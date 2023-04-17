@@ -1,0 +1,18 @@
+[package]
+name = "vynil"
+version = "0.1.0"
+authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[workspace]
+members = [
+    "dist",
+    "package",
+]
+default-members = [
+    "dist",
+]

@@ -1,0 +1,69 @@
+version: '3'
+
+vars:
+  registry: "registry:80"
+  lint_args: "-W clippy::semicolon-if-nothing-returned -W clippy::map-unwrap-or -W clippy::similar-names -W clippy::similar-names -W clippy::manual-string-new"
+  agent_version:
+    sh: awk '/^version/{gsub("\"","");print $3;exit 0}' agent/Cargo.toml
+  dist_version:
+    sh: awk '/^version/{gsub("\"","");print $3;exit 0}' dist/Cargo.toml
+  operator_version:
+    sh: awk '/^version/{gsub("\"","");print $3;exit 0}' operator/Cargo.toml
+
+tasks:
+  lint-docker-agent:
+    cmds:
+    - hadolint agent/Dockerfile
+  lint-docker-dist:
+    cmds:
+    - hadolint dist/Dockerfile
+  lint-docker-operator:
+    cmds:
+    - hadolint operator/Dockerfile
+  lint-docker:
+    cmds:
+    - task: lint-docker-agent
+    - task: lint-docker-dist
+    - task: lint-docker-operator
+  lint-rust:
+    cmds:
+    - "cargo clippy -- -Dwarnings {{ .lint_args }}"
+  rust-fix:
+    cmds:
+    - "cargo clippy --allow-dirty --allow-staged --fix -- {{ .lint_args }}"
+  pedantic:
+    cmds:
+    - cargo clippy -- -Wclippy::pedantic
+  lint:
+    cmds:
+    - task: lint-docker
+    - task: lint-rust
+  crd_gen:
+    cmds:
+    - cargo run --bin crdgen > deploy/crd.yaml
+  crd:
+    deps: [crd_gen]
+    cmds:
+    - kubectl apply -f deploy/crd.yaml
+  agent:
+    deps: [lint-rust, lint-docker-agent]
+    cmds:
+    - kubectl build -t "{{ .registry }}/agent:{{ .agent_version }}" -f agent/Dockerfile . --push
+  dist:
+    deps: [lint-rust, lint-docker-dist]
+    cmds:
+    - kubectl build -t "{{ .registry }}/dist:{{ .dist_version }}" -f dist/Dockerfile . --push
+  operator:
+    deps: [lint-rust, lint-docker-operator]
+    cmds:
+    - kubectl build -t "{{ .registry }}/operator:{{ .operator_version }}" -f operator/Dockerfile . --push
+  restart-oper:
+    deps: [operator]
+    cmds:
+    - kubectl scale deploy -n vynil vynil-controller --replicas=0
+    - kubectl scale deploy -n vynil vynil-controller --replicas=1
+  default:
+    cmds:
+    - task: dist
+    - task: agent
+    - task: operator

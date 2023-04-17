@@ -1,0 +1,150 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vynil-bootstrap
+  namespace: default
+automountServiceAccountToken: true
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: vynil-bootstrap
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: vynil-bootstrap
+subjects:
+- kind: ServiceAccount
+  namespace: default
+  name: vynil-bootstrap
+roleRef:
+  kind: ClusterRole
+  name: vynil-bootstrap
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: core-distrib
+  namespace: default
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  volumeMode: Filesystem
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vynil-bootstrap
+  namespace: default
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      containers:
+      - args:
+        - install
+        env:
+        - name: NAMESPACE
+          value: vynil
+        - name: NAME
+          value: vynil
+        - name: LOG_LEVEL
+          value: debug
+        - name: RUST_LOG
+          value: info,controller=debug,agent=debug
+        image: docker.io/sebt3/vynil-agent:0.1.0
+        name: install
+        volumeMounts:
+        - mountPath: /src
+          name: package
+      initContainers:
+      - args:
+        - clone
+        env:
+        - name: DIST_NAME
+          value: core
+        image: docker.io/sebt3/vynil-agent:0.1.0
+        imagePullPolicy: Always
+        name: clone
+        volumeMounts:
+        - mountPath: /work
+          name: dist
+      - args:
+        - template
+        - -s
+        - /src/core/vynil/
+        env:
+        - name: NAMESPACE
+          value: vynil
+        - name: NAME
+          value: vynil
+        - name: LOG_LEVEL
+          value: debug
+        - name: RUST_LOG
+          value: info,controller=debug,agent=debug
+        image: docker.io/sebt3/vynil-agent:0.1.0
+        name: template
+        volumeMounts:
+        - mountPath: /src
+          name: dist
+        - mountPath: /dest
+          name: package
+      - args:
+        - plan
+        env:
+        - name: NAMESPACE
+          value: vynil
+        - name: NAME
+          value: vynil
+        - name: LOG_LEVEL
+          value: debug
+        - name: RUST_LOG
+          value: info,controller=debug,agent=debug
+        image: docker.io/sebt3/vynil-agent:0.1.0
+        name: plan
+        volumeMounts:
+        - mountPath: /src
+          name: package
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 65534
+        runAsGroup: 65534
+        runAsUser: 65534
+      serviceAccount: vynil-bootstrap
+      serviceAccountName: vynil-bootstrap
+      volumes:
+      - name: dist
+        persistentVolumeClaim:
+          claimName: core-distrib
+      - emptyDir:
+          sizeLimit: 100Mi
+        name: package
+---
+apiVersion: vynil.solidite.fr/v1
+kind: Distrib
+metadata:
+  name: core
+spec:
+  url: "https://github.com/sebt3/vynil-distrib.git"
+  insecure: true
+  schedule: "0 3 * * *"
+---
+apiVersion: vynil.solidite.fr/v1
+kind: Install
+metadata:
+  name: vynil
+  namespace: default
+spec:
+  distrib: core
+  category: core
+  component: vynil

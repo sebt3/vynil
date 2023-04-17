@@ -1,0 +1,20 @@
+[package]
+name = "dist"
+version = "0.1.0"
+authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+package = { path = "../package" }
+clap = { version = "4.1.8", features = ["derive"] }
+env_logger = "0.10.0"
+log = "0.4.17"
+serde_yaml = "0.9.17"
+anyhow = "1.0.69"
+regex = "1.7.3"
+serde_json = "1.0.95"
+
+[[bin]]
+doc = false
+name = "dist"
+path = "src/main.rs"

@@ -1,0 +1,36 @@
+[package]
+name = "agent"
+version = "0.1.0"
+authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+package = { path = "../package" }
+k8s = { path = "../k8s" }
+clap = { version = "4.1.8", features = ["derive", "env"] }
+env_logger = "0.10.0"
+log = "0.4.17"
+anyhow = "1.0.69"
+handlebars = "4.3.6"
+regex = "1.7.2"
+ureq = "2.6.2"
+serde = { version = "1.0.148", features = ["derive"] }
+serde_json = "1.0.95"
+serde_yaml = "0.9.19"
+schemars = { version = "0.8.11", features = ["chrono"] }
+k8s-openapi = { version = "0.18.0", features = ["v1_24"], default-features = false }
+tokio = { version = "1.23.0", features = ["macros", "rt-multi-thread"] }
+chrono = "0.4.24"
+
+[dependencies.kube]
+features = ["runtime", "client", "derive"]
+version = "0.82.0"
+
+[[bin]]
+doc = false
+name = "agent"
+path = "src/main.rs"
+
+[lib]
+name = "client"
+path = "src/lib.rs"

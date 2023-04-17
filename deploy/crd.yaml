@@ -1,0 +1,188 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: distribs.vynil.solidite.fr
+spec:
+  group: vynil.solidite.fr
+  names:
+    categories: []
+    kind: Distrib
+    plural: distribs
+    shortNames:
+    - dist
+    singular: distrib
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: Git url
+      jsonPath: .spec.url
+      name: url
+      type: string
+    - description: Last update date
+      format: date-time
+      jsonPath: .status.last_updated
+      name: last_updated
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for DistribSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              Distrib:
+
+              Describe a source of components distribution git repository
+            properties:
+              branch:
+                description: Git branch
+                type: string
+              insecure:
+                description: Git clone URL
+                type: boolean
+              schedule:
+                description: Actual cron-type expression that defines the interval of the updates.
+                type: string
+              url:
+                description: Git clone URL
+                type: string
+            required:
+            - schedule
+            - url
+            type: object
+          status:
+            description: The status object of `Distrib`
+            properties:
+              components:
+                description: List of known components
+                items:
+                  type: string
+                type: array
+              errors:
+                description: Set with the messages if any error occured
+                items:
+                  type: string
+                type: array
+              last_updated:
+                description: Last update date
+                format: date-time
+                type: string
+            required:
+            - components
+            - last_updated
+            type: object
+        required:
+        - spec
+        title: Distrib
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: installs.vynil.solidite.fr
+spec:
+  group: vynil.solidite.fr
+  names:
+    categories: []
+    kind: Install
+    plural: installs
+    shortNames:
+    - inst
+    singular: install
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Distribution
+      jsonPath: .spec.distrib
+      name: dist
+      type: string
+    - description: Category
+      jsonPath: .spec.category
+      name: cat
+      type: string
+    - description: Component
+      jsonPath: .spec.component
+      name: app
+      type: string
+    - description: Last update date
+      format: date-time
+      jsonPath: .status.last_updated
+      name: last_updated
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for InstallSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              Generate the Kubernetes wrapper struct `Install` from our Spec and Status struct
+
+              This provides a hook for generating the CRD yaml (in crdgen.rs) Maybe
+            properties:
+              category:
+                description: The category name
+                type: string
+              component:
+                description: The package name
+                type: string
+              distrib:
+                description: The distribution source name
+                type: string
+              options:
+                description: Parameters
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              plan:
+                description: Should we plan
+                type: boolean
+            required:
+            - category
+            - component
+            - distrib
+            type: object
+          status:
+            description: The status object of `Install`
+            properties:
+              digest:
+                description: Options digests
+                type: string
+              errors:
+                description: Set with the messages if any error occured
+                items:
+                  type: string
+                type: array
+                x-kubernetes-preserve-unknown-fields: true
+              last_updated:
+                description: Last update date
+                format: date-time
+                type: string
+              plan:
+                description: Currently planned changed, only set if planned is true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              planned:
+                description: Have we planned the project
+                type: boolean
+              tfstate:
+                description: Current terraform status
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+            required:
+            - digest
+            - last_updated
+            - planned
+            type: object
+        required:
+        - spec
+        title: Install
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
