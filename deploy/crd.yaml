@@ -141,6 +141,9 @@ spec:
               plan:
                 description: Should we plan
                 type: boolean
+              schedule:
+                description: Actual cron-type expression that defines the interval of the upgrades.
+                type: string
             required:
             - category
             - component

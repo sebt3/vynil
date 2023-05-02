@@ -1,10 +1,10 @@
 [package]
 name = "operator"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 default-run = "operator"
-license = "Apache-2.0"
+license = "	BSD-3-Clause"
 publish = false
 
 [[bin]]

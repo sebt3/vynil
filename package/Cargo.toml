@@ -3,6 +3,7 @@ name = "package"
 version = "0.1.0"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
+license = "	BSD-3-Clause"
 
 [dependencies]
 anyhow = "1.0.69"

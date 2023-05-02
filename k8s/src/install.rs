@@ -24,6 +24,8 @@ pub struct InstallSpec {
     pub component: String,
     /// Parameters
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Actual cron-type expression that defines the interval of the upgrades.
+    pub schedule: Option<String>,
     /// Should we plan
     pub plan: Option<bool>,
 }

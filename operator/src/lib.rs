@@ -46,7 +46,7 @@ pub trait Reconciler {
 }
 
 pub static OPERATOR: &str = "operator.vynil.solidite.fr";
-pub static AGENT_IMAGE: &str  = "registry.media.home/agent:0.1.0";
+pub static AGENT_IMAGE: &str  = "docker.io/sebt3/vynil-agent:0.1.1";
 
 pub mod distrib;
 pub mod install;

@@ -1,4 +1,4 @@
-use crate::{AGENT_IMAGE, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events};
+use crate::{AGENT_IMAGE, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, cronjobs::CronJobHandler};
 
 use chrono::Utc;
 use kube::{
@@ -75,6 +75,7 @@ impl Reconciler for Install {
         let ns = self.namespace().unwrap();
         let my_ns = ctx.client.default_namespace();
         let mut jobs = JobHandler::new(ctx.client.clone(), my_ns);
+        let mut crons = CronJobHandler::new(ctx.client.clone(), my_ns);
         let plan_name = format!("{ns}--{name}--plan");
         let install_name = format!("{ns}--{name}--install");
 
@@ -121,7 +122,7 @@ impl Reconciler for Install {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [templater,planner],
+                "initContainers": [templater, planner],
                 "containers": [installer],
                 "volumes": [{
                     "name": "dist",
@@ -167,6 +168,63 @@ impl Reconciler for Install {
             }
         });
 
+        if self.spec.schedule.is_some() {
+            let cronjob_install = serde_json::json!({
+                "concurrencyPolicy": "Forbid",
+                "schedule": self.spec.schedule.clone().unwrap(),
+                "jobTemplate": {
+                    "spec": {
+                        "template": install_job
+                    }
+                }
+            });
+            let cronjob_plan = serde_json::json!({
+                "concurrencyPolicy": "Forbid",
+                "schedule": self.spec.schedule.clone().unwrap(),
+                "jobTemplate": {
+                    "spec": {
+                        "template": plan_job
+                    }
+                }
+            });
+
+            if self.should_plan() && !crons.have(plan_name.as_str()).await {
+                info!("Creating {plan_name} CronJob");
+                let cron = crons.create(plan_name.as_str(), &cronjob_plan).await.unwrap();
+                debug!("Sending event {plan_name} CronJob");
+                recorder.publish(
+                    events::from_create("Distrib", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
+                ).await.map_err(Error::KubeError)?;
+            } else if self.should_plan() {
+                info!("Patching {plan_name} CronJob");
+                let _cron = match crons.apply(plan_name.as_str(), &cronjob_plan).await {Ok(j)=>j,Err(_e)=>{
+                    let cron: k8s_openapi::api::batch::v1::CronJob = crons.get(plan_name.as_str()).await.unwrap();
+                    recorder.publish(
+                        events::from_delete("plan", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
+                    ).await.map_err(Error::KubeError)?;
+                    crons.delete(plan_name.as_str()).await.unwrap();
+                    crons.create(plan_name.as_str(), &cronjob_plan).await.unwrap()
+                }};
+            } else if !crons.have(install_name.as_str()).await {
+                info!("Creating {install_name} CronJob");
+                let cron = crons.create(install_name.as_str(), &cronjob_install).await.unwrap();
+                debug!("Sending event for {install_name} CronJob");
+                recorder.publish(
+                    events::from_create("Distrib", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
+                ).await.map_err(Error::KubeError)?;
+            } else {
+                info!("Patching {install_name} CronJob");
+                let _cron = match crons.apply(install_name.as_str(), &cronjob_install).await {Ok(j)=>j,Err(_e)=>{
+                    let cron = crons.get(install_name.as_str()).await.unwrap();
+                    recorder.publish(
+                        events::from_delete("Install", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
+                    ).await.map_err(Error::KubeError)?;
+                    crons.delete(install_name.as_str()).await.unwrap();
+                    crons.create(install_name.as_str(), &cronjob_install).await.unwrap()
+                }};
+            }
+        }
+
         if self.should_plan() && !jobs.have(plan_name.as_str()).await {
             info!("Creating {plan_name} Job");
             let job = jobs.create(plan_name.as_str(), &plan_job).await.unwrap();
@@ -179,7 +237,7 @@ impl Reconciler for Install {
             debug!("Waited {plan_name} OK");
         } else if self.should_plan() {
             info!("Patching {plan_name} Job");
-            let job = match jobs.apply(plan_name.as_str(), &plan_job).await {Ok(j)=>j,Err(_e)=>{
+            let _job = match jobs.apply(plan_name.as_str(), &plan_job).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(plan_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("plan", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
@@ -187,14 +245,14 @@ impl Reconciler for Install {
                 jobs.delete(plan_name.as_str()).await.unwrap();
                 jobs.create(plan_name.as_str(), &plan_job).await.unwrap()
             }};
-            debug!("Sending event for {plan_name} to finish Job");
+            /*debug!("Sending event for {plan_name} to finish Job");
             recorder.publish(
-                events::from_create("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
+                events::from_create("Distrib", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
+            ).await.map_err(Error::KubeError)?;*/
             debug!("Waiting {plan_name} to finish Job");
             jobs.wait_max(plan_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
             debug!("Waited {plan_name} OK");
-        } else if !self.should_plan() && !jobs.have(install_name.as_str()).await {
+        } else if !jobs.have(install_name.as_str()).await {
             info!("Creating {install_name} Job");
             let job = jobs.create(install_name.as_str(), &install_job).await.unwrap();
             debug!("Sending event for {install_name} Job");
@@ -206,7 +264,7 @@ impl Reconciler for Install {
             debug!("Waited {install_name} OK");
         } else {
             info!("Patching {install_name} Job");
-            let job = match jobs.apply(install_name.as_str(), &install_job).await {Ok(j)=>j,Err(_e)=>{
+            let _job = match jobs.apply(install_name.as_str(), &install_job).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(install_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
@@ -214,10 +272,10 @@ impl Reconciler for Install {
                 jobs.delete(install_name.as_str()).await.unwrap();
                 jobs.create(install_name.as_str(), &install_job).await.unwrap()
             }};
-            debug!("Sending event for {install_name} Job");
+            /*debug!("Sending event for {install_name} Job");
             recorder.publish(
-                events::from_create("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
+                events::from_create("Distrib", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
+            ).await.map_err(Error::KubeError)?;*/
             debug!("Waiting {install_name} to finish Job");
             jobs.wait_max(install_name.as_str(),8*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
             debug!("Waited {install_name} OK");
