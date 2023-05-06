@@ -67,6 +67,9 @@ impl Script {
         let cmd = format!("is_def_fn(\"{stage}\",0)");
         self.engine.eval::<bool>(cmd.as_str()).unwrap()
     }
+    pub fn have_stage(&mut self, stage: &str) -> bool {
+        self.have_fn(&format!("pre_{stage}")) || self.have_fn(&format!("post_{stage}"))
+    }
     pub fn run_pre_stage(&mut self, stage: &str) -> Result<()> {
         if self.have_fn(&format!("pre_{stage}")) {
             match self.run_fn(&format!("pre_{stage}")) {Ok(_) => {}, Err(e) => {bail!("pre_{stage} failed with: {e}")}}

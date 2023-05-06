@@ -30,7 +30,7 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
         format!("git pull for {}",dist.name())
     } else {
         // Run git clone
-        shell::run_log(&format!("cd {:?};git clone {:?} .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
+        shell::run_log(&format!("cd {:?};find;git clone {:?} .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
         format!("git clone for {}",dist.name())
     };
     // TODO: Collect found packages

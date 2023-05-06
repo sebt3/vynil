@@ -55,7 +55,7 @@ impl Reconciler for Distrib {
                 "accessModes": ["ReadWriteOnce"],
                 "resources": {
                   "requests": {
-                    "storage": "1Gi"
+                    "storage": "100Mi"
                   }
                 },
                 "volumeMode": "Filesystem",
@@ -65,7 +65,6 @@ impl Reconciler for Distrib {
                 events::from_create("Distrib", &name, "PersistentVolumeClaim", &pvc.name_any(), Some(pvc.object_ref(&())))
             ).await.map_err(Error::KubeError)?;
         }
-        // TODO: Reconciling delta... if possible
 
         let template = serde_json::json!({
             "spec": {
@@ -83,7 +82,8 @@ impl Reconciler for Distrib {
                     }],
                     "volumeMounts": [{
                         "name": "dist",
-                        "mountPath": "/work"
+                        "mountPath": "/work",
+                        "subPath": name
                     }],
                 }],
                 "volumes": [{
@@ -103,7 +103,7 @@ impl Reconciler for Distrib {
         let mut jobs = JobHandler::new(ctx.client.clone(), ns);
         if jobs.have(clone_name.as_str()).await {
             info!("Patching {clone_name} Job");
-            let job = match jobs.apply(clone_name.as_str(), &template).await {Ok(j)=>j,Err(_e)=>{
+            let _job = match jobs.apply(clone_name.as_str(), &template).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(clone_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("plan", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
@@ -111,10 +111,12 @@ impl Reconciler for Distrib {
                 jobs.delete(clone_name.as_str()).await.unwrap();
                 jobs.create(clone_name.as_str(), &template).await.unwrap()
             }};
-            debug!("Sending event for {clone_name} to finish Job");
+            // TODO: Detect if the job changed after the patch (or event better would change prior)
+            // TODO: Send a patched event if changed
+            /*debug!("Sending event for {clone_name} to finish Job");
             recorder.publish(
-                events::from_create("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
+                events::from_patch("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+            ).await.map_err(Error::KubeError)?;*/
             debug!("Waiting {clone_name} to finish Job");
             jobs.wait_max(clone_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
             debug!("Waited {clone_name} OK");

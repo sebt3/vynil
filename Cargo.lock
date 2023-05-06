@@ -789,11 +789,12 @@ dependencies = [
 
 [[package]]
 name = "dist"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
  "env_logger",
+ "handlebars",
  "log",
  "package",
  "regex",
@@ -1836,6 +1837,7 @@ dependencies = [
  "openapiv3",
  "regex",
  "rhai",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml",

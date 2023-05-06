@@ -11,6 +11,16 @@ use k8s_openapi::api::core::v1::ObjectReference;
     }
 }
 
+#[must_use] pub fn from_patch(src_type: &str, src_name: &String, child_type: &str, child_name: &String, child: Option<ObjectReference>) -> Event {
+    Event {
+        type_: EventType::Normal,
+        reason: format!("Reconciling `{}` {}", src_name, src_type),
+        note: Some(format!("Patching `{}` {} for `{}` {}", child_name, child_type, src_name, src_type)),
+        action: format!("Updating `{}` {}", child_name, child_type),
+        secondary: child,
+    }
+}
+
 #[must_use] pub fn from_update(src_type: &str, src_name: &String, child_type: &str, child_name: &String, child: Option<ObjectReference>) -> Event {
     Event {
         type_: EventType::Normal,

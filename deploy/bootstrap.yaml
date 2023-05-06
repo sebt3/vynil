@@ -38,7 +38,7 @@ spec:
   - ReadWriteOnce
   resources:
     requests:
-      storage: 1Gi
+      storage: 100Mi
   volumeMode: Filesystem
 ---
 apiVersion: batch/v1
@@ -79,6 +79,7 @@ spec:
         volumeMounts:
         - mountPath: /work
           name: dist
+          subPath: core
       - args:
         - template
         - -s
@@ -97,6 +98,7 @@ spec:
         volumeMounts:
         - mountPath: /src
           name: dist
+          subPath: core
         - mountPath: /dest
           name: package
       - args:
@@ -136,7 +138,6 @@ metadata:
   name: core
 spec:
   url: "https://github.com/sebt3/vynil-distrib.git"
-  insecure: true
   schedule: "0 3 * * *"
 ---
 apiVersion: vynil.solidite.fr/v1

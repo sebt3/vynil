@@ -78,6 +78,10 @@ impl Reconciler for Install {
         let mut crons = CronJobHandler::new(ctx.client.clone(), my_ns);
         let plan_name = format!("{ns}--{name}--plan");
         let install_name = format!("{ns}--{name}--install");
+        // TODO: Validate that the requested package exist in that distrib Set illegal if not
+        /*if name == "illegal" {
+            return Err(Error::IllegalInstall); // error names show up in metrics
+        }*/
 
         if self.should_plan() && !self.options_status() && jobs.have(plan_name.as_str()).await {
             // Force delete the plan-job
@@ -193,7 +197,7 @@ impl Reconciler for Install {
                 let cron = crons.create(plan_name.as_str(), &cronjob_plan).await.unwrap();
                 debug!("Sending event {plan_name} CronJob");
                 recorder.publish(
-                    events::from_create("Distrib", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
+                    events::from_create("Install", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
             } else if self.should_plan() {
                 info!("Patching {plan_name} CronJob");
@@ -210,7 +214,7 @@ impl Reconciler for Install {
                 let cron = crons.create(install_name.as_str(), &cronjob_install).await.unwrap();
                 debug!("Sending event for {install_name} CronJob");
                 recorder.publish(
-                    events::from_create("Distrib", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
+                    events::from_create("Install", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
             } else {
                 info!("Patching {install_name} CronJob");
@@ -230,7 +234,7 @@ impl Reconciler for Install {
             let job = jobs.create(plan_name.as_str(), &plan_job).await.unwrap();
             debug!("Sending event {plan_name} Job");
             recorder.publish(
-                events::from_create("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+                events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;
             debug!("Waiting {plan_name} to finish Job");
             jobs.wait_max(plan_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
@@ -245,9 +249,11 @@ impl Reconciler for Install {
                 jobs.delete(plan_name.as_str()).await.unwrap();
                 jobs.create(plan_name.as_str(), &plan_job).await.unwrap()
             }};
+            // TODO: Detect if the job changed after the patch (or event better would change prior)
+            // TODO: Send a patched event if changed
             /*debug!("Sending event for {plan_name} to finish Job");
             recorder.publish(
-                events::from_create("Distrib", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
+                events::from_patch("Install", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;*/
             debug!("Waiting {plan_name} to finish Job");
             jobs.wait_max(plan_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
@@ -257,7 +263,7 @@ impl Reconciler for Install {
             let job = jobs.create(install_name.as_str(), &install_job).await.unwrap();
             debug!("Sending event for {install_name} Job");
             recorder.publish(
-                events::from_create("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+                events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;
             debug!("Waiting {install_name} to finish Job");
             jobs.wait_max(install_name.as_str(),8*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
@@ -272,9 +278,11 @@ impl Reconciler for Install {
                 jobs.delete(install_name.as_str()).await.unwrap();
                 jobs.create(install_name.as_str(), &install_job).await.unwrap()
             }};
+            // TODO: Detect if the job changed after the patch (or event better would change prior)
+            // TODO: Send a patched event if changed
             /*debug!("Sending event for {install_name} Job");
             recorder.publish(
-                events::from_create("Distrib", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
+                events::from_patch("Install", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;*/
             debug!("Waiting {install_name} to finish Job");
             jobs.wait_max(install_name.as_str(),8*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
@@ -325,7 +333,8 @@ impl Reconciler for Install {
         ].into());
         templater["volumeMounts"] = serde_json::Value::Array([serde_json::json!({
             "name": "dist",
-            "mountPath": "/src"
+            "mountPath": "/src",
+            "subPath": self.spec.distrib
         }),serde_json::json!({
             "name": "package",
             "mountPath": "/dest"
@@ -368,7 +377,7 @@ impl Reconciler for Install {
             jobs.create(destroyer_name.as_str(), &destroyer_job).await.unwrap()
         }};
         recorder.publish(
-            events::from_create("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+            events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
         ).await.map_err(Error::KubeError)?;
         // Wait up-to 5mn for it's completion
         match jobs.wait_max(destroyer_name.as_str(), 5*60).await {

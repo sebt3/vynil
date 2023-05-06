@@ -100,18 +100,25 @@ pub fn run(args:&Parameters) -> Result<()> {
     for file in fs::read_dir(path).unwrap() {
         let path = file.unwrap().path();
         let filename = path.file_name().unwrap().to_str().unwrap();
-        if re_kusto.is_match(filename) || re_kustohbs.is_match(filename) || re_def.is_match(filename) {
+        if re_def.is_match(filename) {
+            continue;
+        } else if re_kusto.is_match(filename) || re_kustohbs.is_match(filename) {
             copies.push(path);
         } else if re_yml.is_match(filename) || re_ymlhbs.is_match(filename) {
             match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()))  {Ok(_) => {}, Err(e) => {return Err(e)}}
-        } else if re_tf.is_match(filename) || re_rhai.is_match(filename) || re_hbs.is_match(filename) {
-            // Select theses for copy
+        } else if re_tf.is_match(filename) || re_hbs.is_match(filename) ||
+                (re_rhai.is_match(filename) && (script.have_stage("install") || script.have_stage("destroy") || script.have_stage("plan") || script.have_stage("template"))) {
             copies.push(path);
         }
     }
+    let mut dest_path: PathBuf = PathBuf::new();
+    dest_path.push(dest_dir.clone());
+    dest_path.push("index.yaml");
+    yaml.update_options_from_defaults(dest_path)?;
+
     // Copy all valids and selected files to dist
     for path in copies {
-        let mut dest_path = PathBuf::new();
+        let mut dest_path: PathBuf = PathBuf::new();
         dest_path.push(dest_dir.clone());
         dest_path.push(path.file_name().unwrap());
         fs::copy(path, dest_path).unwrap();

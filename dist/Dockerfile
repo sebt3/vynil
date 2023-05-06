@@ -24,7 +24,7 @@ FROM debian:${DEBIAN_VERSION}-slim as target
 ARG HELM_VERSION=v3.10.3
 ARG KUBECTL_VERSION=v1.25.7
 ARG TF_VERSION=1.3.6
-ARG DEB_PACKAGES="curl tar gzip unzip openssl ca-certificates"
+ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates"
 # hadolint ignore=DL3027,DL3008,DL4006,SC2035
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \

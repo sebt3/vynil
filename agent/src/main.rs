@@ -44,7 +44,7 @@ async fn main() {
             }
         }}
         // install init:1
-            Commands::Template(args) => {match template::run(args).await {
+        Commands::Template(args) => {match template::run(args).await {
             Ok(d) => d, Err(e) => {
                 log::error!("Template failed with: {e:}");
                 process::exit(1)
@@ -67,7 +67,7 @@ async fn main() {
         // destroy container
         Commands::Destroy(args) => {match destroy::run(args).await {
             Ok(d) => d, Err(e) => {
-                log::error!("Install failed with: {e:}");
+                log::error!("Destroy failed with: {e:}");
                 process::exit(1)
             }
         }},

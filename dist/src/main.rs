@@ -1,6 +1,8 @@
 mod gen;
 mod pack;
 mod validate;
+mod template;
+mod plan;
 
 use clap::{Parser, Subcommand};
 use std::process;
@@ -24,6 +26,10 @@ pub enum Commands {
     Pack(pack::Parameters),
     /// Generate some terraform files
     Generate(gen::Parameters),
+    /// Template the application dist files to kustomize compatible files
+    Template(template::Parameters),
+    /// Plan the install
+    Plan(plan::Parameters),
 }
 
 fn main() {
@@ -44,5 +50,17 @@ fn main() {
             }
         }}
         Commands::Generate(args) => {gen::run(args)}
-    }
+        Commands::Template(args) => {match template::run(args) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Template failed with: {e:}");
+                process::exit(1)
+            }
+        }},
+        Commands::Plan(args) => {match plan::run(args) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Plan failed with: {e:}");
+                process::exit(1)
+            }
+        }},
+   }
 }
