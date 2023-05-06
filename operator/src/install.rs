@@ -110,7 +110,8 @@ impl Reconciler for Install {
         ].into());
         templater["volumeMounts"] = serde_json::Value::Array([serde_json::json!({
             "name": "dist",
-            "mountPath": "/src"
+            "mountPath": "/src",
+            "subPath": self.spec.distrib
         }),serde_json::json!({
             "name": "package",
             "mountPath": "/dest"
