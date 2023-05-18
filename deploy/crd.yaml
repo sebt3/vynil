@@ -55,10 +55,9 @@ spec:
             description: The status object of `Distrib`
             properties:
               components:
-                description: List of known components
-                items:
-                  type: string
-                type: array
+                description: List of known category->components
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               errors:
                 description: Set with the messages if any error occured
                 items:
@@ -108,6 +107,10 @@ spec:
     - description: Component
       jsonPath: .spec.component
       name: app
+      type: string
+    - description: Status
+      jsonPath: .status.status
+      name: status
       type: string
     - description: Last update date
       format: date-time
@@ -172,6 +175,9 @@ spec:
               planned:
                 description: Have we planned the project
                 type: boolean
+              status:
+                description: Current high-level status of the installation
+                type: string
               tfstate:
                 description: Current terraform status
                 type: object

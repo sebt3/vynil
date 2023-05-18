@@ -3,23 +3,30 @@ use serde::{Serialize, Deserialize};
 use serde_yaml;
 use serde_json;
 use anyhow::{Result, ensure, bail};
-use indexmap::IndexMap;
 pub use openapiv3::{Schema, ReferenceOr};
-use schemars::schema_for_value;
+use schemars::{JsonSchema,schema_for_value};
+use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct ComponentMetadata {
     pub name: String,
     pub description: Option<String>,
 }
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+pub struct ComponentDependency {
+    pub dist: Option<String>,
+    pub category: String,
+    pub component: String,
+}
 #[allow(non_snake_case)]
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct Component {
     pub apiVersion: String,
     pub kind: String,
     pub category: String,
     pub metadata: ComponentMetadata,
-    pub options: IndexMap<String, ReferenceOr<Box<Schema>>>
+    pub options: HashMap<String, serde_json::Value>,
+    pub dependencies: Option<Vec<ComponentDependency>>
 }
 
 fn merge_json(a: &mut serde_json::Value, b: serde_json::Value) {
@@ -49,18 +56,6 @@ fn add_defaults(json: &mut serde_json::Value) {
     }
 }
 
-fn merge_properties(dest: &mut openapiv3::Schema, from: serde_json::Value) {
-    let mut json : serde_json::Value = serde_json::from_str(serde_json::to_string(dest).unwrap().as_str()).unwrap();
-    merge_json(&mut json, from);
-    add_defaults(&mut json);
-    /*if json["type"] == "object" { if let Some(defaults) = dest.schema_data.default.as_ref() {
-        log::info!("{:?}",json["default"]);
-        for (key, _val) in json.clone()["properties"].as_object().unwrap() {
-            json["properties"][key]["default"] = defaults[key].clone();
-        }
-    }}*/
-    *dest = serde_json::from_str(serde_json::to_string(&json).unwrap().as_str()).unwrap();
-}
 
 impl Component {
     fn get_values_inner(id: &String, vals: Option<serde_json::Value>, schem: &Schema) -> serde_json::Value {
@@ -140,7 +135,7 @@ impl Component {
         let mut object = serde_json::Map::new();
         for (key, val) in &self.options {
             let option = if options.contains_key(key) {Some(options[key].clone())} else {None};
-            let schema = val.as_item().unwrap();
+            let schema = &serde_json::from_str(serde_json::to_string(val).unwrap().as_str()).unwrap();
             object.insert(key.clone(), Component::get_values_inner(key, option, schema));
         }
         object.insert("name".to_string(), serde_json::Value::String(env::var("NAME").unwrap_or_else(|_| self.metadata.name.clone())));
@@ -151,17 +146,19 @@ impl Component {
 
     pub fn update_options_from_defaults(mut self, dest:PathBuf) -> Result<()> {
         for (key, mut val) in self.options.clone() {
-            if let openapiv3::ReferenceOr::Item(ref mut boxed) = val {
-                let schema = boxed.as_mut();
-                if let Some(opts) = schema.schema_data.default.as_ref() {
-                    // That option have a default value, update its properties
-                    let objdef = serde_json::from_str(serde_json::to_string(&schema_for_value!(opts).schema)?.as_str())?;
-                    merge_properties( schema, objdef);
-                    log::debug!("{key} after merge : {:}", serde_yaml::to_string(&schema).unwrap());
-                    // TODO: propagate the default values
-                    self.options[&key] = openapiv3::ReferenceOr::Item(Box::new(schema.clone()));
-                }
+            let schema: &Schema = &serde_json::from_str(serde_json::to_string(&val).unwrap().as_str()).unwrap();
+            if let Some(opts) = schema.schema_data.default.as_ref() {
+                // That option have a default value, update its properties
+                let objdef = serde_json::from_str(serde_json::to_string(&schema_for_value!(opts).schema)?.as_str())?;
+                merge_json( &mut val, objdef);
+                add_defaults(&mut val);
+
+                log::debug!("{key} after merge : {:}", serde_yaml::to_string(&schema).unwrap());
+                *self.options.get_mut(key.as_str()).unwrap() = val;
             }
+        }
+        if self.dependencies.is_none() {
+            self.dependencies = Some(Vec::new());
         }
         let mut data = "---
 ".to_string();
@@ -188,6 +185,7 @@ pub fn validate_index(yaml: &serde_yaml::Value) -> Result<()> {
     ensure!(yaml["metadata"]["name"].as_str().map(std::string::ToString::to_string).is_some(), "metadata.name is not set");
     ensure!(yaml["category"].as_str().map(std::string::ToString::to_string).is_some(), "category is not set");
     ensure!(["apps", "core", "share", "tech"].contains(&yaml["category"].as_str().unwrap()), "category is not supported");
+    //TODO: validate that the options is a valid schema
     Ok(())
 }
 

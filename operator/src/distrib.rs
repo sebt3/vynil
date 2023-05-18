@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::{Span, debug, field, info, instrument, warn};
 use async_trait::async_trait;
-pub use k8s::distrib::{Distrib,DistribStatus,StatusDistrib};
+pub use k8s::distrib::{Distrib,DistribStatus};
 
 static DISTRIB_FINALIZER: &str = "distribs.vynil.solidite.fr";
 
@@ -79,8 +79,14 @@ impl Reconciler for Distrib {
                     "env": [{
                         "name": "DIST_NAME",
                         "value": name
+                    },{
+                        "name": "LOG_LEVEL",
+                        "value": "debug"
+                    },{
+                        "name": "RUST_LOG",
+                        "value": "info,controller=debug,agent=debug"
                     }],
-                    "volumeMounts": [{
+                                "volumeMounts": [{
                         "name": "dist",
                         "mountPath": "/work",
                         "subPath": name

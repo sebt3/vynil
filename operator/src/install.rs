@@ -1,8 +1,8 @@
-use crate::{AGENT_IMAGE, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, cronjobs::CronJobHandler};
-
+use crate::{AGENT_IMAGE, OPERATOR, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, cronjobs::CronJobHandler};
+use k8s_openapi::api::core::v1::Namespace;
 use chrono::Utc;
 use kube::{
-    api::{Api, ResourceExt},
+    api::{Api, ListParams, ResourceExt},
     runtime::{
         controller::Action,
         events::Recorder,
@@ -14,7 +14,8 @@ use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::{Span, debug, field, info, instrument, warn};
 use async_trait::async_trait;
-pub use k8s::install::{Install,InstallStatus};
+pub use k8s::install::{Install,InstallStatus, STATUS_INSTALLED};
+pub use k8s::distrib::{Distrib, ComponentDependency};
 static INSTALL_FINALIZER: &str = "installs.vynil.solidite.fr";
 
 
@@ -71,6 +72,7 @@ impl Reconciler for Install {
         ctx.diagnostics.write().await.last_event = Utc::now();
         let reporter = ctx.diagnostics.read().await.reporter.clone();
         let recorder = Recorder::new(client.clone(), reporter, self.object_ref(&()));
+        let dists: Api<Distrib> = Api::all(client.clone());
         let name = self.name_any();
         let ns = self.namespace().unwrap();
         let my_ns = ctx.client.default_namespace();
@@ -78,10 +80,99 @@ impl Reconciler for Install {
         let mut crons = CronJobHandler::new(ctx.client.clone(), my_ns);
         let plan_name = format!("{ns}--{name}--plan");
         let install_name = format!("{ns}--{name}--install");
-        // TODO: Validate that the requested package exist in that distrib Set illegal if not
-        /*if name == "illegal" {
-            return Err(Error::IllegalInstall); // error names show up in metrics
-        }*/
+        let dist_name = self.spec.distrib.as_str();
+        let dist = match dists.get(dist_name).await {Ok(d) => d, Err(e) => {
+            let mut errors: Vec<String> = Vec::new();
+            errors.push(format!("{:?}", e));
+            self.update_status_missing_distrib(client, OPERATOR, errors).await;
+            return Err(Error::IllegalDistrib);
+        }};
+        // Validate that the requested package exist in that distrib
+        if ! dist.have_component(self.spec.category.as_str(), self.spec.component.as_str()) {
+            let mut errors: Vec<String> = Vec::new();
+            errors.push(format!("{:} - {:} is not known from  {:?} distribution", self.spec.category.as_str(), self.spec.component.as_str(), dist_name));
+            self.update_status_missing_component(client, OPERATOR, errors).await;
+            if dist.status.is_some() {
+                return Err(Error::IllegalInstall)
+            } else { // the dist is not yet updated, wait for it for 60s
+                return Ok(Action::requeue(Duration::from_secs(60)))
+            }
+        }
+        let comp = dist.get_component(self.spec.category.as_str(), self.spec.component.as_str()).unwrap();
+        if comp.dependencies.is_some() {
+            for dep in comp.dependencies.clone().unwrap() {
+                // Validate that the dependencies are actually known to the package management
+                if dep.dist.is_some() {
+                    let dist = match dists.get(dep.dist.clone().unwrap().as_str()).await{Ok(d) => d, Err(e) => {
+                        let mut errors: Vec<String> = Vec::new();
+                        errors.push(format!("{:?}", e));
+                        self.update_status_missing_distrib(client, OPERATOR, errors).await;
+                        return Err(Error::IllegalDistrib);
+                    }};
+                    if !dist.have_component(dep.category.as_str(), dep.component.as_str()) {
+                        let mut errors: Vec<String> = Vec::new();
+                        errors.push(format!("{:} - {:} is not known from  {:?} distribution", dep.category.as_str(), dep.component.as_str(), dep.dist.clone().unwrap().as_str()));
+                        self.update_status_missing_component(client, OPERATOR, errors).await;
+                        if dist.status.is_some() {
+                            return Err(Error::IllegalInstall)
+                        } else { // the dist is not yet updated, wait for it for 60s
+                            return Ok(Action::requeue(Duration::from_secs(60)))
+                        }
+                    }
+                } else {
+                    let mut found = false;
+                    for dist in dists.list(&ListParams::default()).await.unwrap() {
+                        if dist.have_component(dep.category.as_str(), dep.component.as_str()) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        let mut errors: Vec<String> = Vec::new();
+                        errors.push(format!("{:} - {:} is not known from any distribution", dep.category.as_str(), dep.component.as_str()));
+                        self.update_status_missing_component(client, OPERATOR, errors).await;
+                        return Ok(Action::requeue(Duration::from_secs(60)))
+                    }
+                }
+                // Validate that the dependencies are actually installed
+                //TODO: support for only current namespace
+                let mut found = false;
+                let mut found_ns = String::new();
+                let mut found_name = String::new();
+                let namespaces: Api<Namespace> = Api::all(client.clone());
+                for ns in namespaces.list(&ListParams::default()).await.unwrap() {
+                    let installs: Api<Install> = Api::namespaced(client.clone(), ns.metadata.name.clone().unwrap().as_str());
+                    for install in installs.list(&ListParams::default()).await.unwrap() {
+                        if install.spec.component.as_str() == dep.component.as_str() && install.spec.category.as_str() == dep.category.as_str() {
+                            found = true;
+                            found_ns = ns.metadata.name.clone().unwrap();
+                            found_name = install.metadata.name.clone().unwrap();
+                            break;
+                        }
+                    }
+                    if found {
+                        break;
+                    }
+                }
+                if ! found {
+                    // TODO: should collect all issues before returning
+                    let mut errors: Vec<String> = Vec::new();
+                    errors.push(format!("{:} - {:} is not installed in any namespace", dep.category.as_str(), dep.component.as_str()));
+                    self.update_status_missing_dependencies(client, OPERATOR, errors).await;
+                    // TODO: evaluate if failing is not a better strategy here
+                    return Ok(Action::requeue(Duration::from_secs(60)))
+                } else {
+                    let installs: Api<Install> = Api::namespaced(client.clone(), found_ns.as_str());
+                    let install = installs.get(found_name.as_str()).await.unwrap();
+                    if install.status.is_none() || install.status.unwrap().status.as_str() != STATUS_INSTALLED {
+                        let mut errors: Vec<String> = Vec::new();
+                        errors.push(format!("Install {:} - {:} is not yet ready", found_ns.as_str(), found_name.as_str()));
+                        self.update_status_waiting_dependencies(client, OPERATOR, errors).await;
+                        return Ok(Action::requeue(Duration::from_secs(60)))
+                    }
+                }
+            }
+        }
 
         if self.should_plan() && !self.options_status() && jobs.have(plan_name.as_str()).await {
             // Force delete the plan-job
@@ -232,6 +323,7 @@ impl Reconciler for Install {
 
         if self.should_plan() && !jobs.have(plan_name.as_str()).await {
             info!("Creating {plan_name} Job");
+            self.update_status_planning(client, OPERATOR).await;
             let job = jobs.create(plan_name.as_str(), &plan_job).await.unwrap();
             debug!("Sending event {plan_name} Job");
             recorder.publish(
@@ -261,6 +353,7 @@ impl Reconciler for Install {
             debug!("Waited {plan_name} OK");
         } else if !jobs.have(install_name.as_str()).await {
             info!("Creating {install_name} Job");
+            self.update_status_installing(client, OPERATOR).await;
             let job = jobs.create(install_name.as_str(), &install_job).await.unwrap();
             debug!("Sending event for {install_name} Job");
             recorder.publish(

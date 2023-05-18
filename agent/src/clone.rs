@@ -1,9 +1,10 @@
 use clap::Args;
 use anyhow::{Result, Error, bail, anyhow};
-use std::{path::{PathBuf, Path}};
-use package::shell;
+use std::{fs, path::{PathBuf, Path}};
+use package::{shell, yaml};
 use client::{get_client, AGENT, events};
 use kube::api::Resource;
+use std::collections::HashMap;
 
 #[derive(Args, Debug)]
 pub struct Parameters {
@@ -14,15 +15,24 @@ pub struct Parameters {
     #[arg(short, long, env = "DIST_NAME", value_name = "DIST_NAME", default_value = "base")]
     name: String,
 }
+
+fn have_index(dir: &Path) -> bool {
+    let mut index: PathBuf = PathBuf::new();
+    index.push(dir);
+    index.push("index.yaml");
+    Path::new(&index).is_file()
+}
+
 pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distrib) -> Result<()> {
     let url = dist.spec.url.clone();
-    let mut dot_git = PathBuf::new();
+    let mut dot_git: PathBuf = PathBuf::new();
     dot_git.push(target.clone());
     dot_git.push(".git");
     if dist.insecure() {
         shell::run_log(&"git config --global http.sslVerify false".into()).or_else(|e: Error| {bail!("{e}")})?;
     }
     // TODO: Support selecting branch
+    // TODO: Support git login somehow
     let action = if Path::new(&dot_git).is_dir() {
         // if a .git directory exist, run git pull
         shell::run_log(&format!("cd {:?};git pull", target)).or_else(|e: Error| {bail!("{e}")})?;
@@ -33,8 +43,34 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
         shell::run_log(&format!("cd {:?};find;git clone {:?} .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
         format!("git clone for {}",dist.name())
     };
-    // TODO: Collect found packages
-    dist.update_status_components(client.clone(), AGENT,Vec::new()).await;
+    let mut categories = HashMap::new();
+    let c_dirs = fs::read_dir(target)?
+        .into_iter()
+        .filter(|r| r.is_ok()) // Get rid of Err variants for Result<DirEntry>
+        .map(|r| r.unwrap().path()) // This is safe, since we only have the Ok variants
+        .filter(|r| r.is_dir() && r.file_name().unwrap().to_str().unwrap() != ".git");
+    for c_subdir in c_dirs {
+        let category = c_subdir.file_name().unwrap().to_str().unwrap().to_string();
+        log::info!("looking for components in: {:}", category);
+        let mut comps = HashMap::new();
+
+        let pkgs = fs::read_dir(c_subdir)?
+            .into_iter()
+            .filter(|r| r.is_ok()) // Get rid of Err variants for Result<DirEntry>
+            .map(|r| r.unwrap().path()) // This is safe, since we only have the Ok variants
+            .filter(|r| r.is_dir())
+            .filter(|r| have_index(r));
+        for comp_dir in pkgs {
+            let comp_name = comp_dir.file_name().unwrap().to_str().unwrap().to_string();
+            log::info!("found component {:} in: {:}", comp_name, category);
+            let mut index: PathBuf = PathBuf::new();
+            index.push(comp_dir.clone());
+            index.push("index.yaml");
+            comps.insert(comp_name, yaml::read_index(&index).or_else(|e: Error| {bail!("{e}")})?);
+        }
+        categories.insert(category, comps);
+    }
+    dist.update_status_components(client.clone(), AGENT, categories).await;
     events::report(AGENT, client,events::from(
         format!("Preparing {}", dist.name()),action.clone(),
         Some(action)

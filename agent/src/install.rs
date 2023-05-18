@@ -32,7 +32,7 @@ pub async fn install(src: &PathBuf, script: &mut script::Script, client: kube::C
         // Verify that the existing plan is the advertised one
         let current = terraform::get_plan(src).or_else(|e: Error| {bail!("{e}")}).unwrap();
         if current != plan {
-            bail!("Current plan file {:?} differ from the advertised one in Install {}", &path, inst.metadata.name.clone().unwrap());
+            log::warn!("Current plan file {:?} differ from the advertised one in Install {}", &path, inst.metadata.name.clone().unwrap());
         }
         true
     } else if plan.is_empty() {

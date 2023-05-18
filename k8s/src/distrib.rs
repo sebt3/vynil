@@ -3,14 +3,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use serde_json::json;
-
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-pub enum StatusDistrib {
-    /// When failed the error message
-    FailedUpdate(String),
-    /// Successfull update
-    Ok (bool),
-}
+pub use package::yaml::{Component, ComponentDependency};
+use std::collections::HashMap;
 
 /// Distrib:
 ///
@@ -37,8 +31,8 @@ pub struct DistribStatus {
     pub errors: Option<Vec<String>>,
     /// Last update date
     pub last_updated: DateTime<Utc>,
-    /// List of known components
-    pub components: Vec<String>,
+    /// List of known category->components
+    pub components: HashMap<String, HashMap<String, Component>>,
 }
 
 impl Distrib {
@@ -53,7 +47,7 @@ impl Distrib {
         self.status.as_ref().map_or_else(Utc::now, |s| s.last_updated)
     }
 
-    pub fn components(&self) -> Vec<String> {
+    pub fn components(&self) -> HashMap<String, HashMap<String, Component>> {
         self.status.clone().map(|s| s.components).unwrap_or_default()
     }
 
@@ -64,8 +58,22 @@ impl Distrib {
     pub fn insecure(&self) -> bool {
         if let Some(ref i) = self.spec.insecure {*i} else {false}
     }
-
-    pub async fn update_status_components(&self, client: Client, manager: &str, components: Vec<String>) {
+    pub fn have_component(&self, category: &str, component: &str) -> bool {
+        if self.components().contains_key(category) {
+            self.components()[category].contains_key(component)
+        }
+        else {
+            false
+        }
+    }
+    pub fn get_component(&self, category: &str, component: &str) -> Option<Component> {
+        if self.have_component(category, component) {
+            Some(self.components()[category][component].clone())
+        } else {
+            None
+        }
+    }
+    pub async fn update_status_components(&self, client: Client, manager: &str, components: HashMap<String, HashMap<String, Component>>) {
         let name = self.metadata.name.clone().unwrap();
         let dists: Api<Distrib> = Api::all(client);
         let new_status = Patch::Apply(json!({

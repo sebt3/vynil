@@ -2,7 +2,22 @@ use kube::CustomResourceExt;
 //use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::JSONSchemaPropsOrBool;
 fn main() {
     println!("---");
-    print!("{}", serde_yaml::to_string(&controller::Distrib::crd()).unwrap());
+    let mut crd = controller::Distrib::crd();
+    if let Some( ref mut schema) = crd.spec.versions[0].schema {
+        if let Some(ref mut api) = schema.open_api_v3_schema {
+            if let Some(ref mut props) = api.properties {
+                props.entry("status".into()).and_modify(|status| {
+                    if let Some(ref mut props) = status.properties {
+                        props.entry("components".into()).and_modify(|spec| {
+                            spec.x_kubernetes_preserve_unknown_fields = Some(true);
+                            spec.additional_properties = None;
+                        });
+                    }
+                });
+            }
+        }
+    }
+    print!("{}", serde_yaml::to_string(&crd).unwrap());
     println!("---");
     let mut crd = controller::Install::crd();
     if let Some( ref mut schema) = crd.spec.versions[0].schema {

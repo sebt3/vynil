@@ -44,24 +44,19 @@ tasks:
   crd:
     deps: [crd_gen]
     cmds:
-    - kubectl apply -f deploy/crd.yaml
+    - kubectl --kubeconfig $HOME/.kube/config.build apply -f deploy/crd.yaml
   agent:
     deps: [lint-rust, lint-docker-agent]
     cmds:
-    - kubectl build -t "{{ .registry }}/sebt3/vynil-agent:{{ .agent_version }}" -f agent/Dockerfile . --registry-secret docker-io --push
+    - kubectl --kubeconfig $HOME/.kube/config.build build -t "{{ .registry }}/sebt3/vynil-agent:{{ .agent_version }}" -f agent/Dockerfile . --registry-secret docker-io --push
   dist:
     deps: [lint-rust, lint-docker-dist]
     cmds:
-    - kubectl build -t "{{ .registry }}/sebt3/vynil-dist:{{ .dist_version }}" -f dist/Dockerfile . --registry-secret docker-io --push
+    - kubectl --kubeconfig $HOME/.kube/config.build build -t "{{ .registry }}/sebt3/vynil-dist:{{ .dist_version }}" -f dist/Dockerfile . --registry-secret docker-io --push
   operator:
     deps: [lint-rust, lint-docker-operator]
     cmds:
-    - kubectl build -t "{{ .registry }}/sebt3/vynil-operator:{{ .operator_version }}" -f operator/Dockerfile . --registry-secret docker-io --push
-  restart-oper:
-    deps: [operator]
-    cmds:
-    - kubectl scale deploy -n vynil vynil-controller --replicas=0
-    - kubectl scale deploy -n vynil vynil-controller --replicas=1
+    - kubectl --kubeconfig $HOME/.kube/config.build build -t "{{ .registry }}/sebt3/vynil-operator:{{ .operator_version }}" -f operator/Dockerfile . --registry-secret docker-io --push
   default:
     cmds:
     - task: dist

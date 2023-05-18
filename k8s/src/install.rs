@@ -4,15 +4,26 @@ use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
+pub const STATUS_ERRORS: &str = "errors";
+pub const STATUS_INSTALLED: &str = "installed";
+pub const STATUS_PLANNED: &str = "planned";
+pub const STATUS_INSTALLING: &str = "installing";
+pub const STATUS_PLANNING: &str = "planning";
+pub const STATUS_MISSING_DIST: &str = "missing distribution";
+pub const STATUS_MISSING_COMP: &str = "missing component";
+pub const STATUS_MISSING_DEPS: &str = "missing dependencies";
+pub const STATUS_WAITING_DEPS: &str = "waiting dependencies";
+
 /// Generate the Kubernetes wrapper struct `Install` from our Spec and Status struct
 ///
 /// This provides a hook for generating the CRD yaml (in crdgen.rs)
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(kind = "Install", group = "vynil.solidite.fr", version = "v1", namespaced)]
 #[kube(status = "InstallStatus", shortname = "inst", printcolumn = r#"
-{"name":"dist", "type":"string", "description":"Distribution", "jsonPath":".spec.distrib"},
-{"name":"cat",  "type":"string", "description":"Category", "jsonPath":".spec.category"},
-{"name":"app",  "type":"string", "description":"Component", "jsonPath":".spec.component"},
+{"name":"dist",   "type":"string", "description":"Distribution", "jsonPath":".spec.distrib"},
+{"name":"cat",    "type":"string", "description":"Category", "jsonPath":".spec.category"},
+{"name":"app",    "type":"string", "description":"Component", "jsonPath":".spec.component"},
+{"name":"status", "type":"string", "description":"Status", "jsonPath":".status.status"},
 {"name":"last_updated", "type":"string", "description":"Last update date", "format": "date-time", "jsonPath":".status.last_updated"}"#)]
 /// Maybe
 pub struct InstallSpec {
@@ -32,6 +43,8 @@ pub struct InstallSpec {
 /// The status object of `Install`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct InstallStatus {
+    /// Current high-level status of the installation
+    pub status: String,
     /// Set with the messages if any error occured
     pub errors: Option<Vec<String>>,
     /// Currently planned changed, only set if planned is true
@@ -104,7 +117,7 @@ impl Install {
     pub fn tfstate(&self) -> serde_json::Map<String, serde_json::Value> {
         self.status.clone().map(|s| s.tfstate.unwrap_or_default()).unwrap_or_default()
     }
-    pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) {
+    async fn update_status_typed(&self, client: Client, manager: &str, errors: Vec<String>, typed: &str) {
         let name = self.name();
         let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
         let last_updated = self.last_updated();
@@ -112,6 +125,7 @@ impl Install {
             "apiVersion": "vynil.solidite.fr/v1",
             "kind": "Install",
             "status": InstallStatus {
+                status: typed.to_string(),
                 plan: Some(self.current_plan()),
                 tfstate: Some(self.current_tfstate()),
                 errors: Some(errors),
@@ -125,6 +139,27 @@ impl Install {
             .patch_status(&name, &ps, &new_status)
             .await;
     }
+    pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) {
+        self.update_status_typed(client, manager, errors, STATUS_ERRORS).await;
+    }
+    pub async fn update_status_missing_distrib(&self, client: Client, manager: &str, errors: Vec<String>) {
+        self.update_status_typed(client, manager, errors, STATUS_MISSING_DIST).await;
+    }
+    pub async fn update_status_missing_component(&self, client: Client, manager: &str, errors: Vec<String>) {
+        self.update_status_typed(client, manager, errors, STATUS_MISSING_COMP).await;
+    }
+    pub async fn update_status_missing_dependencies(&self, client: Client, manager: &str, errors: Vec<String>) {
+        self.update_status_typed(client, manager, errors, STATUS_MISSING_DEPS).await;
+    }
+    pub async fn update_status_waiting_dependencies(&self, client: Client, manager: &str, errors: Vec<String>) {
+        self.update_status_typed(client, manager, errors, STATUS_WAITING_DEPS).await;
+    }
+    pub async fn update_status_installing(&self, client: Client, manager: &str) {
+        self.update_status_typed(client, manager, Vec::new(), STATUS_INSTALLING).await;
+    }
+    pub async fn update_status_planning(&self, client: Client, manager: &str) {
+        self.update_status_typed(client, manager, Vec::new(), STATUS_PLANNING).await;
+    }
     pub async fn update_status_plan(&self, client: Client, manager: &str, plan: serde_json::Map<String, serde_json::Value>) {
         let name = self.name();
         let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
@@ -133,6 +168,7 @@ impl Install {
             "apiVersion": "vynil.solidite.fr/v1",
             "kind": "Install",
             "status": InstallStatus {
+                status: STATUS_PLANNED.to_string(),
                 errors: Some(Vec::new()),
                 tfstate: Some(self.current_tfstate()),
                 planned: true,
@@ -154,6 +190,7 @@ impl Install {
             "apiVersion": "vynil.solidite.fr/v1",
             "kind": "Install",
             "status": InstallStatus {
+                status: STATUS_INSTALLED.to_string(),
                 errors: Some(Vec::new()),
                 plan: Some(self.current_plan()),
                 planned: false,
