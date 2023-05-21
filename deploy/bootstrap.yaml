@@ -74,7 +74,7 @@ spec:
         - name: DIST_NAME
           value: core
         image: docker.io/sebt3/vynil-agent:0.1.2
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         name: clone
         volumeMounts:
         - mountPath: /work

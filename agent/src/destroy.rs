@@ -58,7 +58,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     if ! Path::new(&args.src).is_dir() {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{:?} is not a directory", args.src));
-        inst.update_status_errors(client.clone(), AGENT, errors).await;
+        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&anyhow!("{:?} is not a directory", args.src)), inst.object_ref(&())).await.unwrap();
         bail!("{:?} is not a directory", args.src);
     }
@@ -70,7 +70,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{e}"));
-        inst.update_status_errors(client.clone(), AGENT, errors).await;
+        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         return Err(e)
     }};
@@ -88,7 +88,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     match destroy(&src, &mut script, client.clone(), &inst).await {Ok(_) => {Ok(())}, Err(e) => {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{e}"));
-        inst.update_status_errors(client.clone(), AGENT, errors).await;
+        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         Err(e)
     }}

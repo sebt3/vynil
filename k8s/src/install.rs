@@ -107,6 +107,11 @@ impl Install {
     pub fn plan(&self) -> serde_json::Map<String, serde_json::Value> {
         self.status.clone().map(|s| s.plan.unwrap_or_default()).unwrap_or_default()
     }
+    pub fn have_tfstate(&self) -> bool {
+        if let Some(ref status) = self.status {
+            status.tfstate.is_some()
+        } else {false}
+    }
     fn current_tfstate(&self) -> serde_json::Map<String, serde_json::Value> {
         if let Some(ref status) = self.status {
             if let Some(ref tfstate) = status.tfstate {
@@ -117,7 +122,7 @@ impl Install {
     pub fn tfstate(&self) -> serde_json::Map<String, serde_json::Value> {
         self.status.clone().map(|s| s.tfstate.unwrap_or_default()).unwrap_or_default()
     }
-    async fn update_status_typed(&self, client: Client, manager: &str, errors: Vec<String>, typed: &str) {
+    async fn update_status_typed(&self, client: Client, manager: &str, errors: Vec<String>, typed: &str) -> Result<Install, kube::Error> {
         let name = self.name();
         let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
         let last_updated = self.last_updated();
@@ -135,32 +140,30 @@ impl Install {
             }
         }));
         let ps = PatchParams::apply(manager).force();
-        let _o = insts
-            .patch_status(&name, &ps, &new_status)
-            .await;
+        insts.patch_status(&name, &ps, &new_status).await
     }
-    pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) {
-        self.update_status_typed(client, manager, errors, STATUS_ERRORS).await;
+    pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, errors, STATUS_ERRORS).await
     }
-    pub async fn update_status_missing_distrib(&self, client: Client, manager: &str, errors: Vec<String>) {
-        self.update_status_typed(client, manager, errors, STATUS_MISSING_DIST).await;
+    pub async fn update_status_missing_distrib(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, errors, STATUS_MISSING_DIST).await
     }
-    pub async fn update_status_missing_component(&self, client: Client, manager: &str, errors: Vec<String>) {
-        self.update_status_typed(client, manager, errors, STATUS_MISSING_COMP).await;
+    pub async fn update_status_missing_component(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, errors, STATUS_MISSING_COMP).await
     }
-    pub async fn update_status_missing_dependencies(&self, client: Client, manager: &str, errors: Vec<String>) {
-        self.update_status_typed(client, manager, errors, STATUS_MISSING_DEPS).await;
+    pub async fn update_status_missing_dependencies(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, errors, STATUS_MISSING_DEPS).await
     }
-    pub async fn update_status_waiting_dependencies(&self, client: Client, manager: &str, errors: Vec<String>) {
-        self.update_status_typed(client, manager, errors, STATUS_WAITING_DEPS).await;
+    pub async fn update_status_waiting_dependencies(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, errors, STATUS_WAITING_DEPS).await
     }
-    pub async fn update_status_installing(&self, client: Client, manager: &str) {
-        self.update_status_typed(client, manager, Vec::new(), STATUS_INSTALLING).await;
+    pub async fn update_status_installing(&self, client: Client, manager: &str) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, Vec::new(), STATUS_INSTALLING).await
     }
-    pub async fn update_status_planning(&self, client: Client, manager: &str) {
-        self.update_status_typed(client, manager, Vec::new(), STATUS_PLANNING).await;
+    pub async fn update_status_planning(&self, client: Client, manager: &str) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, Vec::new(), STATUS_PLANNING).await
     }
-    pub async fn update_status_plan(&self, client: Client, manager: &str, plan: serde_json::Map<String, serde_json::Value>) {
+    pub async fn update_status_plan(&self, client: Client, manager: &str, plan: serde_json::Map<String, serde_json::Value>) -> Result<Install, kube::Error> {
         let name = self.name();
         let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
         let last_updated = Utc::now();
@@ -178,11 +181,9 @@ impl Install {
             }
         }));
         let ps = PatchParams::apply(manager).force();
-        let _o = insts
-            .patch_status(&name, &ps, &new_status)
-            .await;
+        insts.patch_status(&name, &ps, &new_status).await
     }
-    pub async fn update_status_apply(&self, client: Client, manager: &str, tfstate: serde_json::Map<String, serde_json::Value>) {
+    pub async fn update_status_apply(&self, client: Client, manager: &str, tfstate: serde_json::Map<String, serde_json::Value>) -> Result<Install, kube::Error> {
         let name = self.name();
         let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
         let last_updated = Utc::now();
@@ -200,8 +201,6 @@ impl Install {
             }
         }));
         let ps = PatchParams::apply(manager).force();
-        let _o = insts
-            .patch_status(&name, &ps, &new_status)
-            .await;
+        insts.patch_status(&name, &ps, &new_status).await
     }
 }

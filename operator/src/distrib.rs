@@ -1,4 +1,4 @@
-use crate::{AGENT_IMAGE, manager::Context, telemetry, Error, Result, Reconciler, pvc::PersistentVolumeClaimHandler, jobs::JobHandler, cronjobs::CronJobHandler, events};
+use crate::{manager::Context, telemetry, Error, Result, Reconciler, pvc::PersistentVolumeClaimHandler, jobs::JobHandler, cronjobs::CronJobHandler, events};
 use chrono::Utc;
 use kube::{
     api::{Api, ResourceExt, Resource},
@@ -66,47 +66,9 @@ impl Reconciler for Distrib {
             ).await.map_err(Error::KubeError)?;
         }
 
-        let template = serde_json::json!({
-            "spec": {
-                "serviceAccount": "vynil-agent",
-                "serviceAccountName": "vynil-agent",
-                "restartPolicy": "Never",
-                "containers": [{
-                    "args":["clone"],
-                    "image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| AGENT_IMAGE.to_string()),
-                    "imagePullPolicy": "Always",
-                    "name": "clone",
-                    "env": [{
-                        "name": "DIST_NAME",
-                        "value": name
-                    },{
-                        "name": "LOG_LEVEL",
-                        "value": "debug"
-                    },{
-                        "name": "RUST_LOG",
-                        "value": "info,controller=debug,agent=debug"
-                    }],
-                                "volumeMounts": [{
-                        "name": "dist",
-                        "mountPath": "/work",
-                        "subPath": name
-                    }],
-                }],
-                "volumes": [{
-                    "name": "dist",
-                    "persistentVolumeClaim": {
-                        "claimName": format!("{name}-distrib")
-                    }
-                }],
-                "securityContext": {
-                    "fsGroup": 65534,
-                    "runAsUser": 65534,
-                    "runAsGroup": 65534
-                }
-            }
-        });
 
         let mut jobs = JobHandler::new(ctx.client.clone(), ns);
+        let template = jobs.get_clone(name.as_str());
         if jobs.have(clone_name.as_str()).await {
             info!("Patching {clone_name} Job");
             let _job = match jobs.apply(clone_name.as_str(), &template).await {Ok(j)=>j,Err(_e)=>{

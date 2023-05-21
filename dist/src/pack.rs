@@ -14,7 +14,7 @@ pub struct Parameters {
     dist: PathBuf,
 }
 
-fn explode(src: &PathBuf, dest: &Path, config: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+fn explode(src: &PathBuf, dest: &Path, config: &serde_json::Map<String, serde_json::Value>, is_template: bool) -> Result<()> {
     let content = fs::read_to_string(src)
         .expect("Should have been able to read the file");
     let parts = content.split("---");
@@ -28,7 +28,7 @@ fn explode(src: &PathBuf, dest: &Path, config: &serde_json::Map<String, serde_js
             let version = version.replace('/', "_");
             let name = yaml["metadata"]["name"].as_str().map(std::string::ToString::to_string).unwrap();
             let name = template::template(name.as_str(), config).unwrap();
-            let filename =  if str.to_string().contains("{{") {
+            let filename =  if str.to_string().contains("{{") && is_template {
                 format!("{}_{}_{}.yaml.hbs", version, kind, name)
             } else {
                 format!("{}_{}_{}.yaml", version, kind, name)
@@ -103,9 +103,12 @@ pub fn run(args:&Parameters) -> Result<()> {
         if re_def.is_match(filename) {
             continue;
         } else if re_kusto.is_match(filename) || re_kustohbs.is_match(filename) {
+            //TODO: this should raise a warning
             copies.push(path);
-        } else if re_yml.is_match(filename) || re_ymlhbs.is_match(filename) {
-            match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()))  {Ok(_) => {}, Err(e) => {return Err(e)}}
+        } else if re_yml.is_match(filename) {
+            match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()), false)  {Ok(_) => {}, Err(e) => {return Err(e)}}
+        } else if re_ymlhbs.is_match(filename) {
+            match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()), true)  {Ok(_) => {}, Err(e) => {return Err(e)}}
         } else if re_tf.is_match(filename) || re_hbs.is_match(filename) ||
                 (re_rhai.is_match(filename) && (script.have_stage("install") || script.have_stage("destroy") || script.have_stage("plan") || script.have_stage("template"))) {
             copies.push(path);

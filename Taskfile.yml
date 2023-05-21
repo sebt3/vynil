@@ -48,15 +48,15 @@ tasks:
   agent:
     deps: [lint-rust, lint-docker-agent]
     cmds:
-    - kubectl --kubeconfig $HOME/.kube/config.build build -t "{{ .registry }}/sebt3/vynil-agent:{{ .agent_version }}" -f agent/Dockerfile . --registry-secret docker-io --push
+    - kubectl build --kubeconfig $HOME/.kube/config.build -t "{{ .registry }}/sebt3/vynil-agent:{{ .agent_version }}" -f agent/Dockerfile . --registry-secret docker-io --push
   dist:
     deps: [lint-rust, lint-docker-dist]
     cmds:
-    - kubectl --kubeconfig $HOME/.kube/config.build build -t "{{ .registry }}/sebt3/vynil-dist:{{ .dist_version }}" -f dist/Dockerfile . --registry-secret docker-io --push
+    - kubectl build --kubeconfig $HOME/.kube/config.build -t "{{ .registry }}/sebt3/vynil-dist:{{ .dist_version }}" -f dist/Dockerfile . --registry-secret docker-io --push
   operator:
     deps: [lint-rust, lint-docker-operator]
     cmds:
-    - kubectl --kubeconfig $HOME/.kube/config.build build -t "{{ .registry }}/sebt3/vynil-operator:{{ .operator_version }}" -f operator/Dockerfile . --registry-secret docker-io --push
+    - kubectl build --kubeconfig $HOME/.kube/config.build -t "{{ .registry }}/sebt3/vynil-operator:{{ .operator_version }}" -f operator/Dockerfile . --registry-secret docker-io --push
   default:
     cmds:
     - task: dist

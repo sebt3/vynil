@@ -73,7 +73,7 @@ impl Distrib {
             None
         }
     }
-    pub async fn update_status_components(&self, client: Client, manager: &str, components: HashMap<String, HashMap<String, Component>>) {
+    pub async fn update_status_components(&self, client: Client, manager: &str, components: HashMap<String, HashMap<String, Component>>) -> Result<Distrib, kube::Error> {
         let name = self.metadata.name.clone().unwrap();
         let dists: Api<Distrib> = Api::all(client);
         let new_status = Patch::Apply(json!({
@@ -86,11 +86,9 @@ impl Distrib {
             }
         }));
         let ps = PatchParams::apply(manager).force();
-        let _o = dists
-            .patch_status(&name, &ps, &new_status)
-            .await;
+        dists.patch_status(&name, &ps, &new_status).await
     }
-    pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) {
+    pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Distrib, kube::Error> {
         let name = self.metadata.name.clone().unwrap();
         let dists: Api<Distrib> = Api::all(client);
         let components = self.components();
@@ -105,8 +103,6 @@ impl Distrib {
             }
         }));
         let ps = PatchParams::apply(manager).force();
-        let _o = dists
-            .patch_status(&name, &ps, &new_status)
-            .await;
+        dists.patch_status(&name, &ps, &new_status).await
     }
 }

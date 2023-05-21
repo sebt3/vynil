@@ -70,7 +70,7 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
         }
         categories.insert(category, comps);
     }
-    dist.update_status_components(client.clone(), AGENT, categories).await;
+    dist.update_status_components(client.clone(), AGENT, categories).await.map_err(|e| anyhow!("{e}"))?;
     events::report(AGENT, client,events::from(
         format!("Preparing {}", dist.name()),action.clone(),
         Some(action)
@@ -89,7 +89,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
      if ! Path::new(&args.dir).is_dir() {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{:?} is not a directory", args.dir));
-        dist.update_status_errors(client.clone(), AGENT, errors).await;
+        dist.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&anyhow!("{:?} is not a directory", args.dir)), dist.object_ref(&())).await.unwrap();
         bail!("{:?} is not a directory", args.dir);
     }
@@ -97,7 +97,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     match clone (&target, client.clone(), &dist).await {Ok(_) => {Ok(())}, Err(e) => {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{e}"));
-        dist.update_status_errors(client.clone(), AGENT, errors).await;
+        dist.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), dist.object_ref(&())).await.unwrap();
         Err(e)
     }}
