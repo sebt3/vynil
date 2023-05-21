@@ -14,6 +14,7 @@ COPY src src/
 COPY package/Cargo.toml package/Cargo.toml
 COPY k8s/Cargo.toml k8s/Cargo.toml
 COPY agent/Cargo.toml agent/Cargo.toml
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 # Build the deps for caching purpose
 RUN cargo build -r --bin agent
 # Get our sources

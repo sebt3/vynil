@@ -6,6 +6,7 @@ COPY dist/parent.toml ./Cargo.toml
 COPY src src/
 COPY package/Cargo.toml package/Cargo.toml
 COPY dist/Cargo.toml dist/Cargo.toml
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 # Build the deps for caching purpose
 RUN mkdir -p package/src dist/src \
  && echo 'fn main() { println!("Dummy") }' > dist/src/main.rs \
