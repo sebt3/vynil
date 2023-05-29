@@ -74,9 +74,7 @@ impl Reconciler for Install {
         }
         let comp = dist.get_component(self.spec.category.as_str(), self.spec.component.as_str()).unwrap();
         if comp.use_authentik() && ! self.have_authentik() {
-            let mut errors: Vec<String> = Vec::new();
-            errors.push(format!("Authentik requiered configuration is missing"));
-            self.update_status_missing_provider(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+            self.update_status_missing_provider(client, OPERATOR, vec!["Authentik requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
             return Err(Error::IllegalInstall)
         } else if comp.use_authentik() {
             // Check that this authentik installation is there
@@ -86,34 +84,24 @@ impl Reconciler for Install {
                     let secret: Secret = secrets.get(format!("{}-akadmin",authentik.name).as_str()).await.unwrap();
                     if let Some(data) = secret.data.clone() {
                         if ! data.contains_key("AUTHENTIK_BOOTSTRAP_TOKEN") {
-                            let mut errors: Vec<String> = Vec::new();
-                            errors.push(format!("Authentik requiered secret is missing values"));
-                            self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                            self.update_status_missing_component(client, OPERATOR, vec!["Authentik requiered secret is missing values".to_string()]).await.map_err(Error::KubeError)?;
                             return Ok(Action::requeue(Duration::from_secs(60)))
                         }
                     } else {
-                        let mut errors: Vec<String> = Vec::new();
-                        errors.push(format!("Authentik requiered secret is missing"));
-                        self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                        self.update_status_missing_component(client, OPERATOR, vec!["Authentik requiered secret is missing".to_string()]).await.map_err(Error::KubeError)?;
                         return Ok(Action::requeue(Duration::from_secs(60)))
                     }
                 } else {
-                    let mut errors: Vec<String> = Vec::new();
-                    errors.push(format!("Authentik requiered configuration is missing"));
-                    self.update_status_missing_provider(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                    self.update_status_missing_provider(client, OPERATOR, vec!["Authentik requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
                     return Err(Error::IllegalInstall)
                 }
             } else {
-                let mut errors: Vec<String> = Vec::new();
-                errors.push(format!("Authentik requiered configuration is missing"));
-                self.update_status_missing_provider(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                self.update_status_missing_provider(client, OPERATOR, vec!["Authentik requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
                 return Err(Error::IllegalInstall)
             }
         }
         if comp.use_postgresql() && ! self.have_postgresql() {
-            let mut errors: Vec<String> = Vec::new();
-            errors.push(format!("PostgreSQL requiered configuration is missing"));
-            self.update_status_missing_provider(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+            self.update_status_missing_provider(client, OPERATOR, vec!["PostgreSQL requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
             return Err(Error::IllegalInstall)
         } else if comp.use_postgresql() {
             // Check that the pgo postgresql password exist
@@ -123,27 +111,19 @@ impl Reconciler for Install {
                     let secret: Secret = secrets.get(format!("postgres.{}.credentials.postgresql.acid.zalan.do",postgresql.name).as_str()).await.unwrap();
                     if let Some(data) = secret.data.clone() {
                         if ! data.contains_key("username") || ! data.contains_key("password") {
-                            let mut errors: Vec<String> = Vec::new();
-                            errors.push(format!("PostgreSQL requiered secret is missing values"));
-                            self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                            self.update_status_missing_component(client, OPERATOR, vec!["PostgreSQL requiered secret is missing values".to_string()]).await.map_err(Error::KubeError)?;
                             return Ok(Action::requeue(Duration::from_secs(60)))
                         }
                     } else {
-                        let mut errors: Vec<String> = Vec::new();
-                        errors.push(format!("PostgreSQL requiered secret is missing"));
-                        self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                        self.update_status_missing_component(client, OPERATOR, vec!["PostgreSQL requiered secret is missing".to_string()]).await.map_err(Error::KubeError)?;
                         return Ok(Action::requeue(Duration::from_secs(60)))
                     }
                 } else {
-                    let mut errors: Vec<String> = Vec::new();
-                    errors.push(format!("PostgreSQL requiered configuration is missing"));
-                    self.update_status_missing_provider(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                    self.update_status_missing_provider(client, OPERATOR, vec!["PostgreSQL requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
                     return Err(Error::IllegalInstall)
                 }
             } else {
-                let mut errors: Vec<String> = Vec::new();
-                errors.push(format!("PostgreSQL requiered configuration is missing"));
-                self.update_status_missing_provider(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                self.update_status_missing_provider(client, OPERATOR, vec!["PostgreSQL requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
                 return Err(Error::IllegalInstall)
             }
         }
@@ -249,7 +229,7 @@ impl Reconciler for Install {
                     if let Some(authentik) = providers.authentik {
                         let mut secrets = SecretHandler::new(ctx.client.clone(), authentik.namespace.as_str());
                         let secret: Secret = secrets.get(format!("{}-akadmin",authentik.name).as_str()).await.unwrap();
-                        if let Some(data) = secret.data.clone() {
+                        if let Some(data) = secret.data {
                             if data.contains_key("AUTHENTIK_BOOTSTRAP_TOKEN") {
                                 let token = data["AUTHENTIK_BOOTSTRAP_TOKEN"].clone();
                                 my_secret["AUTHENTIK_TOKEN"] = serde_json::Value::String(std::str::from_utf8(&token.0).unwrap().to_string());
@@ -265,7 +245,7 @@ impl Reconciler for Install {
                     if let Some(postgresql) = providers.postgresql {
                         let mut secrets = SecretHandler::new(ctx.client.clone(), postgresql.namespace.as_str());
                         let secret: Secret = secrets.get(format!("postgres.{}.credentials.postgresql.acid.zalan.do",postgresql.name).as_str()).await.unwrap();
-                        if let Some(data) = secret.data.clone() {
+                        if let Some(data) = secret.data {
                             if data.contains_key("username") && data.contains_key("password") {
                                 let username = data["username"].clone();
                                 let password = data["password"].clone();
@@ -298,8 +278,9 @@ impl Reconciler for Install {
             }
         }
 
-        let install_job = jobs.get_installs_install(ns.as_str(),name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
-        let plan_job = jobs.get_installs_plan(ns.as_str(),name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
+        let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str());
+        let install_job = jobs.get_installs_install(&hashedself, self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
+        let plan_job = jobs.get_installs_plan(&hashedself, self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
 
         if self.spec.schedule.is_some() {
             let cronjob_install = serde_json::json!({
@@ -458,7 +439,8 @@ impl Reconciler for Install {
         }
         if self.have_tfstate() {
             // Create the delete job
-            let destroyer_job = jobs.get_installs_destroy(ns.as_str(),name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
+            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str());
+            let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
 
             info!("Creating {destroyer_name} Job");
             let job = match jobs.apply(destroyer_name.as_str(), &destroyer_job).await {Ok(j)=>j,Err(_e)=>{

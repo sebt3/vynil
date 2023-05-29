@@ -8,24 +8,40 @@ use either::Either;
 use crate::{AGENT_IMAGE, OPERATOR};
 use k8s::install::ProviderConfigs;
 
+pub struct HashedSelf {
+    ns: String,
+    name: String,
+    hash: String
+}
+
+impl HashedSelf {
+    #[must_use] pub fn new(ns: &str, name: &str, hash: &str) -> HashedSelf {
+        HashedSelf {
+            ns: ns.to_string(),
+            name: name.to_string(),
+            hash: hash.to_string()
+        }
+    }
+}
+
 pub struct JobHandler {
     api: Api<Job>,
 }
 
-fn install_container(ns: &str, name: &str, hash: &str) -> serde_json::Value {
+fn install_container(hself: &HashedSelf) -> serde_json::Value {
     serde_json::json!({
         "args":[],
         "image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| AGENT_IMAGE.to_string()),
         "imagePullPolicy": "IfNotPresent",
         "env": [{
             "name": "NAMESPACE",
-            "value": ns
+            "value": hself.ns
         },{
             "name": "NAME",
-            "value": name
+            "value": hself.name
         },{
             "name": "hash",
-            "value": hash
+            "value": hself.hash
         },{
             "name": "LOG_LEVEL",
             "value": "debug"
@@ -64,15 +80,15 @@ fn clone_container(name: &str) -> serde_json::Value {
 })
 }
 
-fn get_action(ns: &str, name: &str, hash: &str, act: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
-    let mut action = install_container(ns, name, hash);
+fn get_action(hself: &HashedSelf, act: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+    let mut action = install_container(hself);
     action["name"] = serde_json::Value::String(act.to_string());
     action["args"] = serde_json::Value::Array([action["name"].clone()].into());
     if let Some(ref cfg) = cfg {
         if cfg.authentik.is_some() || cfg.postgresql.is_some() {
             action["envFrom"] = serde_json::Value::Array([serde_json::json!({
                 "secretRef": {
-                    "name": format!("{ns}--{name}--secret")
+                    "name": format!("{}--{}--secret", hself.ns, hself.name)
                 }
             })].into());
         }
@@ -80,8 +96,8 @@ fn get_action(ns: &str, name: &str, hash: &str, act: &str, cfg: Option<ProviderC
     action
 }
 
-fn get_templater(ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str) -> serde_json::Value {
-    let mut templater = install_container(ns, name, hash);
+fn get_templater(hself: &HashedSelf, distrib: &str, category: &str, component: &str) -> serde_json::Value {
+    let mut templater = install_container(hself);
     templater["name"] = serde_json::Value::String("template".to_string());
     templater["args"] = serde_json::Value::Array([
         templater["name"].clone(),
@@ -129,14 +145,14 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_plan(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+    pub fn get_installs_plan(&self, hashedself: &HashedSelf, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(ns, name, hash, distrib, category, component)],
-                "containers": [get_action(ns, name, hash, "plan", cfg)],
+                "initContainers": [get_templater(hashedself, distrib, category, component)],
+                "containers": [get_action(hashedself, "plan", cfg)],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
@@ -157,14 +173,14 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_destroy(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+    pub fn get_installs_destroy(&self, hashedself: &HashedSelf, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(ns, name, hash, distrib, category, component)],
-                "containers": [get_action(ns, name, hash, "destroy", cfg)],
+                "initContainers": [get_templater(hashedself, distrib, category, component)],
+                "containers": [get_action(hashedself, "destroy", cfg)],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
@@ -185,14 +201,14 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_install(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+    pub fn get_installs_install(&self, hashedself: &HashedSelf, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(ns, name, hash, distrib, category, component),get_action(ns, name, hash, "plan", cfg.clone())],
-                "containers": [get_action(ns, name, hash, "install", cfg)],
+                "initContainers": [get_templater(hashedself, distrib, category, component),get_action(hashedself, "plan", cfg.clone())],
+                "containers": [get_action(hashedself, "install", cfg)],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
