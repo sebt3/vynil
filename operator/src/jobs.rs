@@ -6,6 +6,7 @@ use kube::{
 };
 use either::Either;
 use crate::{AGENT_IMAGE, OPERATOR};
+use k8s::install::ProviderConfigs;
 
 pub struct JobHandler {
     api: Api<Job>,
@@ -63,10 +64,19 @@ fn clone_container(name: &str) -> serde_json::Value {
 })
 }
 
-fn get_action(ns: &str, name: &str, hash: &str, act: &str) -> serde_json::Value {
+fn get_action(ns: &str, name: &str, hash: &str, act: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
     let mut action = install_container(ns, name, hash);
     action["name"] = serde_json::Value::String(act.to_string());
     action["args"] = serde_json::Value::Array([action["name"].clone()].into());
+    if let Some(ref cfg) = cfg {
+        if cfg.authentik.is_some() || cfg.postgresql.is_some() {
+            action["envFrom"] = serde_json::Value::Array([serde_json::json!({
+                "secretRef": {
+                    "name": format!("{ns}--{name}--secret")
+                }
+            })].into());
+        }
+    }
     action
 }
 
@@ -119,14 +129,14 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_plan(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str) -> serde_json::Value {
+    pub fn get_installs_plan(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
                 "initContainers": [get_templater(ns, name, hash, distrib, category, component)],
-                "containers": [get_action(ns, name, hash, "plan")],
+                "containers": [get_action(ns, name, hash, "plan", cfg)],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
@@ -147,14 +157,14 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_destroy(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str) -> serde_json::Value {
+    pub fn get_installs_destroy(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
                 "initContainers": [get_templater(ns, name, hash, distrib, category, component)],
-                "containers": [get_action(ns, name, hash, "destroy")],
+                "containers": [get_action(ns, name, hash, "destroy", cfg)],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
@@ -175,14 +185,14 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_install(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str) -> serde_json::Value {
+    pub fn get_installs_install(&self, ns: &str, name: &str, hash: &str, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(ns, name, hash, distrib, category, component),get_action(ns, name, hash, "plan")],
-                "containers": [get_action(ns, name, hash, "install")],
+                "initContainers": [get_templater(ns, name, hash, distrib, category, component),get_action(ns, name, hash, "plan", cfg.clone())],
+                "containers": [get_action(ns, name, hash, "install", cfg)],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {

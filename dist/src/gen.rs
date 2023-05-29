@@ -33,7 +33,13 @@ fn providers(args:&ParametersDest) -> Result<()> {
     if ! Path::new(&args.project).is_dir() {
         bail!("{:?} is not a directory", args.project);
     }
-    terraform::gen_providers(&args.project)
+    let mut file = PathBuf::new();
+    file.push(args.project.clone());
+    file.push("index.yaml");
+    let yaml = match yaml::read_index(&file){Ok(d) => d, Err(e) => {
+        bail!("{e}");
+    }};
+    terraform::gen_providers(&args.project, yaml.providers)
 }
 fn ressources(args:&ParametersDest) -> Result<()> {
     if ! Path::new(&args.project).is_dir() {

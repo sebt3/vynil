@@ -32,7 +32,7 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
         shell::run_log(&"git config --global http.sslVerify false".into()).or_else(|e: Error| {bail!("{e}")})?;
     }
     // TODO: Support selecting branch
-    // TODO: Support git login somehow
+    // TODO: Support git login somehow (utilisation d'un secret contenant le fichier .git-credentials)
     let action = if Path::new(&dot_git).is_dir() {
         // if a .git directory exist, run git pull
         shell::run_log(&format!("cd {:?};git pull", target)).or_else(|e: Error| {bail!("{e}")})?;

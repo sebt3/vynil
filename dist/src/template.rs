@@ -21,7 +21,7 @@ pub struct Parameters {
     name: String,
 }
 
-pub fn template(src: PathBuf, dest: PathBuf, yaml:&serde_json::Map<String, serde_json::Value>, script: &mut script::Script) -> Result<()> {
+pub fn template(src: PathBuf, dest: PathBuf, yaml:&serde_json::Map<String, serde_json::Value>, script: &mut script::Script, providers: Option<yaml::Providers>) -> Result<()> {
     let reg = Handlebars::new();
     // run pre-template stage from rhai script if any
     let stage = "template".to_string();
@@ -53,7 +53,7 @@ pub fn template(src: PathBuf, dest: PathBuf, yaml:&serde_json::Map<String, serde
             fs::copy(path, dest_path).unwrap();
         }
     }
-    terraform::gen_providers(&dest).or_else(|e: Error| {bail!("{e}")})?;
+    terraform::gen_providers(&dest, providers).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_variables(&dest, yaml).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_datas(&dest).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_ressources(&dest).or_else(|e: Error| {bail!("{e}")})?;
@@ -92,7 +92,7 @@ pub fn run(args:&Parameters) -> Result<()> {
         dest.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&serde_json::from_str("{}")?)
     ));
-    match template(src, dest, &yaml.get_values(&serde_json::from_str("{}")?), &mut script) {Ok(_) => {Ok(())}, Err(e) => {
+    match template(src, dest, &yaml.get_values(&serde_json::from_str("{}")?), &mut script, yaml.providers.clone()) {Ok(_) => {Ok(())}, Err(e) => {
         Err(e)
     }}
 }

@@ -14,7 +14,7 @@ COPY src src/
 COPY package/Cargo.toml package/Cargo.toml
 COPY k8s/Cargo.toml k8s/Cargo.toml
 COPY agent/Cargo.toml agent/Cargo.toml
-ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
 # Build the deps for caching purpose
 RUN cargo build -r --bin agent
 # Get our sources
@@ -46,7 +46,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && curl -sL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCHITECTURE}.tar.gz" |tar --wildcards -C /usr/local/bin/ --strip-components=1 -xzf - */helm \
  && curl -sL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCHITECTURE}.zip" -o /tmp/tf.zip \
  && unzip /tmp/tf.zip terraform -d /usr/local/bin \
- && rm /tmp/tf.zip
+ && rm /tmp/tf.zip \
+ && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm
 COPY --from=builder /usr/src/agent/target/release/agent /usr/bin/agent
 USER nobody
 WORKDIR /work

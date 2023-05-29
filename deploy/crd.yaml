@@ -112,6 +112,10 @@ spec:
       jsonPath: .status.status
       name: status
       type: string
+    - description: Status
+      jsonPath: .status.errors[*]
+      name: errors
+      type: string
     - description: Last update date
       format: date-time
       jsonPath: .status.last_updated
@@ -144,6 +148,36 @@ spec:
               plan:
                 description: Should we plan
                 type: boolean
+              providers:
+                description: Providers configuration
+                properties:
+                  authentik:
+                    description: Provide an authentik install if needed
+                    properties:
+                      name:
+                        description: Name of the provider source object
+                        type: string
+                      namespace:
+                        description: Namespace of the provider source object
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  postgresql:
+                    description: Provide a pgo instance if needed
+                    properties:
+                      name:
+                        description: Name of the provider source object
+                        type: string
+                      namespace:
+                        description: Namespace of the provider source object
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                type: object
               schedule:
                 description: Actual cron-type expression that defines the interval of the upgrades.
                 type: string
@@ -186,6 +220,7 @@ spec:
             - digest
             - last_updated
             - planned
+            - status
             type: object
         required:
         - spec

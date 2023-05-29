@@ -54,6 +54,7 @@ pub mod jobs;
 pub mod cronjobs;
 pub mod pvc;
 pub mod events;
+pub mod secrets;
 
 /// State machinery for kube, as exposeable to actix
 pub mod manager;

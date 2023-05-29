@@ -23,7 +23,7 @@ pub struct Parameters {
     name: String,
 }
 
-pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client, inst: &client::Install, yaml:&serde_json::Map<String, serde_json::Value>, script: &mut script::Script) -> Result<()> {
+pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client, inst: &client::Install, yaml:&serde_json::Map<String, serde_json::Value>, script: &mut script::Script, providers: Option<yaml::Providers>) -> Result<()> {
     let reg = Handlebars::new();
     // run pre-template stage from rhai script if any
     let stage = "template".to_string();
@@ -55,7 +55,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client, inst: &
             fs::copy(path, dest_path).unwrap();
         }
     }
-    terraform::gen_providers(&dest).or_else(|e: Error| {bail!("{e}")})?;
+    terraform::gen_providers(&dest, providers).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_variables(&dest, yaml).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_datas(&dest).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_ressources(&dest).or_else(|e: Error| {bail!("{e}")})?;
@@ -114,7 +114,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
         dest.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&inst.options())
     ));
-    match template(src, dest, client.clone(), &inst, &yaml.get_values(&inst.options()), &mut script).await {Ok(_) => {Ok(())}, Err(e) => {
+    match template(src, dest, client.clone(), &inst, &yaml.get_values(&inst.options()), &mut script, yaml.providers.clone()).await {Ok(_) => {Ok(())}, Err(e) => {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{e}"));
         inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;

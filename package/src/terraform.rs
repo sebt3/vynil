@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
-use crate::shell;
+use crate::{shell, yaml::Providers};
 
 fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
     if ! Path::new(dest).is_file() || force {
@@ -69,33 +69,135 @@ pub fn run_destroy(src: &PathBuf) -> Result<()> {
     shell::run_log(&format!("cd {:?};terraform apply -destroy -input=false -auto-approve -var-file=env.tfvars", src))
 }
 
-pub fn gen_providers(dest_dir: &PathBuf) -> Result<()> {
+pub fn gen_providers(dest_dir: &PathBuf, providers: Option<Providers>) -> Result<()> {
     let mut file  = PathBuf::new();
-    file.push(dest_dir);
-    file.push("providers.tf");
-    gen_file(&file, &"
+    let mut requiered = String::new();
+    let mut content = String::new();
+    requiered += "
 terraform {
   required_providers {
     kustomization = {
         source  = \"kbst/kustomization\"
         version = \"~> 0.9.2\"
-    }
-#    authentik = {
-#        source = \"goauthentik/authentik\"
-#        version = \"~> 2023.3.0\"
-#    }
-#    kubernetes = {
-#        source = \"hashicorp/kubernetes\"
-#        version = \"~> 2.16.0\"
-#    }
+    }";
+    content += "
   }
 }
 provider \"kustomization\" {
     kubeconfig_incluster = true
-}
-#provider \"kubernetes\" {}
-#provider \"authentik\" {}
-".to_string(), false)
+}";
+    let mut have_kubernetes = false;
+    if let Some(providers) = providers.clone() {
+      if let Some(kubernetes) = providers.kubernetes {
+        have_kubernetes = kubernetes;
+      }
+    }
+    if have_kubernetes {
+      requiered += "
+    kubernetes = {
+        source = \"hashicorp/kubernetes\"
+        version = \"~> 2.20.0\"
+    }";
+      content += "
+provider \"kubernetes\" {
+    host = \"https://kubernetes.default.svc\"
+    token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"
+    cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"
+}";
+    } else {
+      requiered += "
+#    kubernetes = {
+#        source = \"hashicorp/kubernetes\"
+#        version = \"~> 2.20.0\"
+#    }";
+      content += "
+#provider \"kubernetes\" {
+#    host = \"https://kubernetes.default.svc\"
+#    token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"
+#    cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"
+#}";
+    }
+    let mut have_kubectl = false;
+    if let Some(providers) = providers.clone() {
+      if let Some(kubectl) = providers.kubectl {
+        have_kubectl = kubectl;
+      }
+    }
+    if have_kubectl {
+      requiered += "
+    kubectl = {
+        source = \"gavinbunney/kubectl\"
+        version = \"~> 1.14.0\"
+    }";
+      content += "
+provider \"kubectl\" {
+    host = \"https://kubernetes.default.svc\"
+    token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"
+    cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"
+}";
+    } else {
+      requiered += "
+#    kubectl = {
+#        source = \"gavinbunney/kubectl\"
+#        version = \"~> 1.14.0\"
+#    }";
+      content += "
+#provider \"kubectl\" {
+#    host = \"https://kubernetes.default.svc\"
+#    token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"
+#    cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"
+#}";
+    }
+    let mut have_authentik = false;
+    if let Some(providers) = providers.clone() {
+      if let Some(authentik) = providers.authentik {
+        have_authentik = authentik;
+      }
+    }
+    if have_authentik {
+      requiered += "
+    authentik = {
+        source = \"goauthentik/authentik\"
+        version = \"~> 2023.5.0\"
+    }";
+      content += "
+provider \"authentik\" {}";
+    } else {
+      requiered += "
+#    authentik = {
+#        source = \"goauthentik/authentik\"
+#        version = \"~> 2023.5.0\"
+#    }";
+      content += "
+#provider \"authentik\" {}";
+    }
+    let mut have_postgresql = false;
+    if let Some(providers) = providers {
+      if let Some(postgresql) = providers.postgresql {
+        have_postgresql = postgresql;
+      }
+    }
+    if have_postgresql {
+      requiered += "
+    postgresql = {
+        source = \"cyrilgdn/postgresql\"
+        version = \"~> 1.19.0\"
+    }";
+      content += "
+provider \"postgresql\" {}";
+    } else {
+      requiered += "
+#    postgresql = {
+#        source = \"cyrilgdn/postgresql\"
+#        version = \"~> 1.19.0\"
+#    }";
+      content += "
+#provider \"postgresql\" {}";
+    }
+    file.push(dest_dir);
+    file.push("providers.tf");
+    requiered.push_str(content.as_str());
+    gen_file(&file, &requiered, false)
 }
 
 pub fn gen_variables(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json::Value>) -> Result<()> {

@@ -2,7 +2,7 @@ use std::{fs, path::{PathBuf, Path}};
 use anyhow::{Result, bail};
 use clap::Args;
 use regex::Regex;
-use package::{yaml, script, template/*, yaml2tf */};
+use package::{yaml, script, template};
 
 #[derive(Args, Debug)]
 pub struct Parameters {
@@ -97,7 +97,7 @@ pub fn run(args:&Parameters) -> Result<()> {
     let re_yml = Regex::new(r"\.yaml$").unwrap();
     let re_tf = Regex::new(r"\.tf$").unwrap();
     let re_def = Regex::new(r"^index\.yaml$").unwrap();
-    for file in fs::read_dir(path).unwrap() {
+    for file in fs::read_dir(path.clone()).unwrap() {
         let path = file.unwrap().path();
         let filename = path.file_name().unwrap().to_str().unwrap();
         if re_def.is_match(filename) {
@@ -117,7 +117,16 @@ pub fn run(args:&Parameters) -> Result<()> {
     let mut dest_path: PathBuf = PathBuf::new();
     dest_path.push(dest_dir.clone());
     dest_path.push("index.yaml");
-    yaml.update_options_from_defaults(dest_path)?;
+    yaml.update_options_from_defaults(dest_path.clone())?;
+    let mut yaml = match yaml::read_index(&dest_path) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
+    let mut script = script::Script::new(&file, script::new_context(
+        yaml.metadata.name.clone(),
+        yaml.category.clone(),
+        path.into_os_string().into_string().unwrap(),
+        dest_dir.clone().into_os_string().into_string().unwrap(),
+        &yaml.get_values(&serde_json::Map::new())
+    ));
+    match yaml.validate() {Ok(_) => {}, Err(e) => {return Err(e)}}
 
     // Copy all valids and selected files to dist
     for path in copies {

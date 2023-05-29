@@ -23,7 +23,8 @@ pub fn run(args:&Parameters) -> Result<()> {
     // Basic validation the index.yaml file
     if let Err(e) = yaml::validate_index(&yaml) {log::error!("{e:}");process::exit(2)}
     // serde enforced validation
-    let _yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:}");process::exit(1)},};
+    let yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:}");process::exit(1)},};
+    if let Err(e) = yaml.validate() {log::error!("{e:}");process::exit(2)}
     log::info!("Project is valid");
     Ok(())
 }

@@ -2,7 +2,7 @@ use std::{fs, env, path::{PathBuf, Path}};
 use serde::{Serialize, Deserialize};
 use serde_yaml;
 use serde_json;
-use anyhow::{Result, ensure, bail};
+use anyhow::{Result, ensure, bail, anyhow};
 pub use openapiv3::{Schema, ReferenceOr};
 use schemars::{JsonSchema,schema_for_value};
 use std::collections::HashMap;
@@ -18,6 +18,13 @@ pub struct ComponentDependency {
     pub category: String,
     pub component: String,
 }
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+pub struct Providers {
+    pub kubernetes: Option<bool>,
+    pub authentik: Option<bool>,
+    pub kubectl: Option<bool>,
+    pub postgresql: Option<bool>,
+}
 #[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct Component {
@@ -26,7 +33,8 @@ pub struct Component {
     pub category: String,
     pub metadata: ComponentMetadata,
     pub options: HashMap<String, serde_json::Value>,
-    pub dependencies: Option<Vec<ComponentDependency>>
+    pub dependencies: Option<Vec<ComponentDependency>>,
+    pub providers: Option<Providers>,
 }
 
 fn merge_json(a: &mut serde_json::Value, b: serde_json::Value) {
@@ -144,6 +152,29 @@ impl Component {
         object
     }
 
+    pub fn validate(&self) -> Result<()> {
+        for (key, val) in &self.options.clone() {
+            let _schema: &Schema = &serde_json::from_str(serde_json::to_string(val).unwrap().as_str()).map_err(|e| anyhow!("while checking {key} : {e}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn use_authentik(&self) -> bool {
+        if let Some(providers) = self.providers.as_ref() {
+            if let Some(used) = &providers.authentik {
+                *used
+            } else {false}
+        } else {false}
+    }
+
+    pub fn use_postgresql(&self) -> bool {
+        if let Some(providers) = self.providers.as_ref() {
+            if let Some(used) = &providers.postgresql {
+                *used
+            } else {false}
+        } else {false}
+    }
+
     pub fn update_options_from_defaults(mut self, dest:PathBuf) -> Result<()> {
         for (key, mut val) in self.options.clone() {
             let schema: &Schema = &serde_json::from_str(serde_json::to_string(&val).unwrap().as_str()).unwrap();
@@ -185,7 +216,6 @@ pub fn validate_index(yaml: &serde_yaml::Value) -> Result<()> {
     ensure!(yaml["metadata"]["name"].as_str().map(std::string::ToString::to_string).is_some(), "metadata.name is not set");
     ensure!(yaml["category"].as_str().map(std::string::ToString::to_string).is_some(), "category is not set");
     ensure!(["apps", "core", "share", "tech"].contains(&yaml["category"].as_str().unwrap()), "category is not supported");
-    //TODO: validate that the options is a valid schema
     Ok(())
 }
 

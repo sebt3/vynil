@@ -11,8 +11,27 @@ pub const STATUS_INSTALLING: &str = "installing";
 pub const STATUS_PLANNING: &str = "planning";
 pub const STATUS_MISSING_DIST: &str = "missing distribution";
 pub const STATUS_MISSING_COMP: &str = "missing component";
+pub const STATUS_MISSING_PROV: &str = "missing provider config";
 pub const STATUS_MISSING_DEPS: &str = "missing dependencies";
 pub const STATUS_WAITING_DEPS: &str = "waiting dependencies";
+
+/// Providers configuration source
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+pub struct ProviderConfigSource {
+    /// Namespace of the provider source object
+    pub namespace: String,
+    /// Name of the provider source object
+    pub name: String,
+}
+
+/// Providers configuration
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+pub struct ProviderConfigs {
+    /// Provide an authentik install if needed
+    pub authentik: Option<ProviderConfigSource>,
+    /// Provide a pgo instance if needed
+    pub postgresql: Option<ProviderConfigSource>,
+}
 
 /// Generate the Kubernetes wrapper struct `Install` from our Spec and Status struct
 ///
@@ -24,6 +43,7 @@ pub const STATUS_WAITING_DEPS: &str = "waiting dependencies";
 {"name":"cat",    "type":"string", "description":"Category", "jsonPath":".spec.category"},
 {"name":"app",    "type":"string", "description":"Component", "jsonPath":".spec.component"},
 {"name":"status", "type":"string", "description":"Status", "jsonPath":".status.status"},
+{"name":"errors", "type":"string", "description":"Status", "jsonPath":".status.errors[*]"},
 {"name":"last_updated", "type":"string", "description":"Last update date", "format": "date-time", "jsonPath":".status.last_updated"}"#)]
 /// Maybe
 pub struct InstallSpec {
@@ -35,6 +55,8 @@ pub struct InstallSpec {
     pub component: String,
     /// Parameters
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Providers configuration
+    pub providers: Option<ProviderConfigs>,
     /// Actual cron-type expression that defines the interval of the upgrades.
     pub schedule: Option<String>,
     /// Should we plan
@@ -107,6 +129,16 @@ impl Install {
     pub fn plan(&self) -> serde_json::Map<String, serde_json::Value> {
         self.status.clone().map(|s| s.plan.unwrap_or_default()).unwrap_or_default()
     }
+    pub fn have_authentik(&self) -> bool {
+        if let Some(ref providers) = self.spec.providers {
+            providers.authentik.is_some()
+        } else {false}
+    }
+    pub fn have_postgresql(&self) -> bool {
+        if let Some(ref providers) = self.spec.providers {
+            providers.postgresql.is_some()
+        } else {false}
+    }
     pub fn have_tfstate(&self) -> bool {
         if let Some(ref status) = self.status {
             status.tfstate.is_some()
@@ -150,6 +182,9 @@ impl Install {
     }
     pub async fn update_status_missing_component(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
         self.update_status_typed(client, manager, errors, STATUS_MISSING_COMP).await
+    }
+    pub async fn update_status_missing_provider(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, errors, STATUS_MISSING_PROV).await
     }
     pub async fn update_status_missing_dependencies(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
         self.update_status_typed(client, manager, errors, STATUS_MISSING_DEPS).await

@@ -6,7 +6,6 @@ COPY dist/parent.toml ./Cargo.toml
 COPY src src/
 COPY package/Cargo.toml package/Cargo.toml
 COPY dist/Cargo.toml dist/Cargo.toml
-ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 # Build the deps for caching purpose
 RUN mkdir -p package/src dist/src \
  && echo 'fn main() { println!("Dummy") }' > dist/src/main.rs \
@@ -40,7 +39,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && curl -sL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCHITECTURE}.tar.gz" |tar --wildcards -C /usr/local/bin/ --strip-components=1 -xzf - */helm \
  && curl -sL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCHITECTURE}.zip" -o /tmp/tf.zip \
  && unzip /tmp/tf.zip terraform -d /usr/local/bin \
- && rm /tmp/tf.zip
+ && rm /tmp/tf.zip \
+ && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm
 COPY --from=builder /usr/src/dist/target/release/dist /usr/bin/dist
 USER nobody
 WORKDIR /work

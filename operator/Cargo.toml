@@ -47,6 +47,7 @@ thiserror = "1.0.37"
 async-trait = "0.1.68"
 either = "1.8.1"
 
+
 [dependencies.kube]
 features = ["runtime", "client", "derive"]
 version = "0.82.0"
