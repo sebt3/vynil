@@ -47,8 +47,14 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && curl -sL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCHITECTURE}.zip" -o /tmp/tf.zip \
  && unzip /tmp/tf.zip terraform -d /usr/local/bin \
  && rm /tmp/tf.zip \
- && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm
+ && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm \
+ && mkdir -p /var/lib/vynil/keys /nonexistent \
+ && chown -R nobody:nogroup /var/lib/vynil /nonexistent \
+ && chmod 750 /var/lib/vynil /nonexistent \
+ && chmod 700 /var/lib/vynil/keys
 COPY --from=builder /usr/src/agent/target/release/agent /usr/bin/agent
 USER nobody
 WORKDIR /work
+ENV GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i /var/lib/vynil/keys/private"
+RUN git config --global credential.helper 'store --file /var/lib/vynil/git-credentials'
 ENTRYPOINT ["agent"]

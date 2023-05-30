@@ -41,6 +41,36 @@ spec:
               insecure:
                 description: Git clone URL
                 type: boolean
+              login:
+                description: Git authentication
+                properties:
+                  git_credentials:
+                    description: 'a git-credentials store file (format: https://<username>:<password|token>@<url>/<repo>)'
+                    properties:
+                      key:
+                        description: Key of the secret containing the file
+                        type: string
+                      name:
+                        description: Name of the secret
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  ssh_key:
+                    description: SSH private key
+                    properties:
+                      key:
+                        description: Key of the secret containing the file
+                        type: string
+                      name:
+                        description: Name of the secret
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                type: object
               schedule:
                 description: Actual cron-type expression that defines the interval of the updates.
                 type: string

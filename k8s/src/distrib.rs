@@ -6,6 +6,24 @@ use serde_json::json;
 pub use package::yaml::{Component, ComponentDependency};
 use std::collections::HashMap;
 
+/// Secret Reference
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+pub struct SecretRef {
+    /// Name of the secret
+    pub name: String,
+    /// Key of the secret containing the file
+    pub key: String
+}
+
+/// Distribution source authentication
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+pub struct DistribAuthent {
+    /// SSH private key
+    pub ssh_key: Option<SecretRef>,
+    /// a git-credentials store file (format: https://<username>:<password|token>@<url>/<repo>)
+    pub git_credentials: Option<SecretRef>,
+}
+
 /// Distrib:
 ///
 /// Describe a source of components distribution git repository
@@ -21,6 +39,8 @@ pub struct DistribSpec {
     pub insecure: Option<bool>,
     /// Git branch
     pub branch: Option<String>,
+    /// Git authentication
+    pub login: Option<DistribAuthent>,
     /// Actual cron-type expression that defines the interval of the updates.
     pub schedule: String,
 }

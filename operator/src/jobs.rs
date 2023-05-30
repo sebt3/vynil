@@ -7,6 +7,7 @@ use kube::{
 use either::Either;
 use crate::{AGENT_IMAGE, OPERATOR};
 use k8s::install::ProviderConfigs;
+use k8s::distrib::DistribAuthent;
 
 pub struct HashedSelf {
     ns: String,
@@ -56,7 +57,26 @@ fn install_container(hself: &HashedSelf) -> serde_json::Value {
     })
 }
 
-fn clone_container(name: &str) -> serde_json::Value {
+fn clone_container(name: &str, auth: Option<DistribAuthent>) -> serde_json::Value {
+    let mut mounts = vec!(serde_json::json!({
+        "name": "dist",
+        "mountPath": "/work",
+        "subPath": name
+    }));
+    if let Some(auth) = auth {
+        if auth.ssh_key.is_some() {
+            mounts.push(serde_json::json!({
+                "name": "ssh",
+                "mountPath": "/var/lib/vynil/keys",
+            }));
+        }
+        if auth.git_credentials.is_some() {
+            mounts.push(serde_json::json!({
+                "name": "creds",
+                "mountPath": "/var/lib/vynil",
+            }));
+        }
+    }
     serde_json::json!({
         "args":["clone"],
         "image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| AGENT_IMAGE.to_string()),
@@ -71,13 +91,12 @@ fn clone_container(name: &str) -> serde_json::Value {
         },{
             "name": "RUST_LOG",
             "value": "info,controller=debug,agent=debug"
+        },{
+            "name": "GIT_SSH_COMMAND",
+            "value": "ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i /var/lib/vynil/keys/private"
         }],
-        "volumeMounts": [{
-            "name": "dist",
-            "mountPath": "/work",
-            "subPath": name
-        }],
-})
+        "volumeMounts": mounts,
+    })
 }
 
 fn get_action(hself: &HashedSelf, act: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
@@ -123,19 +142,48 @@ impl JobHandler {
         }
     }
 
-    pub fn get_clone(&self, name: &str) -> serde_json::Value {
+    pub fn get_clone(&self, name: &str, auth: Option<DistribAuthent>) -> serde_json::Value {
+        let mut volumes = vec!(serde_json::json!({
+            "name": "dist",
+            "persistentVolumeClaim": {
+                "claimName": format!("{name}-distrib")
+            }
+        }));
+        if let Some(auth) = auth.clone() {
+            if let Some(ref ssh) = auth.ssh_key {
+                volumes.push(serde_json::json!({
+                    "name": "ssh",
+                    "secret": {
+                        "secretName": ssh.name.as_str(),
+                        "defaultMode": "0400",
+                        "items": [{
+                            "key": ssh.key.as_str(),
+                            "path": "private"
+                        }]
+                    }
+                }));
+            }
+            if let Some(ref cred) = auth.git_credentials {
+                volumes.push(serde_json::json!({
+                    "name": "creds",
+                    "secret": {
+                        "secretName": cred.name.as_str(),
+                        "defaultMode": "0400",
+                        "items": [{
+                            "key": cred.key.as_str(),
+                            "path": "git-credentials"
+                        }]
+                    }
+                }));
+            }
+        }
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "containers": [clone_container(name)],
-                "volumes": [{
-                    "name": "dist",
-                    "persistentVolumeClaim": {
-                        "claimName": format!("{name}-distrib")
-                    }
-                }],
+                "containers": [clone_container(name, auth)],
+                "volumes": volumes,
                 "securityContext": {
                     "fsGroup": 65534,
                     "runAsUser": 65534,

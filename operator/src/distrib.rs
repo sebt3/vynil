@@ -68,7 +68,7 @@ impl Reconciler for Distrib {
 
 
         let mut jobs = JobHandler::new(ctx.client.clone(), ns);
-        let template = jobs.get_clone(name.as_str());
+        let template = jobs.get_clone(name.as_str(), self.spec.login.clone());
         if jobs.have(clone_name.as_str()).await {
             info!("Patching {clone_name} Job");
             let _job = match jobs.apply(clone_name.as_str(), &template).await {Ok(j)=>j,Err(_e)=>{
