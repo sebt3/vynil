@@ -155,7 +155,7 @@ impl JobHandler {
                     "name": "ssh",
                     "secret": {
                         "secretName": ssh.name.as_str(),
-                        "defaultMode": "0400",
+                        "defaultMode": 0o400,
                         "items": [{
                             "key": ssh.key.as_str(),
                             "path": "private"
@@ -168,7 +168,7 @@ impl JobHandler {
                     "name": "creds",
                     "secret": {
                         "secretName": cred.name.as_str(),
-                        "defaultMode": "0400",
+                        "defaultMode": 0o400,
                         "items": [{
                             "key": cred.key.as_str(),
                             "path": "git-credentials"
