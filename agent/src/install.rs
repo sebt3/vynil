@@ -115,7 +115,12 @@ pub async fn run(args:&Parameters) -> Result<()> {
     match install(&src, &mut script, client.clone(), &inst).await {Ok(_) => {Ok(())}, Err(e) => {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{e}"));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        let mut path = PathBuf::new();
+        path.push(src.clone());
+        path.push("terraform.tfstate");
+        let content = match fs::read_to_string(path.clone()) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
+        let new_state = match serde_json::from_str(&content) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
+        inst.update_status_errors_tfstate(client.clone(), AGENT, errors, new_state).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         Err(e)
     }}

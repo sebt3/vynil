@@ -11,6 +11,7 @@ use kube::{
     },
     Resource,
 };
+use base64::{Engine as _, engine::general_purpose};
 use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::{Span, debug, field, info, instrument, warn};
@@ -219,7 +220,7 @@ impl Reconciler for Install {
             ).await.map_err(Error::KubeError)?;
             jobs.delete(install_name.as_str()).await.unwrap();
         }
-        if comp.use_postgresql() || comp.use_postgresql() {
+        if comp.use_postgresql() || comp.use_authentik() {
             // Prepare a secret
             let mut my_secrets = SecretHandler::new(ctx.client.clone(), my_ns);
             let mut my_secret = serde_json::json!({});
@@ -232,8 +233,8 @@ impl Reconciler for Install {
                         if let Some(data) = secret.data {
                             if data.contains_key("AUTHENTIK_BOOTSTRAP_TOKEN") {
                                 let token = data["AUTHENTIK_BOOTSTRAP_TOKEN"].clone();
-                                my_secret["AUTHENTIK_TOKEN"] = serde_json::Value::String(std::str::from_utf8(&token.0).unwrap().to_string());
-                                my_secret["AUTHENTIK_URL"] = serde_json::Value::String(format!("{}.{}.svc",authentik.name, authentik.namespace));
+                                my_secret["AUTHENTIK_TOKEN"] = serde_json::Value::String(general_purpose::STANDARD.encode(std::str::from_utf8(&token.0).unwrap()));
+                                my_secret["AUTHENTIK_URL"] = serde_json::Value::String(general_purpose::STANDARD.encode(format!("{}.{}.svc",authentik.name, authentik.namespace)));
                             }
                         }
                     }
@@ -249,9 +250,9 @@ impl Reconciler for Install {
                             if data.contains_key("username") && data.contains_key("password") {
                                 let username = data["username"].clone();
                                 let password = data["password"].clone();
-                                my_secret["PGHOST"] = serde_json::Value::String(format!("{}.{}.svc",postgresql.name, postgresql.namespace));
-                                my_secret["PGUSER"] = serde_json::Value::String(std::str::from_utf8(&username.0).unwrap().to_string());
-                                my_secret["PGPASSWORD"] = serde_json::Value::String(std::str::from_utf8(&password.0).unwrap().to_string());
+                                my_secret["PGHOST"] = serde_json::Value::String(general_purpose::STANDARD.encode(format!("{}.{}.svc",postgresql.name, postgresql.namespace)));
+                                my_secret["PGUSER"] = serde_json::Value::String(general_purpose::STANDARD.encode(std::str::from_utf8(&username.0).unwrap()));
+                                my_secret["PGPASSWORD"] = serde_json::Value::String(general_purpose::STANDARD.encode(std::str::from_utf8(&password.0).unwrap()));
                             }
                         }
                     }

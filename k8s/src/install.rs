@@ -7,7 +7,7 @@ use serde_json::json;
 pub const STATUS_ERRORS: &str = "errors";
 pub const STATUS_INSTALLED: &str = "installed";
 pub const STATUS_PLANNED: &str = "planned";
-pub const STATUS_INSTALLING: &str = "installing";
+pub const STATUS_INSTALLING: &str = "started";
 pub const STATUS_PLANNING: &str = "planning";
 pub const STATUS_MISSING_DIST: &str = "missing distribution";
 pub const STATUS_MISSING_COMP: &str = "missing component";
@@ -176,6 +176,26 @@ impl Install {
     }
     pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
         self.update_status_typed(client, manager, errors, STATUS_ERRORS).await
+    }
+    pub async fn update_status_errors_tfstate(&self, client: Client, manager: &str, errors: Vec<String>, tfstate: serde_json::Map<String, serde_json::Value>) -> Result<Install, kube::Error> {
+        let name = self.name();
+        let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
+        let last_updated = Utc::now();
+        let new_status = Patch::Apply(json!({
+            "apiVersion": "vynil.solidite.fr/v1",
+            "kind": "Install",
+            "status": InstallStatus {
+                status: STATUS_ERRORS.to_string(),
+                errors: Some(errors),
+                plan: Some(self.current_plan()),
+                planned: false,
+                tfstate: Some(tfstate),
+                last_updated,
+                digest: self.options_digest()
+            }
+        }));
+        let ps = PatchParams::apply(manager).force();
+        insts.patch_status(&name, &ps, &new_status).await
     }
     pub async fn update_status_missing_distrib(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
         self.update_status_typed(client, manager, errors, STATUS_MISSING_DIST).await
