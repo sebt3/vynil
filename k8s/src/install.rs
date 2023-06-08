@@ -15,24 +15,6 @@ pub const STATUS_MISSING_PROV: &str = "missing provider config";
 pub const STATUS_MISSING_DEPS: &str = "missing dependencies";
 pub const STATUS_WAITING_DEPS: &str = "waiting dependencies";
 
-/// Providers configuration source
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
-pub struct ProviderConfigSource {
-    /// Namespace of the provider source object
-    pub namespace: String,
-    /// Name of the provider source object
-    pub name: String,
-}
-
-/// Providers configuration
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
-pub struct ProviderConfigs {
-    /// Provide an authentik install if needed
-    pub authentik: Option<ProviderConfigSource>,
-    /// Provide a pgo instance if needed
-    pub postgresql: Option<ProviderConfigSource>,
-}
-
 /// Generate the Kubernetes wrapper struct `Install` from our Spec and Status struct
 ///
 /// This provides a hook for generating the CRD yaml (in crdgen.rs)
@@ -55,8 +37,6 @@ pub struct InstallSpec {
     pub component: String,
     /// Parameters
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Providers configuration
-    pub providers: Option<ProviderConfigs>,
     /// Actual cron-type expression that defines the interval of the upgrades.
     pub schedule: Option<String>,
     /// Should we plan
@@ -128,16 +108,6 @@ impl Install {
     }
     pub fn plan(&self) -> serde_json::Map<String, serde_json::Value> {
         self.status.clone().map(|s| s.plan.unwrap_or_default()).unwrap_or_default()
-    }
-    pub fn have_authentik(&self) -> bool {
-        if let Some(ref providers) = self.spec.providers {
-            providers.authentik.is_some()
-        } else {false}
-    }
-    pub fn have_postgresql(&self) -> bool {
-        if let Some(ref providers) = self.spec.providers {
-            providers.postgresql.is_some()
-        } else {false}
     }
     pub fn have_tfstate(&self) -> bool {
         if let Some(ref status) = self.status {

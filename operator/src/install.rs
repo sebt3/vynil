@@ -1,5 +1,4 @@
 use crate::{OPERATOR, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, cronjobs::CronJobHandler, secrets::SecretHandler};
-use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::api::core::v1::Namespace;
 use chrono::Utc;
 use kube::{
@@ -11,7 +10,7 @@ use kube::{
     },
     Resource,
 };
-use base64::{Engine as _, engine::general_purpose};
+//use base64::{Engine as _, engine::general_purpose};
 use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::{Span, debug, field, info, instrument, warn};
@@ -52,7 +51,6 @@ impl Reconciler for Install {
         let my_ns = ctx.client.default_namespace();
         let mut jobs = JobHandler::new(ctx.client.clone(), my_ns);
         let mut crons = CronJobHandler::new(ctx.client.clone(), my_ns);
-        let secret_name = format!("{ns}--{name}--secret");
         let plan_name = format!("{ns}--{name}--plan");
         let install_name = format!("{ns}--{name}--install");
         let dist_name = self.spec.distrib.as_str();
@@ -74,60 +72,6 @@ impl Reconciler for Install {
             }
         }
         let comp = dist.get_component(self.spec.category.as_str(), self.spec.component.as_str()).unwrap();
-        if comp.use_authentik() && ! self.have_authentik() {
-            self.update_status_missing_provider(client, OPERATOR, vec!["Authentik requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
-            return Err(Error::IllegalInstall)
-        } else if comp.use_authentik() {
-            // Check that this authentik installation is there
-            if let Some(providers) = self.spec.providers.clone() {
-                if let Some(authentik) = providers.authentik {
-                    let mut secrets = SecretHandler::new(ctx.client.clone(), authentik.namespace.as_str());
-                    let secret: Secret = secrets.get(format!("{}-akadmin",authentik.name).as_str()).await.unwrap();
-                    if let Some(data) = secret.data.clone() {
-                        if ! data.contains_key("AUTHENTIK_BOOTSTRAP_TOKEN") {
-                            self.update_status_missing_component(client, OPERATOR, vec!["Authentik requiered secret is missing values".to_string()]).await.map_err(Error::KubeError)?;
-                            return Ok(Action::requeue(Duration::from_secs(60)))
-                        }
-                    } else {
-                        self.update_status_missing_component(client, OPERATOR, vec!["Authentik requiered secret is missing".to_string()]).await.map_err(Error::KubeError)?;
-                        return Ok(Action::requeue(Duration::from_secs(60)))
-                    }
-                } else {
-                    self.update_status_missing_provider(client, OPERATOR, vec!["Authentik requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
-                    return Err(Error::IllegalInstall)
-                }
-            } else {
-                self.update_status_missing_provider(client, OPERATOR, vec!["Authentik requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
-                return Err(Error::IllegalInstall)
-            }
-        }
-        if comp.use_postgresql() && ! self.have_postgresql() {
-            self.update_status_missing_provider(client, OPERATOR, vec!["PostgreSQL requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
-            return Err(Error::IllegalInstall)
-        } else if comp.use_postgresql() {
-            // Check that the pgo postgresql password exist
-            if let Some(providers) = self.spec.providers.clone() {
-                if let Some(postgresql) = providers.postgresql {
-                    let mut secrets = SecretHandler::new(ctx.client.clone(), postgresql.namespace.as_str());
-                    let secret: Secret = secrets.get(format!("postgres.{}.credentials.postgresql.acid.zalan.do",postgresql.name).as_str()).await.unwrap();
-                    if let Some(data) = secret.data.clone() {
-                        if ! data.contains_key("username") || ! data.contains_key("password") {
-                            self.update_status_missing_component(client, OPERATOR, vec!["PostgreSQL requiered secret is missing values".to_string()]).await.map_err(Error::KubeError)?;
-                            return Ok(Action::requeue(Duration::from_secs(60)))
-                        }
-                    } else {
-                        self.update_status_missing_component(client, OPERATOR, vec!["PostgreSQL requiered secret is missing".to_string()]).await.map_err(Error::KubeError)?;
-                        return Ok(Action::requeue(Duration::from_secs(60)))
-                    }
-                } else {
-                    self.update_status_missing_provider(client, OPERATOR, vec!["PostgreSQL requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
-                    return Err(Error::IllegalInstall)
-                }
-            } else {
-                self.update_status_missing_provider(client, OPERATOR, vec!["PostgreSQL requiered configuration is missing".to_string()]).await.map_err(Error::KubeError)?;
-                return Err(Error::IllegalInstall)
-            }
-        }
         if comp.dependencies.is_some() {
             for dep in comp.dependencies.clone().unwrap() {
                 // Validate that the dependencies are actually known to the package management
@@ -220,68 +164,10 @@ impl Reconciler for Install {
             ).await.map_err(Error::KubeError)?;
             jobs.delete(install_name.as_str()).await.unwrap();
         }
-        if comp.use_postgresql() || comp.use_authentik() {
-            // Prepare a secret
-            let mut my_secrets = SecretHandler::new(ctx.client.clone(), my_ns);
-            let mut my_secret = serde_json::json!({});
-            if comp.use_authentik() {
-                // Set AUTHENTIK_URL, AUTHENTIK_TOKEN secret values
-                if let Some(providers) = self.spec.providers.clone() {
-                    if let Some(authentik) = providers.authentik {
-                        let mut secrets = SecretHandler::new(ctx.client.clone(), authentik.namespace.as_str());
-                        let secret: Secret = secrets.get(format!("{}-akadmin",authentik.name).as_str()).await.unwrap();
-                        if let Some(data) = secret.data {
-                            if data.contains_key("AUTHENTIK_BOOTSTRAP_TOKEN") {
-                                let token = data["AUTHENTIK_BOOTSTRAP_TOKEN"].clone();
-                                my_secret["AUTHENTIK_TOKEN"] = serde_json::Value::String(general_purpose::STANDARD.encode(std::str::from_utf8(&token.0).unwrap()));
-                                my_secret["AUTHENTIK_URL"] = serde_json::Value::String(general_purpose::STANDARD.encode(format!("{}.{}.svc",authentik.name, authentik.namespace)));
-                            }
-                        }
-                    }
-                }
-            }
-            if comp.use_postgresql() {
-                // Set PGHOST, PGUSER, PGPASSWORD env variables from the actual pgo secret
-                if let Some(providers) = self.spec.providers.clone() {
-                    if let Some(postgresql) = providers.postgresql {
-                        let mut secrets = SecretHandler::new(ctx.client.clone(), postgresql.namespace.as_str());
-                        let secret: Secret = secrets.get(format!("postgres.{}.credentials.postgresql.acid.zalan.do",postgresql.name).as_str()).await.unwrap();
-                        if let Some(data) = secret.data {
-                            if data.contains_key("username") && data.contains_key("password") {
-                                let username = data["username"].clone();
-                                let password = data["password"].clone();
-                                my_secret["PGHOST"] = serde_json::Value::String(general_purpose::STANDARD.encode(format!("{}.{}.svc",postgresql.name, postgresql.namespace)));
-                                my_secret["PGUSER"] = serde_json::Value::String(general_purpose::STANDARD.encode(std::str::from_utf8(&username.0).unwrap()));
-                                my_secret["PGPASSWORD"] = serde_json::Value::String(general_purpose::STANDARD.encode(std::str::from_utf8(&password.0).unwrap()));
-                            }
-                        }
-                    }
-                }
-            }
-            // Upsert the secret
-            if !my_secrets.have(secret_name.as_str()).await {
-                info!("Creating {secret_name} Secret");
-                let scret = my_secrets.create(secret_name.as_str(), &my_secret).await.unwrap();
-                debug!("Sending event {secret_name} Secret");
-                recorder.publish(
-                    events::from_create("Install", &name, "Secret", &scret.name_any(), Some(scret.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
-            } else {
-                info!("Patching {secret_name} Secret");
-                let _scret = match my_secrets.apply(secret_name.as_str(), &my_secret).await {Ok(j)=>j,Err(_e)=>{
-                    let scret: k8s_openapi::api::core::v1::Secret = my_secrets.get(secret_name.as_str()).await.unwrap();
-                    recorder.publish(
-                        events::from_delete("plan", &name, "Secret", &scret.name_any(), Some(scret.object_ref(&())))
-                    ).await.map_err(Error::KubeError)?;
-                    my_secrets.delete(secret_name.as_str()).await.unwrap();
-                    my_secrets.create(secret_name.as_str(), &my_secret).await.unwrap()
-                }};
-            }
-        }
 
-        let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str());
-        let install_job = jobs.get_installs_install(&hashedself, self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
-        let plan_job = jobs.get_installs_plan(&hashedself, self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
+        let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str());
+        let install_job = jobs.get_installs_install(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
+        let plan_job = jobs.get_installs_plan(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
 
         if self.spec.schedule.is_some() {
             let cronjob_install = serde_json::json!({
@@ -440,8 +326,8 @@ impl Reconciler for Install {
         }
         if self.have_tfstate() {
             // Create the delete job
-            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str());
-            let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.distrib.as_str(), self.spec.category.as_str(), self.spec.component.as_str(), self.spec.providers.clone());
+            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str());
+            let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
 
             info!("Creating {destroyer_name} Job");
             let job = match jobs.apply(destroyer_name.as_str(), &destroyer_job).await {Ok(j)=>j,Err(_e)=>{

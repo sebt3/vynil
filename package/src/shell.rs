@@ -11,6 +11,9 @@ pub fn run (command: &String) -> Output {
             .unwrap_or_else(|_| panic!("The command {:?} failed.", command))
 }
 
+//TODO: support for live logging/output
+// see: https://doc.rust-lang.org/std/process/struct.Stdio.html#method.piped
+// stdin example a faire en loop avec stdout et stderr
 pub fn run_log(command: &String) -> Result<()> {
     let output = run(command);
     let stdout = String::from_utf8(output.stdout).unwrap();

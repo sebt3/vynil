@@ -55,11 +55,11 @@ pub fn run(args:&Parameters) -> Result<()> {
     let mut file = PathBuf::new();
     file.push(path.clone());
     file.push("index.yaml");
-    let yaml = match yaml::read_yaml(&file) {
-        Ok(d) => d, Err(e) => {bail!("{e:}")},
-    };
-    // Validate the index.yaml file
-    yaml::validate_index(&yaml)?;
+    // let yaml = match yaml::read_yaml(&file) {
+    //     Ok(d) => d, Err(e) => {bail!("{e:}")},
+    // };
+    // // Validate the index.yaml file
+    // yaml::validate_index(&yaml)?;
     // Final validation
     let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
     // Create the dest directory if not existing
@@ -97,22 +97,38 @@ pub fn run(args:&Parameters) -> Result<()> {
     let re_yml = Regex::new(r"\.yaml$").unwrap();
     let re_tf = Regex::new(r"\.tf$").unwrap();
     let re_def = Regex::new(r"^index\.yaml$").unwrap();
+    let mut use_kusto = false;
+    let mut use_templates = false;
     for file in fs::read_dir(path.clone()).unwrap() {
         let path = file.unwrap().path();
         let filename = path.file_name().unwrap().to_str().unwrap();
         if re_def.is_match(filename) {
             continue;
         } else if re_kusto.is_match(filename) || re_kustohbs.is_match(filename) {
-            //TODO: this should raise a warning
+            use_kusto = true;
+            if re_kustohbs.is_match(filename) {
+                use_templates = true;
+            }
             copies.push(path);
         } else if re_yml.is_match(filename) {
             match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()), false)  {Ok(_) => {}, Err(e) => {return Err(e)}}
         } else if re_ymlhbs.is_match(filename) {
+            use_templates = true;
             match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()), true)  {Ok(_) => {}, Err(e) => {return Err(e)}}
-        } else if re_tf.is_match(filename) || re_hbs.is_match(filename) ||
+        } else if re_hbs.is_match(filename) {
+            use_templates = true;
+            copies.push(path);
+        } else if re_tf.is_match(filename) ||
                 (re_rhai.is_match(filename) && (script.have_stage("install") || script.have_stage("destroy") || script.have_stage("plan") || script.have_stage("template"))) {
             copies.push(path);
         }
+    }
+    if use_kusto {
+        log::warn!("Having a kustomization.yaml file will cause the terraform plan/install stages to fail!");
+        log::warn!("Make sure the file doesn't survive your install process before terraform plan is fired (hint, use a use pre_plan rhai stage)");
+    }
+    if use_templates {
+        log::warn!("Using mustaches templates is not recommanded, you should migrate to terraform base templating instead.");
     }
     let mut dest_path: PathBuf = PathBuf::new();
     dest_path.push(dest_dir.clone());

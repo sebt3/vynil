@@ -1,7 +1,7 @@
 use std::{process, path::{PathBuf, Path}, fs};
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
-use package::{terraform, yaml};
+use package::{terraform, yaml, script};
 
 #[derive(Args, Debug)]
 pub struct ParametersDest {
@@ -25,6 +25,10 @@ pub enum Commands {
     Ressources(ParametersDest),
     /// Generate datas.tf
     Datas(ParametersDest),
+    /// Generate index.yaml (when creating a new project)
+    Index(ParametersDest),
+    /// Generate index.rhai
+    Rhai(ParametersDest),
     /// Generate index.yaml options based on the default values
     Options(ParametersDest),
 }
@@ -53,6 +57,18 @@ fn datas(args:&ParametersDest) -> Result<()> {
     }
     terraform::gen_datas(&args.project)
 }
+fn index(args:&ParametersDest) -> Result<()> {
+    if ! Path::new(&args.project).is_dir() {
+        bail!("{:?} is not a directory", args.project);
+    }
+    yaml::gen_index(&args.project)
+}
+fn rhai(args:&ParametersDest) -> Result<()> {
+    if ! Path::new(&args.project).is_dir() {
+        bail!("{:?} is not a directory", args.project);
+    }
+    script::gen_index(&args.project)
+}
 fn options(args:&ParametersDest) -> Result<()> {
     let mut file = PathBuf::new();
     file.push(fs::canonicalize(&args.project).unwrap().as_os_str());
@@ -79,6 +95,18 @@ pub fn run(args:&Parameters) {
         Commands::Datas(args) => {match datas(args) {
             Ok(d) => d, Err(e) => {
                 log::error!("Generating the datas.tf file failed with: {e:}");
+                process::exit(1)
+            }
+        }}
+        Commands::Index(args) => {match index(args) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Generating the index.yaml file failed with: {e:}");
+                process::exit(1)
+            }
+        }}
+        Commands::Rhai(args) => {match rhai(args) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Generating the index.rhai file failed with: {e:}");
                 process::exit(1)
             }
         }}

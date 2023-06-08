@@ -6,6 +6,8 @@ use anyhow::{Result, ensure, bail, anyhow};
 pub use openapiv3::{Schema, ReferenceOr};
 use schemars::{JsonSchema,schema_for_value};
 use std::collections::HashMap;
+use crate::terraform::gen_file;
+
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct ComponentMetadata {
@@ -143,8 +145,8 @@ impl Component {
         let mut object = serde_json::Map::new();
         for (key, val) in &self.options {
             let option = if options.contains_key(key) {Some(options[key].clone())} else {None};
-            let schema = &serde_json::from_str(serde_json::to_string(val).unwrap().as_str()).unwrap();
-            object.insert(key.clone(), Component::get_values_inner(key, option, schema));
+            let schema: Schema = serde_json::from_str(serde_json::to_string(val).unwrap().as_str()).map_err(|e| anyhow!("While evaluating options {key} : {e} (value was {:?})", val)).unwrap();
+            object.insert(key.clone(), Component::get_values_inner(key, option, &schema));
         }
         object.insert("name".to_string(), serde_json::Value::String(env::var("NAME").unwrap_or_else(|_| self.metadata.name.clone())));
         // TODO: should detect current namespace instead of hard-coding default
@@ -178,12 +180,23 @@ impl Component {
     pub fn update_options_from_defaults(mut self, dest:PathBuf) -> Result<()> {
         for (key, mut val) in self.options.clone() {
             let schema: &Schema = &serde_json::from_str(serde_json::to_string(&val).unwrap().as_str()).unwrap();
-            if let Some(opts) = schema.schema_data.default.as_ref() {
+            let mut skip = false; // empty array as default produce failed items, skipping
+            if let openapiv3::SchemaKind::Type(openapiv3::Type::Array(_)) = &schema.schema_kind {
+                if let Some(opts) = schema.schema_data.default.as_ref() {
+                    if let Some(serde_json::Value::Array(data)) = opts.into() {
+                        skip = data.is_empty();
+                    }
+                }
+            }
+            if skip {
+                log::warn!("Skipping option \"{}\" while updating type structure from default values", key);
+                log::info!("you should set \"type: array\" and a correct \"items\" definition for option \"{}\" so later validation will work", key);
+            } else if let Some(opts) = schema.schema_data.default.as_ref() {
                 // That option have a default value, update its properties
-                let objdef = serde_json::from_str(serde_json::to_string(&schema_for_value!(opts).schema)?.as_str())?;
+                let final_schema = &schema_for_value!(opts).schema;
+                let objdef = serde_json::from_str(serde_json::to_string(final_schema)?.as_str())?;
                 merge_json( &mut val, objdef);
                 add_defaults(&mut val);
-
                 log::debug!("{key} after merge : {:}", serde_yaml::to_string(&schema).unwrap());
                 *self.options.get_mut(key.as_str()).unwrap() = val;
             }
@@ -215,7 +228,7 @@ pub fn validate_index(yaml: &serde_yaml::Value) -> Result<()> {
     ensure!(version == "vinyl.solidite.fr/v1beta1", "{version} is an unsupported apiVersion (expected: vinyl.solidite.fr/v1beta1)");
     ensure!(yaml["metadata"]["name"].as_str().map(std::string::ToString::to_string).is_some(), "metadata.name is not set");
     ensure!(yaml["category"].as_str().map(std::string::ToString::to_string).is_some(), "category is not set");
-    ensure!(["apps", "core", "share", "tech"].contains(&yaml["category"].as_str().unwrap()), "category is not supported");
+    ensure!(["apps", "core", "share", "tech", "meta", "crd", "dbo"].contains(&yaml["category"].as_str().unwrap()), "category is not supported");
     Ok(())
 }
 
@@ -223,4 +236,29 @@ pub fn validate_index(yaml: &serde_yaml::Value) -> Result<()> {
 pub fn read_index(file:&PathBuf) -> Result<Component> {
     let f = match fs::File::open(Path::new(&file)) {Ok(f) => f, Err(e) => bail!("Error {} while opening {}", e, file.display()),};
     match serde_yaml::from_reader(f) {Ok(d) => Ok(d), Err(e) => bail!("Error {} while parsing yaml from: {}", e, file.display()),}
+}
+
+pub fn gen_index(dest_dir: &PathBuf) -> Result<()> {
+    let mut file  = PathBuf::new();
+    file.push(dest_dir);
+    file.push("index.yaml");
+    gen_file(&file, &"
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Component
+category:
+metadata:
+  name:
+  description:
+providers:
+  authentik: true
+  kubernetes: true
+options:
+  images:
+    default:
+      operator:
+        registry:
+        repository:
+        tag:
+        pullPolicy: IfNotPresent
+".to_string(), false)
 }

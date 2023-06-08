@@ -6,21 +6,22 @@ use kube::{
 };
 use either::Either;
 use crate::{AGENT_IMAGE, OPERATOR};
-use k8s::install::ProviderConfigs;
 use k8s::distrib::DistribAuthent;
 
 pub struct HashedSelf {
     ns: String,
     name: String,
-    hash: String
+    hash: String,
+    distrib: String
 }
 
 impl HashedSelf {
-    #[must_use] pub fn new(ns: &str, name: &str, hash: &str) -> HashedSelf {
+    #[must_use] pub fn new(ns: &str, name: &str, hash: &str, distrib: &str) -> HashedSelf {
         HashedSelf {
             ns: ns.to_string(),
             name: name.to_string(),
-            hash: hash.to_string()
+            hash: hash.to_string(),
+            distrib: distrib.to_string()
         }
     }
 }
@@ -51,6 +52,11 @@ fn install_container(hself: &HashedSelf) -> serde_json::Value {
             "value": "info,controller=debug,agent=debug"
         }],
         "volumeMounts": [{
+            "name": "dist",
+            "mountPath": "/dist",
+            "subPath": hself.distrib,
+            "readOnly": true
+        },{
             "name": "package",
             "mountPath": "/src"
         }],
@@ -99,23 +105,14 @@ fn clone_container(name: &str, auth: Option<DistribAuthent>) -> serde_json::Valu
     })
 }
 
-fn get_action(hself: &HashedSelf, act: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+fn get_action(hself: &HashedSelf, act: &str) -> serde_json::Value {
     let mut action = install_container(hself);
     action["name"] = serde_json::Value::String(act.to_string());
     action["args"] = serde_json::Value::Array([action["name"].clone()].into());
-    if let Some(ref cfg) = cfg {
-        if cfg.authentik.is_some() || cfg.postgresql.is_some() {
-            action["envFrom"] = serde_json::Value::Array([serde_json::json!({
-                "secretRef": {
-                    "name": format!("{}--{}--secret", hself.ns, hself.name)
-                }
-            })].into());
-        }
-    }
     action
 }
 
-fn get_templater(hself: &HashedSelf, distrib: &str, category: &str, component: &str) -> serde_json::Value {
+fn get_templater(hself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
     let mut templater = install_container(hself);
     templater["name"] = serde_json::Value::String("template".to_string());
     templater["args"] = serde_json::Value::Array([
@@ -126,7 +123,8 @@ fn get_templater(hself: &HashedSelf, distrib: &str, category: &str, component: &
     templater["volumeMounts"] = serde_json::Value::Array([serde_json::json!({
         "name": "dist",
         "mountPath": "/src",
-        "subPath": distrib
+        "subPath": hself.distrib,
+        "readOnly": true
     }),serde_json::json!({
         "name": "package",
         "mountPath": "/dest"
@@ -193,18 +191,18 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_plan(&self, hashedself: &HashedSelf, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+    pub fn get_installs_plan(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(hashedself, distrib, category, component)],
-                "containers": [get_action(hashedself, "plan", cfg)],
+                "initContainers": [get_templater(hashedself, category, component)],
+                "containers": [get_action(hashedself, "plan")],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
-                        "claimName": format!("{}-distrib", distrib)
+                        "claimName": format!("{}-distrib", hashedself.distrib)
                     }
                 },{
                     "name": "package",
@@ -221,18 +219,18 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_destroy(&self, hashedself: &HashedSelf, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+    pub fn get_installs_destroy(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(hashedself, distrib, category, component)],
-                "containers": [get_action(hashedself, "destroy", cfg)],
+                "initContainers": [get_templater(hashedself, category, component)],
+                "containers": [get_action(hashedself, "destroy")],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
-                        "claimName": format!("{}-distrib", distrib)
+                        "claimName": format!("{}-distrib", hashedself.distrib)
                     }
                 },{
                     "name": "package",
@@ -249,18 +247,18 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_install(&self, hashedself: &HashedSelf, distrib: &str, category: &str, component: &str, cfg: Option<ProviderConfigs>) -> serde_json::Value {
+    pub fn get_installs_install(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(hashedself, distrib, category, component),get_action(hashedself, "plan", cfg.clone())],
-                "containers": [get_action(hashedself, "install", cfg)],
+                "initContainers": [get_templater(hashedself, category, component),get_action(hashedself, "plan")],
+                "containers": [get_action(hashedself, "install")],
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
-                        "claimName": format!("{}-distrib", distrib)
+                        "claimName": format!("{}-distrib", hashedself.distrib)
                     }
                 },{
                     "name": "package",

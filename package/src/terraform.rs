@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use crate::{shell, yaml::Providers};
 
-fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
+pub fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
     if ! Path::new(dest).is_file() || force {
         match std::fs::write(dest, content) {Ok(_) => {}, Err(e) => bail!("Error {} while generating: {}", e, dest.display()),};
     }
@@ -161,7 +161,10 @@ provider \"kubectl\" {
         version = \"~> 2023.5.0\"
     }";
       content += "
-provider \"authentik\" {}";
+provider \"authentik\" {
+  url   = local.ak-url
+  token = local.ak-token
+}";
     } else {
       requiered += "
 #    authentik = {
@@ -169,7 +172,10 @@ provider \"authentik\" {}";
 #        version = \"~> 2023.5.0\"
 #    }";
       content += "
-#provider \"authentik\" {}";
+#provider \"authentik\" {
+#  url   = local.ak-url
+#  token = local.ak-token
+#}";
     }
     let mut have_postgresql = false;
     if let Some(providers) = providers {
@@ -184,7 +190,11 @@ provider \"authentik\" {}";
         version = \"~> 1.19.0\"
     }";
       content += "
-provider \"postgresql\" {}";
+provider \"postgresql\" {
+  host            = local.pg-host
+  username        = local.pg-username
+  password        = local.pg-password
+}";
     } else {
       requiered += "
 #    postgresql = {
@@ -192,7 +202,11 @@ provider \"postgresql\" {}";
 #        version = \"~> 1.19.0\"
 #    }";
       content += "
-#provider \"postgresql\" {}";
+#provider \"postgresql\" {
+#  host            = local.pg-host
+#  username        = local.pg-username
+#  password        = local.pg-password
+#}";
     }
     file.push(dest_dir);
     file.push("providers.tf");
@@ -207,7 +221,7 @@ pub fn gen_variables(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_j
 
   let mut content  = "
 variable \"common_labels\" {
-  description = \"Labels to add to every objects_\"
+  description = \"Labels to add to every objects\"
   type        = map
   default     = {}
 }
@@ -252,7 +266,7 @@ pub fn gen_datas(dest_dir: &PathBuf) -> Result<()> {
     gen_file(&file, &"
 data \"kustomization_overlay\" \"data\" {
   namespace = var.namespace
-  resources = [ for file in fileset(path.module, \"*.yaml\"): file if file != \"index.yaml\"]
+  resources = [for file in fileset(path.module, \"*.yaml\"): file if file != \"index.yaml\"]
 }
 ".to_string(), false)
 }
