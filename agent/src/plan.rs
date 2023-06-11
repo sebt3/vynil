@@ -39,6 +39,8 @@ pub async fn plan (src: &PathBuf, script: &mut script::Script, client: kube::Cli
     terraform::run_plan(src)?;
     // Get the json data from the plan file from terraform
     let plan = terraform::get_plan(src).or_else(|e: Error| {bail!("{e}")}).unwrap();
+
+    //TODO: check for changes in that plan, set the status accordingly
     // run post-plan stage from rhai script if any
     script.run_post_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
     // Upload the plan to the status->plan of the k8s Install Object
@@ -84,8 +86,9 @@ pub async fn run(args:&Parameters) -> Result<()> {
     file.push(src.clone());
     file.push("index.rhai");
     let mut script = script::Script::new(&file, script::new_context(
-        yaml.metadata.name.clone(),
         yaml.category.clone(),
+        yaml.metadata.name.clone(),
+        inst.name(),
         src.clone().into_os_string().into_string().unwrap(),
         src.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&inst.options())

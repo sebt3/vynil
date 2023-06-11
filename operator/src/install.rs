@@ -1,4 +1,4 @@
-use crate::{OPERATOR, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, cronjobs::CronJobHandler, secrets::SecretHandler};
+use crate::{OPERATOR, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, secrets::SecretHandler};
 use k8s_openapi::api::core::v1::Namespace;
 use chrono::Utc;
 use kube::{
@@ -50,9 +50,7 @@ impl Reconciler for Install {
         let ns = self.namespace().unwrap();
         let my_ns = ctx.client.default_namespace();
         let mut jobs = JobHandler::new(ctx.client.clone(), my_ns);
-        let mut crons = CronJobHandler::new(ctx.client.clone(), my_ns);
-        let plan_name = format!("{ns}--{name}--plan");
-        let install_name = format!("{ns}--{name}--install");
+        let agent_name = format!("{ns}--{name}--agent");
         let dist_name = self.spec.distrib.as_str();
         let dist = match dists.get(dist_name).await {Ok(d) => d, Err(e) => {
             let mut errors: Vec<String> = Vec::new();
@@ -60,6 +58,18 @@ impl Reconciler for Install {
             self.update_status_missing_distrib(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
             return Err(Error::IllegalDistrib);
         }};
+        //TODO: label the install with the distrib, component and category so searching installs is simple
+        if ns == my_ns && self.spec.distrib == "core" && self.spec.component == "vynil" && self.spec.category == "core" {
+            // Auto-installing here, should wait for the bootstrap process to be done
+            if jobs.have("vynil-bootstrap").await {
+                let bootstrap = jobs.get("vynil-bootstrap").await.unwrap();
+                if let Some(status) = bootstrap.status {
+                    if status.completion_time.is_none() {
+                        return Ok(Action::requeue(Duration::from_secs(60)))
+                    }
+                }
+            }
+        }
         // Validate that the requested package exist in that distrib
         if ! dist.have_component(self.spec.category.as_str(), self.spec.component.as_str()) {
             let mut errors: Vec<String> = Vec::new();
@@ -147,105 +157,33 @@ impl Reconciler for Install {
             }
         }
 
-        if self.should_plan() && !self.options_status() && jobs.have(plan_name.as_str()).await {
-            // Force delete the plan-job
-            info!("Deleting {plan_name} Job");
-            let job = jobs.get(plan_name.as_str()).await.unwrap();
-            recorder.publish(
-                events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
-            jobs.delete(plan_name.as_str()).await.unwrap();
-        } else if !self.should_plan() && !self.options_status() && jobs.have(install_name.as_str()).await {
-            // Force delete the install-job
-            info!("Deleting {install_name} Job");
-            let job = jobs.get(install_name.as_str()).await.unwrap();
-            recorder.publish(
-                events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
-            jobs.delete(install_name.as_str()).await.unwrap();
-        }
+        let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), &comp.commit_id);
+        let agent_job = if self.should_plan() {
+            jobs.get_installs_install(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())
+        } else {
+            jobs.get_installs_plan(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())
+        };
 
-        let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str());
-        let install_job = jobs.get_installs_install(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
-        let plan_job = jobs.get_installs_plan(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
-
-        if self.spec.schedule.is_some() {
-            let cronjob_install = serde_json::json!({
-                "concurrencyPolicy": "Forbid",
-                "schedule": self.spec.schedule.clone().unwrap(),
-                "jobTemplate": {
-                    "spec": {
-                        "template": install_job
-                    }
-                }
-            });
-            let cronjob_plan = serde_json::json!({
-                "concurrencyPolicy": "Forbid",
-                "schedule": self.spec.schedule.clone().unwrap(),
-                "jobTemplate": {
-                    "spec": {
-                        "template": plan_job
-                    }
-                }
-            });
-
-            if self.should_plan() && !crons.have(plan_name.as_str()).await {
-                info!("Creating {plan_name} CronJob");
-                let cron = crons.create(plan_name.as_str(), &cronjob_plan).await.unwrap();
-                debug!("Sending event {plan_name} CronJob");
-                recorder.publish(
-                    events::from_create("Install", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
-            } else if self.should_plan() {
-                info!("Patching {plan_name} CronJob");
-                let _cron = match crons.apply(plan_name.as_str(), &cronjob_plan).await {Ok(j)=>j,Err(_e)=>{
-                    let cron: k8s_openapi::api::batch::v1::CronJob = crons.get(plan_name.as_str()).await.unwrap();
-                    recorder.publish(
-                        events::from_delete("plan", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
-                    ).await.map_err(Error::KubeError)?;
-                    crons.delete(plan_name.as_str()).await.unwrap();
-                    crons.create(plan_name.as_str(), &cronjob_plan).await.unwrap()
-                }};
-            } else if !crons.have(install_name.as_str()).await {
-                info!("Creating {install_name} CronJob");
-                let cron = crons.create(install_name.as_str(), &cronjob_install).await.unwrap();
-                debug!("Sending event for {install_name} CronJob");
-                recorder.publish(
-                    events::from_create("Install", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
-            } else {
-                info!("Patching {install_name} CronJob");
-                let _cron = match crons.apply(install_name.as_str(), &cronjob_install).await {Ok(j)=>j,Err(_e)=>{
-                    let cron = crons.get(install_name.as_str()).await.unwrap();
-                    recorder.publish(
-                        events::from_delete("Install", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
-                    ).await.map_err(Error::KubeError)?;
-                    crons.delete(install_name.as_str()).await.unwrap();
-                    crons.create(install_name.as_str(), &cronjob_install).await.unwrap()
-                }};
-            }
-        }
-
-        if self.should_plan() && !jobs.have(plan_name.as_str()).await {
-            info!("Creating {plan_name} Job");
+        if !jobs.have(agent_name.as_str()).await {
+            info!("Creating {agent_name} Job");
             self.update_status_planning(client, OPERATOR).await.map_err(Error::KubeError)?;
-            let job = jobs.create(plan_name.as_str(), &plan_job).await.unwrap();
-            debug!("Sending event {plan_name} Job");
+            let job = jobs.create(agent_name.as_str(), &agent_job).await.unwrap();
+            debug!("Sending event {agent_name} Job");
             recorder.publish(
                 events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;
-            debug!("Waiting {plan_name} to finish Job");
-            jobs.wait_max(plan_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
-            debug!("Waited {plan_name} OK");
-        } else if self.should_plan() {
-            info!("Patching {plan_name} Job");
-            let _job = match jobs.apply(plan_name.as_str(), &plan_job).await {Ok(j)=>j,Err(_e)=>{
-                let job = jobs.get(plan_name.as_str()).await.unwrap();
+            debug!("Waiting {agent_name} to finish Job");
+            jobs.wait_max(agent_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
+            debug!("Waited {agent_name} OK");
+        } else {
+            info!("Patching {agent_name} Job");
+            let _job = match jobs.apply(agent_name.as_str(), &agent_job).await {Ok(j)=>j,Err(_e)=>{
+                let job = jobs.get(agent_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("plan", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
-                jobs.delete(plan_name.as_str()).await.unwrap();
-                jobs.create(plan_name.as_str(), &plan_job).await.unwrap()
+                jobs.delete(agent_name.as_str()).await.unwrap();
+                jobs.create(agent_name.as_str(), &agent_job).await.unwrap()
             }};
             // TODO: Detect if the job changed after the patch (or event better would change prior)
             // TODO: Send a patched event if changed
@@ -253,39 +191,9 @@ impl Reconciler for Install {
             recorder.publish(
                 events::from_patch("Install", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;*/
-            debug!("Waiting {plan_name} to finish Job");
-            jobs.wait_max(plan_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
-            debug!("Waited {plan_name} OK");
-        } else if !jobs.have(install_name.as_str()).await {
-            info!("Creating {install_name} Job");
-            self.update_status_installing(client, OPERATOR).await.map_err(Error::KubeError)?;
-            let job = jobs.create(install_name.as_str(), &install_job).await.unwrap();
-            debug!("Sending event for {install_name} Job");
-            recorder.publish(
-                events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
-            debug!("Waiting {install_name} to finish Job");
-            jobs.wait_max(install_name.as_str(),8*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
-            debug!("Waited {install_name} OK");
-        } else {
-            info!("Patching {install_name} Job");
-            let _job = match jobs.apply(install_name.as_str(), &install_job).await {Ok(j)=>j,Err(_e)=>{
-                let job = jobs.get(install_name.as_str()).await.unwrap();
-                recorder.publish(
-                    events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
-                jobs.delete(install_name.as_str()).await.unwrap();
-                jobs.create(install_name.as_str(), &install_job).await.unwrap()
-            }};
-            // TODO: Detect if the job changed after the patch (or event better would change prior)
-            // TODO: Send a patched event if changed
-            /*debug!("Sending event for {install_name} Job");
-            recorder.publish(
-                events::from_patch("Install", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;*/
-            debug!("Waiting {install_name} to finish Job");
-            jobs.wait_max(install_name.as_str(),8*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
-            debug!("Waited {install_name} OK");
+            debug!("Waiting {agent_name} to finish Job");
+            jobs.wait_max(agent_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
+            debug!("Waited {agent_name} OK");
         }
         Ok(Action::requeue(Duration::from_secs(5 * 60)))
     }
@@ -300,12 +208,23 @@ impl Reconciler for Install {
         let mut jobs = JobHandler::new(ctx.client.clone(), my_ns);
         let name = self.name_any();
         let ns = self.namespace().unwrap();
+        let agent_name = format!("{ns}--{name}--agent");
+
+        // TODO: Stop supporting cleaning these, since they have disapeared in previous versions
         let plan_name = format!("{ns}--{name}--plan");
         let install_name = format!("{ns}--{name}--install");
-        let destroyer_name = format!("{ns}--{name}--destroy");
         let secret_name = format!("{ns}--{name}--secret");
         let mut my_secrets = SecretHandler::new(ctx.client.clone(), my_ns);
 
+        if jobs.have(agent_name.as_str()).await {
+            // Force delete the plan-job
+            info!("Deleting {agent_name} Job");
+            let job = jobs.get(agent_name.as_str()).await.unwrap();
+            recorder.publish(
+                events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+            ).await.map_err(Error::KubeError)?;
+            jobs.delete(agent_name.as_str()).await.unwrap();
+        }
         if jobs.have(plan_name.as_str()).await {
             // Force delete the plan-job
             info!("Deleting {plan_name} Job");
@@ -326,35 +245,35 @@ impl Reconciler for Install {
         }
         if self.have_tfstate() {
             // Create the delete job
-            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str());
+            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), "");
             let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
 
-            info!("Creating {destroyer_name} Job");
-            let job = match jobs.apply(destroyer_name.as_str(), &destroyer_job).await {Ok(j)=>j,Err(_e)=>{
-                let job = jobs.get(destroyer_name.as_str()).await.unwrap();
+            info!("Creating {agent_name} Job");
+            let job = match jobs.apply(agent_name.as_str(), &destroyer_job).await {Ok(j)=>j,Err(_e)=>{
+                let job = jobs.get(agent_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
-                jobs.delete(destroyer_name.as_str()).await.unwrap();
-                jobs.create(destroyer_name.as_str(), &destroyer_job).await.unwrap()
+                jobs.delete(agent_name.as_str()).await.unwrap();
+                jobs.create(agent_name.as_str(), &destroyer_job).await.unwrap()
             }};
             recorder.publish(
                 events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;
             // Wait up-to 5mn for it's completion
-            match jobs.wait_max(destroyer_name.as_str(), 5*60).await {
+            match jobs.wait_max(agent_name.as_str(), 5*60).await {
                 Ok(_) => {},
                 Err(_) => return Err(Error::TooLongDelete)
             }
             // Finally delete the destroyer job
-            if jobs.have(destroyer_name.as_str()).await {
+            if jobs.have(agent_name.as_str()).await {
                 // Force delete the install-job
-                info!("Deleting {destroyer_name} Job");
-                let job = jobs.get(destroyer_name.as_str()).await.unwrap();
+                info!("Deleting {agent_name} Job");
+                let job = jobs.get(agent_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
-                jobs.delete(destroyer_name.as_str()).await.unwrap();
+                jobs.delete(agent_name.as_str()).await.unwrap();
             }
         }
 

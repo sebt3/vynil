@@ -21,7 +21,7 @@ fn explode(src: &PathBuf, dest: &Path, config: &serde_json::Map<String, serde_js
     for i in parts {
         let str = i.to_string();
         let str = str.trim();
-        if str.len()>10 {
+        if str.split('\n').count() > 4 {
             let yaml: serde_yaml::Value = match serde_yaml::from_str(str) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
             let kind = yaml["kind"].as_str().map(std::string::ToString::to_string).unwrap();
             let version = yaml["apiVersion"].as_str().map(std::string::ToString::to_string).unwrap();
@@ -77,8 +77,9 @@ pub fn run(args:&Parameters) -> Result<()> {
     file.push(path.clone());
     file.push("index.rhai");
     let mut script = script::Script::new(&file, script::new_context(
-        yaml.metadata.name.clone(),
         yaml.category.clone(),
+        yaml.metadata.name.clone(),
+        yaml.metadata.name.clone(),
         path.clone().into_os_string().into_string().unwrap(),
         dest_dir.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&serde_json::Map::new())
@@ -136,8 +137,9 @@ pub fn run(args:&Parameters) -> Result<()> {
     yaml.update_options_from_defaults(dest_path.clone())?;
     let mut yaml = match yaml::read_index(&dest_path) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
     let mut script = script::Script::new(&file, script::new_context(
-        yaml.metadata.name.clone(),
         yaml.category.clone(),
+        yaml.metadata.name.clone(),
+        yaml.metadata.name.clone(),
         path.into_os_string().into_string().unwrap(),
         dest_dir.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&serde_json::Map::new())

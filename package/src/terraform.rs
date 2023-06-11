@@ -214,23 +214,22 @@ provider \"postgresql\" {
     gen_file(&file, &requiered, false)
 }
 
-pub fn gen_variables(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json::Value>) -> Result<()> {
+pub fn gen_variables(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json::Value>, category: &str, component: &str, instance: &str) -> Result<()> {
   let mut file  = PathBuf::new();
   file.push(dest_dir);
   file.push("variables.tf");
 
-  let mut content  = "
-variable \"common_labels\" {
-  description = \"Labels to add to every objects\"
-  type        = map
-  default     = {}
-}
-variable \"common_annotations\" {
-  description = \"Annotations to add to every objects\"
-  type        = map
-  default     = {}
-}
-".to_string();
+  let mut content  = format!("
+variable \"category\" {{
+  default     = \"{}\"
+}}
+variable \"component\" {{
+  default     = \"{}\"
+}}
+variable \"instance\" {{
+  default     = \"{}\"
+}}
+", category, component, instance);
   for (name,value) in config {
       let str = serde_json::to_string(value).unwrap();
       let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
@@ -264,7 +263,19 @@ pub fn gen_datas(dest_dir: &PathBuf) -> Result<()> {
     file.push(dest_dir);
     file.push("datas.tf");
     gen_file(&file, &"
+locals {
+  common-labels = {
+    \"vynil.solidite.fr/owner-name\" = var.instance
+    \"vynil.solidite.fr/owner-namespace\" = var.namespace
+    \"vynil.solidite.fr/owner-category\" = var.category
+    \"vynil.solidite.fr/owner-component\" = var.component
+    \"app.kubernetes.io/managed-by\" = \"vynil\"
+    \"app.kubernetes.io/name\" = var.component
+    \"app.kubernetes.io/instance\" = var.instance
+  }
+}
 data \"kustomization_overlay\" \"data\" {
+  common_labels = local.common-labels
   namespace = var.namespace
   resources = [for file in fileset(path.module, \"*.yaml\"): file if file != \"index.yaml\"]
 }

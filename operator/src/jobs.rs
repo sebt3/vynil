@@ -12,16 +12,18 @@ pub struct HashedSelf {
     ns: String,
     name: String,
     hash: String,
-    distrib: String
+    distrib: String,
+    commit_id: String
 }
 
 impl HashedSelf {
-    #[must_use] pub fn new(ns: &str, name: &str, hash: &str, distrib: &str) -> HashedSelf {
+    #[must_use] pub fn new(ns: &str, name: &str, hash: &str, distrib: &str, commit_id: &str) -> HashedSelf {
         HashedSelf {
             ns: ns.to_string(),
             name: name.to_string(),
             hash: hash.to_string(),
-            distrib: distrib.to_string()
+            distrib: distrib.to_string(),
+            commit_id: commit_id.to_string()
         }
     }
 }
@@ -31,6 +33,7 @@ pub struct JobHandler {
 }
 
 fn install_container(hself: &HashedSelf) -> serde_json::Value {
+    let level = std::env::var("AGENT_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     serde_json::json!({
         "args":[],
         "image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| AGENT_IMAGE.to_string()),
@@ -42,14 +45,17 @@ fn install_container(hself: &HashedSelf) -> serde_json::Value {
             "name": "NAME",
             "value": hself.name
         },{
-            "name": "hash",
+            "name": "OPTIONS_HASH",
             "value": hself.hash
         },{
+            "name": "COMMIT_ID",
+            "value": hself.commit_id
+        },{
             "name": "LOG_LEVEL",
-            "value": "debug"
+            "value": level
         },{
             "name": "RUST_LOG",
-            "value": "info,controller=debug,agent=debug"
+            "value": format!("{},controller={},agent={}", level, level, level)
         }],
         "volumeMounts": [{
             "name": "dist",
@@ -64,6 +70,7 @@ fn install_container(hself: &HashedSelf) -> serde_json::Value {
 }
 
 fn clone_container(name: &str, auth: Option<DistribAuthent>) -> serde_json::Value {
+    let level = std::env::var("AGENT_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     let mut mounts = vec!(serde_json::json!({
         "name": "dist",
         "mountPath": "/work",
@@ -93,10 +100,10 @@ fn clone_container(name: &str, auth: Option<DistribAuthent>) -> serde_json::Valu
             "value": name
         },{
             "name": "LOG_LEVEL",
-            "value": "debug"
+            "value": level
         },{
             "name": "RUST_LOG",
-            "value": "info,controller=debug,agent=debug"
+            "value": format!("{},controller={},agent={}", level, level, level)
         },{
             "name": "GIT_SSH_COMMAND",
             "value": "ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i /var/lib/vynil/keys/private"
@@ -191,14 +198,14 @@ impl JobHandler {
         })
     }
 
-    pub fn get_installs_plan(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
+    fn get_installs_spec(&self, hashedself: &HashedSelf, init_containers: &Vec<serde_json::Value>, containers: &Vec<serde_json::Value>) -> serde_json::Value {
         serde_json::json!({
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
                 "restartPolicy": "Never",
-                "initContainers": [get_templater(hashedself, category, component)],
-                "containers": [get_action(hashedself, "plan")],
+                "initContainers": init_containers,
+                "containers": containers,
                 "volumes": [{
                     "name": "dist",
                     "persistentVolumeClaim": {
@@ -207,7 +214,7 @@ impl JobHandler {
                 },{
                     "name": "package",
                     "emptyDir": {
-                        "sizeLimit": "100Mi"
+                        "sizeLimit": "500Mi"
                     }
                 }],
                 "securityContext": {
@@ -217,62 +224,27 @@ impl JobHandler {
                 }
             }
         })
+    }
+
+    pub fn get_installs_plan(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
+        self.get_installs_spec(hashedself,
+            &vec!(get_templater(hashedself, category, component)),
+            &vec!(get_action(hashedself, "plan"))
+        )
     }
 
     pub fn get_installs_destroy(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
-        serde_json::json!({
-            "spec": {
-                "serviceAccount": "vynil-agent",
-                "serviceAccountName": "vynil-agent",
-                "restartPolicy": "Never",
-                "initContainers": [get_templater(hashedself, category, component)],
-                "containers": [get_action(hashedself, "destroy")],
-                "volumes": [{
-                    "name": "dist",
-                    "persistentVolumeClaim": {
-                        "claimName": format!("{}-distrib", hashedself.distrib)
-                    }
-                },{
-                    "name": "package",
-                    "emptyDir": {
-                        "sizeLimit": "100Mi"
-                    }
-                }],
-                "securityContext": {
-                    "fsGroup": 65534,
-                    "runAsUser": 65534,
-                    "runAsGroup": 65534
-                }
-            }
-        })
+        self.get_installs_spec(hashedself,
+            &vec!(get_templater(hashedself, category, component)),
+            &vec!(get_action(hashedself, "destroy"))
+        )
     }
 
     pub fn get_installs_install(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
-        serde_json::json!({
-            "spec": {
-                "serviceAccount": "vynil-agent",
-                "serviceAccountName": "vynil-agent",
-                "restartPolicy": "Never",
-                "initContainers": [get_templater(hashedself, category, component),get_action(hashedself, "plan")],
-                "containers": [get_action(hashedself, "install")],
-                "volumes": [{
-                    "name": "dist",
-                    "persistentVolumeClaim": {
-                        "claimName": format!("{}-distrib", hashedself.distrib)
-                    }
-                },{
-                    "name": "package",
-                    "emptyDir": {
-                        "sizeLimit": "100Mi"
-                    }
-                }],
-                "securityContext": {
-                    "fsGroup": 65534,
-                    "runAsUser": 65534,
-                    "runAsGroup": 65534
-                }
-            }
-        })
+        self.get_installs_spec(hashedself,
+            &vec![get_templater(hashedself, category, component),get_action(hashedself, "plan")],
+            &vec!(get_action(hashedself, "install"))
+        )
     }
 
     pub async fn have(&mut self, name: &str) -> bool {

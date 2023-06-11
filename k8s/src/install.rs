@@ -37,10 +37,8 @@ pub struct InstallSpec {
     pub component: String,
     /// Parameters
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Actual cron-type expression that defines the interval of the upgrades.
-    pub schedule: Option<String>,
-    /// Should we plan
-    pub plan: Option<bool>,
+    /// Should we automatically upgrade the package
+    pub auto_upgrade: Option<bool>,
 }
 /// The status object of `Install`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -55,8 +53,8 @@ pub struct InstallStatus {
     pub tfstate: Option<serde_json::Map<String, serde_json::Value>>,
     /// Last update date
     pub last_updated: DateTime<Utc>,
-    /// Have we planned the project
-    pub planned: bool,
+    /// component version applied
+    pub commit_id: String,
     /// Options digests
     pub digest: String,
 }
@@ -94,10 +92,12 @@ impl Install {
         self.status.as_ref().map_or_else(Utc::now, |s| s.last_updated)
     }
     pub fn should_plan(&self) -> bool {
-        if let Some(p) = self.spec.plan {p} else {false}
-    }
-    pub fn was_planned(&self) -> bool {
-        self.status.as_ref().map_or(false,|s| s.planned)
+        if let Some(p) = self.spec.auto_upgrade {
+            if let Some(status) = self.status.clone() {
+                // Do not auto-install if auto_upgrade is disabled and there is already a valid installation status
+                ! status.commit_id.is_empty() && !p
+            } else {false}
+        } else {false}
     }
     fn current_plan(&self) -> serde_json::Map<String, serde_json::Value> {
         if let Some(ref status) = self.status {
@@ -105,6 +105,11 @@ impl Install {
                 plan.clone()
             } else { serde_json::Map::new() }
         } else { serde_json::Map::new() }
+    }
+    fn current_commit_id(&self) -> String {
+        if let Some(ref status) = self.status {
+            status.commit_id.clone()
+        } else { String::new() }
     }
     pub fn plan(&self) -> serde_json::Map<String, serde_json::Value> {
         self.status.clone().map(|s| s.plan.unwrap_or_default()).unwrap_or_default()
@@ -136,7 +141,7 @@ impl Install {
                 plan: Some(self.current_plan()),
                 tfstate: Some(self.current_tfstate()),
                 errors: Some(errors),
-                planned: self.was_planned(),
+                commit_id: self.current_commit_id(),
                 last_updated,
                 digest: String::new()
             }
@@ -158,8 +163,8 @@ impl Install {
                 status: STATUS_ERRORS.to_string(),
                 errors: Some(errors),
                 plan: Some(self.current_plan()),
-                planned: false,
                 tfstate: Some(tfstate),
+                commit_id: self.current_commit_id(),
                 last_updated,
                 digest: self.options_digest()
             }
@@ -199,8 +204,8 @@ impl Install {
                 status: STATUS_PLANNED.to_string(),
                 errors: Some(Vec::new()),
                 tfstate: Some(self.current_tfstate()),
-                planned: true,
                 plan: Some(plan),
+                commit_id: self.current_commit_id(),
                 last_updated,
                 digest: self.options_digest()
             }
@@ -208,7 +213,7 @@ impl Install {
         let ps = PatchParams::apply(manager).force();
         insts.patch_status(&name, &ps, &new_status).await
     }
-    pub async fn update_status_apply(&self, client: Client, manager: &str, tfstate: serde_json::Map<String, serde_json::Value>) -> Result<Install, kube::Error> {
+    pub async fn update_status_apply(&self, client: Client, manager: &str, tfstate: serde_json::Map<String, serde_json::Value>, commit_id: String) -> Result<Install, kube::Error> {
         let name = self.name();
         let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
         let last_updated = Utc::now();
@@ -219,7 +224,7 @@ impl Install {
                 status: STATUS_INSTALLED.to_string(),
                 errors: Some(Vec::new()),
                 plan: Some(self.current_plan()),
-                planned: false,
+                commit_id,
                 tfstate: Some(tfstate),
                 last_updated,
                 digest: self.options_digest()

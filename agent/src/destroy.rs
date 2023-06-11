@@ -79,8 +79,9 @@ pub async fn run(args:&Parameters) -> Result<()> {
     file.push(src.clone());
     file.push("index.rhai");
     let mut script = script::Script::new(&file, script::new_context(
-        yaml.metadata.name.clone(),
         yaml.category.clone(),
+        yaml.metadata.name.clone(),
+        inst.name(),
         src.clone().into_os_string().into_string().unwrap(),
         src.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&inst.options())

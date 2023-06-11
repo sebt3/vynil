@@ -23,7 +23,11 @@ pub struct Parameters {
     name: String,
 }
 
-pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client, inst: &client::Install, yaml:&serde_json::Map<String, serde_json::Value>, script: &mut script::Script, providers: Option<yaml::Providers>) -> Result<()> {
+pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
+    inst: &client::Install,
+    config:&serde_json::Map<String, serde_json::Value>,
+    script: &mut script::Script,
+    providers: Option<yaml::Providers>) -> Result<()> {
     let reg = Handlebars::new();
     // run pre-template stage from rhai script if any
     let stage = "template".to_string();
@@ -46,7 +50,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client, inst: &
             dest_path.push(dest.clone());
             dest_path.push(name);
             log::debug!("Generating {:?}",dest_path);
-            fs::write(dest_path, reg.render_template(src_content.as_str(), yaml)?)?;
+            fs::write(dest_path, reg.render_template(src_content.as_str(), config)?)?;
         } else if re_yml.is_match(filename) || re_tf.is_match(filename) || re_rhai.is_match(filename) {
             // copy the remaining yaml and tf file to the same (dest) directory
             let mut dest_path = PathBuf::new();
@@ -56,10 +60,10 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client, inst: &
         }
     }
     terraform::gen_providers(&dest, providers).or_else(|e: Error| {bail!("{e}")})?;
-    terraform::gen_variables(&dest, yaml).or_else(|e: Error| {bail!("{e}")})?;
+    terraform::gen_variables(&dest, config, inst.spec.category.as_str(),inst.spec.component.as_str(), inst.name().as_str()).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_datas(&dest).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_ressources(&dest).or_else(|e: Error| {bail!("{e}")})?;
-    terraform::gen_tfvars(&dest, yaml).or_else(|e: Error| {bail!("{e}")})?;
+    terraform::gen_tfvars(&dest, config).or_else(|e: Error| {bail!("{e}")})?;
     // run post-template stage from rhai script if any
     script.run_post_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
     events::report(AGENT, client,events::from(
@@ -108,8 +112,9 @@ pub async fn run(args:&Parameters) -> Result<()> {
     file.push(src.clone());
     file.push("index.rhai");
     let mut script = script::Script::new(&file, script::new_context(
-        yaml.metadata.name.clone(),
         yaml.category.clone(),
+        yaml.metadata.name.clone(),
+        args.name.clone(),
         src.clone().into_os_string().into_string().unwrap(),
         dest.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&inst.options())

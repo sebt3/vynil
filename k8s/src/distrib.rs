@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use serde_json::json;
-pub use package::yaml::{Component, ComponentDependency};
+pub use package::yaml::{ComponentDependency, Providers};
 use std::collections::HashMap;
 
 /// Secret Reference
@@ -22,6 +22,33 @@ pub struct DistribAuthent {
     pub ssh_key: Option<SecretRef>,
     /// a git-credentials store file (format: https://<username>:<password|token>@<url>/<repo>)
     pub git_credentials: Option<SecretRef>,
+}
+
+/// Distribution Component
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+pub struct DistribComponent {
+    /// last known commit_id
+    pub commit_id: String,
+    /// Component description
+    pub description: Option<String>,
+    /// Component options
+    pub options: HashMap<String, serde_json::Value>,
+    /// Component dependencies
+    pub dependencies: Option<Vec<ComponentDependency>>,
+    /// Component providers
+    pub providers: Option<Providers>,
+}
+
+impl DistribComponent {
+    pub fn new(commit_id: String, description: Option<String>, options: HashMap<String, serde_json::Value>, dependencies: Option<Vec<ComponentDependency>>, providers: Option<Providers>) -> Self {
+        DistribComponent {
+            commit_id,
+            description,
+            options,
+            dependencies,
+            providers
+        }
+    }
 }
 
 /// Distrib:
@@ -52,7 +79,7 @@ pub struct DistribStatus {
     /// Last update date
     pub last_updated: DateTime<Utc>,
     /// List of known category->components
-    pub components: HashMap<String, HashMap<String, Component>>,
+    pub components: HashMap<String, HashMap<String, DistribComponent>>,
 }
 
 impl Distrib {
@@ -67,7 +94,7 @@ impl Distrib {
         self.status.as_ref().map_or_else(Utc::now, |s| s.last_updated)
     }
 
-    pub fn components(&self) -> HashMap<String, HashMap<String, Component>> {
+    pub fn components(&self) -> HashMap<String, HashMap<String, DistribComponent>> {
         self.status.clone().map(|s| s.components).unwrap_or_default()
     }
 
@@ -86,14 +113,14 @@ impl Distrib {
             false
         }
     }
-    pub fn get_component(&self, category: &str, component: &str) -> Option<Component> {
+    pub fn get_component(&self, category: &str, component: &str) -> Option<DistribComponent> {
         if self.have_component(category, component) {
             Some(self.components()[category][component].clone())
         } else {
             None
         }
     }
-    pub async fn update_status_components(&self, client: Client, manager: &str, components: HashMap<String, HashMap<String, Component>>) -> Result<Distrib, kube::Error> {
+    pub async fn update_status_components(&self, client: Client, manager: &str, components: HashMap<String, HashMap<String, DistribComponent>>) -> Result<Distrib, kube::Error> {
         let name = self.metadata.name.clone().unwrap();
         let dists: Api<Distrib> = Api::all(client);
         let new_status = Patch::Apply(json!({

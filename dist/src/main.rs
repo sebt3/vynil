@@ -33,7 +33,6 @@ pub enum Commands {
 }
 
 fn main() {
-    //TODO: Support generating "options schema" from default values
     env_logger::init_from_env(env_logger::Env::default().filter_or("LOG_LEVEL", "info").write_style_or("LOG_STYLE", "auto"));
     let args = Parameters::parse();
     match &args.command {

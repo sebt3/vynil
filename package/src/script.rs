@@ -13,10 +13,13 @@ pub fn gen_index(dest_dir: &PathBuf) -> Result<()> {
     file.push("index.rhai");
     gen_file(&file, &"
 const VERSION=config.release;
-const DEST=src;
+const SRC=src;
+const DEST=dest;
 fn pre_pack() {
-    shell(`kubectl kustomize https://github.com/rabbitmq/cluster-operator//config/manager/?ref=${global::VERSION} >${global::DEST}/manager.yaml`);
-    shell(`kubectl kustomize https://github.com/rabbitmq/cluster-operator//config/rbac/?ref=${global::VERSION} >${global::DEST}/rbac.yaml`);
+    shell(`kubectl kustomize https://github.com/rabbitmq/cluster-operator//config/manager/?ref=${global::VERSION} >${global::SRC}/manager.yaml`);
+}
+fn post_pack() {
+    shell(`rm -f ${global::DEST}/v1_Secret_authentik.yaml`);
 }
 fn pre_install() {
     shell(`kubectl apply -k https://github.com/rabbitmq/cluster-operator//config/crd/?ref=v${global::VERSION}`);
@@ -25,11 +28,12 @@ fn pre_install() {
 }
 
 
-pub fn new_context(component:String, category:String, src:String, dest:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
+pub fn new_context(category:String, component:String, instance:String, src:String, dest:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
     let json = serde_json::to_string(config).unwrap();
     let cfg: rhai::Dynamic = serde_json::from_str(&json).unwrap();
     let mut s = Scope::new();
-    s.push_constant("name", component);
+    s.push_constant("instance", instance);
+    s.push_constant("component", component);
     s.push_constant("category", category);
     s.push_constant("src", src);
     s.push_constant("dest", dest);

@@ -65,7 +65,7 @@ pub async fn install(src: &PathBuf, script: &mut script::Script, client: kube::C
     // Upload the tfstate to the status->tf_state of the k8s Install Object
     let content = match fs::read_to_string(path.clone()) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
     let new_state = match serde_json::from_str(&content) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
-    inst.update_status_apply(client.clone(), AGENT, new_state).await.map_err(|e| anyhow!("{e}"))?;
+    inst.update_status_apply(client.clone(), AGENT, new_state, std::env::var("COMMIT_ID").unwrap_or_else(|_| String::new())).await.map_err(|e| anyhow!("{e}"))?;
     events::report(AGENT, client,events::from(
         format!("Installing {}",inst.name()),
         format!("Terraform apply for `{}`",inst.name()),
@@ -106,8 +106,9 @@ pub async fn run(args:&Parameters) -> Result<()> {
     file.push(src.clone());
     file.push("index.rhai");
     let mut script = script::Script::new(&file, script::new_context(
-        yaml.metadata.name.clone(),
         yaml.category.clone(),
+        yaml.metadata.name.clone(),
+        inst.name(),
         src.clone().into_os_string().into_string().unwrap(),
         src.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&inst.options())

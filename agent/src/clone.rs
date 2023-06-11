@@ -1,10 +1,11 @@
 use clap::Args;
 use anyhow::{Result, Error, bail, anyhow};
-use std::{fs, path::{PathBuf, Path}};
+use std::{fs, path::{PathBuf, Path}, collections::HashMap};
 use package::{shell, yaml};
 use client::{get_client, AGENT, events};
 use kube::api::Resource;
-use std::collections::HashMap;
+use k8s::distrib::DistribComponent;
+
 
 #[derive(Args, Debug)]
 pub struct Parameters {
@@ -23,6 +24,48 @@ fn have_index(dir: &Path) -> bool {
     Path::new(&index).is_file()
 }
 
+fn get_commit_id(component_dir: &PathBuf) -> Result<String> {
+    let dir_path = component_dir.as_os_str().to_string_lossy();
+
+    let files = fs::read_dir(component_dir)?
+        .into_iter()
+        .filter(|r| r.is_ok()) // Get rid of Err variants for Result<DirEntry>
+        .map(|r| r.unwrap().path()) // This is safe, since we only have the Ok variants
+        .filter(|r| r.is_file());
+    let mut hashes = Vec::new();
+    // get the commit id of each files
+    for file in files {
+        let commit = match shell::get_output(&format!("cd {:?};git log --format=\"%H\" -n 1 -- {:?}", dir_path, file))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+        if ! hashes.contains(&commit) {
+            hashes.push(commit);
+        }
+    }
+    if hashes.len() == 1 {
+        return Ok(hashes[0].clone())
+    } else if hashes.is_empty() {
+        bail!("No commit found");
+    }
+    // find the most recent commit from that list
+    let commit_list = match shell::get_output(&format!("cd {:?};git log --format=\"%H\"", dir_path))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+    let mut found = String::new();
+    let mut current_id=0;
+    for hash in hashes {
+        for (i,id) in commit_list.lines().enumerate() {
+            if id == hash {
+                if found.is_empty() || current_id < i {
+                    found = hash.to_string();
+                    current_id = i;
+                }
+                break;
+            }
+        }
+    }
+    if found.is_empty() {
+        bail!("No commit found");
+    }
+    Ok(found)
+}
+
 pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distrib) -> Result<()> {
     let url = dist.spec.url.clone();
     let mut dot_git: PathBuf = PathBuf::new();
@@ -35,11 +78,10 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
     let action = if Path::new(&dot_git).is_dir() {
         // if a .git directory exist, run git pull
         shell::run_log(&format!("cd {:?};git pull", target)).or_else(|e: Error| {bail!("{e}")})?;
-        // TODO: Detect changes, if some, mass-plan the changes
         format!("git pull for {}",dist.name())
     } else {
         // Run git clone
-        shell::run_log(&format!("cd {:?};find;git clone {:?} .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
+        shell::run_log(&format!("cd {:?};git clone {:?} .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
         format!("git clone for {}",dist.name())
     };
     let mut categories = HashMap::new();
@@ -65,7 +107,15 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
             let mut index: PathBuf = PathBuf::new();
             index.push(comp_dir.clone());
             index.push("index.yaml");
-            comps.insert(comp_name, yaml::read_index(&index).or_else(|e: Error| {bail!("{e}")})?);
+            let yaml = yaml::read_index(&index).or_else(|e: Error| {bail!("{e}")})?;
+
+            comps.insert(comp_name, DistribComponent::new(
+                get_commit_id(&comp_dir.clone()).or_else(|e: Error| {bail!("{e}")})?,
+                yaml.metadata.description,
+                yaml.options,
+                yaml.dependencies,
+                yaml.providers,
+            ));
         }
         categories.insert(category, comps);
     }

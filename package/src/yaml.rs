@@ -114,6 +114,18 @@ impl Component {
                         let tid = format!("{}_{}",id, key);
                         object.insert(key.clone(), Component::get_values_inner(&tid, opt, schema));
                     }
+                    // Copy remaining values
+                    if let Some(ref v) = vals {
+                        if v.is_object() {
+                            if let Some(x) = v.as_object() {
+                                for (k, v) in x {
+                                    if ! object.contains_key(k) {
+                                        object.insert(k.clone(), v.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     return serde_json::Value::Object(object);
                 },
                 openapiv3::Type::Array(_) => {
@@ -253,6 +265,16 @@ providers:
   authentik: true
   kubernetes: true
 options:
+  sub-domain:
+    default:
+  domain-name:
+    default: your_company.com
+  domain:
+    default: your-company
+  issuer:
+    default: letsencrypt-prod
+  ingress-class:
+    default: traefik
   images:
     default:
       operator:
@@ -260,5 +282,13 @@ options:
         repository:
         tag:
         pullPolicy: IfNotPresent
+    properties:
+      operator:
+        properties:
+          pullPolicy:
+            enum:
+            - Always
+            - Never
+            - IfNotPresent
 ".to_string(), false)
 }

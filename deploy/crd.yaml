@@ -162,6 +162,9 @@ spec:
 
               This provides a hook for generating the CRD yaml (in crdgen.rs) Maybe
             properties:
+              auto_upgrade:
+                description: Should we automatically upgrade the package
+                type: boolean
               category:
                 description: The category name
                 type: string
@@ -175,12 +178,6 @@ spec:
                 description: Parameters
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
-              plan:
-                description: Should we plan
-                type: boolean
-              schedule:
-                description: Actual cron-type expression that defines the interval of the upgrades.
-                type: string
             required:
             - category
             - component
@@ -189,6 +186,9 @@ spec:
           status:
             description: The status object of `Install`
             properties:
+              commit_id:
+                description: component version applied
+                type: string
               digest:
                 description: Options digests
                 type: string
@@ -206,9 +206,6 @@ spec:
                 description: Currently planned changed, only set if planned is true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
-              planned:
-                description: Have we planned the project
-                type: boolean
               status:
                 description: Current high-level status of the installation
                 type: string
@@ -217,9 +214,9 @@ spec:
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
             required:
+            - commit_id
             - digest
             - last_updated
-            - planned
             - status
             type: object
         required:
