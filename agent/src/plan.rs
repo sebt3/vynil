@@ -19,6 +19,7 @@ pub struct Parameters {
 }
 
 pub async fn plan (src: &PathBuf, script: &mut script::Script, client: kube::Client, inst: &client::Install) -> Result<()> {
+    inst.update_status_start_plan(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
     // run pre-plan stage from rhai script if any
     let stage = "plan".to_string();
     script.run_pre_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
@@ -63,9 +64,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
 
     // Validate that the src parameter is a directory
     if ! Path::new(&args.src).is_dir() {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{:?} is not a directory", args.src));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{:?} is not a directory", args.src))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&anyhow!("{:?} is not a directory", args.src)), inst.object_ref(&())).await.unwrap();
         bail!("{:?} is not a directory", args.src);
     }
@@ -75,9 +74,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     file.push(src.clone());
     file.push("index.yaml");
     let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{e}"));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{e}"))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         return Err(e)
     }};
@@ -94,9 +91,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
         &yaml.get_values(&inst.options())
     ));
     match plan (&src, &mut script, client.clone(), &inst).await {Ok(_) => {Ok(())}, Err(e) => {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{e}"));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{e}"))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         Err(e)
     }}

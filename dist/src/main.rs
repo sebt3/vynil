@@ -3,6 +3,7 @@ mod pack;
 mod validate;
 mod template;
 mod plan;
+mod files;
 
 use clap::{Parser, Subcommand};
 use std::process;

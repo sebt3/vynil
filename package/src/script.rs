@@ -4,29 +4,6 @@ use anyhow::{Result, bail};
 use core::any::Any;
 use crate::shell;
 pub use rhai::ImmutableString;
-use crate::terraform::gen_file;
-
-
-pub fn gen_index(dest_dir: &PathBuf) -> Result<()> {
-    let mut file  = PathBuf::new();
-    file.push(dest_dir);
-    file.push("index.rhai");
-    gen_file(&file, &"
-const VERSION=config.release;
-const SRC=src;
-const DEST=dest;
-fn pre_pack() {
-    shell(`kubectl kustomize https://github.com/rabbitmq/cluster-operator//config/manager/?ref=${global::VERSION} >${global::SRC}/manager.yaml`);
-}
-fn post_pack() {
-    shell(`rm -f ${global::DEST}/v1_Secret_authentik.yaml`);
-}
-fn pre_install() {
-    shell(`kubectl apply -k https://github.com/rabbitmq/cluster-operator//config/crd/?ref=v${global::VERSION}`);
-}
-".to_string(), false)
-}
-
 
 pub fn new_context(category:String, component:String, instance:String, src:String, dest:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
     let json = serde_json::to_string(config).unwrap();

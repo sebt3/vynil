@@ -4,6 +4,10 @@ use anyhow::{Result, Error, bail, anyhow};
 use package::{yaml, script, terraform};
 use client::{get_client, AGENT, events};
 use kube::api::Resource;
+use regex::Regex;
+use std::{thread, time::Duration};
+use serde_json::{Value, Map};
+
 
 #[derive(Args, Debug)]
 pub struct Parameters {
@@ -19,6 +23,15 @@ pub struct Parameters {
 }
 
 pub async fn install(src: &PathBuf, script: &mut script::Script, client: kube::Client, inst: &client::Install) -> Result<()> {
+    if let Some(status) = inst.clone().status {
+        let re = Regex::new(r"ing$").unwrap();
+        if re.is_match(&status.status) {
+            log::warn!("*concurrency problem*");
+            log::warn!("Install {} might be already running since its status is {}", inst.metadata.name.clone().unwrap(), &status.status);
+            log::warn!("Continue anyway");
+        }
+    }
+    inst.update_status_start_install(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
     // run pre-install stage from rhai script if any
     let stage = "install".to_string();
     script.run_pre_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
@@ -83,9 +96,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     }};
     // Validate that the src parameter is a directory
     if ! Path::new(&args.src).is_dir() {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{:?} is not a directory", args.src));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{:?} is not a directory", args.src))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&anyhow!("{:?} is not a directory", args.src)), inst.object_ref(&())).await.unwrap();
         bail!("{:?} is not a directory", args.src);
     }
@@ -95,9 +106,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     file.push(src.clone());
     file.push("index.yaml");
     let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{e}"));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{e}"))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         return Err(e)
     }};
@@ -114,14 +123,25 @@ pub async fn run(args:&Parameters) -> Result<()> {
         &yaml.get_values(&inst.options())
     ));
     match install(&src, &mut script, client.clone(), &inst).await {Ok(_) => {Ok(())}, Err(e) => {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{e}"));
         let mut path = PathBuf::new();
         path.push(src.clone());
         path.push("terraform.tfstate");
         let content = match fs::read_to_string(path.clone()) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
-        let new_state = match serde_json::from_str(&content) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
-        inst.update_status_errors_tfstate(client.clone(), AGENT, errors, new_state).await.map_err(|e| anyhow!("{e}"))?;
+        let new_state:Map<String, Value> = match serde_json::from_str(&content) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
+        match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await  {Ok(_) => {}, Err(e) => {
+            log::warn!("Error {} while updating current tfstate while already managing errors. Potential tfstate lost !", e);
+            log::warn!("Retrying in a second");
+            thread::sleep(Duration::from_millis(1000));
+            match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await.map_err(|e| anyhow!("{e}")) {Ok(_) => {}, Err(e) => {
+                log::warn!("Error {} while updating current tfstate again. Sound realy bad this time", e);
+                log::warn!("Retrying in 5 secondS");
+                thread::sleep(Duration::from_millis(5000));
+                match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await.map_err(|e| anyhow!("{e}")) {Ok(_) => {}, Err(e) => {
+                    log::error!("TFSTATE LOST! reason: {}", e);
+                    log::info!("{}", serde_json::to_string(&new_state)?);
+                }};
+            }};
+        }};
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         Err(e)
     }}

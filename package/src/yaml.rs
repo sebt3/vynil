@@ -6,7 +6,6 @@ use anyhow::{Result, ensure, bail, anyhow};
 pub use openapiv3::{Schema, ReferenceOr};
 use schemars::{JsonSchema,schema_for_value};
 use std::collections::HashMap;
-use crate::terraform::gen_file;
 
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -26,6 +25,8 @@ pub struct Providers {
     pub authentik: Option<bool>,
     pub kubectl: Option<bool>,
     pub postgresql: Option<bool>,
+    pub restapi: Option<bool>,
+    pub http: Option<bool>,
 }
 #[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -173,22 +174,6 @@ impl Component {
         Ok(())
     }
 
-    pub fn use_authentik(&self) -> bool {
-        if let Some(providers) = self.providers.as_ref() {
-            if let Some(used) = &providers.authentik {
-                *used
-            } else {false}
-        } else {false}
-    }
-
-    pub fn use_postgresql(&self) -> bool {
-        if let Some(providers) = self.providers.as_ref() {
-            if let Some(used) = &providers.postgresql {
-                *used
-            } else {false}
-        } else {false}
-    }
-
     pub fn update_options_from_defaults(mut self, dest:PathBuf) -> Result<()> {
         for (key, mut val) in self.options.clone() {
             let schema: &Schema = &serde_json::from_str(serde_json::to_string(&val).unwrap().as_str()).unwrap();
@@ -248,47 +233,4 @@ pub fn validate_index(yaml: &serde_yaml::Value) -> Result<()> {
 pub fn read_index(file:&PathBuf) -> Result<Component> {
     let f = match fs::File::open(Path::new(&file)) {Ok(f) => f, Err(e) => bail!("Error {} while opening {}", e, file.display()),};
     match serde_yaml::from_reader(f) {Ok(d) => Ok(d), Err(e) => bail!("Error {} while parsing yaml from: {}", e, file.display()),}
-}
-
-pub fn gen_index(dest_dir: &PathBuf) -> Result<()> {
-    let mut file  = PathBuf::new();
-    file.push(dest_dir);
-    file.push("index.yaml");
-    gen_file(&file, &"
-apiVersion: vinyl.solidite.fr/v1beta1
-kind: Component
-category:
-metadata:
-  name:
-  description:
-providers:
-  authentik: true
-  kubernetes: true
-options:
-  sub-domain:
-    default:
-  domain-name:
-    default: your_company.com
-  domain:
-    default: your-company
-  issuer:
-    default: letsencrypt-prod
-  ingress-class:
-    default: traefik
-  images:
-    default:
-      operator:
-        registry:
-        repository:
-        tag:
-        pullPolicy: IfNotPresent
-    properties:
-      operator:
-        properties:
-          pullPolicy:
-            enum:
-            - Always
-            - Never
-            - IfNotPresent
-".to_string(), false)
 }

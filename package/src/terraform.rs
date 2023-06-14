@@ -134,6 +134,7 @@ provider \"kubectl\" {
     host = \"https://kubernetes.default.svc\"
     token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"
     cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"
+    load_config_file       = false
 }";
     } else {
       requiered += "
@@ -146,6 +147,7 @@ provider \"kubectl\" {
 #    host = \"https://kubernetes.default.svc\"
 #    token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"
 #    cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"
+#    load_config_file       = false
 #}";
     }
     let mut have_authentik = false;
@@ -162,8 +164,8 @@ provider \"kubectl\" {
     }";
       content += "
 provider \"authentik\" {
-  url   = local.ak-url
-  token = local.ak-token
+  url   = \"http://authentik.${var.domain}-auth.svc\"
+  token = data.kubernetes_secret_v1.authentik.data[\"AUTHENTIK_BOOTSTRAP_TOKEN\"]
 }";
     } else {
       requiered += "
@@ -173,12 +175,12 @@ provider \"authentik\" {
 #    }";
       content += "
 #provider \"authentik\" {
-#  url   = local.ak-url
-#  token = local.ak-token
+#  url   = \"http://authentik.${var.domain}-auth.svc\"
+#  token = data.kubernetes_secret_v1.authentik.data[\"AUTHENTIK_BOOTSTRAP_TOKEN\"]
 #}";
     }
     let mut have_postgresql = false;
-    if let Some(providers) = providers {
+    if let Some(providers) = providers.clone() {
       if let Some(postgresql) = providers.postgresql {
         have_postgresql = postgresql;
       }
@@ -207,6 +209,48 @@ provider \"postgresql\" {
 #  username        = local.pg-username
 #  password        = local.pg-password
 #}";
+    }
+    let mut have_http = false;
+    if let Some(providers) = providers.clone() {
+      if let Some(http) = providers.http {
+        have_http = http;
+      }
+    }
+    if have_http {
+      requiered += "
+      http = {
+        source = \"hashicorp/http\"
+        version = \"~> 3.3.0\"
+    }";
+      content += "
+provider \"http\" {}";
+    } else {
+      requiered += "
+#      http = {
+#        source = \"hashicorp/http\"
+#        version = \"~> 3.3.0\"
+#    }";
+      content += "
+#provider \"http\" {}";
+    }
+    let mut have_restapi = false;
+    if let Some(providers) = providers {
+      if let Some(restapi) = providers.restapi {
+        have_restapi = restapi;
+      }
+    }
+    if have_restapi {
+      requiered += "
+      restapi = {
+        source = \"Mastercard/restapi\"
+        version = \"~> 1.18.0\"
+      }";
+    } else {
+      requiered += "
+#      restapi = {
+#        source = \"Mastercard/restapi\"
+#        version = \"~> 1.18.0\"
+#      }";
     }
     file.push(dest_dir);
     file.push("providers.tf");
@@ -274,6 +318,22 @@ locals {
     \"app.kubernetes.io/instance\" = var.instance
   }
 }
+
+# data \"kubernetes_secret_v1\" \"postgresql_password\" {
+#   depends_on = [kubernetes_manifest.prj_postgresql]
+#   metadata {
+#     name = \"${var.component}.${var.instance}-${var.component}.credentials.postgresql.acid.zalan.do\"
+#     namespace = var.namespace
+#   }
+# }
+
+# data \"kubernetes_secret_v1\" \"authentik\" {
+#   metadata {
+#     name = \"authentik\"
+#     namespace = \"${var.domain}-auth\"
+#   }
+# }
+
 data \"kustomization_overlay\" \"data\" {
   common_labels = local.common-labels
   namespace = var.namespace

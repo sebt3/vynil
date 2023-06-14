@@ -52,7 +52,7 @@ fn get_commit_id(component_dir: &PathBuf) -> Result<String> {
     for hash in hashes {
         for (i,id) in commit_list.lines().enumerate() {
             if id == hash {
-                if found.is_empty() || current_id < i {
+                if found.is_empty() || current_id > i {
                     found = hash.to_string();
                     current_id = i;
                 }

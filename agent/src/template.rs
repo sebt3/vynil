@@ -28,6 +28,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     config:&serde_json::Map<String, serde_json::Value>,
     script: &mut script::Script,
     providers: Option<yaml::Providers>) -> Result<()> {
+    inst.update_status_start_template(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
     let reg = Handlebars::new();
     // run pre-template stage from rhai script if any
     let stage = "template".to_string();
@@ -66,6 +67,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     terraform::gen_tfvars(&dest, config).or_else(|e: Error| {bail!("{e}")})?;
     // run post-template stage from rhai script if any
     script.run_post_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
+    inst.update_status_end_template(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
     events::report(AGENT, client,events::from(
         format!("Installing {}",inst.name()),
         format!("Generating templates for `{}`",inst.name()),
@@ -83,17 +85,13 @@ pub async fn run(args:&Parameters) -> Result<()> {
     }};
     // Validate that the dest parameter is a directory
     if ! Path::new(&args.dest).is_dir() {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{:?} is not a directory", args.dest));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{:?} is not a directory", args.dest))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&anyhow!("{:?} is not a directory", args.dest)), inst.object_ref(&())).await.unwrap();
         bail!("{:?} is not a directory", args.dest);
     }
     // Validate that the source parameter is a directory
     if ! Path::new(&args.source).is_dir() {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{:?} is not a directory", args.source));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{:?} is not a directory", args.source))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&anyhow!("{:?} is not a directory", args.source)), inst.object_ref(&())).await.unwrap();
         bail!("{:?} is not a directory", args.source);
     }
@@ -120,9 +118,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
         &yaml.get_values(&inst.options())
     ));
     match template(src, dest, client.clone(), &inst, &yaml.get_values(&inst.options()), &mut script, yaml.providers.clone()).await {Ok(_) => {Ok(())}, Err(e) => {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{e}"));
-        inst.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
+        inst.update_status_errors(client.clone(), AGENT, vec!(format!("{e}"))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         Err(e)
     }}

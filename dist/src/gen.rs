@@ -1,7 +1,8 @@
 use std::{process, path::{PathBuf, Path}, fs};
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
-use package::{terraform, yaml, script};
+use package::{terraform, yaml};
+use crate::files;
 
 #[derive(Args, Debug)]
 pub struct ParametersDest {
@@ -29,9 +30,16 @@ pub enum Commands {
     Index(ParametersDest),
     /// Generate index.rhai
     Rhai(ParametersDest),
+    /// Generate secret.tf
+    Secret(ParametersDest),
+    /// Generate postgresql.tf
+    Postgresql(ParametersDest),
+    /// Generate ingress.tf
+    Ingress(ParametersDest),
     /// Generate index.yaml options based on the default values
     Options(ParametersDest),
 }
+
 
 fn providers(args:&ParametersDest) -> Result<()> {
     if ! Path::new(&args.project).is_dir() {
@@ -56,18 +64,6 @@ fn datas(args:&ParametersDest) -> Result<()> {
         bail!("{:?} is not a directory", args.project);
     }
     terraform::gen_datas(&args.project)
-}
-fn index(args:&ParametersDest) -> Result<()> {
-    if ! Path::new(&args.project).is_dir() {
-        bail!("{:?} is not a directory", args.project);
-    }
-    yaml::gen_index(&args.project)
-}
-fn rhai(args:&ParametersDest) -> Result<()> {
-    if ! Path::new(&args.project).is_dir() {
-        bail!("{:?} is not a directory", args.project);
-    }
-    script::gen_index(&args.project)
 }
 fn options(args:&ParametersDest) -> Result<()> {
     let mut file = PathBuf::new();
@@ -98,15 +94,33 @@ pub fn run(args:&Parameters) {
                 process::exit(1)
             }
         }}
-        Commands::Index(args) => {match index(args) {
+        Commands::Index(args) => {match files::gen_index_yaml(&args.project) {
             Ok(d) => d, Err(e) => {
                 log::error!("Generating the index.yaml file failed with: {e:}");
                 process::exit(1)
             }
         }}
-        Commands::Rhai(args) => {match rhai(args) {
+        Commands::Rhai(args) => {match files::gen_index_rhai(&args.project) {
             Ok(d) => d, Err(e) => {
                 log::error!("Generating the index.rhai file failed with: {e:}");
+                process::exit(1)
+            }
+        }}
+        Commands::Ingress(args) => {match files::gen_ingress(&args.project) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Generating the ingress.tf file failed with: {e:}");
+                process::exit(1)
+            }
+        }}
+        Commands::Postgresql(args) => {match files::gen_postgresql(&args.project) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Generating the postgresql.tf file failed with: {e:}");
+                process::exit(1)
+            }
+        }}
+        Commands::Secret(args) => {match files::gen_secret(&args.project) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Generating the secret.tf file failed with: {e:}");
                 process::exit(1)
             }
         }}

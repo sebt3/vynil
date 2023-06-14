@@ -53,9 +53,7 @@ impl Reconciler for Install {
         let agent_name = format!("{ns}--{name}--agent");
         let dist_name = self.spec.distrib.as_str();
         let dist = match dists.get(dist_name).await {Ok(d) => d, Err(e) => {
-            let mut errors: Vec<String> = Vec::new();
-            errors.push(format!("{:?}", e));
-            self.update_status_missing_distrib(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+            self.update_status_missing_distrib(client, OPERATOR, vec!(format!("{:?}", e))).await.map_err(Error::KubeError)?;
             return Err(Error::IllegalDistrib);
         }};
         //TODO: label the install with the distrib, component and category so searching installs is simple
@@ -72,9 +70,7 @@ impl Reconciler for Install {
         }
         // Validate that the requested package exist in that distrib
         if ! dist.have_component(self.spec.category.as_str(), self.spec.component.as_str()) {
-            let mut errors: Vec<String> = Vec::new();
-            errors.push(format!("{:} - {:} is not known from  {:?} distribution", self.spec.category.as_str(), self.spec.component.as_str(), dist_name));
-            self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+            self.update_status_missing_component(client, OPERATOR, vec!(format!("{:} - {:} is not known from  {:?} distribution", self.spec.category.as_str(), self.spec.component.as_str(), dist_name))).await.map_err(Error::KubeError)?;
             if dist.status.is_some() {
                 return Err(Error::IllegalInstall)
             } else { // the dist is not yet updated, wait for it for 60s
@@ -83,23 +79,19 @@ impl Reconciler for Install {
         }
         let comp = dist.get_component(self.spec.category.as_str(), self.spec.component.as_str()).unwrap();
         if comp.dependencies.is_some() {
+            let mut missing: Vec<String> = Vec::new();
+            let mut should_fail = false;
             for dep in comp.dependencies.clone().unwrap() {
                 // Validate that the dependencies are actually known to the package management
                 if dep.dist.is_some() {
                     let dist = match dists.get(dep.dist.clone().unwrap().as_str()).await{Ok(d) => d, Err(e) => {
-                        let mut errors: Vec<String> = Vec::new();
-                        errors.push(format!("{:?}", e));
-                        self.update_status_missing_distrib(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                        self.update_status_missing_distrib(client, OPERATOR, vec!(format!("{:?}", e))).await.map_err(Error::KubeError)?;
                         return Err(Error::IllegalDistrib);
                     }};
                     if !dist.have_component(dep.category.as_str(), dep.component.as_str()) {
-                        let mut errors: Vec<String> = Vec::new();
-                        errors.push(format!("{:} - {:} is not known from  {:?} distribution", dep.category.as_str(), dep.component.as_str(), dep.dist.clone().unwrap().as_str()));
-                        self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                        missing.push(format!("{:} - {:} is not known from  {:?} distribution", dep.category.as_str(), dep.component.as_str(), dep.dist.clone().unwrap().as_str()));
                         if dist.status.is_some() {
-                            return Err(Error::IllegalInstall)
-                        } else { // the dist is not yet updated, wait for it for 60s
-                            return Ok(Action::requeue(Duration::from_secs(60)))
+                            should_fail = true;
                         }
                     }
                 } else {
@@ -111,10 +103,7 @@ impl Reconciler for Install {
                         }
                     }
                     if !found {
-                        let mut errors: Vec<String> = Vec::new();
-                        errors.push(format!("{:} - {:} is not known from any distribution", dep.category.as_str(), dep.component.as_str()));
-                        self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
-                        return Ok(Action::requeue(Duration::from_secs(60)))
+                        missing.push(format!("{:} - {:} is not known from any distribution", dep.category.as_str(), dep.component.as_str()));
                     }
                 }
                 // Validate that the dependencies are actually installed
@@ -138,35 +127,34 @@ impl Reconciler for Install {
                     }
                 }
                 if ! found {
-                    // TODO: should collect all issues before returning
-                    let mut errors: Vec<String> = Vec::new();
-                    errors.push(format!("{:} - {:} is not installed in any namespace", dep.category.as_str(), dep.component.as_str()));
-                    self.update_status_missing_dependencies(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
-                    // TODO: evaluate if failing is not a better strategy here
-                    return Ok(Action::requeue(Duration::from_secs(60)))
+                    missing.push(format!("{:} - {:} is not installed in any namespace", dep.category.as_str(), dep.component.as_str()));
                 } else {
                     let installs: Api<Install> = Api::namespaced(client.clone(), found_ns.as_str());
                     let install = installs.get(found_name.as_str()).await.unwrap();
                     if install.status.is_none() || install.status.unwrap().status.as_str() != STATUS_INSTALLED {
-                        let mut errors: Vec<String> = Vec::new();
-                        errors.push(format!("Install {:} - {:} is not yet ready", found_ns.as_str(), found_name.as_str()));
-                        self.update_status_waiting_dependencies(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
-                        return Ok(Action::requeue(Duration::from_secs(60)))
+                        missing.push(format!("Install {:} - {:} is not yet ready", found_ns.as_str(), found_name.as_str()));
                     }
                 }
+            }
+            if ! missing.is_empty() {
+                self.update_status_missing_component(client, OPERATOR, missing).await.map_err(Error::KubeError)?;
+                if should_fail {
+                    return Err(Error::IllegalInstall)
+                }
+                return Ok(Action::requeue(Duration::from_secs(60)))
             }
         }
 
         let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), &comp.commit_id);
         let agent_job = if self.should_plan() {
-            jobs.get_installs_install(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())
-        } else {
             jobs.get_installs_plan(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())
+        } else {
+            jobs.get_installs_install(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())
         };
 
         if !jobs.have(agent_name.as_str()).await {
             info!("Creating {agent_name} Job");
-            self.update_status_planning(client, OPERATOR).await.map_err(Error::KubeError)?;
+            self.update_status_agent_started(client, OPERATOR).await.map_err(Error::KubeError)?;
             let job = jobs.create(agent_name.as_str(), &agent_job).await.unwrap();
             debug!("Sending event {agent_name} Job");
             recorder.publish(
