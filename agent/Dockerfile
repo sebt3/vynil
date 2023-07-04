@@ -25,8 +25,8 @@ COPY agent agent/
 RUN touch package/src/lib.rs k8s/src/lib.rs agent/src/lib.rs agent/src/main.rs \
  && cargo build -r --bin agent \
  && strip target/release/agent
-# Finally create the target image with run-time dependencies installed
-FROM debian:${DEBIAN_VERSION}-slim as target
+# Then create the intermediary image with run-time dependencies installed
+FROM debian:${DEBIAN_VERSION}-slim as middle
 ARG HELM_VERSION=v3.10.3
 ARG KUBECTL_VERSION=v1.25.7
 ARG TF_VERSION=1.3.6
@@ -52,8 +52,16 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && chown -R nobody:nogroup /var/lib/vynil /nonexistent \
  && chmod 750 /var/lib/vynil /nonexistent \
  && chmod 700 /var/lib/vynil/keys
+# Use the intermediary image to download the most used providers for runtime caching purpose
+FROM middle as downloader
+WORKDIR /src
+COPY agent/providers.tf .
+RUN terraform init
+# Finally assemble everything together
+FROM middle as target
 COPY --from=builder /usr/src/agent/target/release/agent /usr/bin/agent
 USER nobody
+COPY --from=downloader /src/.terraform/providers /nonexistent/.terraform.d/plugins
 WORKDIR /work
 ENV GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i /var/lib/vynil/keys/private"
 RUN git config --global credential.helper 'store --file /var/lib/vynil/git-credentials'

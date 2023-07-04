@@ -58,6 +58,7 @@ impl DistribComponent {
 #[kube(kind = "Distrib", group = "vynil.solidite.fr", version = "v1")]
 #[kube(status = "DistribStatus", shortname = "dist", printcolumn = r#"
     {"name":"url", "type":"string", "description":"Git url", "jsonPath":".spec.url"},
+    {"name":"schedule", "type":"string", "description":"Update schedule", "jsonPath":".spec.schedule"},
     {"name":"last_updated", "type":"string", "description":"Last update date", "format": "date-time", "jsonPath":".status.last_updated"}"#)]
 pub struct DistribSpec {
     /// Git clone URL
