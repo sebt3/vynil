@@ -78,6 +78,10 @@ impl Reconciler for Install {
             }
         }
         let comp = dist.get_component(self.spec.category.as_str(), self.spec.component.as_str()).unwrap();
+        if self.status.is_some() && self.status.clone().unwrap().status.as_str() == STATUS_INSTALLED && self.status.clone().unwrap().digest.as_str() == comp.commit_id.as_str() {
+            // Nothing to do since component is already installed at current commit_id
+            return Ok(Action::requeue(Duration::from_secs(5 * 60)))
+        }
         if comp.dependencies.is_some() {
             let mut missing: Vec<String> = Vec::new();
             let mut should_fail = false;

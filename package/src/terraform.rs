@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
-use crate::{shell, yaml::Providers};
+use crate::{shell, yaml::{Providers, Component}};
 
 pub fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
     if ! Path::new(dest).is_file() || force {
@@ -258,7 +258,7 @@ provider \"http\" {}";
     gen_file(&file, &requiered, false)
 }
 
-pub fn gen_variables(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json::Value>, category: &str, component: &str, instance: &str) -> Result<()> {
+pub fn gen_variables(dest_dir: &PathBuf, yaml: &Component,config:&serde_json::Map<String, serde_json::Value>, category: &str, component: &str, instance: &str) -> Result<()> {
   let mut file  = PathBuf::new();
   file.push(dest_dir);
   file.push("variables.tf");
@@ -277,11 +277,20 @@ variable \"instance\" {{
   for (name,value) in config {
       let str = serde_json::to_string(value).unwrap();
       let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
-      log::debug!("{}={}", name, output);
-      content += format!("variable \"{}\" {{
+      if yaml.tfaddtype.is_some() && *yaml.tfaddtype.as_ref().unwrap() {
+          let typed = yaml.get_tf_type(name);
+          log::debug!("{}({})={}", name, typed, output);
+          content += format!("variable \"{}\" {{
+  default     = {}
+  type        = {}
+}}
+", name, output, typed).as_str();
+      } else {
+          content += format!("variable \"{}\" {{
   default     = {}
 }}
 ", name, output).as_str();
+      }
   }
   gen_file(&file, &content, false)
 }

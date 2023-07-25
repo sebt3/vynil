@@ -28,7 +28,6 @@ fn get_commit_id(component_dir: &PathBuf) -> Result<String> {
     let dir_path = component_dir.as_os_str().to_string_lossy();
 
     let files = fs::read_dir(component_dir)?
-        .into_iter()
         .filter(|r| r.is_ok()) // Get rid of Err variants for Result<DirEntry>
         .map(|r| r.unwrap().path()) // This is safe, since we only have the Ok variants
         .filter(|r| r.is_file());
@@ -86,7 +85,6 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
     };
     let mut categories = HashMap::new();
     let c_dirs = fs::read_dir(target)?
-        .into_iter()
         .filter(|r| r.is_ok()) // Get rid of Err variants for Result<DirEntry>
         .map(|r| r.unwrap().path()) // This is safe, since we only have the Ok variants
         .filter(|r| r.is_dir() && r.file_name().unwrap().to_str().unwrap() != ".git");
@@ -96,7 +94,6 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
         let mut comps = HashMap::new();
 
         let pkgs = fs::read_dir(c_subdir)?
-            .into_iter()
             .filter(|r| r.is_ok()) // Get rid of Err variants for Result<DirEntry>
             .map(|r| r.unwrap().path()) // This is safe, since we only have the Ok variants
             .filter(|r| r.is_dir())

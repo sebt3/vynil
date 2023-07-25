@@ -54,7 +54,7 @@ pub fn template(src: PathBuf, dest: PathBuf, yaml: Component, config:&serde_json
         }
     }
     terraform::gen_providers(&dest, providers).or_else(|e: Error| {bail!("{e}")})?;
-    terraform::gen_variables(&dest, config,yaml.category.as_str(), yaml.metadata.name.as_str(), yaml.metadata.name.as_str()).or_else(|e: Error| {bail!("{e}")})?;
+    terraform::gen_variables(&dest, &yaml, config,yaml.category.as_str(), yaml.metadata.name.as_str(), yaml.metadata.name.as_str()).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_datas(&dest).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_ressources(&dest).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_tfvars(&dest, config).or_else(|e: Error| {bail!("{e}")})?;

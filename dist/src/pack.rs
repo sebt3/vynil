@@ -17,12 +17,14 @@ pub struct Parameters {
 fn explode(src: &PathBuf, dest: &Path, config: &serde_json::Map<String, serde_json::Value>, is_template: bool) -> Result<()> {
     let content = fs::read_to_string(src)
         .expect("Should have been able to read the file");
-    let parts = content.split("---");
+    let parts = content.split("
+---
+");
     for i in parts {
         let str = i.to_string();
         let str = str.trim();
         if str.split('\n').count() > 4 {
-            let yaml: serde_yaml::Value = match serde_yaml::from_str(str) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
+            let yaml: serde_yaml::Value = match serde_yaml::from_str(str) {Ok(d) => d, Err(e) => {log::error!("'{e:}' while parsing yaml chuck from {}: '{str}'", src.display());std::process::exit(1)},};
             let kind = yaml["kind"].as_str().map(std::string::ToString::to_string).unwrap();
             let version = yaml["apiVersion"].as_str().map(std::string::ToString::to_string).unwrap();
             let version = version.replace('/', "_");
@@ -61,7 +63,9 @@ pub fn run(args:&Parameters) -> Result<()> {
     // // Validate the index.yaml file
     // yaml::validate_index(&yaml)?;
     // Final validation
-    let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
+    log::debug!("Validating index.yaml");
+    let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:} while validating generated index.yaml");std::process::exit(1)},};
+    log::debug!("Validating index.yaml : ok");
     // Create the dest directory if not existing
     let dist = fs::canonicalize(&args.dist).unwrap();
     let mut tmp = PathBuf::new();
@@ -112,9 +116,11 @@ pub fn run(args:&Parameters) -> Result<()> {
             }
             copies.push(path);
         } else if re_yml.is_match(filename) {
+            log::debug!("exploding yaml file: {}", filename);
             match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()), false)  {Ok(_) => {}, Err(e) => {return Err(e)}}
         } else if re_ymlhbs.is_match(filename) {
             use_templates = true;
+            log::debug!("exploding handlebars template file: {}", filename);
             match explode(&path, &dest_dir, &yaml.get_values(&serde_json::Map::new()), true)  {Ok(_) => {}, Err(e) => {return Err(e)}}
         } else if re_hbs.is_match(filename) {
             use_templates = true;
@@ -131,10 +137,12 @@ pub fn run(args:&Parameters) -> Result<()> {
     if use_templates {
         log::warn!("Using mustaches templates is not recommanded, you should migrate to terraform base templating instead.");
     }
+    log::debug!("Preparing final index.yaml");
     let mut dest_path: PathBuf = PathBuf::new();
     dest_path.push(dest_dir.clone());
     dest_path.push("index.yaml");
     yaml.update_options_from_defaults(dest_path.clone())?;
+    log::debug!("Updated final index.yaml");
     let mut yaml = match yaml::read_index(&dest_path) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
     let mut script = script::Script::new(&file, script::new_context(
         yaml.category.clone(),

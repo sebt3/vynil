@@ -259,7 +259,6 @@ impl Install {
     pub async fn update_status_apply(&self, client: Client, manager: &str, tfstate: serde_json::Map<String, serde_json::Value>, commit_id: String) -> Result<Install, kube::Error> {
         let name = self.name();
         let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
-        let last_updated = self.last_updated();
         let pp = PatchParams::apply(manager).force();
         let no_errors: Vec<String> = Vec::new();
         let patch = Patch::Apply(json!({
@@ -271,7 +270,7 @@ impl Install {
                 tfstate: Some(tfstate),
                 errors: Some(no_errors),
                 commit_id,
-                last_updated,
+                last_updated: Utc::now(),
                 digest: self.options_digest()
             }
         }));

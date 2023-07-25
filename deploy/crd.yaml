@@ -19,6 +19,10 @@ spec:
       jsonPath: .spec.url
       name: url
       type: string
+    - description: Update schedule
+      jsonPath: .spec.schedule
+      name: schedule
+      type: string
     - description: Last update date
       format: date-time
       jsonPath: .status.last_updated
@@ -136,13 +140,13 @@ spec:
       type: string
     - description: Component
       jsonPath: .spec.component
-      name: app
+      name: comp
       type: string
     - description: Status
       jsonPath: .status.status
       name: status
       type: string
-    - description: Status
+    - description: Errors
       jsonPath: .status.errors[*]
       name: errors
       type: string

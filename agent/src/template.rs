@@ -25,9 +25,10 @@ pub struct Parameters {
 
 pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     inst: &client::Install,
+    yaml: &yaml::Component,
     config:&serde_json::Map<String, serde_json::Value>,
-    script: &mut script::Script,
-    providers: Option<yaml::Providers>) -> Result<()> {
+    script: &mut script::Script) -> Result<()> {
+    let providers = yaml.providers.clone();
     inst.update_status_start_template(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
     let reg = Handlebars::new();
     // run pre-template stage from rhai script if any
@@ -61,7 +62,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
         }
     }
     terraform::gen_providers(&dest, providers).or_else(|e: Error| {bail!("{e}")})?;
-    terraform::gen_variables(&dest, config, inst.spec.category.as_str(),inst.spec.component.as_str(), inst.name().as_str()).or_else(|e: Error| {bail!("{e}")})?;
+    terraform::gen_variables(&dest, yaml, config, inst.spec.category.as_str(),inst.spec.component.as_str(), inst.name().as_str()).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_datas(&dest).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_ressources(&dest).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_tfvars(&dest, config).or_else(|e: Error| {bail!("{e}")})?;
@@ -101,7 +102,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
     let mut file = PathBuf::new();
     file.push(src.clone());
     file.push("index.yaml");
-    let mut yaml = match yaml::read_index(&file){Ok(d) => d, Err(e) => {
+    let mut yaml: yaml::Component = match yaml::read_index(&file){Ok(d) => d, Err(e) => {
         events::report(AGENT, client, events::from_error(&anyhow!("{e}")), events::get_empty_ref()).await.unwrap();
         bail!("{e}");
     }};
@@ -117,7 +118,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
         dest.clone().into_os_string().into_string().unwrap(),
         &yaml.get_values(&inst.options())
     ));
-    match template(src, dest, client.clone(), &inst, &yaml.get_values(&inst.options()), &mut script, yaml.providers.clone()).await {Ok(_) => {Ok(())}, Err(e) => {
+    match template(src, dest, client.clone(), &inst, &yaml.clone(), &yaml.get_values(&inst.options()), &mut script).await {Ok(_) => {Ok(())}, Err(e) => {
         inst.update_status_errors(client.clone(), AGENT, vec!(format!("{e}"))).await.map_err(|e| anyhow!("{e}"))?;
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         Err(e)

@@ -38,6 +38,7 @@ pub struct Component {
     pub options: HashMap<String, serde_json::Value>,
     pub dependencies: Option<Vec<ComponentDependency>>,
     pub providers: Option<Providers>,
+    pub tfaddtype: Option<bool>,
 }
 
 fn merge_json(a: &mut serde_json::Value, b: serde_json::Value) {
@@ -165,6 +166,56 @@ impl Component {
         // TODO: should detect current namespace instead of hard-coding default
         object.insert("namespace".to_string(), serde_json::Value::String(env::var("NAMESPACE").unwrap_or_else(|_| "default".to_string())));
         object
+    }
+
+    fn get_tf_type_inner(schema: Schema) -> String {
+        let kind = &schema.schema_kind;
+        if let openapiv3::SchemaKind::Type(t) = kind {
+            match t {
+                openapiv3::Type::String(_) => {
+                    return "string".to_string();
+                },
+                openapiv3::Type::Number(_) | openapiv3::Type::Integer(_) => {
+                    return "number".to_string();
+                },
+                openapiv3::Type::Boolean{ .. } => { // Boolean
+                    return "bool".to_string();
+                }
+                openapiv3::Type::Object(objt) => {
+                    let mut ret = String::new();
+                    for (key, val) in &objt.properties {
+                        if let Some(item) = val.clone().into_item() {
+                            if ! ret.is_empty() {
+                                ret += ", ";
+                            }
+                            ret += format!("{} = {}", key, Self::get_tf_type_inner(*item)).as_str();
+                        }
+                    }
+                    if ret.is_empty() {
+                        return "map(any)".to_string();
+                    }
+                    return format!("object({{{}}})", ret).to_string();
+                },
+                openapiv3::Type::Array(arrt) => {
+                    if let Some(boxed) = arrt.items.clone() {
+                        if let Some(item) = boxed.into_item() {
+                            return format!("list({})", Self::get_tf_type_inner(*item)).to_string();
+                        }
+                    }
+                    return "list(any)".to_string();
+                },
+            }
+        }
+        "any".to_string()
+    }
+    pub fn get_tf_type(&self, key: &str) -> String {
+        for (k, val) in &self.options {
+            if k == key {
+                let schema: Schema = serde_json::from_str(serde_json::to_string(val).unwrap().as_str()).map_err(|e| anyhow!("While evaluating options {key} : {e} (value was {:?})", val)).unwrap();
+                return Self::get_tf_type_inner(schema)
+            }
+        }
+        "any".to_string()
     }
 
     pub fn validate(&self) -> Result<()> {
