@@ -1,0 +1,62 @@
+---
+steps:
+  yamllint:
+    group: lint
+    image: git.solidite.fr/images/ansible:8.2.0
+    commands:
+    - yamllint -f colored .
+  cargo:
+    group: lint
+    image: docker.io/rust:1.71.0
+    commands:
+    - export PATH=$PATH:$CARGO_HOME/bin
+    - rustup component add clippy
+    - cargo clippy -- -Dwarnings -W clippy::semicolon-if-nothing-returned -W clippy::map-unwrap-or -W clippy::similar-names -W clippy::similar-names -W clippy::manual-string-new
+  lint-docker-agent:
+    group: lint
+    image: hadolint/hadolint:latest-alpine
+    commands:
+    - hadolint agent/Dockerfile
+  lint-docker-operator:
+    group: lint
+    image: hadolint/hadolint:latest-alpine
+    commands:
+    - hadolint operator/Dockerfile
+  lint-docker-dist:
+    group: lint
+    image: hadolint/hadolint:latest-alpine
+    commands:
+    - hadolint dist/Dockerfile
+  build-agent:
+    group: build
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      repo: git.solidite.fr/${CI_REPO}-agent
+      registry: git.solidite.fr
+      dockerfile: agent/Dockerfile
+      username:
+        from_secret: repo_user
+      password:
+        from_secret: repo_password
+  build-dist:
+    group: build
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      repo: git.solidite.fr/${CI_REPO}-dist
+      registry: git.solidite.fr
+      dockerfile: dist/Dockerfile
+      username:
+        from_secret: repo_user
+      password:
+        from_secret: repo_password
+  build-operator:
+    group: build
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      repo: git.solidite.fr/${CI_REPO}-operator
+      registry: git.solidite.fr
+      dockerfile: operator/Dockerfile
+      username:
+        from_secret: repo_user
+      password:
+        from_secret: repo_password

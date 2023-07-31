@@ -1,6 +1,0 @@
----
-steps:
-  yamllint:
-    image: git.solidite.fr/images/ansible:8.2.0
-    commands:
-    - yamllint -f colored .
