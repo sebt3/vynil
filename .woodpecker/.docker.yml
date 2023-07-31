@@ -40,7 +40,7 @@ steps:
       repo: git.solidite.fr/${CI_REPO}-agent,${CI_REPO}-agent
       dockerfile: agent/Dockerfile
       tags_file: agent/.tags
-      platforms: linux/amd64,linux/arm/v6,linux/arm64/v8
+      platforms: linux/amd64,linux/arm64/v8
       logins:
       - registry: git.solidite.fr
         username:
@@ -59,7 +59,7 @@ steps:
       repo: git.solidite.fr/${CI_REPO}-dist,${CI_REPO}-dist
       dockerfile: dist/Dockerfile
       tags_file: dist/.tags
-      platforms: linux/amd64,linux/arm/v6,linux/arm64/v8
+      platforms: linux/amd64,linux/arm64/v8
       logins:
       - registry: git.solidite.fr
         username:
@@ -78,7 +78,7 @@ steps:
       repo: git.solidite.fr/${CI_REPO}-operator,${CI_REPO}-operator
       dockerfile: operator/Dockerfile
       tags_file: operator/.tags
-      platforms: linux/amd64,linux/arm/v6,linux/arm64/v8
+      platforms: linux/amd64,linux/arm64/v8
       logins:
       - registry: git.solidite.fr
         username:
