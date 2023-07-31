@@ -37,7 +37,7 @@ steps:
     group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
-      repo: git.solidite.fr/${CI_REPO}-agent,${CI_REPO}-agent
+      repo: git.solidite.fr/${CI_REPO_OWNER}/agent,sebt3/${CI_REPO_NAME}-agent
       dockerfile: agent/Dockerfile
       tags_file: agent/.tags
       platforms: linux/amd64,linux/arm64/v8
@@ -56,7 +56,7 @@ steps:
     group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
-      repo: git.solidite.fr/${CI_REPO}-dist,${CI_REPO}-dist
+      repo: git.solidite.fr/${CI_REPO_OWNER}/dist,sebt3/${CI_REPO_NAME}-dist
       dockerfile: dist/Dockerfile
       tags_file: dist/.tags
       platforms: linux/amd64,linux/arm64/v8
@@ -75,7 +75,7 @@ steps:
     group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
-      repo: git.solidite.fr/${CI_REPO}-operator,${CI_REPO}-operator
+      repo: git.solidite.fr/${CI_REPO_OWNER}/operator,sebt3/${CI_REPO_NAME}-operator
       dockerfile: operator/Dockerfile
       tags_file: operator/.tags
       platforms: linux/amd64,linux/arm64/v8
