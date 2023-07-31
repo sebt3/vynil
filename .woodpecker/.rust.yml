@@ -1,7 +1,7 @@
 ---
 steps:
   cargo:
-    image: docker.io/rust:1.71.0-slim-bookworm
+    image: docker.io/rust:1.71.0
     commands:
     - export PATH=$PATH:$CARGO_HOME/bin
     - rustup component add clippy
