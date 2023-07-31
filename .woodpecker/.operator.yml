@@ -1,6 +1,6 @@
 ---
 depends_on:
-- yaml
+- yamllint
 - rust
 
 steps:
