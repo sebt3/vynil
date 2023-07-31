@@ -33,27 +33,7 @@ steps:
     - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' agent/Cargo.toml)">agent/.tags
     - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' dist/Cargo.toml)">dist/.tags
     - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' operator/Cargo.toml)">operator/.tags
-  build-agent:
-    group: build
-    image: woodpeckerci/plugin-docker-buildx
-    settings:
-      repo: git.solidite.fr/${CI_REPO_OWNER}/agent,sebt3/${CI_REPO_NAME}-agent
-      dockerfile: agent/Dockerfile
-      tags_file: agent/.tags
-      platforms: linux/amd64,linux/arm64/v8
-      logins:
-      - registry: git.solidite.fr
-        username:
-          from_secret: repo_user
-        password:
-          from_secret: repo_password
-      - registry: https://index.docker.io/v1/
-        username:
-          from_secret: docker_user
-        password:
-          from_secret: docker_password
   build-dist:
-    group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
       repo: git.solidite.fr/${CI_REPO_OWNER}/dist,sebt3/${CI_REPO_NAME}-dist
@@ -71,8 +51,25 @@ steps:
           from_secret: docker_user
         password:
           from_secret: docker_password
+  build-agent:
+    image: woodpeckerci/plugin-docker-buildx
+    settings:
+      repo: git.solidite.fr/${CI_REPO_OWNER}/agent,sebt3/${CI_REPO_NAME}-agent
+      dockerfile: agent/Dockerfile
+      tags_file: agent/.tags
+      platforms: linux/amd64,linux/arm64/v8
+      logins:
+      - registry: git.solidite.fr
+        username:
+          from_secret: repo_user
+        password:
+          from_secret: repo_password
+      - registry: https://index.docker.io/v1/
+        username:
+          from_secret: docker_user
+        password:
+          from_secret: docker_password
   build-operator:
-    group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
       repo: git.solidite.fr/${CI_REPO_OWNER}/operator,sebt3/${CI_REPO_NAME}-operator
