@@ -1,3 +1,4 @@
+
 # Vynil
 
 Vynil is a terraform based installer for kubernetes.
@@ -48,7 +49,7 @@ Goal: Validation webhook
 - dist update
 ```
 kubectl config set-context --current --namespace=${VYNIL_NS:=vynil};
-kubectl delete job ${VYNIL_DIST:=core}-upg;kubectl create job ${VYNIL_DIST}-upg --from=cronjob/${VYNIL_DIST}-clone
+kubectl delete job ${VYNIL_DIST:=domain}-upg;kubectl create job ${VYNIL_DIST}-upg --from=cronjob/${VYNIL_DIST}-clone
 ```
 
 - get a component commit_id

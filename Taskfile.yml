@@ -1,3 +1,4 @@
+---
 version: '3'
 
 vars:
@@ -20,6 +21,9 @@ tasks:
   lint-docker-operator:
     cmds:
     - hadolint operator/Dockerfile
+  lint-yaml:
+    cmds:
+    - yamllint -f colored .
   lint-docker:
     cmds:
     - task: lint-docker-agent
@@ -38,6 +42,7 @@ tasks:
     cmds:
     - task: lint-docker
     - task: lint-rust
+    - task: lint-yaml
   crd_gen:
     cmds:
     - cargo run --bin crdgen > deploy/crd.yaml

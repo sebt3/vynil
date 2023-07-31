@@ -1,9 +1,10 @@
+---
 name: Build dist tool image
 
 on:
   push:
     tags:
-      - '*'
+    - '*'
 jobs:
   build:
     runs-on: ubuntu-latest
