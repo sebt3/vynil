@@ -27,6 +27,12 @@ steps:
     image: hadolint/hadolint:latest-alpine
     commands:
     - hadolint dist/Dockerfile
+  gen-tags:
+    image: alpine:latest
+    commands:
+    - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' agent/Cargo.toml),$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' agent/Cargo.toml|sed 's/\.[^.]*$//'),latest">agent/.tags
+    - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' dist/Cargo.toml),$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' dist/Cargo.toml|sed 's/\.[^.]*$//'),latest">dist/.tags
+    - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' operator/Cargo.toml),$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' operator/Cargo.toml|sed 's/\.[^.]*$//'),latest">operator/.tags
   build-agent:
     group: build
     image: woodpeckerci/plugin-docker-buildx
@@ -34,6 +40,7 @@ steps:
       repo: git.solidite.fr/${CI_REPO}-agent
       registry: git.solidite.fr
       dockerfile: agent/Dockerfile
+      tags_file: agent/.tags
       username:
         from_secret: repo_user
       password:
@@ -45,6 +52,7 @@ steps:
       repo: git.solidite.fr/${CI_REPO}-dist
       registry: git.solidite.fr
       dockerfile: dist/Dockerfile
+      tags_file: dist/.tags
       username:
         from_secret: repo_user
       password:
@@ -56,6 +64,7 @@ steps:
       repo: git.solidite.fr/${CI_REPO}-operator
       registry: git.solidite.fr
       dockerfile: operator/Dockerfile
+      tags_file: operator/.tags
       username:
         from_secret: repo_user
       password:
