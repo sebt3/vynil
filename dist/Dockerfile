@@ -10,13 +10,13 @@ COPY dist/Cargo.toml dist/Cargo.toml
 RUN mkdir -p package/src dist/src \
  && echo 'fn main() { println!("Dummy") }' > dist/src/main.rs \
  && touch package/src/lib.rs \
- && cargo build -r --bin dist
+ && cargo build -j 1 -r --bin dist
 # Get our sources
 COPY package package/
 COPY dist dist/
 # Update the crates entrypoints so cargo is aware these should rebuild
 RUN touch package/src/lib.rs dist/src/main.rs \
- && cargo build -r --bin dist \
+ && CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -j 1 -r --bin dist \
  && strip target/release/dist
 
 # Finally create the target image with run-time dependencies installed
