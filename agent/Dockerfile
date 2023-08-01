@@ -1,7 +1,7 @@
 ARG RUST_VERSION=1.68
 ARG DEBIAN_VERSION=bookworm
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
-ARG BUILD_DEPS="binutils libssl-dev pkg-config"
+ARG BUILD_DEPS="binutils libssl-dev pkg-config git"
 WORKDIR /usr/src/agent
 # hadolint ignore=DL3008,DL3015
 RUN mkdir -p package/src k8s/src agent/src \

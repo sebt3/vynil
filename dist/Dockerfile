@@ -1,15 +1,19 @@
 ARG RUST_VERSION=1.68
 ARG DEBIAN_VERSION=bookworm
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
+ARG BUILD_DEPS="git"
 WORKDIR /usr/src/dist
 COPY dist/parent.toml ./Cargo.toml
 COPY src src/
 COPY package/Cargo.toml package/Cargo.toml
 COPY dist/Cargo.toml dist/Cargo.toml
 # Build the deps for caching purpose
+# hadolint ignore=DL3008,DL3015
 RUN mkdir -p package/src dist/src \
  && echo 'fn main() { println!("Dummy") }' > dist/src/main.rs \
  && touch package/src/lib.rs \
+ && DEBIAN_FRONTEND=noninteractive apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get -y install ${BUILD_DEPS} \
  && cargo build -j 1 -r --bin dist
 # Get our sources
 COPY package package/
