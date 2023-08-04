@@ -16,14 +16,14 @@ COPY k8s/Cargo.toml k8s/Cargo.toml
 COPY agent/Cargo.toml agent/Cargo.toml
 
 # Build the deps for caching purpose
-RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -j 1 -r --bin agent
+RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -r --bin agent
 # Get our sources
 COPY package package/
 COPY k8s k8s/
 COPY agent agent/
 # Update the crates entrypoints so cargo is aware these should rebuild
 RUN touch package/src/lib.rs k8s/src/lib.rs agent/src/lib.rs agent/src/main.rs \
- && cargo build -j 1 -r --bin agent \
+ && cargo build -r --bin agent \
  && strip target/release/agent
 # Then create the intermediary image with run-time dependencies installed
 FROM debian:${DEBIAN_VERSION}-slim as middle

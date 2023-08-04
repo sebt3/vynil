@@ -34,6 +34,7 @@ steps:
     - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' dist/Cargo.toml)">dist/.tags
     - echo "$(awk -v p=1 '$1=="version"&&p==1{gsub("\"","",$3);print $3;p=0}' operator/Cargo.toml)">operator/.tags
   build-dist:
+    group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
       repo: git.solidite.fr/${CI_REPO_OWNER}/dist,sebt3/${CI_REPO_NAME}-dist
@@ -52,6 +53,7 @@ steps:
         password:
           from_secret: docker_password
   build-agent:
+    group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
       repo: git.solidite.fr/${CI_REPO_OWNER}/agent,sebt3/${CI_REPO_NAME}-agent
@@ -70,6 +72,7 @@ steps:
         password:
           from_secret: docker_password
   build-operator:
+    group: build
     image: woodpeckerci/plugin-docker-buildx
     settings:
       repo: git.solidite.fr/${CI_REPO_OWNER}/operator,sebt3/${CI_REPO_NAME}-operator

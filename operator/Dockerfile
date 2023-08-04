@@ -15,14 +15,14 @@ COPY package/Cargo.toml package/Cargo.toml
 COPY k8s/Cargo.toml k8s/Cargo.toml
 COPY operator/Cargo.toml operator/Cargo.toml
 # Build the deps for caching purpose
-RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -j 1 -r --bin operator
+RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -r --bin operator
 # Get our sources
 COPY package package/
 COPY k8s k8s/
 COPY operator operator/
 # Update the crates entrypoints so cargo is aware these should rebuild
 RUN touch package/src/lib.rs k8s/src/lib.rs operator/src/lib.rs operator/src/main.rs \
- && cargo build -j 1 -r --bin operator \
+ && cargo build -r --bin operator \
  && strip target/release/operator
 
 # Finally create the target image with run-time dependencies installed
