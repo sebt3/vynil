@@ -36,7 +36,11 @@ steps:
   build-dist:
     group: build
     image: woodpeckerci/plugin-docker-buildx
+    volumes:
+    - dist-cache:/var/lib/docker
     settings:
+      mount:
+      - "dist-cache"
       repo: git.solidite.fr/${CI_REPO_OWNER}/dist,sebt3/${CI_REPO_NAME}-dist
       dockerfile: dist/Dockerfile
       tags_file: dist/.tags
@@ -55,7 +59,11 @@ steps:
   build-agent:
     group: build
     image: woodpeckerci/plugin-docker-buildx
+    volumes:
+    - agent-cache:/var/lib/docker
     settings:
+      mount:
+      - "agent-cache"
       repo: git.solidite.fr/${CI_REPO_OWNER}/agent,sebt3/${CI_REPO_NAME}-agent
       dockerfile: agent/Dockerfile
       tags_file: agent/.tags
@@ -74,7 +82,11 @@ steps:
   build-operator:
     group: build
     image: woodpeckerci/plugin-docker-buildx
+    volumes:
+    - operator-cache:/var/lib/docker
     settings:
+      mount:
+      - "operator-cache"
       repo: git.solidite.fr/${CI_REPO_OWNER}/operator,sebt3/${CI_REPO_NAME}-operator
       dockerfile: operator/Dockerfile
       tags_file: operator/.tags
