@@ -116,6 +116,7 @@ impl Reconciler for Install {
                 let mut found_ns = String::new();
                 let mut found_name = String::new();
                 let namespaces: Api<Namespace> = Api::all(client.clone());
+                // TODO: sort the namespace with name close to the current namespace first so we found the right one
                 for ns in namespaces.list(&ListParams::default()).await.unwrap() {
                     let installs: Api<Install> = Api::namespaced(client.clone(), ns.metadata.name.clone().unwrap().as_str());
                     for install in installs.list(&ListParams::default()).await.unwrap() {
@@ -135,7 +136,8 @@ impl Reconciler for Install {
                 } else {
                     let installs: Api<Install> = Api::namespaced(client.clone(), found_ns.as_str());
                     let install = installs.get(found_name.as_str()).await.unwrap();
-                    if install.status.is_none() || install.status.unwrap().status.as_str() != STATUS_INSTALLED {
+
+                    if install.status.is_none() || install.status.unwrap().commit_id.is_empty() {
                         missing.push(format!("Install {:} - {:} is not yet ready", found_ns.as_str(), found_name.as_str()));
                     }
                 }

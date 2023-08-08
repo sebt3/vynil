@@ -49,7 +49,7 @@ Goal: Validation webhook
 - dist update
 ```
 kubectl config set-context --current --namespace=${VYNIL_NS:=vynil};
-kubectl delete job ${VYNIL_DIST:=domain}-upg;kubectl create job ${VYNIL_DIST}-upg --from=cronjob/${VYNIL_DIST}-clone
+kubectl delete job ${VYNIL_DIST:=domain}-upg;kubectl create job ${VYNIL_DIST}-upg --from=cronjob/${VYNIL_DIST}-clone && kubectl wait --for=condition=complete job/${VYNIL_DIST}-upg && kubectl delete po -l app=vynil-controller
 ```
 
 - get a component commit_id

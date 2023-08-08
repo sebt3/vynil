@@ -5,13 +5,13 @@ steps:
     image: git.solidite.fr/images/ansible:8.2.0
     commands:
     - yamllint -f colored .
-#  cargo:
-#    group: lint
-#    image: docker.io/rust:1.71.0
-#    commands:
-#    - export PATH=$PATH:$CARGO_HOME/bin
-#    - rustup component add clippy
-#    - cargo clippy -- -Dwarnings -W clippy::semicolon-if-nothing-returned -W clippy::map-unwrap-or -W clippy::similar-names -W clippy::similar-names -W clippy::manual-string-new
+  cargo:
+    group: lint
+    image: docker.io/rust:1.71.0
+    commands:
+    - export PATH=$PATH:$CARGO_HOME/bin
+    - rustup component add clippy
+    - cargo clippy -- -Dwarnings -W clippy::semicolon-if-nothing-returned -W clippy::map-unwrap-or -W clippy::similar-names -W clippy::similar-names -W clippy::manual-string-new
   lint-docker-agent:
     group: lint
     image: hadolint/hadolint:latest-alpine

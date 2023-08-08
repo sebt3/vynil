@@ -331,12 +331,19 @@ locals {
 # data \"kubernetes_secret_v1\" \"postgresql_password\" {
 #   depends_on = [kubernetes_manifest.prj_postgresql]
 #   metadata {
-#     name = \"${var.component}.${var.instance}-${var.component}.credentials.postgresql.acid.zalan.do\"
+#     name = \"${var.instance}-${var.component}-pg-app\"
 #     namespace = var.namespace
 #   }
 # }
 
 # data \"kubernetes_secret_v1\" \"authentik\" {
+#   metadata {
+#     name = \"authentik\"
+#     namespace = \"${var.domain}-auth\"
+#   }
+# }
+
+# data \"kubernetes_ingress_v1\" \"authentik\" {
 #   metadata {
 #     name = \"authentik\"
 #     namespace = \"${var.domain}-auth\"
