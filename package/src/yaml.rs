@@ -168,18 +168,30 @@ impl Component {
         object
     }
 
-    fn get_tf_type_inner(schema: Schema) -> String {
+    fn get_tf_type_inner(schema: Schema, use_optional: bool) -> String {
         let kind = &schema.schema_kind;
         if let openapiv3::SchemaKind::Type(t) = kind {
             match t {
                 openapiv3::Type::String(_) => {
-                    return "string".to_string();
+                    return if use_optional {
+                        "optional(string)"
+                    } else {
+                        "string"
+                    }.to_string();
                 },
                 openapiv3::Type::Number(_) | openapiv3::Type::Integer(_) => {
-                    return "number".to_string();
+                    return if use_optional {
+                        "optional(number)"
+                    } else {
+                        "number"
+                    }.to_string();
                 },
                 openapiv3::Type::Boolean{ .. } => { // Boolean
-                    return "bool".to_string();
+                    return if use_optional {
+                        "optional(bool)"
+                    } else {
+                        "bool"
+                    }.to_string();
                 }
                 openapiv3::Type::Object(objt) => {
                     let mut ret = String::new();
@@ -188,21 +200,37 @@ impl Component {
                             if ! ret.is_empty() {
                                 ret += ", ";
                             }
-                            ret += format!("{} = {}", key, Self::get_tf_type_inner(*item)).as_str();
+                            ret += format!("{} = {}", key, Self::get_tf_type_inner(*item, true)).as_str();
                         }
                     }
                     if ret.is_empty() {
-                        return "map(any)".to_string();
+                        return if use_optional {
+                            "optional(map(any))"
+                        } else {
+                            "map(any)"
+                        }.to_string();
                     }
-                    return format!("object({{{}}})", ret).to_string();
+                    return if use_optional {
+                        format!("optional(object({{{}}}))", ret)
+                    } else {
+                        format!("object({{{}}})", ret)
+                    }.to_string();
                 },
                 openapiv3::Type::Array(arrt) => {
                     if let Some(boxed) = arrt.items.clone() {
                         if let Some(item) = boxed.into_item() {
-                            return format!("list({})", Self::get_tf_type_inner(*item)).to_string();
+                            return if use_optional {
+                                format!("optional(list({}))", Self::get_tf_type_inner(*item, true))
+                            } else {
+                                format!("list({})", Self::get_tf_type_inner(*item, true))
+                            }.to_string();
                         }
                     }
-                    return "list(any)".to_string();
+                    return if use_optional {
+                        "optional(list(any))"
+                    } else {
+                        "list(any)"
+                    }.to_string();
                 },
             }
         }
@@ -212,7 +240,7 @@ impl Component {
         for (k, val) in &self.options {
             if k == key {
                 let schema: Schema = serde_json::from_str(serde_json::to_string(val).unwrap().as_str()).map_err(|e| anyhow!("While evaluating options {key} : {e} (value was {:?})", val)).unwrap();
-                return Self::get_tf_type_inner(schema)
+                return Self::get_tf_type_inner(schema, false)
             }
         }
         "any".to_string()
