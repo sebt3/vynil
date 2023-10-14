@@ -3,6 +3,8 @@ name: Build Operator
 
 on:
   push:
+    branches:
+    - main
     tags:
     - '*'
 jobs:
