@@ -221,9 +221,9 @@ impl Component {
                     if let Some(boxed) = arrt.items.clone() {
                         if let Some(item) = boxed.into_item() {
                             return if use_optional {
-                                format!("optional(list({}))", Self::get_tf_type_inner(*item, true))
+                                format!("optional(list({}))", Self::get_tf_type_inner(*item, false))
                             } else {
-                                format!("list({})", Self::get_tf_type_inner(*item, true))
+                                format!("list({})", Self::get_tf_type_inner(*item, false))
                             }.to_string();
                         }
                     }

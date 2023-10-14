@@ -99,6 +99,9 @@ fn clone_container(name: &str, auth: Option<DistribAuthent>) -> serde_json::Valu
             "name": "DIST_NAME",
             "value": name
         },{
+            "name": "RUST_BACKTRACE",
+            "value": "1"
+        },{
             "name": "LOG_LEVEL",
             "value": level
         },{
