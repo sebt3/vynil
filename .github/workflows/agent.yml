@@ -3,8 +3,6 @@ name: Build Agent
 
 on:
   push:
-    branches:
-    - main
     tags:
     - '*'
 jobs:
