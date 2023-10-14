@@ -93,7 +93,6 @@ pub fn run(args:&Parameters) -> Result<()> {
     match script.run_pre_stage(&stage) {Ok(_) => {}, Err(e) => {return Err(e)}}
     // look source directory
     let mut copies: Vec<PathBuf> = Vec::new();
-    //let mut have_kusto= false;
     let re_kusto = Regex::new(r"^kustomization\.yaml$").unwrap();
     let re_kustohbs = Regex::new(r"^kustomization\.yaml\.hbs$").unwrap();
     let re_rhai = Regex::new(r"^index\.rhai$").unwrap();

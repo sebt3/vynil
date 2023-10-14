@@ -38,5 +38,3 @@ jobs:
         tags: |
           ${{ github.repository }}-agent:latest
           ${{ github.repository }}-agent:${{ github.ref_name }}
-          ghcr.io/${{ github.repository }}-agent:latest
-          ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }}

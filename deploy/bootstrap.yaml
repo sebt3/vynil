@@ -62,7 +62,7 @@ spec:
           value: debug
         - name: RUST_LOG
           value: info,controller=debug,agent=debug
-        image: docker.io/sebt3/vynil-agent:0.1.2
+        image: docker.io/sebt3/vynil-agent:0.2.2
         name: install
         volumeMounts:
         - mountPath: /src
@@ -73,7 +73,7 @@ spec:
         env:
         - name: DIST_NAME
           value: core
-        image: docker.io/sebt3/vynil-agent:0.1.2
+        image: docker.io/sebt3/vynil-agent:0.2.2
         imagePullPolicy: IfNotPresent
         name: clone
         volumeMounts:
@@ -93,7 +93,7 @@ spec:
           value: debug
         - name: RUST_LOG
           value: info,controller=debug,agent=debug
-        image: docker.io/sebt3/vynil-agent:0.1.2
+        image: docker.io/sebt3/vynil-agent:0.2.2
         name: template
         volumeMounts:
         - mountPath: /src
@@ -112,7 +112,7 @@ spec:
           value: debug
         - name: RUST_LOG
           value: info,controller=debug,agent=debug
-        image: docker.io/sebt3/vynil-agent:0.1.2
+        image: docker.io/sebt3/vynil-agent:0.2.2
         name: plan
         volumeMounts:
         - mountPath: /src

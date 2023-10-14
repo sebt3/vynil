@@ -233,6 +233,37 @@ provider \"http\" {}";
       content += "
 #provider \"http\" {}";
     }
+    let mut have_gitea = false;
+    if let Some(providers) = providers.clone() {
+      if let Some(gitea) = providers.gitea {
+        have_gitea = gitea;
+      }
+    }
+    if have_gitea {
+      requiered += "
+      gitea = {
+        source = \"Lerentis/gitea\"
+        version = \"~> 0.16.0\"
+      }";
+      content += "
+provider \"gitea\" {
+  base_url = \"http://gitea-http.${var.domain}-ci.svc:3000/\"
+  username = data.kubernetes_secret_v1.gitea.data[\"username\"]
+  password = data.kubernetes_secret_v1.gitea.data[\"password\"]
+}";
+    } else {
+      requiered += "
+#      gitea = {
+#        source = \"Lerentis/gitea\"
+#        version = \"~> 0.16.0\"
+#      }";
+      content += "
+#provider \"gitea\" {
+#  base_url = \"http://gitea-http.${var.domain}-ci.svc:3000/\"
+#  username = data.kubernetes_secret_v1.gitea.data[\"username\"]
+#  password = data.kubernetes_secret_v1.gitea.data[\"password\"]
+#}";
+    }
     let mut have_restapi = false;
     if let Some(providers) = providers {
       if let Some(restapi) = providers.restapi {

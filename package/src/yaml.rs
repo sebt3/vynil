@@ -27,6 +27,7 @@ pub struct Providers {
     pub postgresql: Option<bool>,
     pub restapi: Option<bool>,
     pub http: Option<bool>,
+    pub gitea: Option<bool>,
 }
 #[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -48,7 +49,7 @@ fn merge_json(a: &mut serde_json::Value, b: serde_json::Value) {
                 if v.is_null() {
                     a.remove(&k);
                 }
-                else {
+                else if k!="items" || v != serde_json::Value::Bool(true) {
                     merge_json(a.entry(k).or_insert(serde_json::Value::Null), v);
                 }
             }
@@ -273,7 +274,7 @@ impl Component {
                 let objdef = serde_json::from_str(serde_json::to_string(final_schema)?.as_str())?;
                 merge_json( &mut val, objdef);
                 add_defaults(&mut val);
-                log::debug!("{key} after merge : {:}", serde_yaml::to_string(&schema).unwrap());
+                log::debug!("{key} after default : {:}", serde_yaml::to_string(&val).unwrap());
                 *self.options.get_mut(key.as_str()).unwrap() = val;
             }
         }

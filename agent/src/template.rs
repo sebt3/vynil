@@ -69,11 +69,13 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     // run post-template stage from rhai script if any
     script.run_post_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
     inst.update_status_end_template(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
-    events::report(AGENT, client,events::from(
+    match events::report(AGENT, client,events::from(
         format!("Installing {}",inst.name()),
         format!("Generating templates for `{}`",inst.name()),
         Some(format!("Generating templates for `{}` successfully completed",inst.name()
-    ))), inst.object_ref(&())).await.unwrap();
+    ))), inst.object_ref(&())).await  {Ok(_) => {}, Err(e) =>
+        {log::warn!("While sending event we got {:?}",e)}
+    };
     Ok(())
 }
 

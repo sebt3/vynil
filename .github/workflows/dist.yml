@@ -38,5 +38,3 @@ jobs:
         tags: |
           ${{ github.repository }}-dist:latest
           ${{ github.repository }}-dist:${{ github.ref_name }}
-          ghcr.io/${{ github.repository }}-dist:latest
-          ghcr.io/${{ github.repository }}-dist:${{ github.ref_name }}

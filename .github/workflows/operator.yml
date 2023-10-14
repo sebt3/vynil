@@ -38,5 +38,3 @@ jobs:
         tags: |
           ${{ github.repository }}-operator:latest
           ${{ github.repository }}-operator:${{ github.ref_name }}
-          ghcr.io/${{ github.repository }}-operator:latest
-          ghcr.io/${{ github.repository }}-operator:${{ github.ref_name }}
