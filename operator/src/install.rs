@@ -204,9 +204,6 @@ impl Reconciler for Install {
         let ns = self.namespace().unwrap();
         let agent_name = format!("{ns}--{name}--agent");
 
-        // TODO: Stop supporting cleaning these, since they have disapeared in previous versions
-        let plan_name = format!("{ns}--{name}--plan");
-        let install_name = format!("{ns}--{name}--install");
         let secret_name = format!("{ns}--{name}--secret");
         let mut my_secrets = SecretHandler::new(ctx.client.clone(), my_ns);
 
@@ -219,37 +216,19 @@ impl Reconciler for Install {
             ).await.map_err(Error::KubeError)?;
             jobs.delete(agent_name.as_str()).await.unwrap();
         }
-        if jobs.have(plan_name.as_str()).await {
-            // Force delete the plan-job
-            info!("Deleting {plan_name} Job");
-            let job = jobs.get(plan_name.as_str()).await.unwrap();
-            recorder.publish(
-                events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
-            jobs.delete(plan_name.as_str()).await.unwrap();
-        }
-        if jobs.have(install_name.as_str()).await {
-            // Force delete the install-job
-            info!("Deleting {install_name} Job");
-            let job = jobs.get(install_name.as_str()).await.unwrap();
-            recorder.publish(
-                events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
-            jobs.delete(install_name.as_str()).await.unwrap();
-        }
         if self.have_tfstate() {
             // Create the delete job
             let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), "");
             let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
 
             info!("Creating {agent_name} Job");
-            let job = match jobs.apply(agent_name.as_str(), &destroyer_job).await {Ok(j)=>j,Err(_e)=>{
+            let job = match jobs.apply_short(agent_name.as_str(), &destroyer_job).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(agent_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 jobs.delete(agent_name.as_str()).await.unwrap();
-                jobs.create(agent_name.as_str(), &destroyer_job).await.unwrap()
+                jobs.create_short(agent_name.as_str(), &destroyer_job).await.unwrap()
             }};
             recorder.publish(
                 events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))

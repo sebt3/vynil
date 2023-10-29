@@ -34,8 +34,8 @@ pub enum Commands {
     Secret(ParametersDest),
     /// Generate postgresql.tf
     Postgresql(ParametersDest),
-    /// Generate ingress.tf
-    Ingress(ParametersDest),
+    /// Generate presentation.tf
+    Presentation(ParametersDest),
     /// Generate index.yaml options based on the default values
     Options(ParametersDest),
 }
@@ -106,9 +106,9 @@ pub fn run(args:&Parameters) {
                 process::exit(1)
             }
         }}
-        Commands::Ingress(args) => {match files::gen_ingress(&args.project) {
+        Commands::Presentation(args) => {match files::gen_presentation(&args.project) {
             Ok(d) => d, Err(e) => {
-                log::error!("Generating the ingress.tf file failed with: {e:}");
+                log::error!("Generating the presentation.tf file failed with: {e:}");
                 process::exit(1)
             }
         }}

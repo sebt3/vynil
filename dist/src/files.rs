@@ -33,6 +33,23 @@ options:
     default: letsencrypt-prod
   ingress-class:
     default: traefik
+  app-group:
+    default: infra
+  storage:
+    default:
+      size: 1Gi
+      accessMode: ReadWriteOnce
+      type: Filesystem
+    properties:
+      type:
+        enum:
+          - Filesystem
+          - Block
+      accessMode:
+        enum:
+          - ReadWriteOnce
+          - ReadOnlyMany
+          - ReadWriteMany
   images:
     default:
       operator:
@@ -76,87 +93,102 @@ fn pre_install() {
 ".to_string(), false)
 }
 
-pub fn gen_ingress(dest_dir: &PathBuf) -> Result<()> {
+pub fn gen_presentation(dest_dir: &PathBuf) -> Result<()> {
     if ! Path::new(dest_dir).is_dir() {
         bail!("{:?} is not a directory", dest_dir);
     }
     let mut file  = PathBuf::new();
     file.push(dest_dir);
-    file.push("ingress.tf");
+    file.push("presentation.tf");
     gen_file(&file, &"
 locals {
-    dns-names = [\"${var.sub-domain}.${var.domain-name}\"]
-    middlewares = [\"${var.instance}-https\"]
-    service = {
-      \"name\"  = \"${var.instance}\"
-      \"port\" = {
-        \"number\" = 80
-      }
+  dns-name = \"${var.sub-domain}.${var.domain-name}\"
+  dns-names = [local.dns-name]
+  app-name = var.component == var.instance ? var.instance : format(\"%s-%s\", var.component, var.instance)
+  icon              = \"pics/logo.svg\"
+  request_headers = {
+    \"Content-Type\"  = \"application/json\"
+    Authorization   = \"Bearer ${data.kubernetes_secret_v1.authentik.data[\"AUTHENTIK_BOOTSTRAP_TOKEN\"]}\"
+  }
+  service           = {
+    \"name\"  = \"${var.component}-${var.instance}\"
+    \"port\" = {
+      \"number\" = 80
     }
-    rules = [ for v in local.dns-names : {
-      \"host\" = \"${v}\"
-      \"http\" = {
-        \"paths\" = [{
-          \"backend\"  = {
-            \"service\" = local.service
-          }
-          \"path\"     = \"/\"
-          \"pathType\" = \"Prefix\"
-        }]
-      }
-    }]
+  }
 }
 
-resource \"kubectl_manifest\" \"prj_certificate\" {
-  yaml_body  = <<-EOF
-    apiVersion: \"cert-manager.io/v1\"
-    kind: \"Certificate\"
-    metadata:
-      name: \"${var.instance}\"
-      namespace: \"${var.namespace}\"
-      labels: ${jsonencode(local.common-labels)}
-    spec:
-        secretName: \"${var.instance}-cert\"
-        dnsNames: ${jsonencode(local.dns-names)}
-        issuerRef:
-          name: \"${var.issuer}\"
-          kind: \"ClusterIssuer\"
-          group: \"cert-manager.io\"
-  EOF
+module \"service\" {
+  source = \"/dist/modules/service\"
+  component         = var.component
+  instance          = var.instance
+  namespace         = var.namespace
+  labels            = local.common-labels
+  target            = \"http\"
+  port              = local.service.port.number
+  providers = {
+    kubectl = kubectl
+  }
 }
 
-resource \"kubectl_manifest\" \"prj_https_redirect\" {
-  yaml_body  = <<-EOF
-    apiVersion: \"traefik.containo.us/v1alpha1\"
-    kind: \"Middleware\"
-    metadata:
-      name: \"${var.instance}-https\"
-      namespace: \"${var.namespace}\"
-      labels: ${jsonencode(local.common-labels)}
-    spec:
-      redirectScheme:
-        scheme: \"https\"
-        permanent: true
-  EOF
+module \"ingress\" {
+  source = \"/dist/modules/ingress\"
+  component         = \"\"
+  instance          = var.instance
+  namespace         = var.namespace
+  issuer            = var.issuer
+  ingress-class     = var.ingress-class
+  labels            = local.common-labels
+  dns-names         = local.dns-names
+  middlewares       = [\"forward-${local.app-name}\"]
+  service           = local.service
+  providers = {
+    kubectl = kubectl
+  }
 }
 
-resource \"kubectl_manifest\" \"prj_ingress\" {
-  force_conflicts = true
-  yaml_body  = <<-EOF
-    apiVersion: \"networking.k8s.io/v1\"
-    kind: \"Ingress\"
-    metadata:
-      name: \"${var.instance}\"
-      namespace: \"${var.namespace}\"
-      labels: ${jsonencode(local.common-labels)}
-      annotations:
-        \"traefik.ingress.kubernetes.io/router.middlewares\": \"${join(\",\", [for m in local.middlewares : format(\"%s-%s@kubernetescrd\", var.namespace, m)])}\"
-    spec:
-      ingressClassName: \"${var.ingress-class}\"
-      rules: ${jsonencode(local.rules)}
-      tls:
-      - hosts: ${jsonencode(local.dns-names)}
-        secretName: \"${var.instance}-cert\"
+module \"application\" {
+  source = \"/dist/modules/application\"
+  component         = var.component
+  instance          = var.instance
+  app-group         = var.app-group
+  dns-name          = local.dns-name
+  icon              = local.icon
+  protocol_provider = module.forward.provider-id
+  providers = {
+    authentik = authentik
+  }
+}
+
+provider \"restapi\" {
+  uri = \"http://authentik.${var.domain}-auth.svc/api/v3/\"
+  headers = local.request_headers
+  create_method = \"PATCH\"
+  update_method = \"PATCH\"
+  destroy_method = \"PATCH\"
+  write_returns_object = true
+  id_attribute = \"name\"
+}
+
+module \"forward\" {
+  source = \"/dist/modules/forward\"
+  component         = var.component
+  instance          = var.instance
+  domain            = var.domain
+  namespace         = var.namespace
+  ingress-class     = var.ingress-class
+  labels            = local.common-labels
+  dns-names         = local.dns-names
+  service           = local.service
+  icon              = local.icon
+  request_headers   = local.request_headers
+  providers = {
+    restapi = restapi
+    http = http
+    kubectl = kubectl
+    authentik = authentik
+  }
+}
   EOF
 }
 ".to_string(), false)

@@ -203,6 +203,11 @@ impl JobHandler {
 
     fn get_installs_spec(&self, hashedself: &HashedSelf, init_containers: &Vec<serde_json::Value>, containers: &Vec<serde_json::Value>) -> serde_json::Value {
         serde_json::json!({
+            "metadata": {
+                "annotations": {
+                    "mayfly.cloud.namecheap.com/expire": "120h"
+                },
+            },
             "spec": {
                 "serviceAccount": "vynil-agent",
                 "serviceAccountName": "vynil-agent",
@@ -281,6 +286,25 @@ impl JobHandler {
         self.api.create(&PostParams::default(), &data).await
     }
 
+    pub async fn create_short(&mut self, name: &str, template: &serde_json::Value) -> Result<Job, kube::Error> {
+        let data = serde_json::from_value(serde_json::json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": name,
+                "annotations": {
+                    "mayfly.cloud.namecheap.com/expire": "1h"
+                },
+            },
+            "spec": {
+                "backoffLimit": 3,
+                "parallelism": 1,
+                "template": template
+            }
+        })).unwrap();
+        self.api.create(&PostParams::default(), &data).await
+    }
+
     pub async fn apply(&mut self, name: &str, template: &serde_json::Value) -> Result<Job, kube::Error> {
         if self.have(name).await {
             let params = PatchParams::apply(OPERATOR);
@@ -297,6 +321,28 @@ impl JobHandler {
             self.api.patch(name, &params, &patch).await
         } else {
             self.create(name, template).await
+        }
+    }
+
+    pub async fn apply_short(&mut self, name: &str, template: &serde_json::Value) -> Result<Job, kube::Error> {
+        if self.have(name).await {
+            let params = PatchParams::apply(OPERATOR);
+            let patch = Patch::Apply(serde_json::json!({
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {
+                    "name": name,
+                    "annotations": {
+                        "mayfly.cloud.namecheap.com/expire": "1h"
+                    },
+                },
+                "spec": {
+                    "template": template
+                }
+            }));
+            self.api.patch(name, &params, &patch).await
+        } else {
+            self.create_short(name, template).await
         }
     }
 
