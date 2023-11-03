@@ -204,7 +204,35 @@ impl Install {
         self.update_status_starting(client, manager, STATUS_TEMPLATED).await
     }
     pub async fn update_status_end_destroy(&self, client: Client, manager: &str) -> Result<Install, kube::Error> {
-        self.update_status_starting(client, manager, STATUS_DESTROYED).await
+        let name = self.name();
+        let insts: Api<Install> = Api::namespaced(client, self.metadata.namespace.clone().unwrap().as_str());
+        let last_updated = self.last_updated();
+        let pp = if self.status.is_some() {PatchParams::apply(manager)} else {PatchParams::apply(manager).force()};
+        let patch = if self.status.is_some() {
+            Patch::Merge(serde_json::json!({
+                "status": {
+                    "plan": None::<Option<serde_json::Map<String, serde_json::Value>>>,
+                    "tfstate": None::<Option<serde_json::Map<String, serde_json::Value>>>,
+                    "errors": None::<Vec<String>>,
+                    "status": STATUS_DESTROYED.to_string(),
+                }
+            }))
+        } else {
+            Patch::Apply(json!({
+                "apiVersion": "vynil.solidite.fr/v1",
+                "kind": "Install",
+                "status": InstallStatus {
+                    status: STATUS_DESTROYED.to_string(),
+                    plan: None,
+                    tfstate: None,
+                    errors: Some(Vec::new()),
+                    commit_id: self.current_commit_id(),
+                    last_updated,
+                    digest: String::new()
+                }
+            }))
+        };
+        insts.patch_status(&name, &pp, &patch).await
     }
     pub async fn update_status_errors(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
         self.update_status_typed(client, manager, errors, STATUS_ERRORS).await

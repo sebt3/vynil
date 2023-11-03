@@ -76,11 +76,11 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
     // TODO: Support selecting branch
     let action = if Path::new(&dot_git).is_dir() {
         // if a .git directory exist, run git pull
-        shell::run_log(&format!("cd {:?};git pull", target)).or_else(|e: Error| {bail!("{e}")})?;
+        shell::run_log(&format!("cd '{:?}';git set-url origin '{:?}';git pull", target, url)).or_else(|e: Error| {bail!("{e}")})?;
         format!("git pull for {}",dist.name())
     } else {
         // Run git clone
-        shell::run_log(&format!("cd {:?};git clone {:?} .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
+        shell::run_log(&format!("cd '{:?}';git clone '{:?}' .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
         format!("git clone for {}",dist.name())
     };
     let mut categories = HashMap::new();

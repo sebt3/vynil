@@ -207,15 +207,6 @@ impl Reconciler for Install {
         let secret_name = format!("{ns}--{name}--secret");
         let mut my_secrets = SecretHandler::new(ctx.client.clone(), my_ns);
 
-        if jobs.have(agent_name.as_str()).await {
-            // Force delete the plan-job
-            info!("Deleting {agent_name} Job");
-            let job = jobs.get(agent_name.as_str()).await.unwrap();
-            recorder.publish(
-                events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
-            jobs.delete(agent_name.as_str()).await.unwrap();
-        }
         if self.have_tfstate() {
             // Create the delete job
             let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), "");

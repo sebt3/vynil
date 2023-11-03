@@ -126,22 +126,27 @@ pub async fn run(args:&Parameters) -> Result<()> {
         let mut path = PathBuf::new();
         path.push(src.clone());
         path.push("terraform.tfstate");
-        let content = match fs::read_to_string(path.clone()) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
-        let new_state:Map<String, Value> = match serde_json::from_str(&content) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
-        match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await  {Ok(_) => {}, Err(e) => {
-            log::warn!("Error {} while updating current tfstate while already managing errors. Potential tfstate lost !", e);
-            log::warn!("Retrying in a second");
-            thread::sleep(Duration::from_millis(1000));
-            match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await.map_err(|e| anyhow!("{e}")) {Ok(_) => {}, Err(e) => {
-                log::warn!("Error {} while updating current tfstate again. Sound realy bad this time", e);
-                log::warn!("Retrying in 5 secondS");
-                thread::sleep(Duration::from_millis(5000));
+        log::error!("Installation failed: {}", e);
+        if Path::new(&path).is_file() {
+            let content = match fs::read_to_string(path.clone()) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
+            let new_state:Map<String, Value> = match serde_json::from_str(&content) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
+            match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await  {Ok(_) => {}, Err(e) => {
+                log::warn!("Error {} while updating current tfstate while already managing errors. Potential tfstate lost !", e);
+                log::warn!("Retrying in a second");
+                thread::sleep(Duration::from_millis(1000));
                 match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await.map_err(|e| anyhow!("{e}")) {Ok(_) => {}, Err(e) => {
-                    log::error!("TFSTATE LOST! reason: {}", e);
-                    log::info!("{}", serde_json::to_string(&new_state)?);
+                    log::warn!("Error {} while updating current tfstate again. Sound realy bad this time", e);
+                    log::warn!("Retrying in 5 secondS");
+                    thread::sleep(Duration::from_millis(5000));
+                    match inst.update_status_errors_tfstate(client.clone(), AGENT, vec!(format!("{e}")), new_state.clone()).await.map_err(|e| anyhow!("{e}")) {Ok(_) => {}, Err(e) => {
+                        log::error!("TFSTATE LOST! reason: {}", e);
+                        log::info!("{}", serde_json::to_string(&new_state)?);
+                    }};
                 }};
             }};
-        }};
+        } else {
+            inst.update_status_errors(client.clone(), AGENT, vec!(format!("{e}"))).await.map_err(|e| anyhow!("{e}"))?;
+        }
         events::report(AGENT, client, events::from_error(&e), inst.object_ref(&())).await.unwrap();
         Err(e)
     }}

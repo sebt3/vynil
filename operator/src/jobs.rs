@@ -54,6 +54,9 @@ fn install_container(hself: &HashedSelf) -> serde_json::Value {
             "name": "LOG_LEVEL",
             "value": level
         },{
+            "name": "RUST_BACKTRACE",
+            "value": "1"
+        },{
             "name": "RUST_LOG",
             "value": format!("{},controller={},agent={}", level, level, level)
         }],
