@@ -41,15 +41,19 @@ spec:
             properties:
               branch:
                 description: Git branch
+                nullable: true
                 type: string
               insecure:
                 description: Git clone URL
+                nullable: true
                 type: boolean
               login:
                 description: Git authentication
+                nullable: true
                 properties:
                   git_credentials:
                     description: 'a git-credentials store file (format: https://<username>:<password|token>@<url>/<repo>)'
+                    nullable: true
                     properties:
                       key:
                         description: Key of the secret containing the file
@@ -63,6 +67,7 @@ spec:
                     type: object
                   ssh_key:
                     description: SSH private key
+                    nullable: true
                     properties:
                       key:
                         description: Key of the secret containing the file
@@ -87,6 +92,7 @@ spec:
             type: object
           status:
             description: The status object of `Distrib`
+            nullable: true
             properties:
               components:
                 description: List of known category->components
@@ -96,6 +102,7 @@ spec:
                 description: Set with the messages if any error occured
                 items:
                   type: string
+                nullable: true
                 type: array
               last_updated:
                 description: Last update date
@@ -168,6 +175,7 @@ spec:
             properties:
               auto_upgrade:
                 description: Should we automatically upgrade the package
+                nullable: true
                 type: boolean
               category:
                 description: The category name
@@ -180,6 +188,7 @@ spec:
                 type: string
               options:
                 description: Parameters
+                nullable: true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
             required:
@@ -189,6 +198,7 @@ spec:
             type: object
           status:
             description: The status object of `Install`
+            nullable: true
             properties:
               commit_id:
                 description: component version applied
@@ -200,14 +210,15 @@ spec:
                 description: Set with the messages if any error occured
                 items:
                   type: string
+                nullable: true
                 type: array
-                x-kubernetes-preserve-unknown-fields: true
               last_updated:
                 description: Last update date
                 format: date-time
                 type: string
               plan:
                 description: Currently planned changed, only set if planned is true
+                nullable: true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               status:
@@ -215,6 +226,7 @@ spec:
                 type: string
               tfstate:
                 description: Current terraform status
+                nullable: true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
             required:
