@@ -42,11 +42,6 @@ fn main() {
                             spec.x_kubernetes_preserve_unknown_fields = Some(true);
                             spec.additional_properties = None;
                         });
-                        props.entry("errors".into()).and_modify(|spec| {
-                            spec.x_kubernetes_preserve_unknown_fields = Some(true);
-                            spec.additional_properties = None;
-                            //spec.additional_properties = Some(JSONSchemaPropsOrBool::Bool(true));
-                        });
                     }
                 });
             }
