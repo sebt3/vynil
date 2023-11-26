@@ -1,19 +1,34 @@
+use anyhow::{anyhow, bail, Error, Result};
 use clap::Args;
-use anyhow::{Result, Error, bail, anyhow};
-use std::{fs, path::{PathBuf, Path}, collections::HashMap};
-use package::{shell, yaml};
-use client::{get_client, AGENT, events};
-use kube::api::Resource;
+use client::{events, get_client, AGENT};
 use k8s::distrib::DistribComponent;
-
+use kube::api::Resource;
+use package::{shell, yaml};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Args, Debug)]
 pub struct Parameters {
     /// Directory to clone into
-    #[arg(short, long, env = "GIT_ROOT", value_name = "GIT_ROOT", default_value = "/work")]
+    #[arg(
+        short,
+        long,
+        env = "GIT_ROOT",
+        value_name = "GIT_ROOT",
+        default_value = "/work"
+    )]
     dir: PathBuf,
     /// Distrib name
-    #[arg(short, long, env = "DIST_NAME", value_name = "DIST_NAME", default_value = "base")]
+    #[arg(
+        short,
+        long,
+        env = "DIST_NAME",
+        value_name = "DIST_NAME",
+        default_value = "core"
+    )]
     name: String,
 }
 
@@ -34,22 +49,35 @@ fn get_commit_id(component_dir: &PathBuf) -> Result<String> {
     let mut hashes = Vec::new();
     // get the commit id of each files
     for file in files {
-        let commit = match shell::get_output(&format!("cd {:?};git log --format=\"%H\" -n 1 -- {:?}", dir_path, file))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
-        if ! hashes.contains(&commit) {
+        let commit = match shell::get_output(&format!(
+            "cd {:?};git log --format=\"%H\" -n 1 -- {:?}",
+            dir_path, file
+        )) {
+            Ok(d) => d,
+            Err(e) => {
+                bail!("{e}")
+            }
+        };
+        if !hashes.contains(&commit) {
             hashes.push(commit);
         }
     }
     if hashes.len() == 1 {
-        return Ok(hashes[0].clone())
+        return Ok(hashes[0].clone());
     } else if hashes.is_empty() {
         bail!("No commit found");
     }
     // find the most recent commit from that list
-    let commit_list = match shell::get_output(&format!("cd {:?};git log --format=\"%H\"", dir_path))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+    let commit_list = match shell::get_output(&format!("cd {:?};git log --format=\"%H\"", dir_path)) {
+        Ok(d) => d,
+        Err(e) => {
+            bail!("{e}")
+        }
+    };
     let mut found = String::new();
-    let mut current_id=0;
+    let mut current_id = 0;
     for hash in hashes {
-        for (i,id) in commit_list.lines().enumerate() {
+        for (i, id) in commit_list.lines().enumerate() {
             if id == hash {
                 if found.is_empty() || current_id > i {
                     found = hash.to_string();
@@ -65,23 +93,35 @@ fn get_commit_id(component_dir: &PathBuf) -> Result<String> {
     Ok(found)
 }
 
-pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distrib) -> Result<()> {
+pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distrib) -> Result<()> {
     let url = dist.spec.url.clone();
     let mut dot_git: PathBuf = PathBuf::new();
     dot_git.push(target.clone());
     dot_git.push(".git");
     if dist.insecure() {
-        shell::run_log(&"git config --global http.sslVerify false".into()).or_else(|e: Error| {bail!("{e}")})?;
+        shell::run_log(&"git config --global http.sslVerify false".into())
+            .or_else(|e: Error| bail!("{e}"))?;
     }
-    // TODO: Support selecting branch
     let action = if Path::new(&dot_git).is_dir() {
         // if a .git directory exist, run git pull
-        shell::run_log(&format!("cd '{:?}';git set-url origin '{:?}';git pull", target, url)).or_else(|e: Error| {bail!("{e}")})?;
-        format!("git pull for {}",dist.name())
+        shell::run_log(&format!(
+            "set -e ; cd {target} ; git remote set-url origin {url} ; git reset --hard origin/{branch}",
+            target = target.display(),
+            url = url,
+            branch = dist.branch()
+        ))
+        .or_else(|e: Error| bail!("{e}"))?;
+        format!("git pull for {}", dist.name())
     } else {
         // Run git clone
-        shell::run_log(&format!("cd '{:?}';git clone '{:?}' .", target, url)).or_else(|e: Error| {bail!("{e}")})?;
-        format!("git clone for {}",dist.name())
+        shell::run_log(&format!(
+            "set -e ; cd {target} ; git clone {url} . ; git fetch --all ; git checkout -b {branch} ; git pull origin {branch}",
+            target=target.display(),
+            url=url,
+            branch=dist.branch()
+        ))
+        .or_else(|e: Error| bail!("{e}"))?;
+        format!("git clone for {}", dist.name())
     };
     let mut categories = HashMap::new();
     let c_dirs = fs::read_dir(target)?
@@ -104,47 +144,82 @@ pub async fn clone (target: &PathBuf, client: kube::Client, dist: &client::Distr
             let mut index: PathBuf = PathBuf::new();
             index.push(comp_dir.clone());
             index.push("index.yaml");
-            let yaml = yaml::read_index(&index).or_else(|e: Error| {bail!("{e}")})?;
+            let yaml = yaml::read_index(&index).or_else(|e: Error| bail!("{e}"))?;
 
-            comps.insert(comp_name, DistribComponent::new(
-                get_commit_id(&comp_dir.clone()).or_else(|e: Error| {bail!("{e}")})?,
-                yaml.metadata.description,
-                yaml.options,
-                yaml.dependencies,
-                yaml.providers,
-            ));
+            comps.insert(
+                comp_name,
+                DistribComponent::new(
+                    get_commit_id(&comp_dir.clone()).or_else(|e: Error| bail!("{e}"))?,
+                    yaml.metadata.description,
+                    yaml.options,
+                    yaml.dependencies,
+                    yaml.providers,
+                ),
+            );
         }
         categories.insert(category, comps);
     }
-    dist.update_status_components(client.clone(), AGENT, categories).await.map_err(|e| anyhow!("{e}"))?;
-    events::report(AGENT, client,events::from(
-        format!("Preparing {}", dist.name()),action.clone(),
-        Some(action)
-    ), dist.object_ref(&())).await.unwrap();
+    dist.update_status_components(client.clone(), AGENT, categories)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+    events::report(
+        AGENT,
+        client,
+        events::from(format!("Preparing {}", dist.name()), action.clone(), Some(action)),
+        dist.object_ref(&()),
+    )
+    .await
+    .unwrap();
     Ok(())
 }
 
-pub async fn run(args:&Parameters) -> Result<()> {
+pub async fn run(args: &Parameters) -> Result<()> {
     let client = get_client().await;
     let mut distribs = client::DistribHandler::new(client.clone());
-    let dist = match distribs.get(args.name.as_str()).await {Ok(d) => d, Err(e) => {
-        events::report(AGENT, client, events::from_error(&anyhow!("{e}")), events::get_empty_ref()).await.unwrap();
-        bail!("{e}");
-    }};
-     // Validate that the dir parameter is a directory
-     if ! Path::new(&args.dir).is_dir() {
+    let dist = match distribs.get(args.name.as_str()).await {
+        Ok(d) => d,
+        Err(e) => {
+            events::report(
+                AGENT,
+                client,
+                events::from_error(&anyhow!("{e}")),
+                events::get_empty_ref(),
+            )
+            .await
+            .unwrap();
+            bail!("{e}");
+        }
+    };
+    // Validate that the dir parameter is a directory
+    if !Path::new(&args.dir).is_dir() {
         let mut errors: Vec<String> = Vec::new();
         errors.push(format!("{:?} is not a directory", args.dir));
-        dist.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
-        events::report(AGENT, client, events::from_error(&anyhow!("{:?} is not a directory", args.dir)), dist.object_ref(&())).await.unwrap();
+        dist.update_status_errors(client.clone(), AGENT, errors)
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        events::report(
+            AGENT,
+            client,
+            events::from_error(&anyhow!("{:?} is not a directory", args.dir)),
+            dist.object_ref(&()),
+        )
+        .await
+        .unwrap();
         bail!("{:?} is not a directory", args.dir);
     }
     let target = std::fs::canonicalize(&args.dir).unwrap();
-    match clone (&target, client.clone(), &dist).await {Ok(_) => {Ok(())}, Err(e) => {
-        let mut errors: Vec<String> = Vec::new();
-        errors.push(format!("{e}"));
-        dist.update_status_errors(client.clone(), AGENT, errors).await.map_err(|e| anyhow!("{e}"))?;
-        events::report(AGENT, client, events::from_error(&e), dist.object_ref(&())).await.unwrap();
-        Err(e)
-    }}
+    match clone(&target, client.clone(), &dist).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let mut errors: Vec<String> = Vec::new();
+            errors.push(format!("{e}"));
+            dist.update_status_errors(client.clone(), AGENT, errors)
+                .await
+                .map_err(|e| anyhow!("{e}"))?;
+            events::report(AGENT, client, events::from_error(&e), dist.object_ref(&()))
+                .await
+                .unwrap();
+            Err(e)
+        }
+    }
 }
