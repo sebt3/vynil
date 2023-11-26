@@ -100,7 +100,7 @@ impl Distrib {
     }
 
     pub fn branch(&self) -> String {
-        if let Some(ref branch) = self.spec.branch {branch.clone()} else {"stable".to_string()}
+        if let Some(ref branch) = self.spec.branch {branch.clone()} else {String::new()}
     }
 
     pub fn insecure(&self) -> bool {

@@ -104,21 +104,39 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
     }
     let action = if Path::new(&dot_git).is_dir() {
         // if a .git directory exist, run git pull
+        let mut branch_manage: String = "".to_owned();
+        if dist.branch() != "" {
+            branch_manage.push_str(&format!(
+                "git reset --hard origin/{branch}",
+                branch = dist.branch()
+            ))
+        } else {
+            branch_manage.push_str("git pull")
+        }
         shell::run_log(&format!(
-            "set -e ; cd {target} ; git remote set-url origin {url} ; git reset --hard origin/{branch}",
+            "set -e ; cd {target} ; git remote set-url origin {url} ; {command}",
             target = target.display(),
             url = url,
-            branch = dist.branch()
+            command = branch_manage
         ))
         .or_else(|e: Error| bail!("{e}"))?;
         format!("git pull for {}", dist.name())
     } else {
         // Run git clone
+        let mut branch_manage: String = "".to_owned();
+        if dist.branch() != "" {
+            branch_manage.push_str(&format!(
+                "; git fetch --all ; git checkout -b {branch} ; git pull origin {branch}",
+                branch = dist.branch()
+            ))
+        } else {
+            branch_manage.push_str("")
+        }
         shell::run_log(&format!(
-            "set -e ; cd {target} ; git clone {url} . ; git fetch --all ; git checkout -b {branch} ; git pull origin {branch}",
-            target=target.display(),
-            url=url,
-            branch=dist.branch()
+            "set -e ; cd {target} ; git clone {url} . {command}",
+            target = target.display(),
+            url = url,
+            command = branch_manage
         ))
         .or_else(|e: Error| bail!("{e}"))?;
         format!("git clone for {}", dist.name())
