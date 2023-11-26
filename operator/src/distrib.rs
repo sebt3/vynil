@@ -55,7 +55,7 @@ impl Reconciler for Distrib {
                 "accessModes": ["ReadWriteOnce"],
                 "resources": {
                   "requests": {
-                    "storage": "256Mi"
+                    "storage": "1Gi"
                   }
                 },
                 "volumeMode": "Filesystem",
