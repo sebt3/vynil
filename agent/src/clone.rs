@@ -107,7 +107,7 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
         let mut branch_manage: String = "".to_owned();
         if dist.branch() != "" {
             branch_manage.push_str(&format!(
-                "git reset --hard origin/{branch}",
+                "git checkout {branch}; git reset --hard origin/{branch}; git pull",
                 branch = dist.branch()
             ))
         } else {
