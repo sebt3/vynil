@@ -25,6 +25,7 @@ pub struct Providers {
     pub authentik: Option<bool>,
     pub kubectl: Option<bool>,
     pub postgresql: Option<bool>,
+    pub mysql: Option<bool>,
     pub restapi: Option<bool>,
     pub http: Option<bool>,
     pub gitea: Option<bool>,

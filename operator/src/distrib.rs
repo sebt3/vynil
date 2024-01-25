@@ -71,13 +71,13 @@ impl Reconciler for Distrib {
         let template = jobs.get_clone(name.as_str(), self.spec.login.clone());
         if jobs.have(clone_name.as_str()).await {
             info!("Patching {clone_name} Job");
-            let _job = match jobs.apply(clone_name.as_str(), &template).await {Ok(j)=>j,Err(_e)=>{
+            let _job = match jobs.apply_distrib(clone_name.as_str(), &template, "clone", name.as_str()).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(clone_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("plan", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 jobs.delete(clone_name.as_str()).await.unwrap();
-                jobs.create(clone_name.as_str(), &template).await.unwrap()
+                jobs.create_distrib(clone_name.as_str(), &template, "clone", name.as_str()).await.unwrap()
             }};
             // TODO: Detect if the job changed after the patch (or event better would change prior)
             // TODO: Send a patched event if changed
@@ -90,7 +90,7 @@ impl Reconciler for Distrib {
             debug!("Waited {clone_name} OK");
         } else {
             info!("Creating {clone_name} Job");
-            let job = jobs.create(clone_name.as_str(), &template).await.unwrap();
+            let job = jobs.create_distrib(clone_name.as_str(), &template, "clone", name.as_str()).await.unwrap();
             recorder.publish(
                 events::from_create("Distrib", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;
@@ -108,17 +108,17 @@ impl Reconciler for Distrib {
         let mut crons = CronJobHandler::new(ctx.client.clone(), ns);
         if crons.have(clone_name.as_str()).await {
             info!("Patching {clone_name} CronJob");
-            let _cjob = match crons.apply(clone_name.as_str(), &cronjob_tmpl).await {Ok(j)=>j,Err(_e)=>{
+            let _cjob = match crons.apply(clone_name.as_str(), &cronjob_tmpl, "clone", name.as_str()).await {Ok(j)=>j,Err(_e)=>{
                 let job = crons.get(clone_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("plan", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 crons.delete(clone_name.as_str()).await.unwrap();
-                crons.create(clone_name.as_str(), &template).await.unwrap()
+                crons.create(clone_name.as_str(), &template, "clone", name.as_str()).await.unwrap()
             }};
         } else {
             info!("Creating {clone_name} CronJob");
-            let cron = crons.create(clone_name.as_str(), &cronjob_tmpl).await.unwrap();
+            let cron = crons.create(clone_name.as_str(), &cronjob_tmpl, "clone", name.as_str()).await.unwrap();
             recorder.publish(
                 events::from_create("Distrib", &name, "CronJob", &cron.name_any(), Some(cron.object_ref(&())))
             ).await.map_err(Error::KubeError)?;

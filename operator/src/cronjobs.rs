@@ -33,11 +33,17 @@ impl CronJobHandler {
         self.api.get(name).await
     }
 
-    pub async fn create(&mut self, name: &str, spec: &serde_json::Value) -> Result<CronJob, kube::Error> {
+    pub async fn create(&mut self, name: &str, spec: &serde_json::Value, distname: &str, action: &str) -> Result<CronJob, kube::Error> {
         let data = serde_json::from_value(serde_json::json!({
             "apiVersion": "batch/v1",
             "kind": "CronJob",
             "metadata": {
+                "labels": {
+                    "app": "vynil",
+                    "component": "agent",
+                    "action": action,
+                    "distrib.name": distname,
+                },
                 "name": name,
             },
             "spec": spec
@@ -45,20 +51,26 @@ impl CronJobHandler {
         self.api.create(&PostParams::default(), &data).await
     }
 
-    pub async fn apply(&mut self, name: &str, spec: &serde_json::Value) -> Result<CronJob, kube::Error> {
+    pub async fn apply(&mut self, name: &str, spec: &serde_json::Value, distname: &str, action: &str) -> Result<CronJob, kube::Error> {
         if self.have(name).await {
             let params = PatchParams::apply(OPERATOR);
             let patch = Patch::Apply(serde_json::json!({
                 "apiVersion": "batch/v1",
                 "kind": "CronJob",
                 "metadata": {
+                    "labels": {
+                        "app": "vynil",
+                        "component": "agent",
+                        "action": action,
+                        "distrib.name": distname,
+                    },
                     "name": name,
                 },
                 "spec": spec
             }));
             self.api.patch(name, &params, &patch).await
         } else {
-            self.create(name, spec).await
+            self.create(name, spec, distname, action).await
         }
     }
 

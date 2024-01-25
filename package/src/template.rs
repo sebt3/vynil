@@ -1,5 +1,5 @@
 use handlebars::Handlebars;
-use anyhow::{Result};
+use anyhow::Result;
 
 
 pub fn template(template:&str ,values:&serde_json::Map<String, serde_json::Value>) -> Result<String> {

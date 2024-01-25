@@ -50,7 +50,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm \
  && mkdir -p /var/lib/vynil/keys /nonexistent \
  && chown -R nobody:nogroup /var/lib/vynil /nonexistent \
- && chmod 750 /var/lib/vynil /nonexistent \
+ && chmod 770 /var/lib/vynil /nonexistent \
  && chmod 700 /var/lib/vynil/keys
 # Use the intermediary image to download the most used providers for runtime caching purpose
 FROM middle as downloader

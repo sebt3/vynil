@@ -89,7 +89,8 @@ fn clone_container(name: &str, auth: Option<DistribAuthent>) -> serde_json::Valu
         if auth.git_credentials.is_some() {
             mounts.push(serde_json::json!({
                 "name": "creds",
-                "mountPath": "/var/lib/vynil",
+                "mountPath": "/var/lib/vynil/git-credentials",
+                "subPath": "git-credentials",
             }));
         }
     }
@@ -273,12 +274,40 @@ impl JobHandler {
         self.api.get(name).await
     }
 
-    pub async fn create(&mut self, name: &str, template: &serde_json::Value) -> Result<Job, kube::Error> {
+    pub async fn create_distrib(&mut self, name: &str, template: &serde_json::Value, action: &str, distrib_name: &str) -> Result<Job, kube::Error> {
         let data = serde_json::from_value(serde_json::json!({
             "apiVersion": "batch/v1",
             "kind": "Job",
             "metadata": {
                 "name": name,
+                "labels": {
+                    "app": "vynil",
+                    "component": "agent",
+                    "action": action,
+                    "distrib.name": distrib_name,
+                },
+            },
+            "spec": {
+                "backoffLimit": 3,
+                "parallelism": 1,
+                "template": template
+            }
+        })).unwrap();
+        self.api.create(&PostParams::default(), &data).await
+    }
+    pub async fn create_install(&mut self, name: &str, template: &serde_json::Value, action: &str, install_name: &str, install_namespace: &str) -> Result<Job, kube::Error> {
+        let data = serde_json::from_value(serde_json::json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "app": "vynil",
+                    "component": "agent",
+                    "action": action,
+                    "install.name": install_name,
+                    "install.namespace": install_namespace,
+                },
             },
             "spec": {
                 "backoffLimit": 3,
@@ -289,7 +318,7 @@ impl JobHandler {
         self.api.create(&PostParams::default(), &data).await
     }
 
-    pub async fn create_short(&mut self, name: &str, template: &serde_json::Value) -> Result<Job, kube::Error> {
+    pub async fn create_short_install(&mut self, name: &str, template: &serde_json::Value, action: &str, install_name: &str, install_namespace: &str) -> Result<Job, kube::Error> {
         let data = serde_json::from_value(serde_json::json!({
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -298,6 +327,13 @@ impl JobHandler {
                 "annotations": {
                     "mayfly.cloud.namecheap.com/expire": "1h"
                 },
+                "labels": {
+                    "app": "vynil",
+                    "component": "agent",
+                    "action": action,
+                    "install.name": install_name,
+                    "install.namespace": install_namespace,
+                },
             },
             "spec": {
                 "backoffLimit": 3,
@@ -308,7 +344,7 @@ impl JobHandler {
         self.api.create(&PostParams::default(), &data).await
     }
 
-    pub async fn apply(&mut self, name: &str, template: &serde_json::Value) -> Result<Job, kube::Error> {
+    pub async fn apply_install(&mut self, name: &str, template: &serde_json::Value, action: &str, install_name: &str, install_namespace: &str) -> Result<Job, kube::Error> {
         if self.have(name).await {
             let params = PatchParams::apply(OPERATOR);
             let patch = Patch::Apply(serde_json::json!({
@@ -316,6 +352,13 @@ impl JobHandler {
                 "kind": "Job",
                 "metadata": {
                     "name": name,
+                    "labels": {
+                        "app": "vynil",
+                        "component": "agent",
+                        "action": action,
+                        "install.name": install_name,
+                        "install.namespace": install_namespace,
+                    },
                 },
                 "spec": {
                     "template": template
@@ -323,11 +366,10 @@ impl JobHandler {
             }));
             self.api.patch(name, &params, &patch).await
         } else {
-            self.create(name, template).await
+            self.create_install(name, template, action, install_name, install_namespace).await
         }
     }
-
-    pub async fn apply_short(&mut self, name: &str, template: &serde_json::Value) -> Result<Job, kube::Error> {
+    pub async fn apply_distrib(&mut self, name: &str, template: &serde_json::Value, action: &str, distrib_name: &str) -> Result<Job, kube::Error> {
         if self.have(name).await {
             let params = PatchParams::apply(OPERATOR);
             let patch = Patch::Apply(serde_json::json!({
@@ -335,6 +377,38 @@ impl JobHandler {
                 "kind": "Job",
                 "metadata": {
                     "name": name,
+                    "labels": {
+                        "app": "vynil",
+                        "component": "agent",
+                        "action": action,
+                        "distrib.name": distrib_name,
+                    },
+                },
+                "spec": {
+                    "template": template
+                }
+            }));
+            self.api.patch(name, &params, &patch).await
+        } else {
+            self.create_distrib(name, template, action, distrib_name).await
+        }
+    }
+
+    pub async fn apply_short_install(&mut self, name: &str, template: &serde_json::Value, action: &str, install_name: &str, install_namespace: &str) -> Result<Job, kube::Error> {
+        if self.have(name).await {
+            let params = PatchParams::apply(OPERATOR);
+            let patch = Patch::Apply(serde_json::json!({
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "metadata": {
+                    "name": name,
+                    "labels": {
+                        "app": "vynil",
+                        "component": "agent",
+                        "action": action,
+                        "install.name": install_name,
+                        "install.namespace": install_namespace,
+                    },
                     "annotations": {
                         "mayfly.cloud.namecheap.com/expire": "1h"
                     },
@@ -345,7 +419,7 @@ impl JobHandler {
             }));
             self.api.patch(name, &params, &patch).await
         } else {
-            self.create_short(name, template).await
+            self.create_short_install(name, template, action, install_name, install_namespace).await
         }
     }
 

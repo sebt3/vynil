@@ -107,14 +107,14 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
         let mut branch_manage: String = "".to_owned();
         if dist.branch() != "" {
             branch_manage.push_str(&format!(
-                "git checkout {branch}; git reset --hard origin/{branch}; git pull",
+                "git switch {branch}; git reset --hard origin/{branch}",
                 branch = dist.branch()
             ))
         } else {
-            branch_manage.push_str("git pull")
+            branch_manage.push_str("RBRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'); git switch ${RBRANCH}; git reset --hard origin/${RBRANCH}")
         }
         shell::run_log(&format!(
-            "set -e ; cd {target} ; git remote set-url origin {url} ; {command}",
+            "set -e ; cd {target} ; git remote set-url origin {url} ; git fetch ; {command}",
             target = target.display(),
             url = url,
             command = branch_manage

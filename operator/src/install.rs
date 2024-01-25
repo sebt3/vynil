@@ -157,11 +157,16 @@ impl Reconciler for Install {
         } else {
             jobs.get_installs_install(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())
         };
+        let action = if self.should_plan() {
+            "plan"
+        } else {
+            "install"
+        };
 
         if !jobs.have(agent_name.as_str()).await {
             info!("Creating {agent_name} Job");
             self.update_status_agent_started(client, OPERATOR).await.map_err(Error::KubeError)?;
-            let job = jobs.create(agent_name.as_str(), &agent_job).await.unwrap();
+            let job = jobs.create_install(agent_name.as_str(), &agent_job, action, name.as_str(), ns.as_str()).await.unwrap();
             debug!("Sending event {agent_name} Job");
             recorder.publish(
                 events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
@@ -171,13 +176,13 @@ impl Reconciler for Install {
             debug!("Waited {agent_name} OK");
         } else {
             info!("Patching {agent_name} Job");
-            let _job = match jobs.apply(agent_name.as_str(), &agent_job).await {Ok(j)=>j,Err(_e)=>{
+            let _job = match jobs.apply_install(agent_name.as_str(), &agent_job, action, name.as_str(), ns.as_str()).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(agent_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("plan", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 jobs.delete(agent_name.as_str()).await.unwrap();
-                jobs.create(agent_name.as_str(), &agent_job).await.unwrap()
+                jobs.create_install(agent_name.as_str(), &agent_job, action, name.as_str(), ns.as_str()).await.unwrap()
             }};
             // TODO: Detect if the job changed after the patch (or event better would change prior)
             // TODO: Send a patched event if changed
@@ -213,13 +218,13 @@ impl Reconciler for Install {
             let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
 
             info!("Creating {agent_name} Job");
-            let job = match jobs.apply_short(agent_name.as_str(), &destroyer_job).await {Ok(j)=>j,Err(_e)=>{
+            let job = match jobs.apply_short_install(agent_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(agent_name.as_str()).await.unwrap();
                 recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 jobs.delete(agent_name.as_str()).await.unwrap();
-                jobs.create_short(agent_name.as_str(), &destroyer_job).await.unwrap()
+                jobs.create_short_install(agent_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await.unwrap()
             }};
             recorder.publish(
                 events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))

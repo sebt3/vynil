@@ -164,8 +164,8 @@ provider \"kubectl\" {
     }";
       content += "
 provider \"authentik\" {
-  url   = \"http://authentik.${var.domain}-auth.svc\"
-  token = data.kubernetes_secret_v1.authentik.data[\"AUTHENTIK_BOOTSTRAP_TOKEN\"]
+  url   = local.authentik_url
+  token = local.authentik_token
 }";
     } else {
       requiered += "
@@ -175,8 +175,8 @@ provider \"authentik\" {
 #    }";
       content += "
 #provider \"authentik\" {
-#  url   = \"http://authentik.${var.domain}-auth.svc\"
-#  token = data.kubernetes_secret_v1.authentik.data[\"AUTHENTIK_BOOTSTRAP_TOKEN\"]
+#  url   = local.authentik_url
+#  token = local.authentik_token
 #}";
     }
     let mut have_postgresql = false;
@@ -193,9 +193,9 @@ provider \"authentik\" {
     }";
       content += "
 provider \"postgresql\" {
-  host            = local.pg-host
-  username        = local.pg-username
-  password        = local.pg-password
+  host            = local.pg_host
+  username        = local.pg_username
+  password        = local.pg_password
 }";
     } else {
       requiered += "
@@ -205,9 +205,40 @@ provider \"postgresql\" {
 #    }";
       content += "
 #provider \"postgresql\" {
-#  host            = local.pg-host
-#  username        = local.pg-username
-#  password        = local.pg-password
+#  host            = local.pg_host
+#  username        = local.pg_username
+#  password        = local.pg_password
+#}";
+    }
+    let mut have_mysql = false;
+    if let Some(providers) = providers.clone() {
+      if let Some(mysql) = providers.mysql {
+        have_mysql = mysql;
+      }
+    }
+    if have_mysql {
+      requiered += "
+    mysql = {
+        source = \"petoju/mysql\"
+        version = \"~> 3.0.43\"
+    }";
+      content += "
+provider \"mysql\" {
+  host            = local.mysql_host
+  username        = local.mysql_username
+  password        = local.mysql_password
+}";
+    } else {
+      requiered += "
+#    mysql = {
+#        source = \"petoju/mysql\"
+#        version = \"~> 3.0.43\"
+#    }";
+      content += "
+#provider \"mysql\" {
+#  host            = local.mysql_host
+#  username        = local.mysql_username
+#  password        = local.mysql_password
 #}";
     }
     let mut have_http = false;
@@ -247,9 +278,9 @@ provider \"http\" {}";
       }";
       content += "
 provider \"gitea\" {
-  base_url = \"http://gitea-http.${var.domain}-ci.svc:3000/\"
-  username = data.kubernetes_secret_v1.gitea.data[\"username\"]
-  password = data.kubernetes_secret_v1.gitea.data[\"password\"]
+  base_url = local.gitea_host
+  username = local.gitea_username
+  password = local.gitea_password
 }";
     } else {
       requiered += "
@@ -259,9 +290,9 @@ provider \"gitea\" {
 #      }";
       content += "
 #provider \"gitea\" {
-#  base_url = \"http://gitea-http.${var.domain}-ci.svc:3000/\"
-#  username = data.kubernetes_secret_v1.gitea.data[\"username\"]
-#  password = data.kubernetes_secret_v1.gitea.data[\"password\"]
+#  base_url = local.gitea_host
+#  username = local.gitea_username
+#  password = local.gitea_password
 #}";
     }
     let mut have_restapi = false;
@@ -348,6 +379,11 @@ pub fn gen_datas(dest_dir: &PathBuf) -> Result<()> {
     file.push("datas.tf");
     gen_file(&file, &"
 locals {
+#   authentik_url = \"http://authentik.${var.domain}-auth.svc\"
+#   authentik_token = data.kubernetes_secret_v1.authentik.data[\"AUTHENTIK_BOOTSTRAP_TOKEN\"]
+#   gitea_host = \"http://gitea-http.${var.domain}-ci.svc:3000/\"
+#   gitea_username = data.kubernetes_secret_v1.gitea.data[\"username\"]
+#   gitea_password = data.kubernetes_secret_v1.gitea.data[\"password\"]
   common-labels = {
     \"vynil.solidite.fr/owner-name\" = var.instance
     \"vynil.solidite.fr/owner-namespace\" = var.namespace
@@ -365,6 +401,15 @@ locals {
 #     name = \"${var.instance}-${var.component}-pg-app\"
 #     namespace = var.namespace
 #   }
+# }
+
+# data \"kubernetes_secret_v1\" \"prj_mysql_secret\" {
+#  depends_on = [kubectl_manifest.prj_mysql_secret]
+#  metadata {
+#    name      = \"${local.app_slug}-mysql\"
+#    namespace = var.namespace
+#    labels = local.mysql_labels
+#  }
 # }
 
 # data \"kubernetes_secret_v1\" \"authentik\" {
