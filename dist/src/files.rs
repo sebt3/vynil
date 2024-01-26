@@ -34,22 +34,24 @@ providers:
   http: true
   restapi: true
 options:
+  sso_vynil:
+    default: true
   timezone:
     default: Europe/Paris
   language:
     default: fr_FR
-  sub-domain:
+  sub_domain:
     default: to-be-set
-  domain-name:
-    default: your_company.com
+  domain_name:
+    default: your-company.com
   domain:
     default: your-company
   issuer:
     default: letsencrypt-prod
-  ingress-class:
+  ingress_class:
     default: traefik
-  app-group:
-    default: infra
+  app_group:
+    default: apps
   replicas:
     default: 1
   hpa:
@@ -60,12 +62,12 @@ options:
   backups:
     default:
       enable: false
-      use-barman: false
+      use_barman: false
       endpoint: \"\"
-      secret-name: backup-settings
-      key-id-key: s3-id
-      secret-key: s3-secret
-      restic-key: bck-password
+      secret_name: backup-settings
+      key_id_key: s3-id
+      secret_key: s3-secret
+      restic_key: bck-password
       schedule:
         db: \"10 3 * * *\"
         backup: \"10 3 * * *\"
@@ -91,20 +93,23 @@ options:
         size: 1Gi
         accessMode: ReadWriteOnce
         type: Filesystem
+        class: \"\"
       redis:
         size: '2Gi'
       postgres:
         size: '10Gi'
     properties:
-      type:
-        enum:
-          - Filesystem
-          - Block
-      accessMode:
-        enum:
-          - ReadWriteOnce
-          - ReadOnlyMany
-          - ReadWriteMany
+      volume:
+        properties:
+          type:
+            enum:
+              - Filesystem
+              - Block
+          accessMode:
+            enum:
+              - ReadWriteOnce
+              - ReadOnlyMany
+              - ReadWriteMany
   images:
     default:
       postgresql:
