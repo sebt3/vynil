@@ -38,6 +38,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     let re_rhai = Regex::new(r"^index\.rhai$").unwrap();
     let re_hbs = Regex::new(r"\.hbs$").unwrap();
     let re_yml = Regex::new(r"\.yaml$").unwrap();
+    let re_tpl = Regex::new(r"\.tpl$").unwrap();
     let re_tf = Regex::new(r"\.tf$").unwrap();
     for file in fs::read_dir(src).unwrap() {
         let path = file.unwrap().path();
@@ -53,7 +54,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
             dest_path.push(name);
             log::debug!("Generating {:?}",dest_path);
             fs::write(dest_path, reg.render_template(src_content.as_str(), config)?)?;
-        } else if re_yml.is_match(filename) || re_tf.is_match(filename) || re_rhai.is_match(filename) {
+        } else if re_yml.is_match(filename) || re_tf.is_match(filename) || re_rhai.is_match(filename)  || re_tpl.is_match(filename) {
             // copy the remaining yaml and tf file to the same (dest) directory
             let mut dest_path = PathBuf::new();
             dest_path.push(dest.clone());
