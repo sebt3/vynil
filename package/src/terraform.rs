@@ -224,7 +224,7 @@ provider \"postgresql\" {
     }";
       content += "
 provider \"mysql\" {
-  host            = local.mysql_host
+  endpoint        = local.mysql_host
   username        = local.mysql_username
   password        = local.mysql_password
 }";
@@ -236,7 +236,7 @@ provider \"mysql\" {
 #    }";
       content += "
 #provider \"mysql\" {
-#  host            = local.mysql_host
+#  endpoint        = local.mysql_host
 #  username        = local.mysql_username
 #  password        = local.mysql_password
 #}";
@@ -393,6 +393,17 @@ locals {
     \"app.kubernetes.io/name\" = var.component
     \"app.kubernetes.io/instance\" = var.instance
   }
+#   pvc_spec = merge({
+#     \"accessModes\" = [var.storage.volume.accessMode]
+#     \"volumeMode\" = var.storage.volume.type
+#     \"resources\" = {
+#       \"requests\" = {
+#         \"storage\" = \"${var.storage.volume.size}\"
+#       }
+#     }
+#   }, var.storage.volume.class != \"\" ?{
+#     \"storageClassName\" = var.storage.volume.class
+#   }:{})
 }
 
 # data \"kubernetes_secret_v1\" \"postgresql_password\" {
