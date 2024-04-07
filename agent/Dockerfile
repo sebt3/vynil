@@ -1,4 +1,4 @@
-ARG RUST_VERSION=1.73
+ARG RUST_VERSION=1.77
 ARG DEBIAN_VERSION=bookworm
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git"

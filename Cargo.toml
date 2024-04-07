@@ -1,6 +1,6 @@
 [package]
 name = "vynil"
-version = "0.2.6"
+version = "0.2.7"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 license = "	BSD-3-Clause"

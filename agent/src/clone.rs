@@ -126,16 +126,19 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
         let mut branch_manage: String = "".to_owned();
         if dist.branch() != "" {
             branch_manage.push_str(&format!(
-                "; git fetch --all ; git checkout -b {branch} ; git pull origin {branch}",
-                branch = dist.branch()
+                "git clone {url} -b {branch} .",
+                branch = dist.branch(),
+                url = url
             ))
         } else {
-            branch_manage.push_str("")
+            branch_manage.push_str(&format!(
+                "git clone {url} .",
+                url = url
+            ))
         }
         shell::run_log(&format!(
-            "set -e ; cd {target} ; git clone {url} . {command}",
+            "set -e ; cd {target} ; {command}",
             target = target.display(),
-            url = url,
             command = branch_manage
         ))
         .or_else(|e: Error| bail!("{e}"))?;

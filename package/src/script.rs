@@ -1,4 +1,4 @@
-use rhai::{Engine, Scope, Module, RegisterNativeFunction};
+use rhai::{Engine, Scope, Module, RhaiNativeFunc};
 use std::{process, path::{PathBuf, Path}};
 use anyhow::{Result, bail};
 use core::any::Any;
@@ -55,7 +55,7 @@ impl Script {
         self.ctx = ctx;
     }
 
-    pub fn register<A: 'static, const N: usize, const C: bool, R: Any + Clone, const L: bool, F: RegisterNativeFunction<A, N, C, R, L>+ 'static>(&mut self, name: &str, func: F) {
+    pub fn register<A: 'static, const N: usize, const C: bool, R: Any + Clone, const L: bool, F: RhaiNativeFunc<A, N, C, R, L>+ 'static>(&mut self, name: &str, func: F) {
         self.engine.register_fn(name, func);
     }
 
