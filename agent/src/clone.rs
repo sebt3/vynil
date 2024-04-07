@@ -172,7 +172,7 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
                 DistribComponent::new(
                     get_commit_id(&comp_dir.clone()).or_else(|e: Error| bail!("{e}"))?,
                     yaml.metadata.description,
-                    yaml.options,
+                    yaml.options.into_iter().collect(),
                     yaml.dependencies,
                     yaml.providers,
                 ),

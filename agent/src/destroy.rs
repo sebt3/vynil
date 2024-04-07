@@ -20,7 +20,9 @@ pub struct Parameters {
 }
 
 pub async fn destroy(src: &PathBuf, script: &mut script::Script, client: kube::Client, inst: &client::Install) -> Result<()> {
-    inst.update_status_start_destroy(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
+    match inst.update_status_start_destroy(client.clone(), AGENT).await {Ok(_) => {}, Err(e) =>
+        {log::warn!("While updating instance status event we got {:?}", e)}
+    };
     // run pre-plan stage from rhai script if any
     let stage = "destroy".to_string();
     script.run_pre_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
@@ -40,12 +42,14 @@ pub async fn destroy(src: &PathBuf, script: &mut script::Script, client: kube::C
     terraform::run_destroy(src).or_else(|e: Error| {bail!("{e}")})?;
     // run post-plan stage from rhai script if any
     script.run_post_stage(&stage).or_else(|e: Error| {bail!("{e}")}).or_else(|e: Error| {bail!("{e}")})?;
-    inst.update_status_end_destroy(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
+    match inst.update_status_end_destroy(client.clone(), AGENT).await  {Ok(_) => {}, Err(e) =>
+        {log::warn!("While updating instance status event we got {:?}", e)}
+    };
     match events::report(AGENT, client,events::from(
-        format!("Deleting {}",inst.name()),
-        format!("Terraform destroy for `{}`",inst.name()),
-        Some(format!("Terraform destroy for `{}` successfully completed",inst.name()
-    ))), inst.object_ref(&())).await {Ok(_) => {}, Err(e) =>
+        format!("Deleting"),
+        format!("Terraform destroy for '{}.{}'",inst.namespace(),inst.name()),
+        Some(format!("Terraform destroy for '{}.{}' successfully completed",inst.namespace(),inst.name()))
+    ), inst.object_ref(&())).await {Ok(_) => {}, Err(e) =>
         {log::warn!("While sending event we got {:?}", e)}
     };
     Ok(())

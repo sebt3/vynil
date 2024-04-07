@@ -49,8 +49,7 @@ either = "1.8.1"
 base64 = "0.21.2"
 
 [dependencies.kube]
-default-features = false
-features = ["runtime", "client", "derive", "openssl-tls"]
+features = ["runtime", "client", "derive"]
 version = "0.90.0"
 
 # testing new releases - ignore

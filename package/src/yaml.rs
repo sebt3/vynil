@@ -5,7 +5,7 @@ use serde_json;
 use anyhow::{Result, ensure, bail, anyhow};
 pub use openapiv3::{Schema, ReferenceOr};
 use schemars::{JsonSchema,schema_for_value};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -37,7 +37,7 @@ pub struct Component {
     pub kind: String,
     pub category: String,
     pub metadata: ComponentMetadata,
-    pub options: HashMap<String, serde_json::Value>,
+    pub options: BTreeMap<String, serde_json::Value>,
     pub dependencies: Option<Vec<ComponentDependency>>,
     pub providers: Option<Providers>,
     pub tfaddtype: Option<bool>,

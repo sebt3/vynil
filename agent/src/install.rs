@@ -80,10 +80,10 @@ pub async fn install(src: &PathBuf, script: &mut script::Script, client: kube::C
     let new_state = match serde_json::from_str(&content) {Ok(d) => d, Err(e) => bail!("Error {} while reading: {}", e, path.display())};
     inst.update_status_apply(client.clone(), AGENT, new_state, std::env::var("COMMIT_ID").unwrap_or_else(|_| String::new())).await.map_err(|e| anyhow!("{e}"))?;
     events::report(AGENT, client,events::from(
-        format!("Installing {}",inst.name()),
-        format!("Terraform apply for `{}`",inst.name()),
-        Some(format!("Terraform apply for `{}` successfully completed",inst.name()
-    ))), inst.object_ref(&())).await.unwrap();
+        format!("Installing"),
+        format!("Terraform apply for '{}.{}'",inst.namespace(),inst.name()),
+        Some(format!("Terraform apply for '{}.{}' successfully completed",inst.namespace(),inst.name()))
+    ), inst.object_ref(&())).await.unwrap();
     Ok(())
 }
 

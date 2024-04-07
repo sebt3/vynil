@@ -25,7 +25,7 @@ pub async fn reconcile(inst: Arc<Install>, ctx: Arc<Context>) -> Result<Action> 
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", &field::display(&trace_id));
     let _mes = ctx.metrics.inst_count_and_measure();
-    let ns = inst.namespace().unwrap(); // inst is namespace scoped
+    let ns = inst.namespace(); // inst is namespace scoped
     let insts: Api<Install> = Api::namespaced(ctx.client.clone(), &ns);
 
     info!("Reconciling Install \"{}\" in {}", inst.name_any(), ns);
@@ -47,7 +47,7 @@ impl Reconciler for Install {
         let recorder = Recorder::new(client.clone(), reporter, self.object_ref(&()));
         let dists: Api<Distrib> = Api::all(client.clone());
         let name = self.name_any();
-        let ns = self.namespace().unwrap();
+        let ns = self.namespace();
         let my_ns = ctx.client.default_namespace();
         let mut jobs = JobHandler::new(ctx.client.clone(), my_ns);
         let agent_name = format!("{ns}--{name}--agent");
@@ -206,35 +206,15 @@ impl Reconciler for Install {
         let my_ns = ctx.client.default_namespace();
         let mut jobs = JobHandler::new(ctx.client.clone(), my_ns);
         let name = self.name_any();
-        let ns = self.namespace().unwrap();
+        let ns = self.namespace();
         let agent_name = format!("{ns}--{name}--agent");
+        let deletor_name = format!("{ns}--{name}--delete");
 
         let secret_name = format!("{ns}--{name}--secret");
         let mut my_secrets = SecretHandler::new(ctx.client.clone(), my_ns);
 
         if self.have_tfstate() {
-            // Create the delete job
-            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), "");
-            let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
-
-            info!("Creating {agent_name} Job");
-            let job = match jobs.apply_short_install(agent_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await {Ok(j)=>j,Err(_e)=>{
-                let job = jobs.get(agent_name.as_str()).await.unwrap();
-                recorder.publish(
-                    events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
-                jobs.delete(agent_name.as_str()).await.unwrap();
-                jobs.create_short_install(agent_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await.unwrap()
-            }};
-            recorder.publish(
-                events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
-            // Wait up-to 5mn for it's completion
-            match jobs.wait_max(agent_name.as_str(), 5*60).await {
-                Ok(_) => {},
-                Err(_) => return Err(Error::TooLongDelete)
-            }
-            // Finally delete the destroyer job
+            // delete the agent job if any
             if jobs.have(agent_name.as_str()).await {
                 // Force delete the install-job
                 info!("Deleting {agent_name} Job");
@@ -243,6 +223,37 @@ impl Reconciler for Install {
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 jobs.delete(agent_name.as_str()).await.unwrap();
+            }
+            // Create the delete job
+            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), "");
+            let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
+
+            info!("Creating {deletor_name} Job");
+            let job = match jobs.apply_short_install(deletor_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await {Ok(j)=>j,Err(_e)=>{
+                let job = jobs.get(deletor_name.as_str()).await.unwrap();
+                recorder.publish(
+                    events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+                ).await.map_err(Error::KubeError)?;
+                jobs.delete(deletor_name.as_str()).await.unwrap();
+                jobs.create_short_install(deletor_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await.unwrap()
+            }};
+            recorder.publish(
+                events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+            ).await.map_err(Error::KubeError)?;
+            // Wait up-to 5mn for it's completion
+            match jobs.wait_max(deletor_name.as_str(), 5*60).await {
+                Ok(_) => {},
+                Err(_) => return Err(Error::TooLongDelete)
+            }
+            // Finally delete the destroyer job
+            if jobs.have(deletor_name.as_str()).await {
+                // Force delete the install-job
+                info!("Deleting {deletor_name} Job");
+                let job = jobs.get(deletor_name.as_str()).await.unwrap();
+                recorder.publish(
+                    events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+                ).await.map_err(Error::KubeError)?;
+                jobs.delete(deletor_name.as_str()).await.unwrap();
             }
         }
 
