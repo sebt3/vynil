@@ -47,10 +47,10 @@ pub async fn plan (src: &PathBuf, script: &mut script::Script, client: kube::Cli
     // Upload the plan to the status->plan of the k8s Install Object
     inst.update_status_plan(client.clone(), AGENT, plan).await.map_err(|e| anyhow!("{e}"))?;
     events::report(AGENT, client,events::from(
-        format!("Preparing {}",inst.name()),
-        format!("Terraform plan for `{}`",inst.name()),
-        Some(format!("Terraform plan for `{}` successfully completed",inst.name()
-    ))), inst.object_ref(&())).await.unwrap();
+        format!("Planning"),
+        format!("Terraform plan for '{}.{}'",inst.namespace(),inst.name()),
+        Some(format!("Terraform plan for '{}.{}' successfully completed",inst.namespace(),inst.name()))
+    ), inst.object_ref(&())).await.unwrap();
     Ok(())
 }
 

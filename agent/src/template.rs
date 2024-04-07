@@ -29,7 +29,9 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     config:&serde_json::Map<String, serde_json::Value>,
     script: &mut script::Script) -> Result<()> {
     let providers = yaml.providers.clone();
-    inst.update_status_start_template(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
+    match inst.update_status_start_template(client.clone(), AGENT).await {Ok(_) => {}, Err(e) =>
+        {log::warn!("While updating install status we got {:?}", e)}
+    };
     let reg = Handlebars::new();
     // run pre-template stage from rhai script if any
     let stage = "template".to_string();
@@ -69,12 +71,14 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     terraform::gen_tfvars(&dest, config).or_else(|e: Error| {bail!("{e}")})?;
     // run post-template stage from rhai script if any
     script.run_post_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
-    inst.update_status_end_template(client.clone(), AGENT).await.map_err(|e| anyhow!("{e}"))?;
+    match inst.update_status_end_template(client.clone(), AGENT).await {Ok(_) => {}, Err(e) =>
+        {log::warn!("While updating install status we got {:?}", e)}
+    };
     match events::report(AGENT, client,events::from(
-        format!("Installing {}",inst.name()),
-        format!("Generating templates for `{}`",inst.name()),
-        Some(format!("Generating templates for `{}` successfully completed",inst.name()
-    ))), inst.object_ref(&())).await  {Ok(_) => {}, Err(e) =>
+        format!("Templating"),
+        format!("Generating templates for '{}.{}'",inst.namespace(),inst.name()),
+        Some(format!("Generating templates for '{}.{}' successfully completed",inst.namespace(),inst.name()))
+    ), inst.object_ref(&())).await  {Ok(_) => {}, Err(e) =>
         {log::warn!("While sending event we got {:?}",e)}
     };
     Ok(())

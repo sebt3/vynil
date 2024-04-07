@@ -72,6 +72,13 @@ impl Install {
             String::new()
         }
     }
+    pub fn namespace(&self) -> String {
+        if let Some(ref name) = self.metadata.namespace {
+            name.clone()
+        } else {
+            String::new()
+        }
+    }
     pub fn options(&self) -> serde_json::Map<std::string::String, serde_json::Value> {
         if let Some(ref opt) = self.spec.options {
             opt.clone()

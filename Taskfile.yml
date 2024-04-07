@@ -45,7 +45,7 @@ tasks:
     - task: lint-yaml
   crd_gen:
     cmds:
-    - cargo run --bin crdgen > deploy/crd.yaml
+    - cargo run --bin crdgen > deploy/crd/crd.yaml
   crd:
     deps: [crd_gen]
     cmds:

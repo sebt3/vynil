@@ -17,8 +17,7 @@ anyhow = "1.0.70"
 sha256 = "1.1.2"
 
 [dependencies.kube]
-default-features = false
-features = ["runtime", "client", "derive", "openssl-tls"]
+features = ["runtime", "client", "derive"]
 version = "0.90.0"
 
 [lib]
