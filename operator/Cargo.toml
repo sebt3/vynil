@@ -1,6 +1,6 @@
 [package]
 name = "operator"
-version = "0.2.7"
+version = "0.2.8"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 default-run = "operator"

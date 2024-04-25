@@ -219,9 +219,9 @@ impl Reconciler for Install {
                 // Force delete the install-job
                 info!("Deleting {agent_name} Job");
                 let job = jobs.get(agent_name.as_str()).await.unwrap();
-                recorder.publish(
+                match recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
+                ).await { Ok(_) => {}, Err(e) => {debug!("While publishing event, we got {:?}", e)} };
                 jobs.delete(agent_name.as_str()).await.unwrap();
             }
             // Create the delete job
@@ -230,16 +230,16 @@ impl Reconciler for Install {
 
             info!("Creating {deletor_name} Job");
             let job = match jobs.apply_short_install(deletor_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await {Ok(j)=>j,Err(_e)=>{
-                let job = jobs.get(deletor_name.as_str()).await.unwrap();
-                recorder.publish(
+                let job: k8s_openapi::api::batch::v1::Job = jobs.get(deletor_name.as_str()).await.unwrap();
+                match recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
+                ).await { Ok(_) => {}, Err(e) => {debug!("While publishing event, we got {:?}", e)} };
                 jobs.delete(deletor_name.as_str()).await.unwrap();
                 jobs.create_short_install(deletor_name.as_str(), &destroyer_job, "destroy", name.as_str(), ns.as_str()).await.unwrap()
             }};
-            recorder.publish(
+            match recorder.publish(
                 events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
+            ).await { Ok(_) => {}, Err(e) => {debug!("While publishing event, we got {:?}", e)} };
             // Wait up-to 5mn for it's completion
             match jobs.wait_max(deletor_name.as_str(), 5*60).await {
                 Ok(_) => {},
@@ -250,9 +250,9 @@ impl Reconciler for Install {
                 // Force delete the install-job
                 info!("Deleting {deletor_name} Job");
                 let job = jobs.get(deletor_name.as_str()).await.unwrap();
-                recorder.publish(
+                match recorder.publish(
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
-                ).await.map_err(Error::KubeError)?;
+                ).await { Ok(_) => {}, Err(e) => {debug!("While publishing event, we got {:?}", e)} };
                 jobs.delete(deletor_name.as_str()).await.unwrap();
             }
         }
@@ -260,9 +260,9 @@ impl Reconciler for Install {
         if my_secrets.have(secret_name.as_str()).await {
             info!("Deleting {secret_name} Secret");
             let scret: k8s_openapi::api::core::v1::Secret = my_secrets.get(secret_name.as_str()).await.unwrap();
-            recorder.publish(
+            match recorder.publish(
                 events::from_delete("Install", &name, "Secret", &scret.name_any(), Some(scret.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;
+            ).await { Ok(_) => {}, Err(e) => {debug!("While publishing event, we got {:?}", e)} };
             my_secrets.delete(secret_name.as_str()).await.unwrap();
         }
 
