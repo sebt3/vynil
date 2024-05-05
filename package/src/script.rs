@@ -23,7 +23,7 @@ pub struct Script {
     ctx: Scope<'static>
 }
 impl Script {
-    pub fn new(file:&PathBuf, ctx: Scope<'static>) -> Script {
+    pub fn new(ctx: Scope<'static>) -> Script {
         let mut e = Engine::new();
         // Logging
         e.register_fn("log_debug", |s:ImmutableString| log::debug!("{s}"));
@@ -39,16 +39,45 @@ impl Script {
         });
         // TODO: Add an http client (download/get/post/put)
         // TODO: Add a kubectl wrapper
-        if Path::new(&file).is_file() {
-            let str = file.as_os_str().to_str().unwrap();
-            let ast = match e.compile_file(str.into()) {Ok(d) => d, Err(e) => {log::error!("Loading {str} failed with: {e:}");process::exit(1)},};
-            let module = match Module::eval_ast_as_new(ctx.clone(), &ast,&e) {
-                Ok(d) => d, Err(e) => {log::error!("Parsing {str} failed with: {e:}");process::exit(1)},
-            };
-            e.register_global_module(module.into());
-        }
 
         Script {engine: e, ctx}
+    }
+
+    pub fn from(file:&PathBuf, ctx: Scope<'static>) -> Script {
+        let mut script = Self::new(ctx.clone());
+        if Path::new(&file).is_file() {
+            let str = file.as_os_str().to_str().unwrap();
+            let ast = match script.engine.compile_file(str.into()) {Ok(d) => d, Err(e) => {log::error!("Loading {str} failed with: {e:}");process::exit(1)},};
+            let module = match Module::eval_ast_as_new(ctx, &ast,&script.engine) {
+                Ok(d) => d, Err(e) => {log::error!("Parsing {str} failed with: {e:}");process::exit(1)},
+            };
+            script.engine.register_global_module(module.into());
+        }
+        script
+    }
+
+    pub fn from_dir(dir:&PathBuf, stage: &str, ctx: Scope<'static>) -> Script {
+        let mut stg = PathBuf::new();
+        let mut index = PathBuf::new();
+        stg.push(dir.clone());
+        stg.push(format!("{}.yaml", stage));
+        index.push(dir.clone());
+        index.push("index.rhai");
+        if Path::new(&stg.clone()).is_file() {
+            Self::from(&stg, ctx)
+        } else  {
+            Self::from(&index, ctx)
+        }
+    }
+
+    pub fn from_str(code: &str, ctx: Scope<'static>) -> Script {
+        let mut script = Self::new(ctx.clone());
+        let ast = match script.engine.compile(code) {Ok(d) => d, Err(e) => {log::error!("Loading {code} failed with: {e:}");process::exit(1)},};
+        let module = match Module::eval_ast_as_new(ctx, &ast,&script.engine) {
+            Ok(d) => d, Err(e) => {log::error!("Parsing {code} failed with: {e:}");process::exit(1)},
+        };
+        script.engine.register_global_module(module.into());
+        script
     }
 
     pub fn set_context(&mut self, ctx: Scope<'static>) {

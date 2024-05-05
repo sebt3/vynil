@@ -77,10 +77,7 @@ pub fn run(args:&Parameters) -> Result<()> {
     let dest_dir = fs::canonicalize(&tmp).unwrap();
 
     // Start the script engine
-    let mut file = PathBuf::new();
-    file.push(path.clone());
-    file.push("index.rhai");
-    let mut script = script::Script::new(&file, script::new_context(
+    let mut script = script::Script::from_dir(&path.clone(), &"pack".to_string(), script::new_context(
         yaml.category.clone(),
         yaml.metadata.name.clone(),
         yaml.metadata.name.clone(),
@@ -143,7 +140,7 @@ pub fn run(args:&Parameters) -> Result<()> {
     yaml.update_options_from_defaults(dest_path.clone())?;
     log::debug!("Updated final index.yaml");
     let mut yaml = match yaml::read_index(&dest_path) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
-    let mut script = script::Script::new(&file, script::new_context(
+    let mut script = script::Script::from_dir(&path.clone(), &"pack".to_string(), script::new_context(
         yaml.category.clone(),
         yaml.metadata.name.clone(),
         yaml.metadata.name.clone(),

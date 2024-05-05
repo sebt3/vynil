@@ -79,10 +79,7 @@ pub async fn run(args:&Parameters) -> Result<()> {
         return Err(e)
     }};
     // Start the script engine
-    let mut file = PathBuf::new();
-    file.push(src.clone());
-    file.push("index.rhai");
-    let mut script = script::Script::new(&file, script::new_context(
+    let mut script = script::Script::from_dir(&src.clone(), &"plan".to_string(), script::new_context(
         yaml.category.clone(),
         yaml.metadata.name.clone(),
         inst.name(),
