@@ -27,7 +27,7 @@ pub fn template(src: PathBuf, dest: PathBuf, yaml: Component, config:&serde_json
     let stage = "template".to_string();
     script.run_pre_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
     // look source directory
-    let re_rhai = Regex::new(r"^index\.rhai$").unwrap();
+    let re_rhai = Regex::new(r"\.rhai$").unwrap();
     let re_hbs = Regex::new(r"\.hbs$").unwrap();
     let re_yml = Regex::new(r"\.yaml$").unwrap();
     let re_tpl = Regex::new(r"\.tpl$").unwrap();

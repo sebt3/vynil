@@ -92,7 +92,7 @@ pub fn run(args:&Parameters) -> Result<()> {
     let mut copies: Vec<PathBuf> = Vec::new();
     let re_kusto = Regex::new(r"^kustomization\.yaml$").unwrap();
     let re_kustohbs = Regex::new(r"^kustomization\.yaml\.hbs$").unwrap();
-    let re_rhai = Regex::new(r"^index\.rhai$").unwrap();
+    let re_rhai = Regex::new(r"\.rhai$").unwrap();
     let re_hbs = Regex::new(r"\.hbs$").unwrap();
     let re_ymlhbs = Regex::new(r"\.yaml\.hbs$").unwrap();
     let re_yml = Regex::new(r"\.yaml$").unwrap();
