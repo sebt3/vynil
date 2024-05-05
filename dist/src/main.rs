@@ -3,6 +3,7 @@ mod pack;
 mod validate;
 mod template;
 mod plan;
+mod check;
 mod files;
 
 use clap::{Parser, Subcommand};
@@ -25,6 +26,8 @@ pub enum Commands {
     Validate(validate::Parameters),
     /// Pack given project
     Pack(pack::Parameters),
+    /// Run the check script
+    Check(check::Parameters),
     /// Generate some terraform files
     Generate(gen::Parameters),
     /// Template the application dist files to kustomize compatible files
@@ -44,6 +47,12 @@ fn main() {
             }
         }}
         Commands::Pack(args) => {match pack::run(args) {
+            Ok(d) => d, Err(e) => {
+                log::error!("Packing failed with: {e:}");
+                process::exit(1)
+            }
+        }}
+        Commands::Check(args) => {match check::run(args) {
             Ok(d) => d, Err(e) => {
                 log::error!("Packing failed with: {e:}");
                 process::exit(1)
