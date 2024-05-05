@@ -1,6 +1,6 @@
 [package]
 name = "operator"
-version = "0.2.8"
+version = "0.2.9"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 default-run = "operator"
@@ -26,6 +26,7 @@ default = []
 telemetry = ["tonic", "opentelemetry-otlp"]
 
 [dependencies]
+package = { path = "../package" }
 k8s = { path = "../k8s" }
 actix-web = "4.2.1"
 futures = "0.3.25"

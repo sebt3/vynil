@@ -1,4 +1,5 @@
 use crate::{OPERATOR, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, secrets::SecretHandler};
+use package::script;
 use k8s_openapi::api::core::v1::Namespace;
 use chrono::Utc;
 use kube::{
@@ -150,7 +151,18 @@ impl Reconciler for Install {
                 return Ok(Action::requeue(Duration::from_secs(60)))
             }
         }
-
+        // Use provided check script
+        if comp.check.is_some() {
+            let check = comp.check.clone().unwrap();
+            let mut script  = script::Script::from_str(&check, script::new_base_context(
+                self.spec.category.clone(),
+                self.spec.component.clone(),
+                name.clone(),
+                &self.options()
+            ));
+            let stage = "check".to_string();
+            script.run_pre_stage(&stage).map_err(Error::CheckError)?;
+        }
         let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), &comp.commit_id);
         let agent_job = if self.should_plan() {
             jobs.get_installs_plan(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())

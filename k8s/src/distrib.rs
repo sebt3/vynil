@@ -37,16 +37,19 @@ pub struct DistribComponent {
     pub dependencies: Option<Vec<ComponentDependency>>,
     /// Component providers
     pub providers: Option<Providers>,
+    /// Check Script
+    pub check: Option<String>,
 }
 
 impl DistribComponent {
-    pub fn new(commit_id: String, description: Option<String>, options: HashMap<String, serde_json::Value>, dependencies: Option<Vec<ComponentDependency>>, providers: Option<Providers>) -> Self {
+    pub fn new(commit_id: String, description: Option<String>, options: HashMap<String, serde_json::Value>, dependencies: Option<Vec<ComponentDependency>>, providers: Option<Providers>, check: Option<String>) -> Self {
         DistribComponent {
             commit_id,
             description,
             options,
             dependencies,
-            providers
+            providers,
+            check
         }
     }
 }

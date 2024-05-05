@@ -12,6 +12,9 @@ pub enum Error {
     #[error("Kube Error: {0}")]
     KubeError(#[source] kube::Error),
 
+    #[error("check Error: {0}")]
+    CheckError(#[source] k8s::Error),
+
     #[error("Kube wait job Error: {0}")]
     WaitError(#[source] tokio::time::error::Elapsed),
     #[error("Kube job Error: {0}")]

@@ -5,16 +5,20 @@ use core::any::Any;
 use crate::shell;
 pub use rhai::ImmutableString;
 
-pub fn new_context(category:String, component:String, instance:String, src:String, dest:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
+pub fn new_base_context(category:String, component:String, instance:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
     let json = serde_json::to_string(config).unwrap();
     let cfg: rhai::Dynamic = serde_json::from_str(&json).unwrap();
     let mut s = Scope::new();
     s.push_constant("instance", instance);
     s.push_constant("component", component);
     s.push_constant("category", category);
+    s.push_constant("config", cfg);
+    s
+}
+pub fn new_context(category:String, component:String, instance:String, src:String, dest:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
+    let mut s = new_base_context(category,component,instance,config);
     s.push_constant("src", src);
     s.push_constant("dest", dest);
-    s.push_constant("config", cfg);
     s
 }
 
@@ -72,11 +76,11 @@ impl Script {
 
     pub fn from_str(code: &str, ctx: Scope<'static>) -> Script {
         let mut script = Self::new(ctx.clone());
-        let ast = match script.engine.compile(code) {Ok(d) => d, Err(e) => {log::error!("Loading {code} failed with: {e:}");process::exit(1)},};
-        let module = match Module::eval_ast_as_new(ctx, &ast,&script.engine) {
-            Ok(d) => d, Err(e) => {log::error!("Parsing {code} failed with: {e:}");process::exit(1)},
-        };
-        script.engine.register_global_module(module.into());
+        match script.engine.compile(code) {Ok(ast) => {
+            match Module::eval_ast_as_new(ctx, &ast,&script.engine) {Ok(module) => {
+                script.engine.register_global_module(module.into());
+            }, Err(e) => {log::error!("Parsing {code} failed with: {e:}");},};
+        }, Err(e) => {log::error!("Loading {code} failed with: {e:}")},};
         script
     }
 

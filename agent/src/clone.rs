@@ -166,7 +166,14 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
             index.push(comp_dir.clone());
             index.push("index.yaml");
             let yaml = yaml::read_index(&index).or_else(|e: Error| bail!("{e}"))?;
-
+            let mut script_file: PathBuf = PathBuf::new();
+            script_file.push(comp_dir.clone());
+            script_file.push("check.rhai");
+            let check = if Path::new(&script_file.clone()).is_file() {
+                Some(fs::read_to_string(script_file).unwrap())
+            } else {
+                None
+            };
             comps.insert(
                 comp_name,
                 DistribComponent::new(
@@ -175,6 +182,7 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
                     yaml.options.into_iter().collect(),
                     yaml.dependencies,
                     yaml.providers,
+                    check
                 ),
             );
         }
