@@ -1,5 +1,5 @@
 pub mod shell;
 pub mod script;
-pub mod yaml;
 pub mod terraform;
 pub mod template;
+pub use k8s::yaml;

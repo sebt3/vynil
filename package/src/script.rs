@@ -3,6 +3,7 @@ use std::{process, path::{PathBuf, Path}};
 use anyhow::{Result, bail};
 use core::any::Any;
 use crate::shell;
+use k8s::{get_client,handlers::{SecretHandler,DistribHandler,InstallHandler,IngressHandler}};
 pub use rhai::ImmutableString;
 
 pub fn new_base_context(category:String, component:String, instance:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
@@ -41,6 +42,30 @@ impl Script {
         e.register_fn("sh_value", |s:ImmutableString| {
             shell::get_output(&format!("{s}")).unwrap()
         });
+        e.register_fn("have_distrib", |name:ImmutableString| -> bool {
+            futures::executor::block_on(async move {
+                let mut handle = DistribHandler::new(get_client().await);
+                handle.have(&name).await
+            })
+        });
+        e.register_fn("have_install", |ns:ImmutableString, name:ImmutableString| -> bool {
+            futures::executor::block_on(async move {
+                let mut handle = InstallHandler::new(get_client().await, &ns);
+                handle.have(&name).await
+            })
+        });
+        e.register_fn("have_ingress", |ns:ImmutableString, name:ImmutableString| -> bool {
+            futures::executor::block_on(async move {
+                let mut handle = IngressHandler::new(get_client().await, &ns);
+                handle.have(&name).await
+            })
+        });
+        e.register_fn("have_secret", |ns:ImmutableString, name:ImmutableString| -> bool {
+            futures::executor::block_on(async move {
+                let mut handle = SecretHandler::new(get_client().await, &ns);
+                handle.have(&name).await
+            })
+        });
         // TODO: Add an http client (download/get/post/put)
         // TODO: Add a kubectl wrapper
 
@@ -64,7 +89,7 @@ impl Script {
         let mut stg = PathBuf::new();
         let mut index = PathBuf::new();
         stg.push(dir.clone());
-        stg.push(format!("{}.yaml", stage));
+        stg.push(format!("{}.rhai", stage));
         index.push(dir.clone());
         index.push("index.rhai");
         if Path::new(&stg.clone()).is_file() {

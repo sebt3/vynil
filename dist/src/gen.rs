@@ -61,8 +61,9 @@ fn options(args:&ParametersDest) -> Result<()> {
     let mut file = PathBuf::new();
     file.push(fs::canonicalize(&args.project).unwrap().as_os_str());
     file.push("index.yaml");
-    let yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:}");process::exit(1)},};
-    yaml.update_options_from_defaults(file)
+    let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:}");process::exit(1)},};
+    yaml.update_options_from_defaults()?;
+    yaml.write_self_to(file)
 }
 
 

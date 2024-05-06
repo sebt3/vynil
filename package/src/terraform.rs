@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
-use crate::{shell, yaml::{Providers, Component}};
+use k8s::yaml::{Providers, Component};
+use crate::shell;
 
 pub fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
     if ! Path::new(dest).is_file() || force {

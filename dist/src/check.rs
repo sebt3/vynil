@@ -12,7 +12,7 @@ pub struct Parameters {
     #[arg(short, long, env = "NAMESPACE", value_name = "NAMESPACE", default_value = "default")]
     namespace: String,
     /// Install Name
-    #[arg(short='i', long, env = "NAME", value_name = "NAME")]
+    #[arg(short='i', long, env = "NAME", value_name = "NAME", default_value = "core")]
     name: String,
 }
 
@@ -39,6 +39,7 @@ pub fn run(args:&Parameters) -> Result<()> {
     let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {
         return Err(e)
     }};
+    yaml.update_options_from_defaults()?;
     // Start the script engine
     let mut script = script::Script::from_dir(&src.clone(), &"check".to_string(), script::new_base_context(
         yaml.category.clone(),

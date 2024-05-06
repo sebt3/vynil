@@ -3,8 +3,9 @@ use clap::Args;
 use regex::Regex;
 use handlebars::Handlebars;
 use anyhow::{Result, Error, bail, anyhow};
-use package::{yaml, script, terraform};
-use client::{get_client, AGENT, events};
+use k8s::{get_client, yaml, handlers::InstallHandler};
+use package::{script, terraform};
+use client::{AGENT, events};
 use kube::api::Resource;
 
 #[derive(Args, Debug)]
@@ -86,7 +87,7 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
 
 pub async fn run(args:&Parameters) -> Result<()> {
     let client = get_client().await;
-    let mut installs = client::InstallHandler::new(client.clone(), args.namespace.as_str());
+    let mut installs = InstallHandler::new(client.clone(), args.namespace.as_str());
     let inst = match installs.get(args.name.as_str()).await{Ok(d) => d, Err(e) => {
         events::report(AGENT, client, events::from_error(&anyhow!("{e}")), events::get_empty_ref()).await.unwrap();
         bail!("{e}");

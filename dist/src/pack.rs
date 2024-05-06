@@ -65,6 +65,7 @@ pub fn run(args:&Parameters) -> Result<()> {
     // Final validation
     log::debug!("Validating index.yaml");
     let mut yaml = match yaml::read_index(&file) {Ok(d) => d, Err(e) => {log::error!("{e:} while validating generated index.yaml");std::process::exit(1)},};
+    yaml.update_options_from_defaults()?;
     log::debug!("Validating index.yaml : ok");
     // Create the dest directory if not existing
     let dist = fs::canonicalize(&args.dist).unwrap();
@@ -137,7 +138,7 @@ pub fn run(args:&Parameters) -> Result<()> {
     let mut dest_path: PathBuf = PathBuf::new();
     dest_path.push(dest_dir.clone());
     dest_path.push("index.yaml");
-    yaml.update_options_from_defaults(dest_path.clone())?;
+    yaml.write_self_to(dest_path.clone())?;
     log::debug!("Updated final index.yaml");
     let mut yaml = match yaml::read_index(&dest_path) {Ok(d) => d, Err(e) => {log::error!("{e:}");std::process::exit(1)},};
     let mut script = script::Script::from_dir(&path.clone(), &"pack".to_string(), script::new_context(

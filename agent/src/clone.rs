@@ -1,9 +1,10 @@
 use anyhow::{anyhow, bail, Error, Result};
 use clap::Args;
-use client::{events, get_client, AGENT};
-use k8s::distrib::DistribComponent;
+use client::{events, AGENT};
+use k8s::{get_client,distrib::DistribComponent};
 use kube::api::Resource;
-use package::{shell, yaml};
+use k8s::{yaml,handlers::DistribHandler};
+use package::shell;
 use std::{
     collections::HashMap,
     fs,
@@ -204,7 +205,7 @@ pub async fn clone(target: &PathBuf, client: kube::Client, dist: &client::Distri
 
 pub async fn run(args: &Parameters) -> Result<()> {
     let client = get_client().await;
-    let mut distribs = client::DistribHandler::new(client.clone());
+    let mut distribs = DistribHandler::new(client.clone());
     let dist = match distribs.get(args.name.as_str()).await {
         Ok(d) => d,
         Err(e) => {

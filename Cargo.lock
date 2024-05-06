@@ -807,6 +807,7 @@ dependencies = [
  "regex",
  "serde_json",
  "serde_yaml",
+ "tokio",
 ]
 
 [[package]]
@@ -1423,10 +1424,12 @@ dependencies = [
  "chrono",
  "k8s-openapi",
  "kube",
- "package",
+ "log",
+ "openapiv3",
  "schemars",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha256",
 ]
 
@@ -1856,16 +1859,16 @@ name = "package"
 version = "0.2.9"
 dependencies = [
  "anyhow",
+ "futures",
  "handlebars",
  "indexmap 1.9.3",
+ "k8s",
  "log",
- "openapiv3",
  "regex",
  "rhai",
  "schemars",
  "serde",
  "serde_json",
- "serde_yaml",
 ]
 
 [[package]]

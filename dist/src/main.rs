@@ -36,7 +36,8 @@ pub enum Commands {
     Plan(plan::Parameters),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init_from_env(env_logger::Env::default().filter_or("LOG_LEVEL", "info").write_style_or("LOG_STYLE", "auto"));
     let args = Parameters::parse();
     match &args.command {
@@ -54,7 +55,7 @@ fn main() {
         }}
         Commands::Check(args) => {match check::run(args) {
             Ok(d) => d, Err(e) => {
-                log::error!("Packing failed with: {e:}");
+                log::error!("Check failed with: {e:}");
                 process::exit(1)
             }
         }}

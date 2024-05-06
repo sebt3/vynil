@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use serde_json::json;
-pub use package::yaml::{ComponentDependency, Providers};
+pub use crate::yaml::{ComponentDependency, Providers};
 use std::collections::HashMap;
 
 /// Secret Reference

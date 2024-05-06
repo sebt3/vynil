@@ -255,7 +255,14 @@ impl Component {
         Ok(())
     }
 
-    pub fn update_options_from_defaults(mut self, dest:PathBuf) -> Result<()> {
+    pub fn write_self_to(self, dest:PathBuf) -> Result<()> {
+        let mut data = "---
+".to_string();
+        data.push_str(serde_yaml::to_string(&self).unwrap().as_str());
+        fs::write(dest, data).expect("Unable to write file");
+        Ok(())
+    }
+    pub fn update_options_from_defaults(&mut self) -> Result<()> {
         for (key, mut val) in self.options.clone() {
             let schema: &Schema = &serde_json::from_str(serde_json::to_string(&val).unwrap().as_str()).unwrap();
             let mut skip = false; // empty array as default produce failed items, skipping
@@ -282,10 +289,6 @@ impl Component {
         if self.dependencies.is_none() {
             self.dependencies = Some(Vec::new());
         }
-        let mut data = "---
-".to_string();
-        data.push_str(serde_yaml::to_string(&self).unwrap().as_str());
-        fs::write(dest, data).expect("Unable to write file");
         Ok(())
     }
 }
