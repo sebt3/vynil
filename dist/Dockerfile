@@ -1,25 +1,28 @@
-ARG RUST_VERSION=1.77
+ARG RUST_VERSION=1.77.1
 ARG DEBIAN_VERSION=bookworm
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
 ARG BUILD_DEPS="git"
 WORKDIR /usr/src/dist
+COPY Cargo.lock .
 COPY dist/parent.toml ./Cargo.toml
 COPY src src/
 COPY package/Cargo.toml package/Cargo.toml
+COPY k8s/Cargo.toml k8s/Cargo.toml
 COPY dist/Cargo.toml dist/Cargo.toml
 # Build the deps for caching purpose
 # hadolint ignore=DL3008,DL3015
-RUN mkdir -p package/src dist/src \
+RUN mkdir -p package/src k8s/src dist/src \
  && echo 'fn main() { println!("Dummy") }' > dist/src/main.rs \
- && touch package/src/lib.rs \
+ && touch package/src/lib.rs k8s/src/lib.rs \
  && DEBIAN_FRONTEND=noninteractive apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y install ${BUILD_DEPS} \
  && CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -r --bin dist
 # Get our sources
 COPY package package/
+COPY k8s k8s/
 COPY dist dist/
 # Update the crates entrypoints so cargo is aware these should rebuild
-RUN touch package/src/lib.rs dist/src/main.rs \
+RUN touch package/src/lib.rs k8s/src/lib.rs dist/src/main.rs \
  && cargo build -r --bin dist \
  && strip target/release/dist
 

@@ -3,6 +3,7 @@ ARG DEBIAN_VERSION=bookworm
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git"
 WORKDIR /usr/src/operator
+COPY Cargo.lock .
 # hadolint ignore=DL3008,DL3015
 RUN mkdir -p k8s/src operator/src package/src \
  && echo 'fn main() { println!("Dummy") }' > operator/src/main.rs \
