@@ -153,6 +153,7 @@ impl Reconciler for Install {
         }
         // Use provided check script
         if comp.check.is_some() {
+            info!("Starting the check script");
             let check = comp.check.clone().unwrap();
             let mut script  = script::Script::from_str(&check, script::new_base_context(
                 self.spec.category.clone(),
@@ -161,7 +162,18 @@ impl Reconciler for Install {
                 &self.options()
             ));
             let stage = "check".to_string();
-            script.run_pre_stage(&stage).map_err(Error::CheckError)?;
+            let errors = match script.run_pre_stage(&stage) {
+                Ok(d) => Vec::new(),
+                Err(e) => {
+                    let mut missing: Vec<String> = Vec::new();
+                    missing.push(format!("{e}",e));
+                    missing
+                }
+            };
+            if ! errors.is_empty() {
+                self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                return Ok(Action::requeue(Duration::from_secs(60)))
+            }
         }
         let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), &comp.commit_id);
         let agent_job = if self.should_plan() {
