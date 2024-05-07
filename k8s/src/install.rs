@@ -16,6 +16,7 @@ pub const STATUS_DESTROYED: &str = "destroyed";
 pub const STATUS_AGENT_STARTED: &str = "agent started";
 pub const STATUS_MISSING_DIST: &str = "missing distribution";
 pub const STATUS_MISSING_COMP: &str = "missing component";
+pub const STATUS_CHECK_FAIL: &str = "Validations failed";
 pub const STATUS_MISSING_PROV: &str = "missing provider config";
 pub const STATUS_MISSING_DEPS: &str = "missing dependencies";
 pub const STATUS_WAITING_DEPS: &str = "waiting dependencies";
@@ -180,6 +181,9 @@ impl Install {
     }
     pub async fn update_status_missing_component(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
         self.update_status_typed(client, manager, errors, STATUS_MISSING_COMP).await
+    }
+    pub async fn update_status_check_failed(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
+        self.update_status_typed(client, manager, errors, STATUS_CHECK_FAIL).await
     }
     pub async fn update_status_missing_provider(&self, client: Client, manager: &str, errors: Vec<String>) -> Result<Install, kube::Error> {
         self.update_status_typed(client, manager, errors, STATUS_MISSING_PROV).await

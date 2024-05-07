@@ -342,7 +342,7 @@ variable \"instance\" {{
       let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
       if yaml.tfaddtype.is_some() && *yaml.tfaddtype.as_ref().unwrap() {
           let typed = yaml.get_tf_type(name);
-          log::debug!("{}({})={}", name, typed, output);
+          tracing::debug!("{}({})={}", name, typed, output);
           content += format!("variable \"{}\" {{
   default     = {}
   type        = {}
@@ -367,7 +367,7 @@ pub fn gen_tfvars(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json
     for (name,value) in config {
         let str = serde_json::to_string(value).unwrap();
         let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
-        log::debug!("{}={}", name, output);
+        tracing::debug!("{}={}", name, output);
         content += format!("{} = {}
 ", name, output).as_str();
     }

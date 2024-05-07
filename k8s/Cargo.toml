@@ -16,7 +16,7 @@ k8s-openapi = { version = "0.21.0", features = ["latest"], default-features = fa
 chrono = "0.4.24"
 anyhow = "1.0.70"
 sha256 = "1.1.2"
-log = "0.4.17"
+tracing = "0.1.37"
 
 [dependencies.kube]
 features = ["runtime", "client", "derive"]

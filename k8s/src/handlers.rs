@@ -9,9 +9,9 @@ pub struct InstallHandler {
     api: Api<Install>,
 }
 impl InstallHandler {
-    #[must_use] pub fn new(cl: Client, ns: &str) -> InstallHandler {
+    #[must_use] pub fn new(cl: &Client, ns: &str) -> InstallHandler {
         InstallHandler {
-            api: Api::namespaced(cl, ns),
+            api: Api::namespaced(cl.clone(), ns),
         }
     }
     pub async fn have(&mut self, name: &str) -> bool {
@@ -33,9 +33,9 @@ pub struct DistribHandler {
     api: Api<Distrib>,
 }
 impl DistribHandler {
-    #[must_use] pub fn new(cl: Client) -> DistribHandler {
+    #[must_use] pub fn new(cl: &Client) -> DistribHandler {
         DistribHandler {
-            api: Api::all(cl),
+            api: Api::all(cl.clone()),
         }
     }
     pub async fn have(&mut self, name: &str) -> bool {
@@ -53,14 +53,14 @@ impl DistribHandler {
     }
 }
 
-use k8s_openapi::api::networking::v1::Ingress;
+pub use k8s_openapi::api::networking::v1::Ingress;
 pub struct IngressHandler {
     api: Api<Ingress>,
 }
 impl IngressHandler {
-    #[must_use] pub fn new(cl: Client, ns: &str) -> IngressHandler {
+    #[must_use] pub fn new(cl: &Client, ns: &str) -> IngressHandler {
         IngressHandler {
-            api: Api::namespaced(cl, ns),
+            api: Api::namespaced(cl.clone(), ns),
         }
     }
     pub async fn have(&mut self, name: &str) -> bool {
@@ -78,14 +78,14 @@ impl IngressHandler {
     }
 }
 
-use k8s_openapi::api::core::v1::Secret;
+pub use k8s_openapi::api::core::v1::Secret;
 pub struct SecretHandler {
     api: Api<Secret>,
 }
 impl SecretHandler {
-    #[must_use] pub fn new(cl: Client, ns: &str) -> SecretHandler {
+    #[must_use] pub fn new(cl: &Client, ns: &str) -> SecretHandler {
         SecretHandler {
-            api: Api::namespaced(cl, ns),
+            api: Api::namespaced(cl.clone(), ns),
         }
     }
     pub async fn have(&mut self, name: &str) -> bool {
@@ -99,6 +99,31 @@ impl SecretHandler {
         false
     }
     pub async fn get(&mut self, name: &str) -> Result<Secret, kube::Error> {
+        self.api.get(name).await
+    }
+}
+
+pub use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+pub struct CustomResourceDefinitionHandler {
+    api: Api<CustomResourceDefinition>,
+}
+impl CustomResourceDefinitionHandler {
+    #[must_use] pub fn new(cl: &Client) -> CustomResourceDefinitionHandler {
+        CustomResourceDefinitionHandler {
+            api: Api::all(cl.clone()),
+        }
+    }
+    pub async fn have(&mut self, name: &str) -> bool {
+        let lp = ListParams::default();
+        let list = self.api.list(&lp).await.unwrap();
+        for secret in list {
+            if secret.metadata.name.clone().unwrap() == name {
+                return true;
+            }
+        }
+        false
+    }
+    pub async fn get(&mut self, name: &str) -> Result<CustomResourceDefinition, kube::Error> {
         self.api.get(name).await
     }
 }

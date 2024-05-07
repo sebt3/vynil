@@ -21,6 +21,16 @@ use k8s_openapi::api::core::v1::ObjectReference;
     }
 }
 
+#[must_use] pub fn from_check(src_type: &str, src_name: &String, action: String, note: Option<String>) -> Event {
+    Event {
+        type_: EventType::Normal,
+        reason: format!("Reconciling `{}` {}", src_name, src_type),
+        note,
+        action,
+        secondary: None,
+    }
+}
+
 #[must_use] pub fn from_update(src_type: &str, src_name: &String, child_type: &str, child_name: &String, child: Option<ObjectReference>) -> Event {
     Event {
         type_: EventType::Normal,

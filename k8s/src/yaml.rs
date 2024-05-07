@@ -274,15 +274,15 @@ impl Component {
                 }
             }
             if skip {
-                log::warn!("Skipping option \"{}\" while updating type structure from default values", key);
-                log::info!("you should set \"type: array\" and a correct \"items\" definition for option \"{}\" so later validation will work", key);
+                tracing::warn!("Skipping option \"{}\" while updating type structure from default values", key);
+                tracing::info!("you should set \"type: array\" and a correct \"items\" definition for option \"{}\" so later validation will work", key);
             } else if let Some(opts) = schema.schema_data.default.as_ref() {
                 // That option have a default value, update its properties
                 let final_schema = &schema_for_value!(opts).schema;
                 let objdef = serde_json::from_str(serde_json::to_string(final_schema)?.as_str())?;
                 merge_json( &mut val, objdef);
                 add_defaults(&mut val);
-                log::debug!("{key} after default : {:}", serde_yaml::to_string(&val).unwrap());
+                tracing::debug!("{key} after default : {:}", serde_yaml::to_string(&val).unwrap());
                 *self.options.get_mut(key.as_str()).unwrap() = val;
             }
         }

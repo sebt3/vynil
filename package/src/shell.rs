@@ -19,10 +19,10 @@ pub fn run_log(command: &String) -> Result<()> {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     if !stdout.is_empty() {
-        log::info!("{}", stdout.trim());
+        tracing::info!("{}", stdout.trim());
     }
     if !stderr.is_empty() {
-        log::warn!("{}", stderr.trim());
+        tracing::warn!("{}", stderr.trim());
     }
     if ! output.status.success() {
         bail!("The command {:?} failed.", command);
@@ -32,7 +32,7 @@ pub fn run_log(command: &String) -> Result<()> {
 
 pub fn run_log_check(command: &String) {
     match run_log(command)  {Ok(_) => {}, Err(e) => {
-        log::error!("{e}");
+        tracing::error!("{e}");
         process::exit(1);
     }}
 }
@@ -41,7 +41,7 @@ pub fn get_output(command: &String) -> Result<String> {
     let output = run(command);
     let stderr = String::from_utf8(output.stderr).unwrap();
     if !stderr.is_empty() {
-        log::warn!("{}", stderr.trim());
+        tracing::warn!("{}", stderr.trim());
     }
     if ! output.status.success() {
         bail!("The command {:?} failed.", command);

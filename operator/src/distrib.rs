@@ -171,9 +171,8 @@ impl Reconciler for Distrib {
     }
 }
 
-
 #[must_use] pub fn error_policy(dist: Arc<Distrib>, error: &Error, ctx: Arc<Context>) -> Action {
-    warn!("reconcile failed: {:?}", error);
+    warn!("reconcile failed for {:?}: {:?}", dist.metadata.name, error);
     ctx.metrics.dist_reconcile_failure(&dist, error);
     Action::requeue(Duration::from_secs(5 * 60))
 }

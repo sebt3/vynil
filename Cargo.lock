@@ -1426,13 +1426,13 @@ dependencies = [
  "chrono",
  "k8s-openapi",
  "kube",
- "log",
  "openapiv3",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha256",
+ "tracing",
 ]
 
 [[package]]
@@ -1830,6 +1830,7 @@ dependencies = [
  "opentelemetry-otlp",
  "package",
  "prometheus",
+ "rhai",
  "schemars",
  "serde",
  "serde_json",
@@ -1866,12 +1867,13 @@ dependencies = [
  "handlebars",
  "indexmap 1.9.3",
  "k8s",
- "log",
  "regex",
  "rhai",
  "schemars",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

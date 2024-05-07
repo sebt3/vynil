@@ -14,7 +14,7 @@ use kube::{
 //use base64::{Engine as _, engine::general_purpose};
 use std::sync::Arc;
 use tokio::time::Duration;
-use tracing::{Span, debug, field, info, instrument, warn};
+use tracing::{Span, debug, field, info, instrument, warn, error};
 use async_trait::async_trait;
 pub use k8s::install::{Install,InstallStatus, STATUS_INSTALLED};
 pub use k8s::distrib::{Distrib, ComponentDependency};
@@ -64,6 +64,10 @@ impl Reconciler for Install {
                 let bootstrap = jobs.get("vynil-bootstrap").await.unwrap();
                 if let Some(status) = bootstrap.status {
                     if status.completion_time.is_none() {
+                        warn!("Will not trigger auto-install before the bootstrap job is completed, requeue");
+                        recorder.publish(
+                            events::from_check("Install", &name, "Bootstrap in progress, requeue".to_string(), None)
+                        ).await.map_err(Error::KubeError)?;
                         return Ok(Action::requeue(Duration::from_secs(60)))
                     }
                 }
@@ -72,6 +76,10 @@ impl Reconciler for Install {
         // Validate that the requested package exist in that distrib
         if ! dist.have_component(self.spec.category.as_str(), self.spec.component.as_str()) {
             self.update_status_missing_component(client, OPERATOR, vec!(format!("{:} - {:} is not known from  {:?} distribution", self.spec.category.as_str(), self.spec.component.as_str(), dist_name))).await.map_err(Error::KubeError)?;
+            warn!("Missing component for {ns}.{name}");
+            recorder.publish(
+                events::from_check("Install", &name, "Missing component".to_string(), Some(format!("{:} - {:} is not known from  {:?} distribution", self.spec.category.as_str(), self.spec.component.as_str(), dist_name)))
+            ).await.map_err(Error::KubeError)?;
             if dist.status.is_some() {
                 return Err(Error::IllegalInstall)
             } else { // the dist is not yet updated, wait for it for 60s
@@ -144,6 +152,11 @@ impl Reconciler for Install {
                 }
             }
             if ! missing.is_empty() {
+                let note = missing[0].clone();
+                warn!("Missing dependencies for {ns}.{name}: {note}");
+                recorder.publish(
+                    events::from_check("Install", &name, "Missing dependencies".to_string(), Some(note))
+                ).await.map_err(Error::KubeError)?;
                 self.update_status_missing_component(client, OPERATOR, missing).await.map_err(Error::KubeError)?;
                 if should_fail {
                     return Err(Error::IllegalInstall)
@@ -153,7 +166,6 @@ impl Reconciler for Install {
         }
         // Use provided check script
         if comp.check.is_some() {
-            info!("Starting the check script");
             let check = comp.check.clone().unwrap();
             let mut script  = script::Script::from_str(&check, script::new_base_context(
                 self.spec.category.clone(),
@@ -163,16 +175,25 @@ impl Reconciler for Install {
             ));
             let stage = "check".to_string();
             let errors = match script.run_pre_stage(&stage) {
-                Ok(d) => Vec::new(),
+                Ok(_d) => Vec::new(),
                 Err(e) => {
                     let mut missing: Vec<String> = Vec::new();
-                    missing.push(format!("{e}",e));
+                    missing.push(format!("{e}"));
                     missing
                 }
             };
             if ! errors.is_empty() {
-                self.update_status_missing_component(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                let note = errors[0].clone();
+                warn!("Validation script failed for {ns}.{name}: {note}");
+                recorder.publish(
+                    events::from_check("Install", &name, "Validation failed".to_string(), Some(note))
+                ).await.map_err(Error::KubeError)?;
+                self.update_status_check_failed(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(60)))
+            } else {
+                recorder.publish(
+                    events::from_check("Install", &name, "Validation succeed".to_string(), None)
+                ).await.map_err(Error::KubeError)?;
             }
         }
         let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), &comp.commit_id);
@@ -191,32 +212,32 @@ impl Reconciler for Install {
             info!("Creating {agent_name} Job");
             self.update_status_agent_started(client, OPERATOR).await.map_err(Error::KubeError)?;
             let job = jobs.create_install(agent_name.as_str(), &agent_job, action, name.as_str(), ns.as_str()).await.unwrap();
-            debug!("Sending event {agent_name} Job");
             recorder.publish(
                 events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
             ).await.map_err(Error::KubeError)?;
-            debug!("Waiting {agent_name} to finish Job");
             jobs.wait_max(agent_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
-            debug!("Waited {agent_name} OK");
         } else {
-            info!("Patching {agent_name} Job");
-            let _job = match jobs.apply_install(agent_name.as_str(), &agent_job, action, name.as_str(), ns.as_str()).await {Ok(j)=>j,Err(_e)=>{
+            let job = match jobs.apply_install(agent_name.as_str(), &agent_job, action, name.as_str(), ns.as_str()).await {Ok(j)=>j,Err(_e)=>{
                 let job = jobs.get(agent_name.as_str()).await.unwrap();
                 recorder.publish(
-                    events::from_delete("plan", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+                    events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 jobs.delete(agent_name.as_str()).await.unwrap();
+                error!("Recreating {agent_name} Job");
+                recorder.publish(
+                    events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
+                ).await.map_err(Error::KubeError)?;
                 jobs.create_install(agent_name.as_str(), &agent_job, action, name.as_str(), ns.as_str()).await.unwrap()
             }};
-            // TODO: Detect if the job changed after the patch (or event better would change prior)
-            // TODO: Send a patched event if changed
-            /*debug!("Sending event for {plan_name} to finish Job");
-            recorder.publish(
-                events::from_patch("Install", &name, "Job", &_job.name_any(), Some(_job.object_ref(&())))
-            ).await.map_err(Error::KubeError)?;*/
-            debug!("Waiting {agent_name} to finish Job");
-            jobs.wait_max(agent_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
-            debug!("Waited {agent_name} OK");
+            if let Some(status) = job.status {
+                if status.completion_time.is_none() {
+                    error!("Waiting after {agent_name} Job");
+                    recorder.publish(
+                        events::from_check("Install", &name, "Bootstrap in progress, requeue".to_string(), None)
+                    ).await.map_err(Error::KubeError)?;
+                    jobs.wait_max(agent_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
+                }
+            }
         }
         Ok(Action::requeue(Duration::from_secs(5 * 60)))
     }
@@ -295,7 +316,7 @@ impl Reconciler for Install {
 }
 
 #[must_use] pub fn error_policy(inst: Arc<Install>, error: &Error, ctx: Arc<Context>) -> Action {
-    warn!("reconcile failed: {:?}", error);
+    warn!("reconcile failed for '{:?}.{:?}': {:?}", inst.metadata.namespace, inst.metadata.name, error);
     ctx.metrics.inst_reconcile_failure(&inst, error);
     Action::requeue(Duration::from_secs(5 * 60))
 }

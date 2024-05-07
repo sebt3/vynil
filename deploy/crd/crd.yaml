@@ -19,6 +19,10 @@ spec:
       jsonPath: .spec.url
       name: url
       type: string
+    - description: Git branch
+      jsonPath: .spec.branch
+      name: branch
+      type: string
     - description: Update schedule
       jsonPath: .spec.schedule
       name: schedule

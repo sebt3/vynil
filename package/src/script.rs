@@ -1,10 +1,11 @@
-use rhai::{Engine, Scope, Module, RhaiNativeFunc};
+use rhai::{Engine, Scope, Module/*, RhaiNativeFunc */};
 use std::{process, path::{PathBuf, Path}};
 use anyhow::{Result, bail};
-use core::any::Any;
+//use core::any::Any;
 use crate::shell;
-use k8s::{get_client,handlers::{SecretHandler,DistribHandler,InstallHandler,IngressHandler}};
+use k8s::{Client, get_client,handlers::{DistribHandler, Ingress, IngressHandler, InstallHandler, SecretHandler, Secret, CustomResourceDefinitionHandler, CustomResourceDefinition},install::Install, distrib::Distrib};
 pub use rhai::ImmutableString;
+use tokio::runtime::Handle;
 
 pub fn new_base_context(category:String, component:String, instance:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
     let json = serde_json::to_string(config).unwrap();
@@ -23,62 +24,137 @@ pub fn new_context(category:String, component:String, instance:String, src:Strin
     s
 }
 
+#[derive(Debug)]
 pub struct Script {
     pub engine: Engine,
     ctx: Scope<'static>
 }
+
+fn add_to_engine(engine: &mut Engine, code: &str, ctx: Scope<'static>) {
+    match engine.compile(code) {Ok(ast) => {
+        match Module::eval_ast_as_new(ctx, &ast,&engine) {Ok(module) => {
+            engine.register_global_module(module.into());
+        }, Err(e) => {tracing::error!("Parsing {code} failed with: {e:}");},};
+    }, Err(e) => {tracing::error!("Loading {code} failed with: {e:}")},};
+}
+
+fn create_engine(client: &Client) -> Engine {
+    let mut e = Engine::new();
+    // Logging
+    e.register_fn("log_debug", |s:ImmutableString| tracing::debug!("{s}"));
+    e.register_fn("log_info", |s:ImmutableString| tracing::info!("{s}"));
+    e.register_fn("log_warn", |s:ImmutableString| tracing::warn!("{s}"));
+    e.register_fn("log_error", |s:ImmutableString| tracing::error!("{s}"));
+    // lancement de commande shell
+    e.register_fn("shell", |s:ImmutableString| {
+        shell::run_log_check(&format!("{s}"));
+    });
+    e.register_fn("sh_value", |s:ImmutableString| {
+        shell::get_output(&format!("{s}")).unwrap()
+    });
+    let cli = client.clone();
+    e.register_fn("have_crd", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = CustomResourceDefinitionHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_crd", move |name:ImmutableString| -> CustomResourceDefinition {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = CustomResourceDefinitionHandler::new(&cl);
+            handle.get(&name).await.unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("have_distrib", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = DistribHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_distrib", move |name:ImmutableString| -> Distrib {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = DistribHandler::new(&cl);
+            handle.get(&name).await.unwrap()
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("have_install", move |ns:ImmutableString, name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = InstallHandler::new(&cl, &ns);
+            let ret = handle.have(&name).await;
+            ret
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("get_install", move |ns:ImmutableString, name:ImmutableString| -> Install {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = InstallHandler::new(&cl, &ns);
+            let ret = handle.get(&name).await.unwrap();
+            ret
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("have_ingress", move |ns:ImmutableString, name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = IngressHandler::new(&cl, &ns);
+            handle.have(&name).await
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("get_ingress", move |ns:ImmutableString, name:ImmutableString| -> Ingress {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = IngressHandler::new(&cl, &ns);
+            handle.get(&name).await.unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("have_secret", move |ns:ImmutableString, name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = SecretHandler::new(&cl, &ns);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_secret", move |ns:ImmutableString, name:ImmutableString| -> Secret {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = SecretHandler::new(&cl, &ns);
+            handle.get(&name).await.unwrap()
+        })})
+    });
+    add_to_engine(&mut e, "fn assert(cond, mess) {if (!cond){throw mess}}", Scope::new());
+    // TODO: Add an http client (download/get/post/put)
+    // TODO: Add a kubectl wrapper
+    e
+}
+
 impl Script {
     pub fn new(ctx: Scope<'static>) -> Script {
-        let mut e = Engine::new();
-        // Logging
-        e.register_fn("log_debug", |s:ImmutableString| log::debug!("{s}"));
-        e.register_fn("log_info", |s:ImmutableString| log::info!("{s}"));
-        e.register_fn("log_warn", |s:ImmutableString| log::warn!("{s}"));
-        e.register_fn("log_error", |s:ImmutableString| log::error!("{s}"));
-        // lancement de commande shell
-        e.register_fn("shell", |s:ImmutableString| {
-            shell::run_log_check(&format!("{s}"));
+        let cl = futures::executor::block_on(async move {
+            get_client().await
         });
-        e.register_fn("sh_value", |s:ImmutableString| {
-            shell::get_output(&format!("{s}")).unwrap()
-        });
-        e.register_fn("have_distrib", |name:ImmutableString| -> bool {
-            futures::executor::block_on(async move {
-                let mut handle = DistribHandler::new(get_client().await);
-                handle.have(&name).await
-            })
-        });
-        e.register_fn("have_install", |ns:ImmutableString, name:ImmutableString| -> bool {
-            futures::executor::block_on(async move {
-                let mut handle = InstallHandler::new(get_client().await, &ns);
-                handle.have(&name).await
-            })
-        });
-        e.register_fn("have_ingress", |ns:ImmutableString, name:ImmutableString| -> bool {
-            futures::executor::block_on(async move {
-                let mut handle = IngressHandler::new(get_client().await, &ns);
-                handle.have(&name).await
-            })
-        });
-        e.register_fn("have_secret", |ns:ImmutableString, name:ImmutableString| -> bool {
-            futures::executor::block_on(async move {
-                let mut handle = SecretHandler::new(get_client().await, &ns);
-                handle.have(&name).await
-            })
-        });
-        // TODO: Add an http client (download/get/post/put)
-        // TODO: Add a kubectl wrapper
-
-        Script {engine: e, ctx}
+        Script {engine: create_engine(&cl), ctx}
     }
 
     pub fn from(file:&PathBuf, ctx: Scope<'static>) -> Script {
         let mut script = Self::new(ctx.clone());
         if Path::new(&file).is_file() {
             let str = file.as_os_str().to_str().unwrap();
-            let ast = match script.engine.compile_file(str.into()) {Ok(d) => d, Err(e) => {log::error!("Loading {str} failed with: {e:}");process::exit(1)},};
+            let ast = match script.engine.compile_file(str.into()) {Ok(d) => d, Err(e) => {tracing::error!("Loading {str} failed with: {e:}");process::exit(1)},};
             let module = match Module::eval_ast_as_new(ctx, &ast,&script.engine) {
-                Ok(d) => d, Err(e) => {log::error!("Parsing {str} failed with: {e:}");process::exit(1)},
+                Ok(d) => d, Err(e) => {tracing::error!("Parsing {str} failed with: {e:}");process::exit(1)},
             };
             script.engine.register_global_module(module.into());
         }
@@ -101,11 +177,7 @@ impl Script {
 
     pub fn from_str(code: &str, ctx: Scope<'static>) -> Script {
         let mut script = Self::new(ctx.clone());
-        match script.engine.compile(code) {Ok(ast) => {
-            match Module::eval_ast_as_new(ctx, &ast,&script.engine) {Ok(module) => {
-                script.engine.register_global_module(module.into());
-            }, Err(e) => {log::error!("Parsing {code} failed with: {e:}");},};
-        }, Err(e) => {log::error!("Loading {code} failed with: {e:}")},};
+        add_to_engine(&mut script.engine, code, ctx.clone());
         script
     }
 
@@ -113,9 +185,9 @@ impl Script {
         self.ctx = ctx;
     }
 
-    pub fn register<A: 'static, const N: usize, const C: bool, R: Any + Clone, const L: bool, F: RhaiNativeFunc<A, N, C, R, L>+ 'static>(&mut self, name: &str, func: F) {
+    /*pub fn register<A: 'static, const N: usize, const C: bool, R: Any + Clone, const L: bool, F: RhaiNativeFunc<A, N, C, R, L>+ SendSync + 'static>(&mut self, name: &str, func: F) {
         self.engine.register_fn(name, func);
-    }
+    }*/
 
     fn run_fn(&mut self, func: &str) -> Result<()> {
         let cmd = format!("let x = {func}();x!=false");

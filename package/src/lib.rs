@@ -3,3 +3,4 @@ pub mod script;
 pub mod terraform;
 pub mod template;
 pub use k8s::yaml;
+pub use anyhow::Error;
