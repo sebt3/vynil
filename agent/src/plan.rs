@@ -57,7 +57,7 @@ pub async fn plan (src: &PathBuf, script: &mut script::Script, client: kube::Cli
 
 pub async fn run(args:&Parameters) -> Result<()> {
     let client = get_client().await;
-    let mut installs = InstallHandler::new(client.clone(), args.namespace.as_str());
+    let mut installs = InstallHandler::new(&client.clone(), args.namespace.as_str());
     let inst = match installs.get(args.name.as_str()).await {Ok(d) => d, Err(e) => {
         events::report(AGENT, client, events::from_error(&anyhow!("{e}")), events::get_empty_ref()).await.unwrap();
         bail!("{e}");
