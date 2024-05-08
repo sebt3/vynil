@@ -126,13 +126,15 @@ fn get_action(hself: &HashedSelf, act: &str) -> serde_json::Value {
     action
 }
 
-fn get_templater(hself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
+fn get_templater(hself: &HashedSelf, category: &str, component: &str, target: &str) -> serde_json::Value {
     let mut templater = install_container(hself);
     templater["name"] = serde_json::Value::String("template".to_string());
     templater["args"] = serde_json::Value::Array([
         templater["name"].clone(),
         serde_json::Value::String("-s".to_string()),
-        serde_json::Value::String(format!("/src/{}/{}/", category, component))
+        serde_json::Value::String(format!("/src/{}/{}/", category, component)),
+        serde_json::Value::String("-t".to_string()),
+        serde_json::Value::String(target.to_string())
     ].into());
     templater["volumeMounts"] = serde_json::Value::Array([serde_json::json!({
         "name": "dist",
@@ -240,21 +242,21 @@ impl JobHandler {
 
     pub fn get_installs_plan(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
         self.get_installs_spec(hashedself,
-            &vec!(get_templater(hashedself, category, component)),
+            &vec!(get_templater(hashedself, category, component, "plan")),
             &vec!(get_action(hashedself, "plan"))
         )
     }
 
     pub fn get_installs_destroy(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
         self.get_installs_spec(hashedself,
-            &vec!(get_templater(hashedself, category, component)),
+            &vec!(get_templater(hashedself, category, component, "destroy")),
             &vec!(get_action(hashedself, "destroy"))
         )
     }
 
     pub fn get_installs_install(&self, hashedself: &HashedSelf, category: &str, component: &str) -> serde_json::Value {
         self.get_installs_spec(hashedself,
-            &vec![get_templater(hashedself, category, component),get_action(hashedself, "plan")],
+            &vec![get_templater(hashedself, category, component, "install"),get_action(hashedself, "plan")],
             &vec!(get_action(hashedself, "install"))
         )
     }

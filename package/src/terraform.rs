@@ -321,6 +321,14 @@ provider \"gitea\" {
     gen_file(&file, &requiered, false)
 }
 
+pub fn save_to_tf(filename: &str, name: &str, str: &str) -> Result<()> {
+  let content = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+  gen_file(&filename.to_string().into(), &format!("variable \"{}\" {{
+    default     = {}
+  }}
+  ",name, content), true)
+}
+
 pub fn gen_variables(dest_dir: &PathBuf, yaml: &Component,config:&serde_json::Map<String, serde_json::Value>, category: &str, component: &str, instance: &str) -> Result<()> {
   let mut file  = PathBuf::new();
   file.push(dest_dir);

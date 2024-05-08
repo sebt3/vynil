@@ -1,9 +1,10 @@
-use rhai::{Engine, Scope, Module/*, RhaiNativeFunc */};
+use rhai::{Engine, Scope, Module, Dynamic};
 use std::{process, path::{PathBuf, Path}};
 use anyhow::{Result, bail};
 //use core::any::Any;
 use crate::shell;
-use k8s::{Client, get_client,handlers::{DistribHandler, Ingress, IngressHandler, InstallHandler, SecretHandler, Secret, CustomResourceDefinitionHandler, CustomResourceDefinition},install::Install, distrib::Distrib};
+use crate::terraform::save_to_tf;
+use k8s::{Client, get_client,handlers::{DistribHandler, IngressHandler, InstallHandler, SecretHandler, CustomResourceDefinitionHandler, ServiceHandler, NamespaceHandler, StorageClassHandler, CSIDriverHandler}};
 pub use rhai::ImmutableString;
 use tokio::runtime::Handle;
 
@@ -21,6 +22,11 @@ pub fn new_context(category:String, component:String, instance:String, src:Strin
     let mut s = new_base_context(category,component,instance,config);
     s.push_constant("src", src);
     s.push_constant("dest", dest);
+    s
+}
+pub fn new_context_template(category:String, component:String, instance:String, src:String, dest:String, config:&serde_json::Map<String, serde_json::Value>, target:String) -> Scope<'static> {
+    let mut s = new_context(category, component, instance, src, dest, config);
+    s.push_constant("template_for", target);
     s
 }
 
@@ -61,11 +67,19 @@ fn create_engine(client: &Client) -> Engine {
         })})
     });
     let cli = client.clone();
-    e.register_fn("get_crd", move |name:ImmutableString| -> CustomResourceDefinition {
+    e.register_fn("get_crd", move |name:ImmutableString| -> Dynamic {
         let cl = cli.clone();
         tokio::task::block_in_place(|| {Handle::current().block_on(async move {
             let mut handle = CustomResourceDefinitionHandler::new(&cl);
-            handle.get(&name).await.unwrap()
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_crd", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = CustomResourceDefinitionHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
         })})
     });
     let cli = client.clone();
@@ -77,11 +91,19 @@ fn create_engine(client: &Client) -> Engine {
         })})
     });
     let cli = client.clone();
-    e.register_fn("get_distrib", move |name:ImmutableString| -> Distrib {
+    e.register_fn("get_distrib", move |name:ImmutableString| -> Dynamic {
         let cl = cli.clone();
         tokio::task::block_in_place(|| {Handle::current().block_on(async move {
             let mut handle = DistribHandler::new(&cl);
-            handle.get(&name).await.unwrap()
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_distrib", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = DistribHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
         })})
     });
     let cli: Client = client.clone();
@@ -94,12 +116,19 @@ fn create_engine(client: &Client) -> Engine {
         })})
     });
     let cli: Client = client.clone();
-    e.register_fn("get_install", move |ns:ImmutableString, name:ImmutableString| -> Install {
+    e.register_fn("get_install", move |ns:ImmutableString, name:ImmutableString| -> Dynamic {
         let cl = cli.clone();
         tokio::task::block_in_place(|| {Handle::current().block_on(async move {
             let mut handle = InstallHandler::new(&cl, &ns);
-            let ret = handle.get(&name).await.unwrap();
-            ret
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("list_install", move |ns:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = InstallHandler::new(&cl, &ns);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
         })})
     });
     let cli: Client = client.clone();
@@ -111,11 +140,19 @@ fn create_engine(client: &Client) -> Engine {
         })})
     });
     let cli: Client = client.clone();
-    e.register_fn("get_ingress", move |ns:ImmutableString, name:ImmutableString| -> Ingress {
+    e.register_fn("get_ingress", move |ns:ImmutableString, name:ImmutableString| -> Dynamic {
         let cl = cli.clone();
         tokio::task::block_in_place(|| {Handle::current().block_on(async move {
             let mut handle = IngressHandler::new(&cl, &ns);
-            handle.get(&name).await.unwrap()
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("list_ingress", move |ns:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = IngressHandler::new(&cl, &ns);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
         })})
     });
     let cli = client.clone();
@@ -127,12 +164,121 @@ fn create_engine(client: &Client) -> Engine {
         })})
     });
     let cli = client.clone();
-    e.register_fn("get_secret", move |ns:ImmutableString, name:ImmutableString| -> Secret {
+    e.register_fn("get_secret", move |ns:ImmutableString, name:ImmutableString| -> Dynamic {
         let cl = cli.clone();
         tokio::task::block_in_place(|| {Handle::current().block_on(async move {
             let mut handle = SecretHandler::new(&cl, &ns);
-            handle.get(&name).await.unwrap()
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
         })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_secret", move |ns:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = SecretHandler::new(&cl, &ns);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("have_service", move |ns:ImmutableString, name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = ServiceHandler::new(&cl, &ns);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_service", move |ns:ImmutableString, name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = ServiceHandler::new(&cl, &ns);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_service", move |ns:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = ServiceHandler::new(&cl, &ns);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("have_namespace", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = NamespaceHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_namespace", move |name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = NamespaceHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_namespace", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = NamespaceHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("have_storage_class", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = StorageClassHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_storage_class", move |name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = StorageClassHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_storage_class", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = StorageClassHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("have_csi_driver", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = CSIDriverHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_csi_driver", move |name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = CSIDriverHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_csi_driver", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = CSIDriverHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    e.register_fn("save_to_tf", move |filename: ImmutableString, name: ImmutableString, data: Dynamic| {
+        match save_to_tf(&filename, &name, &serde_json::to_string(&data).unwrap()) {Ok(d) => d, Err(e) => {
+            tracing::error!("Failed to save {filename}: {e:}");
+        }};
     });
     add_to_engine(&mut e, "fn assert(cond, mess) {if (!cond){throw mess}}", Scope::new());
     // TODO: Add an http client (download/get/post/put)

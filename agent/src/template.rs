@@ -22,6 +22,9 @@ pub struct Parameters {
     /// Install Name
     #[arg(short='i', long, env = "NAME", value_name = "NAME")]
     name: String,
+    /// Templating target (plan|install|destroy)
+    #[arg(short, long, env = "TARGET", value_name = "TARGET", default_value = "install")]
+    target: String,
 }
 
 pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
@@ -115,13 +118,14 @@ pub async fn run(args:&Parameters) -> Result<()> {
         bail!("{e}");
     }};
     // Start the script engine
-    let mut script = script::Script::from_dir(&src.clone(), &"template".to_string(), script::new_context(
+    let mut script = script::Script::from_dir(&src.clone(), &"template".to_string(), script::new_context_template(
         yaml.category.clone(),
         yaml.metadata.name.clone(),
         args.name.clone(),
         src.clone().into_os_string().into_string().unwrap(),
         dest.clone().into_os_string().into_string().unwrap(),
-        &yaml.get_values(&inst.options())
+        &yaml.get_values(&inst.options()),
+        args.target.clone()
     ));
     match template(src, dest, client.clone(), &inst, &yaml.clone(), &yaml.get_values(&inst.options()), &mut script).await {Ok(_) => {Ok(())}, Err(e) => {
         inst.update_status_errors(client.clone(), AGENT, vec!(format!("{e}"))).await.map_err(|e| anyhow!("{e}"))?;
