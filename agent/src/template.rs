@@ -6,7 +6,7 @@ use anyhow::{Result, Error, bail, anyhow};
 use k8s::{get_client, yaml, handlers::InstallHandler};
 use package::{script, terraform};
 use client::{AGENT, events};
-use kube::api::Resource;
+use kube::{api::Resource, ResourceExt};
 
 #[derive(Args, Debug)]
 pub struct Parameters {
@@ -70,9 +70,10 @@ pub async fn template(src: PathBuf, dest: PathBuf, client: kube::Client,
     }
     terraform::gen_providers(&dest, providers).or_else(|e: Error| {bail!("{e}")})?;
     terraform::gen_variables(&dest, yaml, config, inst.spec.category.as_str(),inst.spec.component.as_str(), inst.name().as_str()).or_else(|e: Error| {bail!("{e}")})?;
-    terraform::gen_datas(&dest).or_else(|e: Error| {bail!("{e}")})?;
-    terraform::gen_ressources(&dest).or_else(|e: Error| {bail!("{e}")})?;
-    terraform::gen_tfvars(&dest, config).or_else(|e: Error| {bail!("{e}")})?;
+    if terraform::have_datas(&dest) {
+        terraform::gen_ressources(&dest).or_else(|e: Error| {bail!("{e}")})?;
+    }
+    terraform::gen_tfvars(&dest, config,Some(package::terraform::InstallOwner::new(inst.namespace(), inst.name(),inst.uid().unwrap()))).or_else(|e: Error| {bail!("{e}")})?;
     // run post-template stage from rhai script if any
     script.run_post_stage(&stage).or_else(|e: Error| {bail!("{e}")})?;
     match inst.update_status_end_template(client.clone(), AGENT).await {Ok(_) => {}, Err(e) =>

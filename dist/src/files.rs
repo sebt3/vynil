@@ -21,8 +21,6 @@ metadata:
 dependencies:
 # - category: core
 #   component: secret-generator
-# - category: share
-#   component: authentik
 # - category: dbo
 #   component: pg
 # - category: dbo

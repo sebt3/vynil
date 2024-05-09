@@ -344,6 +344,9 @@ variable \"component\" {{
 variable \"instance\" {{
   default     = \"{}\"
 }}
+variable \"install_owner\" {{
+  default     = null
+}}
 ", category, component, instance);
   for (name,value) in config {
       let str = serde_json::to_string(value).unwrap();
@@ -366,20 +369,56 @@ variable \"instance\" {{
   gen_file(&file, &content, false)
 }
 
-pub fn gen_tfvars(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json::Value>) -> Result<()> {
+pub struct InstallOwner {
+  pub namespace: String,
+  pub name: String,
+  pub uid: String,
+}
+impl InstallOwner {
+  #[must_use] pub fn new(namespace: String, name: String,uid: String) -> InstallOwner {
+    InstallOwner {
+      namespace,
+      name,
+      uid
+    }
+  }
+  pub fn to_string(&self) -> String {
+    format!("[
+  \"apiVersion\": \"vynil.solidite.fr/v1\",
+  \"kind\": \"Install\",
+  \"blockOwnerDeletion\": true,
+  \"namespace\": \"{}\",
+  \"name\": \"{}\",
+  \"uid\": \"{}\",
+]", self.namespace, self.name, self.uid)
+  }
+}
+
+pub fn gen_tfvars(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json::Value>, owner: Option<InstallOwner>) -> Result<()> {
     let mut file  = PathBuf::new();
     file.push(dest_dir);
     file.push("env.tfvars");
 
     let mut content: String = String::new();
     for (name,value) in config {
-        let str = serde_json::to_string(value).unwrap();
-        let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
-        tracing::debug!("{}={}", name, output);
-        content += format!("{} = {}
+      let str = serde_json::to_string(value).unwrap();
+      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+      tracing::debug!("{}={}", name, output);
+      content += format!("{} = {}
 ", name, output).as_str();
     }
+    if let Some(ownref) = owner {
+      content += format!("install_owner = {}
+", ownref.to_string()).as_str();
+    }
     gen_file(&file, &content, true)
+}
+
+pub fn have_datas(dest_dir: &PathBuf) -> bool {
+  let mut file  = PathBuf::new();
+  file.push(dest_dir);
+  file.push("datas.tf");
+  Path::new(&file).exists()
 }
 
 pub fn gen_datas(dest_dir: &PathBuf) -> Result<()> {
