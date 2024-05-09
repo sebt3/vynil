@@ -223,7 +223,7 @@ impl Reconciler for Install {
                     events::from_delete("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
                 jobs.delete(agent_name.as_str()).await.unwrap();
-                error!("Recreating {agent_name} Job");
+                info!("Recreating {agent_name} Job");
                 recorder.publish(
                     events::from_create("Install", &name, "Job", &job.name_any(), Some(job.object_ref(&())))
                 ).await.map_err(Error::KubeError)?;
@@ -231,7 +231,7 @@ impl Reconciler for Install {
             }};
             if let Some(status) = job.status {
                 if status.completion_time.is_none() {
-                    error!("Waiting after {agent_name} Job");
+                    info!("Waiting after {agent_name} Job");
                     recorder.publish(
                         events::from_check("Install", &name, "Bootstrap in progress, requeue".to_string(), None)
                     ).await.map_err(Error::KubeError)?;

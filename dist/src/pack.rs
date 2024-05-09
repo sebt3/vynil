@@ -78,7 +78,8 @@ pub fn run(args:&Parameters) -> Result<()> {
     let dest_dir = fs::canonicalize(&tmp).unwrap();
 
     // Start the script engine
-    let mut script = script::Script::from_dir(&path.clone(), &"pack".to_string(), script::new_context(
+    let stage = "pack".to_string();
+    let mut script = script::Script::from_dir(&path.clone(), &stage, script::new_context(
         yaml.category.clone(),
         yaml.metadata.name.clone(),
         yaml.metadata.name.clone(),
@@ -87,13 +88,13 @@ pub fn run(args:&Parameters) -> Result<()> {
         &yaml.get_values(&serde_json::Map::new())
     ));
     // run the pre-pack stage if any
-    let stage = "pack".to_string();
     match script.run_pre_stage(&stage) {Ok(_) => {}, Err(e) => {return Err(e)}}
     // look source directory
     let mut copies: Vec<PathBuf> = Vec::new();
     let re_kusto = Regex::new(r"^kustomization\.yaml$").unwrap();
     let re_kustohbs = Regex::new(r"^kustomization\.yaml\.hbs$").unwrap();
     let re_rhai = Regex::new(r"\.rhai$").unwrap();
+    let re_pack = Regex::new(r"pack\.rhai$").unwrap();
     let re_hbs = Regex::new(r"\.hbs$").unwrap();
     let re_ymlhbs = Regex::new(r"\.yaml\.hbs$").unwrap();
     let re_yml = Regex::new(r"\.yaml$").unwrap();
@@ -123,7 +124,7 @@ pub fn run(args:&Parameters) -> Result<()> {
             use_templates = true;
             copies.push(path);
         } else if re_tf.is_match(filename) ||
-                (re_rhai.is_match(filename) && (script.have_stage("install") || script.have_stage("destroy") || script.have_stage("plan") || script.have_stage("template"))) {
+                (re_rhai.is_match(filename) && !re_pack.is_match(filename)) {
             copies.push(path);
         }
     }
