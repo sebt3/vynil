@@ -98,7 +98,8 @@ pub fn run(args:&Parameters) -> Result<()> {
     let re_hbs = Regex::new(r"\.hbs$").unwrap();
     let re_ymlhbs = Regex::new(r"\.yaml\.hbs$").unwrap();
     let re_yml = Regex::new(r"\.yaml$").unwrap();
-    let re_tf = Regex::new(r"\.tf$").unwrap();
+    let re_gentf: Regex = Regex::new(r"^gen_.*\.tf$").unwrap();
+    let re_tf: Regex = Regex::new(r"\.tf$").unwrap();
     let re_def = Regex::new(r"^index\.yaml$").unwrap();
     let mut use_kusto = false;
     let mut use_templates = false;
@@ -123,7 +124,7 @@ pub fn run(args:&Parameters) -> Result<()> {
         } else if re_hbs.is_match(filename) {
             use_templates = true;
             copies.push(path);
-        } else if re_tf.is_match(filename) ||
+        } else if (re_tf.is_match(filename) && ! re_gentf.is_match(filename))||
                 (re_rhai.is_match(filename) && !re_pack.is_match(filename)) {
             copies.push(path);
         }

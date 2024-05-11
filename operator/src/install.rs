@@ -11,10 +11,9 @@ use kube::{
     },
     Resource,
 };
-//use base64::{Engine as _, engine::general_purpose};
 use std::sync::Arc;
 use tokio::time::Duration;
-use tracing::{Span, debug, field, info, instrument, warn, error};
+use tracing::{Span, debug, field, info, instrument, warn};
 use async_trait::async_trait;
 pub use k8s::install::{Install,InstallStatus, STATUS_INSTALLED};
 pub use k8s::distrib::{Distrib, ComponentDependency};
