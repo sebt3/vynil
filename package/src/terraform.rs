@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use k8s::yaml::{Providers, Component};
+use serde::{Deserialize, Serialize};
 use crate::shell;
 
 pub fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
@@ -369,6 +370,7 @@ variable \"install_owner\" {{
   gen_file(&file, &content, false)
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct InstallOwner {
   pub namespace: String,
   pub name: String,
@@ -408,8 +410,11 @@ pub fn gen_tfvars(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json
 ", name, output).as_str();
     }
     if let Some(ownref) = owner {
-      content += format!("install_owner = {}
-", ownref.to_string()).as_str();
+      let str = serde_json::to_string(&ownref).unwrap();
+      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+
+      content += format!("install_owner = [{}]
+", output).as_str();
     }
     gen_file(&file, &content, true)
 }
