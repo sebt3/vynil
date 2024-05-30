@@ -13,17 +13,19 @@ pub struct HashedSelf {
     name: String,
     hash: String,
     distrib: String,
-    commit_id: String
+    commit_id: String,
+    conditions: String
 }
 
 impl HashedSelf {
-    #[must_use] pub fn new(ns: &str, name: &str, hash: &str, distrib: &str, commit_id: &str) -> HashedSelf {
+    #[must_use] pub fn new(ns: &str, name: &str, hash: &str, distrib: &str, commit_id: &str, conditions: &str) -> HashedSelf {
         HashedSelf {
             ns: ns.to_string(),
             name: name.to_string(),
             hash: hash.to_string(),
             distrib: distrib.to_string(),
-            commit_id: commit_id.to_string()
+            commit_id: commit_id.to_string(),
+            conditions: conditions.to_string()
         }
     }
 }
@@ -50,6 +52,9 @@ fn install_container(hself: &HashedSelf) -> serde_json::Value {
         },{
             "name": "COMMIT_ID",
             "value": hself.commit_id
+        },{
+            "name": "CONDITIONS",
+            "value": hself.conditions
         },{
             "name": "LOG_LEVEL",
             "value": level

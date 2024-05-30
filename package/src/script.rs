@@ -1,6 +1,6 @@
 use rhai::{Engine, Scope, Module, ImmutableString};
 use std::{process, path::{PathBuf, Path}};
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, anyhow};
 use crate::pkg_script::add_pkg_to_engine;
 use crate::k8s_script::add_k8s_to_engine;
 use k8s::{Client, get_client};
@@ -128,5 +128,12 @@ impl Script {
             match self.run_fn(&format!("post_{stage}")) {Ok(_) => {}, Err(e) => {bail!("post_{stage} failed with: {e}")}}
         }
         Ok(())
+    }
+    pub fn get_string_result(&mut self, fnct: &str) -> Result<String> {
+        if self.have_fn(fnct) {
+            self.engine.eval_with_scope::<String>(&mut self.ctx, format!("{fnct}()").as_str()).map_err(|e| anyhow!("{e}"))
+        } else {
+            Ok("{}".to_string())
+        }
     }
 }

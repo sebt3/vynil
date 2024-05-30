@@ -28,7 +28,7 @@ pub async fn reconcile(inst: Arc<Install>, ctx: Arc<Context>) -> Result<Action> 
     let ns = inst.namespace(); // inst is namespace scoped
     let insts: Api<Install> = Api::namespaced(ctx.client.clone(), &ns);
 
-    info!("Reconciling Install \"{}\" in {}", inst.name_any(), ns);
+    debug!("Reconciling Install \"{}\" in {}", inst.name_any(), ns);
     finalizer(&insts, INSTALL_FINALIZER, inst, |event| async {
         match event {
             Finalizer::Apply(inst) => inst.reconcile(ctx.clone()).await,
@@ -52,9 +52,16 @@ impl Reconciler for Install {
         let mut jobs = JobHandler::new(ctx.client.clone(), my_ns);
         let agent_name = format!("{ns}--{name}--agent");
         let dist_name = self.spec.distrib.as_str();
-        let dist = match dists.get(dist_name).await {Ok(d) => d, Err(e) => {
-            self.update_status_missing_distrib(client, OPERATOR, vec!(format!("{:?}", e))).await.map_err(Error::KubeError)?;
-            return Err(Error::IllegalDistrib);
+        let dist = match dists.get(dist_name).await {Ok(d) => d, Err(e) => match e {
+            kube::Error::Service(b) => {
+                // the api server might be overwhelmed, retry in 2mn
+                info!("Network error while querying for distrib: {:}", b);
+                return Ok(Action::requeue(Duration::from_secs(120)))
+            },
+            e => {
+                self.update_status_missing_distrib(client, OPERATOR, vec!(format!("{:?}", e))).await.map_err(Error::KubeError)?;
+                return Err(Error::IllegalDistrib);
+            }
         }};
         //TODO: label the install with the distrib, component and category so searching installs is simple
         if ns == my_ns && self.spec.distrib == "core" && self.spec.component == "vynil" && self.spec.category == "core" {
@@ -119,12 +126,10 @@ impl Reconciler for Install {
                     }
                 }
                 // Validate that the dependencies are actually installed
-                //TODO: support for only current namespace
                 let mut found = false;
                 let mut found_ns = String::new();
                 let mut found_name = String::new();
                 let namespaces: Api<Namespace> = Api::all(client.clone());
-                // TODO: sort the namespace with name close to the current namespace first so we found the right one
                 for ns in namespaces.list(&ListParams::default()).await.unwrap() {
                     let installs: Api<Install> = Api::namespaced(client.clone(), ns.metadata.name.clone().unwrap().as_str());
                     for install in installs.list(&ListParams::default()).await.unwrap() {
@@ -164,7 +169,7 @@ impl Reconciler for Install {
             }
         }
         // Use provided check script
-        if comp.check.is_some() {
+        let conditions = if comp.check.is_some() {
             let check = comp.check.clone().unwrap();
             let mut script  = script::Script::from_str(&check, script::new_base_context(
                 self.spec.category.clone(),
@@ -194,8 +199,17 @@ impl Reconciler for Install {
                     events::from_check("Install", &name, "Validation succeed".to_string(), None)
                 ).await.map_err(Error::KubeError)?;
             }
-        }
-        let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), &comp.commit_id);
+            match script.get_string_result("conditions") {
+                Ok(val) => val,
+                Err(e) => {
+                    let mut errors: Vec<String> = Vec::new();
+                    errors.push(format!("{e}"));
+                    self.update_status_conditions_failed(client, OPERATOR, errors).await.map_err(Error::KubeError)?;
+                    return Ok(Action::requeue(Duration::from_secs(5*60)))
+                }
+            }
+        } else {"{}".to_string()};
+        let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), &comp.commit_id, &conditions);
         let agent_job = if self.should_plan() {
             jobs.get_installs_plan(&hashedself, self.spec.category.as_str(), self.spec.component.as_str())
         } else {
@@ -230,9 +244,9 @@ impl Reconciler for Install {
             }};
             if let Some(status) = job.status {
                 if status.completion_time.is_none() {
-                    info!("Waiting after {agent_name} Job");
+                    debug!("Waiting after {agent_name} Job");
                     recorder.publish(
-                        events::from_check("Install", &name, "Bootstrap in progress, requeue".to_string(), None)
+                        events::from_check("Install", &name, "Agent is progressing, waiting for its end".to_string(), None)
                     ).await.map_err(Error::KubeError)?;
                     jobs.wait_max(agent_name.as_str(),2*60).await.map_err(Error::WaitError)?.map_err(Error::JobError)?;
                 }
@@ -269,7 +283,7 @@ impl Reconciler for Install {
                 jobs.delete(agent_name.as_str()).await.unwrap();
             }
             // Create the delete job
-            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), "");
+            let hashedself = crate::jobs::HashedSelf::new(ns.as_str(), name.as_str(), self.options_digest().as_str(), self.spec.distrib.as_str(), "","");
             let destroyer_job = jobs.get_installs_destroy(&hashedself, self.spec.category.as_str(), self.spec.component.as_str());
 
             info!("Creating {deletor_name} Job");

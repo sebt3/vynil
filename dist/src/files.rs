@@ -12,6 +12,7 @@ pub fn gen_index_yaml(dest_dir: &PathBuf) -> Result<()> {
     file.push(dest_dir);
     file.push("index.yaml");
     gen_file(&file, &"
+---
 apiVersion: vinyl.solidite.fr/v1beta1
 kind: Component
 category:
@@ -101,13 +102,13 @@ options:
         properties:
           type:
             enum:
-              - Filesystem
-              - Block
+            - Filesystem
+            - Block
           accessMode:
             enum:
-              - ReadWriteOnce
-              - ReadOnlyMany
-              - ReadWriteMany
+            - ReadWriteOnce
+            - ReadOnlyMany
+            - ReadWriteMany
   images:
     default:
       postgresql:
@@ -118,39 +119,26 @@ options:
         registry: quay.io
         repository: opstree/redis
         tag: v7.0.12
-        pullPolicy: IfNotPresent
+        pull_policy: IfNotPresent
       redis_exporter:
         registry: quay.io
         repository: opstree/redis-exporter
         tag: v1.44.0
-        pullPolicy: IfNotPresent
+        pull_policy: IfNotPresent
       app:
         registry: docker.io
         repository: to-be/defined
         tag: v1.0.0
-        pullPolicy: IfNotPresent
+        pull_policy: IfNotPresent
     properties:
-      app:
+      app: &pull_properties
         properties:
-          pullPolicy:
+          pull_policy:
             enum:
             - Always
             - Never
             - IfNotPresent
-      redis:
-        properties:
-          pullPolicy:
-            enum:
-            - Always
-            - Never
-            - IfNotPresent
-      redis_exporter:
-        properties:
-          pullPolicy:
-            enum:
-            - Always
-            - Never
-            - IfNotPresent
+      redis: *pull_properties
+      redis_exporter: *pull_properties
 ".to_string(), false)
 }
-

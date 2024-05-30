@@ -46,7 +46,7 @@ fn explode_to_tf(src: &str, dest: &str, base: &str) -> Result<()> {
                 values["metadata"]["namespace"] = serde_yaml::Value::from("${var.namespace}");
             }
             values["metadata"]["ownerReferences"] = serde_yaml::Value::from("${jsonencode(var.install_owner)}");
-            values["metadata"]["labels"] = serde_yaml::Value::from("${jsonencode(local.common-labels)}");
+            values["metadata"]["labels"] = serde_yaml::Value::from("${jsonencode(local.common_labels)}");
             let str = serde_yaml::to_string(&values).unwrap();
             content.push_str(&format!("resource \"kubectl_manifest\" \"{}\" {{
   yaml_body  = <<-EOF

@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use k8s::yaml::{Providers, Component};
-use serde::{Deserialize, Serialize};
 use crate::shell;
 
 pub fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
@@ -338,12 +337,15 @@ pub fn gen_variables(dest_dir: &PathBuf, yaml: &Component,config:&serde_json::Ma
   let mut content  = format!("
 variable \"category\" {{
   default     = \"{}\"
+  type        = string
 }}
 variable \"component\" {{
   default     = \"{}\"
+  type        = string
 }}
 variable \"instance\" {{
   default     = \"{}\"
+  type        = string
 }}
 variable \"install_owner\" {{
   default     = null
@@ -352,8 +354,8 @@ variable \"install_owner\" {{
   for (name,value) in config {
       let str = serde_json::to_string(value).unwrap();
       let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
-      if yaml.tfaddtype.is_some() && *yaml.tfaddtype.as_ref().unwrap() {
-          let typed = yaml.get_tf_type(name);
+      if ! yaml.tfaddtype.is_some() || ! *yaml.tfaddtype.as_ref().unwrap() {
+          let typed = if name=="name"||name=="namespace" {"string".to_string()} else {yaml.get_tf_type(name)};
           tracing::debug!("{}({})={}", name, typed, output);
           content += format!("variable \"{}\" {{
   default     = {}
@@ -370,7 +372,6 @@ variable \"install_owner\" {{
   gen_file(&file, &content, false)
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct InstallOwner {
   pub namespace: String,
   pub name: String,
@@ -385,14 +386,14 @@ impl InstallOwner {
     }
   }
   pub fn to_string(&self) -> String {
-    format!("[
+    format!("[{{
   \"apiVersion\": \"vynil.solidite.fr/v1\",
   \"kind\": \"Install\",
   \"blockOwnerDeletion\": true,
   \"namespace\": \"{}\",
   \"name\": \"{}\",
   \"uid\": \"{}\",
-]", self.namespace, self.name, self.uid)
+}}]", self.namespace, self.name, self.uid)
   }
 }
 
@@ -410,7 +411,7 @@ pub fn gen_tfvars(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json
 ", name, output).as_str();
     }
     if let Some(ownref) = owner {
-      let str = serde_json::to_string(&ownref).unwrap();
+      let str = ownref.to_string();
       let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
 
       content += format!("install_owner = [{}]
@@ -437,7 +438,7 @@ locals {
 #   gitea_host = \"http://gitea-http.${var.domain}-ci.svc:3000/\"
 #   gitea_username = data.kubernetes_secret_v1.gitea.data[\"username\"]
 #   gitea_password = data.kubernetes_secret_v1.gitea.data[\"password\"]
-  common-labels = {
+  common_labels = {
     \"vynil.solidite.fr/owner-name\" = var.instance
     \"vynil.solidite.fr/owner-namespace\" = var.namespace
     \"vynil.solidite.fr/owner-category\" = var.category
@@ -491,7 +492,7 @@ locals {
 # }
 
 data \"kustomization_overlay\" \"data\" {
-  common_labels = local.common-labels
+  common_labels = local.common_labels
   namespace = var.namespace
   resources = [for file in fileset(path.module, \"*.yaml\"): file if file != \"index.yaml\"]
 }
