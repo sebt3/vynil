@@ -3,6 +3,7 @@ use std::{process, path::{PathBuf, Path}};
 use anyhow::{Result, bail, anyhow};
 use crate::pkg_script::add_pkg_to_engine;
 use crate::k8s_script::add_k8s_to_engine;
+use crate::http_script::add_http_to_engine;
 use k8s::{Client, get_client};
 
 pub fn new_base_context(category:String, component:String, instance:String, config:&serde_json::Map<String, serde_json::Value>) -> Scope<'static> {
@@ -49,10 +50,9 @@ fn create_engine(client: &Client) -> Engine {
     e.register_fn("log_warn", |s:ImmutableString| tracing::warn!("{s}"));
     e.register_fn("log_error", |s:ImmutableString| tracing::error!("{s}"));
     add_pkg_to_engine(&mut e);
+    add_http_to_engine(&mut e);
     add_k8s_to_engine(&mut e,client);
     add_to_engine(&mut e, "fn assert(cond, mess) {if (!cond){throw mess}}", Scope::new());
-    // TODO: Add an http client (download/get/post/put)
-    // TODO: Add a kubectl wrapper
     e
 }
 

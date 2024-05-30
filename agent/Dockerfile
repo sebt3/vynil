@@ -29,7 +29,7 @@ RUN touch package/src/lib.rs k8s/src/lib.rs agent/src/lib.rs agent/src/main.rs \
 # Then create the intermediary image with run-time dependencies installed
 FROM debian:${DEBIAN_VERSION}-slim as middle
 ARG HELM_VERSION=v3.10.3
-ARG KUBECTL_VERSION=v1.25.7
+ARG KUBECTL_VERSION=v1.29.3
 ARG TF_VERSION=1.3.6
 ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client"
 # hadolint ignore=DL3008,DL4006,SC2035

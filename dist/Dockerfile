@@ -1,7 +1,7 @@
 ARG RUST_VERSION=1.77.1
 ARG DEBIAN_VERSION=bookworm
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
-ARG BUILD_DEPS="git"
+ARG BUILD_DEPS="git pkg-config libssl-dev"
 WORKDIR /usr/src/dist
 COPY Cargo.lock .
 COPY dist/parent.toml ./Cargo.toml
@@ -29,7 +29,7 @@ RUN touch package/src/lib.rs k8s/src/lib.rs dist/src/main.rs \
 # Finally create the target image with run-time dependencies installed
 FROM debian:${DEBIAN_VERSION}-slim as target
 ARG HELM_VERSION=v3.10.3
-ARG KUBECTL_VERSION=v1.25.7
+ARG KUBECTL_VERSION=v1.29.3
 ARG TF_VERSION=1.3.6
 ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates"
 # hadolint ignore=DL3027,DL3008,DL4006,SC2035

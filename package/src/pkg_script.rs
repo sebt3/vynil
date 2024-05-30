@@ -1,9 +1,12 @@
 use std::{fs, path::{Path,PathBuf}};
 use anyhow::{Result, bail};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use crate::shell;
-use rhai::{Engine, Dynamic, ImmutableString};
+use rhai::{Engine, Dynamic, ImmutableString,Map};
 use crate::terraform::save_to_tf;
-use std::collections::HashMap;
+use std::{collections::HashMap,env};
+use serde_json;
+use serde_yaml;
 
 fn explode_to_tf(src: &str, dest: &str, base: &str) -> Result<()> {
     let content = fs::read_to_string(src)
@@ -75,5 +78,32 @@ pub fn add_pkg_to_engine(e: &mut Engine) {
         match explode_to_tf(&source, &dest, &base) {Ok(d) => d, Err(e) => {
             tracing::error!("Failed to explode {source} to {dest}/{base}: {e:}");
         }};
+    });
+    e.register_fn("get_env", |var: ImmutableString| -> ImmutableString {
+        match env::var(var.to_string()) {
+            Ok(s) => s.into(),
+            Err(_e) => "".into()
+        }
+    });
+    e.register_fn("base64_decode", |val: ImmutableString| -> ImmutableString {
+        String::from_utf8(STANDARD.decode(val.to_string()).unwrap()).unwrap().into()
+    });
+    e.register_fn("base64_encode", |val: ImmutableString| -> ImmutableString {
+        STANDARD.encode(val.to_string()).into()
+    });
+    e.register_fn("json_encode", |val: Dynamic| -> ImmutableString {
+        serde_json::to_string(&val).unwrap().into()
+    });
+    e.register_fn("json_encode", |val: Map| -> ImmutableString {
+        serde_json::to_string(&val).unwrap().into()
+    });
+    e.register_fn("json_decode", |val: ImmutableString| -> Dynamic {
+        serde_json::from_str(&val.to_string()).unwrap()
+    });
+    e.register_fn("yaml_encode", |val: &Dynamic| -> ImmutableString {
+        serde_yaml::to_string(val).unwrap().into()
+    });
+    e.register_fn("yaml_decode", |val: ImmutableString| -> Dynamic {
+        serde_yaml::from_str(&val.to_string()).unwrap()
     });
 }

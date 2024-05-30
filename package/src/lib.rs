@@ -1,5 +1,6 @@
 mod k8s_script;
 mod pkg_script;
+mod http_script;
 pub mod shell;
 pub mod script;
 pub mod terraform;

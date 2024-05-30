@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-version = "0.2.11"
+version = "0.2.12"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 license = "	BSD-3-Clause"
