@@ -1,0 +1,45 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "cargo"
+  - package-ecosystem: "cargo"
+    directory: "/agent"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "agent"
+  - package-ecosystem: "cargo"
+    directory: "/dist"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dist"
+  - package-ecosystem: "cargo"
+    directory: "/k8s"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "k8s"
+  - package-ecosystem: "cargo"
+    directory: "/operator"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "operator"
+  - package-ecosystem: "cargo"
+    directory: "/package"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "package"
