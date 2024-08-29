@@ -1,9 +1,11 @@
+use std::str::FromStr;
 use rhai::{Engine,Map,Dynamic,ImmutableString};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client,Response};
 
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
+pub static CLIENT_NAME: &str = "vynil.solidite.fr";
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct Head {
@@ -52,45 +54,76 @@ impl Head {
     }
 }
 
-fn http_get(url: &str, headers: Map) -> Response {
-    let mut client = Client::new().get(url.to_string());
+fn http_get(url: &str, headers: Map) -> Result<Response, reqwest::Error> {
+    let five_sec = std::time::Duration::from_secs(60 * 5);
+    let mut client = Client::builder()
+        .user_agent(CLIENT_NAME)
+        .timeout(five_sec)
+        .build().unwrap().get(url.to_string());
     for (key,val) in headers {
         client = client.header(key.to_string(), val.to_string());
     }
     tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-        client.send().await.unwrap()
+        client.send().await
     })})
 }
-fn http_patch(url: &str, headers: Map, body: &str) -> Response {
-    let mut client = Client::new().patch(url.to_string()).body(body.to_string());
+fn http_patch(url: &str, headers: Map, body: &str) -> Result<Response, reqwest::Error> {
+    let five_sec = std::time::Duration::from_secs(60 * 5);
+    let mut client = Client::builder()
+        .user_agent(CLIENT_NAME)
+        .timeout(five_sec)
+        .build().unwrap().patch(url.to_string()).body(body.to_string());
     for (key,val) in headers {
         client = client.header(key.to_string(), val.to_string());
     }
     tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-        client.send().await.unwrap()
+        client.send().await
     })})
 }
-fn http_post(url: &str, headers: Map, body: &str) -> Response {
-    let mut client = Client::new().post(url.to_string()).body(body.to_string());
+fn http_post(url: &str, headers: Map, body: &str) -> Result<Response, reqwest::Error> {
+    let five_sec = std::time::Duration::from_secs(60 * 5);
+    let mut client = Client::builder()
+            .user_agent(CLIENT_NAME)
+            .timeout(five_sec)
+            .build().unwrap().post(url.to_string()).body(body.to_string());
     for (key,val) in headers {
         client = client.header(key.to_string(), val.to_string());
     }
     tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-        client.send().await.unwrap()
+        client.send().await
     })})
 }
-fn http_put(url: &str, headers: Map, body: &str) -> Response {
-    let mut client = Client::new().put(url.to_string()).body(body.to_string());
+fn http_put(url: &str, headers: Map, body: &str) -> Result<Response, reqwest::Error> {
+    let five_sec = std::time::Duration::from_secs(60 * 5);
+    let mut client = Client::builder()
+        .user_agent(CLIENT_NAME)
+        .timeout(five_sec)
+        .build().unwrap().put(url.to_string()).body(body.to_string());
     for (key,val) in headers {
         client = client.header(key.to_string(), val.to_string());
     }
     tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-        client.send().await.unwrap()
+        client.send().await
+    })})
+}
+fn http_delete(url: &str, headers: Map) -> Result<Response, reqwest::Error> {
+    let five_sec = std::time::Duration::from_secs(60 * 5);
+    let mut client = Client::builder()
+        .user_agent(CLIENT_NAME)
+        .timeout(five_sec)
+        .build().unwrap().delete(url.to_string());
+    for (key,val) in headers {
+        client = client.header(key.to_string(), val.to_string());
+    }
+    tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+        client.send().await
     })})
 }
 fn http_check(url: &str, headers: Map, code: i64) -> bool {
-    let res = http_get(url, headers);
-    i64::from(res.status().as_u16())==code
+    match http_get(url, headers) {
+        Ok(res) => i64::from(res.status().as_u16())==code,
+        Err(_) => false
+    }
 }
 pub fn add_http_to_engine(e: &mut Engine) {
     // TODO: http_get[,_json](uri,headers)
@@ -99,88 +132,234 @@ pub fn add_http_to_engine(e: &mut Engine) {
         http_check(&url.to_string(),headers,i64::from(code))
     });
     e.register_fn("http_get", move |url:ImmutableString,headers:Map| -> Dynamic {
-        let res = http_get(&url.to_string(),headers);
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            ret.insert("body".to_string().into(), Dynamic::from(res.text().await.unwrap()));
-            ret.into()
-        })})
+        match http_get(&url.to_string(),headers) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(res) => {
+                            ret.insert("body".to_string().into(), Dynamic::from(res));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
+    });
+    e.register_fn("http_delete", move |url:ImmutableString,headers:Map| -> Dynamic {
+        let mut ret = Map::new();
+        match http_delete(&url.to_string(),headers) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(res) => {
+                            ret.insert("body".to_string().into(), Dynamic::from(res));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_post", move |url:ImmutableString,headers:Map,data:ImmutableString| -> Dynamic {
-        let res = http_post(&url.to_string(),headers,&data.to_string());
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            ret.insert("body".to_string().into(), Dynamic::from(res.text().await.unwrap()));
-            ret.into()
-        })})
+        match http_post(&url.to_string(),headers,&data.to_string()) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(res) => {
+                            ret.insert("body".to_string().into(), Dynamic::from(res));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_patch", move |url:ImmutableString,headers:Map,data:ImmutableString| -> Dynamic {
-        let res = http_patch(&url.to_string(),headers,&data.to_string());
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            ret.insert("body".to_string().into(), Dynamic::from(res.text().await.unwrap()));
-            ret.into()
-        })})
+        match http_patch(&url.to_string(),headers,&data.to_string()) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(res) => {
+                            ret.insert("body".to_string().into(), Dynamic::from(res));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_put", move |url:ImmutableString,headers:Map,data:ImmutableString| -> Dynamic {
-        let res = http_put(&url.to_string(),headers,&data.to_string());
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            ret.insert("body".to_string().into(), Dynamic::from(res.text().await.unwrap()));
-            ret.into()
-        })})
+        match http_put(&url.to_string(),headers,&data.to_string()) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(res) => {
+                            ret.insert("body".to_string().into(), Dynamic::from(res));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_get_json", move |url:ImmutableString,headers:Map| -> Dynamic {
         let mut h = Head::from(headers);h.add_json_accept();
-        let res = http_get(&url.to_string(),h.get);
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            let text = res.text().await.unwrap();
-            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
-            ret.insert("body".to_string().into(), Dynamic::from(text));
-            ret.into()
-        })})
+        match http_get(&url.to_string(),h.get) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(text) => {
+                            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
+                            ret.insert("body".to_string().into(), Dynamic::from(text));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_post_json", move |url:ImmutableString,headers:Map,data:Dynamic| -> Dynamic {
         let mut h = Head::from(headers);h.add_json();
-        let res = http_post(&url.to_string(),h.get,&serde_json::to_string(&data).unwrap());
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            let text = res.text().await.unwrap();
-            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
-            ret.insert("body".to_string().into(), Dynamic::from(text));
-            ret.into()
-        })})
+        match http_post(&url.to_string(),h.get,&serde_json::to_string(&data).unwrap()) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(text) => {
+                            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
+                            ret.insert("body".to_string().into(), Dynamic::from(text));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_patch_json", move |url:ImmutableString,headers:Map,data:Dynamic| -> Dynamic {
         let mut h = Head::from(headers);h.add_json();
-        let res = http_patch(&url.to_string(),h.get,&serde_json::to_string(&data).unwrap());
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            let text = res.text().await.unwrap();
-            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
-            ret.insert("body".to_string().into(), Dynamic::from(text));
-            ret.into()
-        })})
+        match http_patch(&url.to_string(),h.get,&serde_json::to_string(&data).unwrap()) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(text) => {
+                            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
+                            ret.insert("body".to_string().into(), Dynamic::from(text));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_put_json", move |url:ImmutableString,headers:Map,data:Dynamic| -> Dynamic {
         let mut h = Head::from(headers);h.add_json();
-        let res = http_put(&url.to_string(),h.get,&serde_json::to_string(&data).unwrap());
         let mut ret = Map::new();
-        ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
-        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
-            let text = res.text().await.unwrap();
-            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
-            ret.insert("body".to_string().into(), Dynamic::from(text));
-            ret.into()
-        })})
+        match http_put(&url.to_string(),h.get,&serde_json::to_string(&data).unwrap()) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(text) => {
+                            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
+                            ret.insert("body".to_string().into(), Dynamic::from(text));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
+    });
+    e.register_fn("http_delete_json", move |url:ImmutableString,headers:Map| -> Dynamic {
+        let mut h = Head::from(headers);h.add_json();
+        let mut ret = Map::new();
+        match http_delete(&url.to_string(),h.get) {
+            Ok(res) => {
+                ret.insert("code".to_string().into(), Dynamic::from(res.status().as_u16()));
+                tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+                    match res.text().await {
+                        Ok(text) => {
+                            ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap());
+                            ret.insert("body".to_string().into(), Dynamic::from(text));
+                        },
+                        Err(e) => {
+                            ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                        }
+                    }
+                    ret.into()
+                })})
+            }, Err(e) => {
+                ret.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}", e)).unwrap());
+                ret.into()
+            }
+        }
     });
     e.register_fn("http_header", || -> Map {
         Head::new().get
