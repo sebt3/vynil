@@ -1,5 +1,5 @@
 use rhai::{Engine, Dynamic, ImmutableString};
-use k8s::{Client, handlers::{DistribHandler, IngressHandler, InstallHandler, SecretHandler, CustomResourceDefinitionHandler, ServiceHandler, NamespaceHandler, StorageClassHandler, CSIDriverHandler}};
+use k8s::{Client, handlers::{DistribHandler, IngressHandler, InstallHandler, SecretHandler, CustomResourceDefinitionHandler, ServiceHandler, NamespaceHandler, StorageClassHandler, CSIDriverHandler, NodeHandler, IngressClassHandler, TenantHandler, ClusterIssuerHandler}};
 use tokio::runtime::Handle;
 
 fn add_crd_to_engine(e: &mut Engine, client: &Client) {
@@ -111,6 +111,33 @@ fn add_ingress_to_engine(e: &mut Engine, client: &Client) {
     });
 }
 
+fn add_ingressclass_to_engine(e: &mut Engine, client: &Client) {
+    let cli: Client = client.clone();
+    e.register_fn("have_ingressclass", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = IngressClassHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("get_ingressclass", move |name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = IngressClassHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli: Client = client.clone();
+    e.register_fn("list_ingressclass", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = IngressClassHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+}
+
 fn add_secret_to_engine(e: &mut Engine, client: &Client) {
     let cli = client.clone();
     e.register_fn("have_secret", move |ns:ImmutableString, name:ImmutableString| -> bool {
@@ -192,6 +219,87 @@ fn add_ns_to_engine(e: &mut Engine, client: &Client) {
     });
 }
 
+fn add_node_to_engine(e: &mut Engine, client: &Client) {
+    let cli = client.clone();
+    e.register_fn("have_node", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = NodeHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_node", move |name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = NodeHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_node", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = NodeHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+}
+
+fn add_tenant_to_engine(e: &mut Engine, client: &Client) {
+    let cli = client.clone();
+    e.register_fn("have_tenant", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = TenantHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_tenant", move |name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = TenantHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_tenant", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = TenantHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+}
+
+fn add_clusterissuer_to_engine(e: &mut Engine, client: &Client) {
+    let cli = client.clone();
+    e.register_fn("have_clusterissuer", move |name:ImmutableString| -> bool {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = ClusterIssuerHandler::new(&cl);
+            handle.have(&name).await
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("get_clusterissuer", move |name:ImmutableString| -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = ClusterIssuerHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.get(&name).await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+    let cli = client.clone();
+    e.register_fn("list_clusterissuer", move || -> Dynamic {
+        let cl = cli.clone();
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            let mut handle = ClusterIssuerHandler::new(&cl);
+            serde_json::from_str(&serde_json::to_string(&handle.list().await.unwrap()).unwrap()).unwrap()
+        })})
+    });
+}
+
 fn add_sc_to_engine(e: &mut Engine, client: &Client) {
     let cli = client.clone();
     e.register_fn("have_storage_class", move |name:ImmutableString| -> bool {
@@ -251,9 +359,13 @@ pub fn add_k8s_to_engine(e: &mut Engine, client: &Client) {
     add_distrib_to_engine(e,client);
     add_install_to_engine(e,client);
     add_ingress_to_engine(e,client);
+    add_ingressclass_to_engine(e,client);
     add_secret_to_engine(e,client);
     add_service_to_engine(e,client);
     add_ns_to_engine(e,client);
+    add_node_to_engine(e,client);
+    add_clusterissuer_to_engine(e,client);
+    add_tenant_to_engine(e,client);
     add_sc_to_engine(e,client);
     add_csi_to_engine(e,client);
 }

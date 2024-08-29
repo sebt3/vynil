@@ -4,7 +4,7 @@ use kube::{
     Client,
 };
 
-use crate::{distrib::Distrib, install::Install};
+use crate::{distrib::Distrib, install::Install, tenants::Tenant, clusterissuers::ClusterIssuer};
 pub struct InstallHandler {
     api: Api<Install>,
 }
@@ -61,6 +61,62 @@ impl DistribHandler {
     }
 }
 
+pub struct TenantHandler {
+    api: Api<Tenant>,
+}
+impl TenantHandler {
+    #[must_use] pub fn new(cl: &Client) -> TenantHandler {
+        TenantHandler {
+            api: Api::all(cl.clone()),
+        }
+    }
+    pub async fn have(&mut self, name: &str) -> bool {
+        let lp = ListParams::default();
+        let list = self.api.list(&lp).await.unwrap();
+        for tnt in list {
+            if tnt.metadata.name.unwrap_or_default() == name {
+                return true;
+            }
+        }
+        false
+    }
+    pub async fn get(&mut self, name: &str) -> Result<Tenant, kube::Error> {
+        self.api.get(name).await
+    }
+    pub async fn list(&mut self) -> Result<ObjectList<Tenant>, kube::Error> {
+        let lp = ListParams::default();
+        self.api.list(&lp).await
+    }
+}
+
+pub struct ClusterIssuerHandler {
+    api: Api<ClusterIssuer>,
+}
+impl ClusterIssuerHandler {
+    #[must_use] pub fn new(cl: &Client) -> ClusterIssuerHandler {
+        ClusterIssuerHandler {
+            api: Api::all(cl.clone()),
+        }
+    }
+    pub async fn have(&mut self, name: &str) -> bool {
+        let lp = ListParams::default();
+        let list = self.api.list(&lp).await.unwrap();
+        for cissuer in list {
+            if cissuer.metadata.name.unwrap_or_default() == name {
+                return true;
+            }
+        }
+        false
+    }
+    pub async fn get(&mut self, name: &str) -> Result<ClusterIssuer, kube::Error> {
+        self.api.get(name).await
+    }
+    pub async fn list(&mut self) -> Result<ObjectList<ClusterIssuer>, kube::Error> {
+        let lp = ListParams::default();
+        self.api.list(&lp).await
+    }
+}
+
 pub use k8s_openapi::api::networking::v1::Ingress;
 pub struct IngressHandler {
     api: Api<Ingress>,
@@ -90,6 +146,35 @@ impl IngressHandler {
     }
 }
 
+pub use k8s_openapi::api::networking::v1::IngressClass;
+pub struct IngressClassHandler {
+    api: Api<IngressClass>,
+}
+impl IngressClassHandler {
+    #[must_use] pub fn new(cl: &Client) -> IngressClassHandler {
+        IngressClassHandler {
+            api: Api::all(cl.clone()),
+        }
+    }
+    pub async fn have(&mut self, name: &str) -> bool {
+        let lp = ListParams::default();
+        let list = self.api.list(&lp).await.unwrap();
+        for ing in list {
+            if ing.metadata.name.clone().unwrap() == name {
+                return true;
+            }
+        }
+        false
+    }
+    pub async fn get(&mut self, name: &str) -> Result<IngressClass, kube::Error> {
+        self.api.get(name).await
+    }
+    pub async fn list(&mut self) -> Result<ObjectList<IngressClass>, kube::Error> {
+        let lp = ListParams::default();
+        self.api.list(&lp).await
+    }
+}
+
 pub use k8s_openapi::api::core::v1::Secret;
 pub struct SecretHandler {
     api: Api<Secret>,
@@ -114,6 +199,35 @@ impl SecretHandler {
         self.api.get(name).await
     }
     pub async fn list(&mut self) -> Result<ObjectList<Secret>, kube::Error> {
+        let lp = ListParams::default();
+        self.api.list(&lp).await
+    }
+}
+
+pub use k8s_openapi::api::core::v1::Node;
+pub struct NodeHandler {
+    api: Api<Node>,
+}
+impl NodeHandler {
+    #[must_use] pub fn new(cl: &Client) -> NodeHandler {
+        NodeHandler {
+            api: Api::all(cl.clone()),
+        }
+    }
+    pub async fn have(&mut self, name: &str) -> bool {
+        let lp = ListParams::default();
+        let list = self.api.list(&lp).await.unwrap();
+        for node in list {
+            if node.metadata.name.clone().unwrap() == name {
+                return true;
+            }
+        }
+        false
+    }
+    pub async fn get(&mut self, name: &str) -> Result<Node, kube::Error> {
+        self.api.get(name).await
+    }
+    pub async fn list(&mut self) -> Result<ObjectList<Node>, kube::Error> {
         let lp = ListParams::default();
         self.api.list(&lp).await
     }
