@@ -12,7 +12,7 @@ pub fn gen_file(dest:&PathBuf, content: &String, force: bool) -> Result<()> {
 }
 
 pub fn run_init(src: &PathBuf) -> Result<()> {
-    shell::run_log(&format!("cd {:?};terraform init", src))
+    shell::run_log(&format!("cd {:?};tofu init", src))
 }
 
 pub fn run_plan(src: &PathBuf) -> Result<()> {
@@ -29,7 +29,7 @@ pub fn run_plan(src: &PathBuf) -> Result<()> {
     if ! Path::new(&file).is_file() {
         bail!("`env.tfvars` should be there");
     }
-    shell::run_log(&format!("cd {:?};terraform plan -input=false -out=tf.plan -var-file=env.tfvars", src))
+    shell::run_log(&format!("cd {:?};tofu plan -input=false -out=tf.plan -var-file=env.tfvars", src))
 }
 
 pub fn run_apply(src: &PathBuf) -> Result<()> {
@@ -39,7 +39,7 @@ pub fn run_apply(src: &PathBuf) -> Result<()> {
     if ! Path::new(&file).is_file() {
         match run_plan(src) {Ok(_) => {}, Err(e) => {return Err(e)}}
     }
-    shell::run_log(&format!("cd {:?};terraform apply -input=false -auto-approve tf.plan", src))
+    shell::run_log(&format!("cd {:?};tofu apply -input=false -auto-approve tf.plan", src))
 }
 
 pub fn get_plan(src: &PathBuf) -> Result<serde_json::Map<String, serde_json::Value>> {
@@ -49,7 +49,7 @@ pub fn get_plan(src: &PathBuf) -> Result<serde_json::Map<String, serde_json::Val
     if ! Path::new(&file).is_file() {
         match run_plan(src) {Ok(_) => {}, Err(e) => {return Err(e)}}
     }
-    let output = match shell::get_output(&format!("cd {:?};terraform show -json tf.plan", src)) {Ok(d) => d, Err(e) => {bail!("{e}")}};
+    let output = match shell::get_output(&format!("cd {:?};tofu show -json tf.plan", src)) {Ok(d) => d, Err(e) => {bail!("{e}")}};
     let json: serde_json::Map<String, serde_json::Value> = serde_json::from_str(output.as_str()).unwrap();
     Ok(json)
 }
@@ -68,7 +68,7 @@ pub fn run_destroy(src: &PathBuf) -> Result<()> {
     if ! Path::new(&file).is_file() {
         bail!("`env.tfvars` should be there");
     }
-    shell::run_log(&format!("cd {:?};terraform apply -destroy -input=false -auto-approve -var-file=env.tfvars", src))
+    shell::run_log(&format!("cd {:?};tofu apply -destroy -input=false -auto-approve -var-file=env.tfvars", src))
 }
 
 pub fn gen_providers(dest_dir: &PathBuf, providers: Option<Providers>) -> Result<()> {
@@ -323,7 +323,7 @@ provider \"gitea\" {
 }
 
 pub fn save_to_tf(filename: &str, name: &str, str: &str) -> Result<()> {
-  let content = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+  let content = match shell::get_output(&format!("echo 'jsondecode({:?})'|tofu console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
   gen_file(&filename.to_string().into(), &format!("variable \"{}\" {{
     default     = {}
   }}
@@ -354,7 +354,7 @@ variable \"install_owner\" {{
 ", category, component, instance);
   for (name,value) in config {
       let str = serde_json::to_string(value).unwrap();
-      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|tofu console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
       if ! yaml.tfaddtype.is_some() || *yaml.tfaddtype.as_ref().unwrap() {
           let typed = if name=="name"||name=="namespace" {"string".to_string()} else {yaml.get_tf_type(name)};
           tracing::debug!("{}({})={}", name, typed, output);
@@ -402,14 +402,14 @@ pub fn gen_tfvars(dest_dir: &PathBuf, config:&serde_json::Map<String, serde_json
     let mut content: String = String::new();
     for (name,value) in config {
       let str = serde_json::to_string(value).unwrap();
-      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|tofu console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
       tracing::debug!("{}={}", name, output);
       content += format!("{} = {}
 ", name, output).as_str();
     }
     if let Some(ownref) = owner {
       let str = serde_json::to_string(&ownref).unwrap();
-      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|terraform console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
+      let output = match shell::get_output(&format!("echo 'jsondecode({:?})'|tofu console",str))  {Ok(d) => d, Err(e) => {bail!("{e}")}};
 
       content += format!("install_owner = [{}]
 ", output).as_str();

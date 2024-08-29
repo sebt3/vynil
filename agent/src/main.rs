@@ -37,11 +37,11 @@ async fn main() {
     // existing objects : k get inst -n kydah-vynil vynil -o "jsonpath={.status.tfstate.resources[*].instances[*].attributes.ids}"|jq .
 
     // import kustomized ones :
-    // terraform show -json tf.plan|jq '.planned_values.root_module.resources[].address' -r|grep kustomization_resource.main|while read res;do terraform import "$res" "$(echo $res|sed 's/.*\["//;s/".*//')";done
+    // tofu show -json tf.plan|jq '.planned_values.root_module.resources[].address' -r|grep kustomization_resource.main|while read res;do tofu import "$res" "$(echo $res|sed 's/.*\["//;s/".*//')";done
 
     // import customressources
-    // terraform show -json tf.plan>/tmp/plan.json
-    // jq '.planned_values.root_module.resources[].address' -r /tmp/plan.json |nl -v 0|grep kubernetes_manifest|while read id res;do vers=$(jq ".planned_values.root_module.resources[$id].values.manifest.apiVersion" -r /tmp/plan.json);kind=$(jq ".planned_values.root_module.resources[$id].values.manifest.kind" -r /tmp/plan.json);name=$(jq ".planned_values.root_module.resources[$id].values.manifest.metadata.name" -r /tmp/plan.json);terraform import "$res" "apiVersion=$vers,kind=$kind,name=$name,namespace=solidite-auth";done
+    // tofu show -json tf.plan>/tmp/plan.json
+    // jq '.planned_values.root_module.resources[].address' -r /tmp/plan.json |nl -v 0|grep kubernetes_manifest|while read id res;do vers=$(jq ".planned_values.root_module.resources[$id].values.manifest.apiVersion" -r /tmp/plan.json);kind=$(jq ".planned_values.root_module.resources[$id].values.manifest.kind" -r /tmp/plan.json);name=$(jq ".planned_values.root_module.resources[$id].values.manifest.metadata.name" -r /tmp/plan.json);tofu import "$res" "apiVersion=$vers,kind=$kind,name=$name,namespace=solidite-auth";done
 
     env_logger::init_from_env(env_logger::Env::default().filter_or("LOG_LEVEL", "info").write_style_or("LOG_STYLE", "auto"));
     let args = Parameters::parse();

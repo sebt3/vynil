@@ -1,7 +1,7 @@
 
 # Vynil
 
-Vynil is a terraform based installer for kubernetes.
+Vynil is an opentofu based installer for kubernetes.
 The goal is to build a package manager akin to dpkg/rpm but for the kubernetes.
 
 Unlike helm, kustomize, argoCD, Flux... which all give you all the flexibility to install as you please. Vynil main goal is to help create an integrated distribution for kubernetes, so customisation come scarse but integration of everything by default.

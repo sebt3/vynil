@@ -30,7 +30,7 @@ RUN touch package/src/lib.rs k8s/src/lib.rs agent/src/lib.rs agent/src/main.rs \
 FROM debian:${DEBIAN_VERSION}-slim as middle
 ARG HELM_VERSION=v3.10.3
 ARG KUBECTL_VERSION=v1.29.3
-ARG TF_VERSION=1.3.6
+ARG TF_VERSION=1.8.1
 ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client"
 # hadolint ignore=DL3008,DL4006,SC2035
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
@@ -45,10 +45,9 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && curl -sL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCHITECTURE}/kubectl" -o /usr/local/bin/kubectl \
  && echo "$(curl -sL "https://dl.k8s.io/${KUBECTL_VERSION}/bin/linux/${ARCHITECTURE}/kubectl.sha256") /usr/local/bin/kubectl" | sha256sum --check \
  && curl -sL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCHITECTURE}.tar.gz" |tar --wildcards -C /usr/local/bin/ --strip-components=1 -xzf - */helm \
- && curl -sL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${ARCHITECTURE}.zip" -o /tmp/tf.zip \
- && unzip /tmp/tf.zip terraform -d /usr/local/bin \
- && rm /tmp/tf.zip \
- && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm \
+ && curl -sL "https://github.com/opentofu/opentofu/releases/download/v${TF_VERSION}/tofu_${TF_VERSION}_linux_${ARCHITECTURE}.tar.gz |tar -C /usr/local/bin/ -xzf - tofu \
+ && ln -sf /usr/local/bin/tofu /usr/local/bin/terraform \
+ && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/tofu \
  && mkdir -p /var/lib/vynil/keys /nonexistent \
  && chown -R nobody:nogroup /var/lib/vynil /nonexistent \
  && chmod 770 /var/lib/vynil /nonexistent \
@@ -57,7 +56,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
 FROM middle as downloader
 WORKDIR /src
 COPY agent/providers.tf .
-RUN terraform init
+RUN tofu init
 # Finally assemble everything together
 FROM middle as target
 COPY --from=builder /usr/src/agent/target/release/agent /usr/bin/agent
