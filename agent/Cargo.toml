@@ -9,7 +9,7 @@ license = "	BSD-3-Clause"
 package = { path = "../package" }
 k8s = { path = "../k8s" }
 clap = { version = "4.1.8", features = ["derive", "env"] }
-env_logger = "0.10.0"
+env_logger = "0.11.5"
 log = "0.4.17"
 anyhow = "1.0.69"
 handlebars = "4.3.6"
