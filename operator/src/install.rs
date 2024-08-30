@@ -1,5 +1,4 @@
 use crate::{OPERATOR, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, secrets::SecretHandler};
-use actix_web::http;
 use package::script;
 use k8s_openapi::api::core::v1::Namespace;
 use chrono::Utc;
