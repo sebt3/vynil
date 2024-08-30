@@ -1,4 +1,5 @@
 use crate::{OPERATOR, manager::Context, telemetry, Error, Result, Reconciler, jobs::JobHandler, events, secrets::SecretHandler};
+use actix_web::http;
 use package::script;
 use k8s_openapi::api::core::v1::Namespace;
 use chrono::Utc;
@@ -56,6 +57,11 @@ impl Reconciler for Install {
             kube::Error::Service(b) => {
                 // the api server might be overwhelmed, retry in 2mn
                 info!("Network error while querying for distrib: {:}", b);
+                return Ok(Action::requeue(Duration::from_secs(120)))
+            },
+            kube::Error::Api(e) => {
+                // the api server might be overwhelmed, retry in 2mn
+                info!("Api error while querying for distrib: {:}", e);
                 return Ok(Action::requeue(Duration::from_secs(120)))
             },
             e => {
