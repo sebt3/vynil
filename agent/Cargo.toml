@@ -16,7 +16,7 @@ handlebars = "4.3.6"
 regex = "1.7.2"
 ureq = "2.6.2"
 serde = { version = "1.0.148", features = ["derive"] }
-serde_json = "1.0.95"
+serde_json = "1.0.127"
 serde_yaml = "0.9.19"
 schemars = { version = "0.8.11", features = ["chrono"] }
 k8s-openapi = { version = "0.21.0", features = ["latest"], default-features = false }

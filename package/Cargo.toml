@@ -15,7 +15,7 @@ tracing = "0.1.37"
 regex = "1.7.3"
 futures = "0.3.25"
 indexmap = "1.9.3"
-serde_json = "1.0.95"
+serde_json = "1.0.127"
 handlebars = "4.3.6"
 indent = "0.1.1"
 schemars = { version = "0.8.11", features = ["chrono"] }
