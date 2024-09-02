@@ -7,7 +7,7 @@ license = "	BSD-3-Clause"
 
 [dependencies]
 k8s = { path = "../k8s" }
-anyhow = "1.0.69"
+anyhow = "1.0.86"
 rhai = { version = "1.18.0", features = ["sync", "serde"] }
 serde =  { version = "1.0.152", features = ["derive"] }
 serde_yaml = "0.9.17"
