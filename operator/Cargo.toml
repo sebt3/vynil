@@ -48,7 +48,7 @@ thiserror = "1.0.37"
 async-trait = "0.1.68"
 either = "1.8.1"
 base64 = "0.22.1"
-json-patch =  {version = "=1.2.0"}
+json-patch =  {version = "=2.0.0"}
 rhai = { version = "1.18.0", features = ["sync", "serde"] }
 
 [dependencies.kube]
