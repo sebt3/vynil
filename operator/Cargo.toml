@@ -53,7 +53,7 @@ rhai = { version = "1.18.0", features = ["sync", "serde"] }
 
 [dependencies.kube]
 features = ["runtime", "client", "derive"]
-version = "0.91.0"
+version = "0.95.0"
 
 # testing new releases - ignore
 #git = "https://github.com/kube-rs/kube-rs.git"
