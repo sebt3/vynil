@@ -20,7 +20,7 @@ tracing = "0.1.37"
 
 [dependencies.kube]
 features = ["runtime", "client", "derive"]
-version = "0.91.0"
+version = "0.96.0"
 
 [lib]
 name = "k8s"
