@@ -29,7 +29,7 @@ telemetry = ["tonic", "opentelemetry-otlp"]
 package = { path = "../package" }
 k8s = { path = "../k8s" }
 actix-web = "4.9.0"
-futures = "0.3.28"
+futures = "0.3.31"
 tokio = { version = "1.23.0", features = ["macros", "rt-multi-thread"] }
 k8s-openapi = { version = "0.22.0", features = ["latest"], default-features = false }
 schemars = { version = "0.8.12", features = ["chrono"] }
