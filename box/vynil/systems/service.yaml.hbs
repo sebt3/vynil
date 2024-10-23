@@ -1,0 +1,12 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{instance.appslug}}-controller
+spec:
+  ports:
+  - port: 80
+    targetPort: 9000
+    protocol: TCP
+    name: http
+  selector: {{json_to_str (selector_from_ctx this comp="controller")}}

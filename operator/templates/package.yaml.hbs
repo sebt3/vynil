@@ -1,0 +1,106 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ job_name }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      annotations:
+        mayfly.cloud.namecheap.com/expire: 120h
+    spec:
+      containers:
+      - name: install
+        args:
+        - {{ package_type }}
+        - {{ package_action }}
+        env:
+        - name: NAMESPACE
+          value: {{ namespace }}
+        - name: INSTANCE
+          value: {{ name }}
+        - name: OPTIONS_HASH
+          value: {{ digest }}
+        - name: TAG
+          value: {{ tag }}
+        - name: LOG_LEVEL
+          value: {{ log_level }}
+        - name: RUST_BACKTRACE
+          value: "1"
+        - name: RUST_LOG
+          value: {{ log_level }},agent={{ log_level }}
+        - name: VYNIL_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        image: {{ agent_image }}
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - mountPath: /package
+          name: package
+      initContainers:
+      - name: unpack
+        args:
+        - package
+        - unpack
+        env:
+        - name: REGISTRY
+          value: {{ registry }}
+        - name: IMAGE
+          value: {{ image }}
+        - name: TAG
+          value: {{ tag }}
+{{#if use_secret }}
+        - name: PULL_SECRET_PATH
+          value: /secret
+{{/if}}
+        - name: LOG_LEVEL
+          value: {{ log_level }}
+        - name: RUST_BACKTRACE
+          value: "1"
+        - name: RUST_LOG
+          value: {{ log_level }},agent={{ log_level }}
+        - name: VYNIL_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        image: {{ agent_image }}
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: package
+          mountPath: /package
+        - name: config
+          mountPath: /etc/vynil
+{{#if use_secret }}
+        - name: pullsecret
+          mountPath: /secret
+{{/if}}
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 65534
+        runAsGroup: 65534
+        runAsUser: 65534
+      serviceAccount: vynil-agent
+      serviceAccountName: vynil-agent
+      volumes:
+      - name: package
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: config
+        configMap:
+          name: vynil
+          optional: true
+{{#if use_secret }}
+      - name: pullsecret
+        secret:
+          secretName: {{ pull_secret }}
+{{/if}}

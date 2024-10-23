@@ -1,0 +1,61 @@
+[workspace]
+resolver = "1"
+members = [
+    "agent",
+    "operator",
+    "common",
+]
+default-members = [
+    "agent",
+    "operator",
+]
+
+[workspace.dependencies]
+k8s-openapi = { version = "0.23.0", features = ["latest"], default-features = false }
+tracing = "0.1.37"
+serde = { version = "1.0.185", features = ["derive"] }
+serde_json = "1.0.105"
+serde_yaml = "0.9.25"
+tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
+chrono = { version = "0.4.38", features = ["serde"] }
+schemars = { version = "0.8.12", features = ["chrono"] }
+actix-web = "4.9.0"
+base64 = "0.22.1"
+
+[workspace.dependencies.kube]
+features = ["runtime", "client", "derive" ]
+version = "0.96.0"
+
+
+[workspace.package]
+version = "0.3.0"
+authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
+edition = "2021"
+license = "	BSD-3-Clause"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[package]
+name = "vynil"
+publish = false
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[profile.release]
+strip = true
+
+# use "cargo install cargo-commander", then "cargo cmd generate"
+[package.metadata.commands]
+generate = { cmd=[
+    "cargo run --bin agent -- crdgen > box/vynil/crds/crd.yaml",
+]}
+crd = { cmd=[
+    "cargo run --bin agent -- crdgen > box/vynil/crds/crd.yaml",
+    "cp box/vynil/crds/crd.yaml deploy/crd/crd.yaml",
+    "kubectl apply -f box/vynil/crds/crd.yaml"
+]}
+fmt = { cmd=[
+    "cargo +nightly fmt"
+]}

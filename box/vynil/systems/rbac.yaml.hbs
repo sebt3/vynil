@@ -1,0 +1,103 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{instance.appslug}}-controller
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vynil-agent
+automountServiceAccountToken: true
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-{{instance.appslug}}-resources
+rules:
+- apiGroups: ["vynil.solidite.fr"]
+  resources: ["jukeboxes", "jukeboxes/status", "systeminstances", "systeminstances/status", "tenantinstances", "tenantinstances/status"]
+  verbs: ["get", "watch", "list", "patch"]
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create"]
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.appslug}}-resources
+rules:
+- apiGroups: ["batch"]
+  resources: ["cronjobs", "jobs"]
+  verbs: ["*"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-{{instance.appslug}}-admin
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-{{instance.appslug}}-controller-resources
+subjects:
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: {{instance.appslug}}-controller
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: vynil-agent
+roleRef:
+  kind: ClusterRole
+  name: {{instance.namespace}}-{{instance.appslug}}-resources
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.appslug}}-controller-resources
+subjects:
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: {{instance.appslug}}-controller
+roleRef:
+  kind: Role
+  name: {{instance.appslug}}-resources
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-vynil-agent-admin
+subjects:
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: vynil-agent
+roleRef:
+  kind: ClusterRole
+  name: {{instance.namespace}}-{{instance.appslug}}-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-vynil-agent-cluster-admin
+subjects:
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: vynil-agent
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io

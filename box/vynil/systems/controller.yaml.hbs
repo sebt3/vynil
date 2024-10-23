@@ -1,0 +1,49 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{instance.appslug}}-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{json_to_str (selector_from_ctx this comp="controller")}}
+  template:
+    metadata:
+      labels: {{json_to_str (selector_from_ctx this comp="controller")}}
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '9000'
+    spec:
+      serviceAccountName: {{instance.appslug}}-controller
+      containers:
+      - name: vynil-controller
+        image: {{image_from_ctx this "controller"}}
+        imagePullPolicy: IfNotPresent
+        resources: {{json_to_str (resources_from_ctx this "controller")}}
+        ports:
+        - name: http
+          containerPort: 9000
+          protocol: TCP
+        env:
+        - name: RUST_BACKTRACE
+          value: '1'
+        - name: RUST_LOG
+          value: info,controller=info
+        - name: AGENT_IMAGE
+          value: "{{image_from_ctx this "agent"}}"
+        - name: VYNIL_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 15

@@ -1,0 +1,165 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vynil-bootstrap
+  namespace: vynil-system
+automountServiceAccountToken: true
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: vynil-bootstrap
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: vynil-bootstrap-init
+subjects:
+- kind: ServiceAccount
+  namespace: vynil-system
+  name: vynil-bootstrap
+roleRef:
+  kind: ClusterRole
+  name: vynil-bootstrap
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: vynil.solidite.fr/v1
+kind: JukeBox
+metadata:
+  name: vynil
+spec:
+  source:
+    list:
+    - "docker.io/sebt3/vynil"
+  maturity: stable
+  schedule: "0 3 * * *"
+---
+apiVersion: vynil.solidite.fr/v1
+kind: SystemInstance
+metadata:
+  name: vynil
+  namespace: vynil-system
+spec:
+  jukebox: vynil
+  category: core
+  package: vynil
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vynil-bootstrap
+  namespace: vynil-system
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      annotations:
+        mayfly.cloud.namecheap.com/expire: 120h
+    spec:
+      containers:
+      - name: install
+        image: docker.io/sebt3/vynil-agent:0.3.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - system
+        - install
+        env:
+        - name: NAMESPACE
+          value: vynil-system
+        - name: INSTANCE
+          value: vynil
+        - name: TAG
+          value: 0.3.0
+        - name: LOG_LEVEL
+          value: info
+        - name: RUST_BACKTRACE
+          value: "1"
+        - name: RUST_LOG
+          value: info,agent=info
+        - name: VYNIL_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        volumeMounts:
+        - mountPath: /package
+          name: package
+      initContainers:
+      - name: scan
+        image: docker.io/sebt3/vynil-agent:0.3.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - box
+        - scan
+        env:
+        - name: JUKEBOX
+          value: vynil
+        - name: VYNIL_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: RUST_BACKTRACE
+          value: "1"
+        - name: LOG_LEVEL
+          value: info
+        - name: RUST_LOG
+          value: info,controller=info,agent=info
+      - name: unpack
+        image: docker.io/sebt3/vynil-agent:0.3.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - package
+        - unpack
+        env:
+        - name: REGISTRY
+          value: docker.io
+        - name: IMAGE
+          value: sebt3/vynil
+        - name: TAG
+          value: 0.3.0
+        - name: LOG_LEVEL
+          value: info
+        - name: RUST_BACKTRACE
+          value: "1"
+        - name: RUST_LOG
+          value: info,agent=info
+        - name: VYNIL_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        volumeMounts:
+        - mountPath: /package
+          name: package
+      securityContext:
+        fsGroup: 65534
+        runAsGroup: 65534
+        runAsUser: 65534
+      serviceAccount: vynil-bootstrap
+      serviceAccountName: vynil-bootstrap
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir:
+          sizeLimit: 500Mi
+        name: package

@@ -1,0 +1,18 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Package
+metadata:
+  name: test
+  category: core
+  description: Vynil controller to manage vynil packages installations
+  type: tenant
+  features:
+  - upgrade
+  - auto_config
+options:
+  test1:
+    default: cool
+  test2:
+    default:
+      text: Salut oh toi maitre des conneries
+      num: 42

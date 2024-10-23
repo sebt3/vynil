@@ -1,0 +1,667 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: jukeboxes.vynil.solidite.fr
+spec:
+  group: vynil.solidite.fr
+  names:
+    categories: []
+    kind: JukeBox
+    plural: jukeboxes
+    shortNames:
+    - box
+    singular: jukebox
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: Update schedule
+      jsonPath: .spec.schedule
+      name: schedule
+      type: string
+    - description: Last update date
+      format: date-time
+      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      name: last_updated
+      type: date
+    - description: Message
+      jsonPath: .status.conditions[?(@.type == 'Updated')].message
+      name: message
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Custom resource representing a JukeBox, source of vynil packages
+        properties:
+          spec:
+            description: Describe a source of vynil packages jukeboxution
+            properties:
+              maturity:
+                description: Jukebox maturity (stable/beta/alpha)
+                enum:
+                - stable
+                - beta
+                - alpha
+                nullable: true
+                type: string
+              pull_secret:
+                description: ImagePullSecret name in the vynil-system namespace
+                nullable: true
+                type: string
+              schedule:
+                description: Actual cron-type expression that defines the interval of the updates.
+                type: string
+              source:
+                description: Source type
+                nullable: true
+                oneOf:
+                - required:
+                  - list
+                - required:
+                  - harbor
+                - required:
+                  - script
+                properties:
+                  harbor:
+                    description: Harbor project to list image from
+                    properties:
+                      project:
+                        type: string
+                      registry:
+                        type: string
+                    required:
+                    - project
+                    - registry
+                    type: object
+                  list:
+                    description: List of oci images
+                    items:
+                      type: string
+                    type: array
+                  script:
+                    description: Custom script that produce the image list
+                    type: string
+                type: object
+            required:
+            - schedule
+            type: object
+          status:
+            description: The status object of `JukeBox`
+            nullable: true
+            properties:
+              conditions:
+                description: JukeBox Conditions
+                items:
+                  description: ApplicationCondition contains details about an application condition, which is usually an error or warning
+                  properties:
+                    generation:
+                      description: Generation for that status
+                      format: int64
+                      type: integer
+                    lastTransitionTime:
+                      description: LastTransitionTime is the time the condition was last observed
+                      format: date-time
+                      nullable: true
+                      type: string
+                    message:
+                      description: Message contains human-readable message indicating details about condition
+                      type: string
+                    status:
+                      description: Status ("True" or "False") describe if the condition is enbled
+                      enum:
+                      - 'True'
+                      - 'False'
+                      type: string
+                    type:
+                      description: Type is an application condition type
+                      enum:
+                      - Ready
+                      - Updated
+                      type: string
+                  required:
+                  - generation
+                  - message
+                  - status
+                  - type
+                  type: object
+                type: array
+              packages:
+                description: Vynil packages for this box
+                items:
+                  description: Vynil Package in JukeBox status
+                  properties:
+                    image:
+                      description: Image
+                      type: string
+                    metadata:
+                      description: Metadata for a package
+                      properties:
+                        app_version:
+                          description: Application version
+                          nullable: true
+                          type: string
+                        category:
+                          description: Package category
+                          type: string
+                        description:
+                          description: Package description
+                          type: string
+                        features:
+                          description: Package features
+                          items:
+                            description: Vynil package feature
+                            enum:
+                            - upgrade
+                            - backup
+                            - monitoring
+                            - high_availability
+                            - auto_config
+                            - auto_scaling
+                            type: string
+                          type: array
+                        name:
+                          description: Package name
+                          type: string
+                        type:
+                          description: Package type
+                          enum:
+                          - tenant
+                          - system
+                          type: string
+                      required:
+                      - category
+                      - description
+                      - features
+                      - name
+                      - type
+                      type: object
+                    options:
+                      description: Component options
+                      nullable: true
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    registry:
+                      description: Registry
+                      type: string
+                    requirements:
+                      description: Requirement
+                      items:
+                        description: Vynil Package Requirement
+                        oneOf:
+                        - required:
+                          - custom_resource_definition
+                        - required:
+                          - system_package
+                        - required:
+                          - tenant_package
+                        - required:
+                          - prefly
+                        - required:
+                          - storage_capability
+                        - required:
+                          - minimum_previous_version
+                        - required:
+                          - cpu
+                        - required:
+                          - memory
+                        - required:
+                          - disk
+                        properties:
+                          cpu:
+                            format: double
+                            type: number
+                          custom_resource_definition:
+                            type: string
+                          disk:
+                            format: uint64
+                            minimum: 0.0
+                            type: integer
+                          memory:
+                            format: uint64
+                            minimum: 0.0
+                            type: integer
+                          minimum_previous_version:
+                            type: string
+                          prefly:
+                            properties:
+                              name:
+                                type: string
+                              script:
+                                type: string
+                            required:
+                            - name
+                            - script
+                            type: object
+                          storage_capability:
+                            enum:
+                            - RWX
+                            - ROX
+                            type: string
+                          system_package:
+                            properties:
+                              category:
+                                type: string
+                              name:
+                                type: string
+                            required:
+                            - category
+                            - name
+                            type: object
+                          tenant_package:
+                            properties:
+                              category:
+                                type: string
+                              name:
+                                type: string
+                            required:
+                            - category
+                            - name
+                            type: object
+                        type: object
+                      type: array
+                    tag:
+                      description: Current tag
+                      type: string
+                  required:
+                  - image
+                  - metadata
+                  - registry
+                  - requirements
+                  - tag
+                  type: object
+                type: array
+            required:
+            - conditions
+            - packages
+            type: object
+        required:
+        - spec
+        title: JukeBox
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tenantinstances.vynil.solidite.fr
+spec:
+  group: vynil.solidite.fr
+  names:
+    categories: []
+    kind: TenantInstance
+    plural: tenantinstances
+    shortNames:
+    - vti
+    singular: tenantinstance
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Distribution
+      jsonPath: .spec.jukebox
+      name: dist
+      type: string
+    - description: Category
+      jsonPath: .spec.category
+      name: cat
+      type: string
+    - description: Component
+      jsonPath: .spec.package
+      name: comp
+      type: string
+    - description: Version
+      jsonPath: .status.tag
+      name: tag
+      type: string
+    - description: Last update date
+      format: date-time
+      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      name: last_updated
+      type: date
+    - description: Errors
+      jsonPath: .status.conditions[?(@.status == 'False')].message
+      name: errors
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Custom resource representing an Vynil tenant package installation
+        properties:
+          spec:
+            description: Describe a source of vynil packages jukeboxution
+            properties:
+              category:
+                description: The category name
+                type: string
+              jukebox:
+                description: The jukeboxution source name
+                type: string
+              options:
+                description: Parameters
+                nullable: true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              package:
+                description: The package name
+                type: string
+              version:
+                description: The package version
+                nullable: true
+                type: string
+            required:
+            - category
+            - jukebox
+            - package
+            type: object
+          status:
+            description: The status object of `TenantInstance`
+            nullable: true
+            properties:
+              conditions:
+                description: TenantInstance Conditions
+                items:
+                  description: ApplicationCondition contains details about an application condition, which is usually an error or warning
+                  properties:
+                    generation:
+                      description: Generation for that status
+                      format: int64
+                      type: integer
+                    lastTransitionTime:
+                      description: LastTransitionTime is the time the condition was last observed
+                      format: date-time
+                      nullable: true
+                      type: string
+                    message:
+                      description: Message contains human-readable message indicating details about condition
+                      type: string
+                    status:
+                      description: Status ("True" or "False") describe if the condition is enbled
+                      enum:
+                      - 'True'
+                      - 'False'
+                      type: string
+                    type:
+                      description: Type is an application condition type
+                      enum:
+                      - Ready
+                      - Installed
+                      - Backuped
+                      - Restored
+                      - AgentStarted
+                      - TofuInstalled
+                      - VitalApplied
+                      - ScalableApplied
+                      - OtherApplied
+                      - RhaiApplied
+                      type: string
+                  required:
+                  - generation
+                  - message
+                  - status
+                  - type
+                  type: object
+                type: array
+              digest:
+                description: Options digests
+                nullable: true
+                type: string
+              others:
+                description: List of other children
+                items:
+                  description: Children describe a k8s object
+                  properties:
+                    kind:
+                      description: kind of k8s object
+                      type: string
+                    name:
+                      description: Name of the object
+                      type: string
+                    namespace:
+                      description: Namespace is only used for Cluster TenantInstance for namespaced object
+                      nullable: true
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                nullable: true
+                type: array
+              rhaistate:
+                description: Current rhai status (gzip+base64) (for custom package information)
+                nullable: true
+                type: string
+              scalables:
+                description: List of scalable children
+                items:
+                  description: Children describe a k8s object
+                  properties:
+                    kind:
+                      description: kind of k8s object
+                      type: string
+                    name:
+                      description: Name of the object
+                      type: string
+                    namespace:
+                      description: Namespace is only used for Cluster TenantInstance for namespaced object
+                      nullable: true
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                nullable: true
+                type: array
+              tag:
+                description: Current tag
+                nullable: true
+                type: string
+              tfstate:
+                description: Current terraform status (gzip+base64)
+                nullable: true
+                type: string
+              vitals:
+                description: List of vital children
+                items:
+                  description: Children describe a k8s object
+                  properties:
+                    kind:
+                      description: kind of k8s object
+                      type: string
+                    name:
+                      description: Name of the object
+                      type: string
+                    namespace:
+                      description: Namespace is only used for Cluster TenantInstance for namespaced object
+                      nullable: true
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                nullable: true
+                type: array
+            required:
+            - conditions
+            type: object
+        required:
+        - spec
+        title: TenantInstance
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: systeminstances.vynil.solidite.fr
+spec:
+  group: vynil.solidite.fr
+  names:
+    categories: []
+    kind: SystemInstance
+    plural: systeminstances
+    shortNames:
+    - vsi
+    singular: systeminstance
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Distribution
+      jsonPath: .spec.jukebox
+      name: dist
+      type: string
+    - description: Category
+      jsonPath: .spec.category
+      name: cat
+      type: string
+    - description: Component
+      jsonPath: .spec.package
+      name: comp
+      type: string
+    - description: Version
+      jsonPath: .status.tag
+      name: tag
+      type: string
+    - description: Last update date
+      format: date-time
+      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      name: last_updated
+      type: date
+    - description: Errors
+      jsonPath: .status.conditions[?(@.status == 'False')].message
+      name: errors
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Custom resource representing an Vynil cluster package installation
+        properties:
+          spec:
+            description: Describe a source of vynil packages jukeboxution
+            properties:
+              category:
+                description: The category name
+                type: string
+              jukebox:
+                description: The jukeboxution source name
+                type: string
+              options:
+                description: Parameters
+                nullable: true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              package:
+                description: The package name
+                type: string
+              version:
+                description: The package version
+                nullable: true
+                type: string
+            required:
+            - category
+            - jukebox
+            - package
+            type: object
+          status:
+            description: The status object of `SystemInstance`
+            nullable: true
+            properties:
+              conditions:
+                description: SystemInstance Conditions
+                items:
+                  description: ApplicationCondition contains details about an application condition, which is usually an error or warning
+                  properties:
+                    generation:
+                      description: Generation for that status
+                      format: int64
+                      type: integer
+                    lastTransitionTime:
+                      description: LastTransitionTime is the time the condition was last observed
+                      format: date-time
+                      nullable: true
+                      type: string
+                    message:
+                      description: Message contains human-readable message indicating details about condition
+                      type: string
+                    status:
+                      description: Status ("True" or "False") describe if the condition is enbled
+                      enum:
+                      - 'True'
+                      - 'False'
+                      type: string
+                    type:
+                      description: Type is an application condition type
+                      enum:
+                      - Ready
+                      - Installed
+                      - AgentStarted
+                      - CrdApplied
+                      - TofuInstalled
+                      - SystemApplied
+                      - RhaiApplied
+                      type: string
+                  required:
+                  - generation
+                  - message
+                  - status
+                  - type
+                  type: object
+                type: array
+              crds:
+                description: List of crds children
+                items:
+                  type: string
+                nullable: true
+                type: array
+              digest:
+                description: Options digests
+                nullable: true
+                type: string
+              rhaistate:
+                description: Current rhai status (gzip+base64) (for custom package information)
+                nullable: true
+                type: string
+              systems:
+                description: List of system children
+                items:
+                  description: Children describe a k8s object
+                  properties:
+                    kind:
+                      description: kind of k8s object
+                      type: string
+                    name:
+                      description: Name of the object
+                      type: string
+                    namespace:
+                      description: Namespace is only used for Cluster SystemInstance for namespaced object
+                      nullable: true
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                nullable: true
+                type: array
+              tag:
+                description: Current tag
+                nullable: true
+                type: string
+              tfstate:
+                description: Current terraform status (gzip+base64)
+                nullable: true
+                type: string
+            required:
+            - conditions
+            type: object
+        required:
+        - spec
+        title: SystemInstance
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

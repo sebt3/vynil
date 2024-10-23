@@ -1,0 +1,48 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ job_name }}
+  labels:
+    app.kubernetes.io/instance: {{ name }}
+    app.kubernetes.io/managed-by: vynil
+    vynil.solidite.fr/owner-type: jukebox
+spec:
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: scan
+            args:
+            - box
+            - scan
+            env:
+            - name: JUKEBOX
+              value: {{ name }}
+            - name: VYNIL_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RUST_BACKTRACE
+              value: "1"
+            - name: LOG_LEVEL
+              value: {{ log_level }}
+            - name: RUST_LOG
+              value: info,controller=info,agent=info
+            image: {{ agent_image }}
+            imagePullPolicy: IfNotPresent
+          restartPolicy: OnFailure
+          securityContext:
+            fsGroup: 65534
+            runAsGroup: 65534
+            runAsUser: 65534
+          serviceAccount: {{ service_account }}
+          serviceAccountName: {{ service_account }}
+  schedule: {{ schedule }}
+  successfulJobsHistoryLimit: 3
