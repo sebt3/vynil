@@ -29,9 +29,9 @@ use tokio::{runtime::Handle, task::block_in_place};
 #[kube(
     doc = "Custom resource representing an Vynil tenant package installation",
     printcolumn = r#"
-    {"name":"dist",   "type":"string", "description":"Distribution", "jsonPath":".spec.jukebox"},
+    {"name":"Juke",   "type":"string", "description":"JukeBox", "jsonPath":".spec.jukebox"},
     {"name":"cat",    "type":"string", "description":"Category", "jsonPath":".spec.category"},
-    {"name":"comp",   "type":"string", "description":"Component", "jsonPath":".spec.package"},
+    {"name":"pkg",    "type":"string", "description":"Package", "jsonPath":".spec.package"},
     {"name":"tag",    "type":"string", "description":"Version", "jsonPath":".status.tag"},
     {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
     {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
@@ -346,6 +346,12 @@ impl TenantInstance {
         } else {
             Ok(None)
         }
+    }
+
+    fn have_condition(&self, cond: &ApplicationCondition) -> bool {
+        if let Some(status) = self.status.clone() {
+            status.conditions.clone().into_iter().any(|c| c.condition_type==cond.condition_type && c.generation== cond.generation && c.status == cond.status && c.message == cond.message)
+        } else {false}
     }
 
     fn get_conditions_excluding(&self, exclude: Vec<ConditionsType>) -> Vec<ApplicationCondition> {
@@ -732,105 +738,117 @@ impl TenantInstance {
     pub async fn set_agent_started(&mut self) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-        ]);
-        conditions.push(ApplicationCondition::agent_started(generation));
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
+        let cond = ApplicationCondition::agent_started(generation);
+        if ! self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+                ConditionsType::AgentStarted,
+            ]);
+            conditions.push(cond);
+            let result = self
+                .patch_status(
+                    client.clone(),
+                    json!({
+                        "conditions": conditions,
+                    }),
+                )
+                .await?;
+            self.send_event(client, Event {
+                type_: EventType::Normal,
+                reason: "AgentStarted".to_string(),
+                note: None,
+                action: "AgentStart".to_string(),
+                secondary: None,
+            })
             .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "AgentStarted".to_string(),
-            note: None,
-            action: "AgentStart".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
+            Ok(result)
+        } else {Ok(self.clone())}
     }
 
     pub async fn set_missing_box(&mut self, jukebox: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-        ]);
-        conditions.push(ApplicationCondition::missing_box(&jukebox, generation));
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
+        let cond = ApplicationCondition::missing_box(&jukebox, generation);
+        if ! self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+                ConditionsType::AgentStarted,
+            ]);
+            conditions.push(cond);
+            let result = self
+                .patch_status(
+                    client.clone(),
+                    json!({
+                        "conditions": conditions,
+                    }),
+                )
+                .await?;
+            self.send_event(client, Event {
+                type_: EventType::Warning,
+                reason: "MissingJukebox".to_string(),
+                note: Some(format!("JukeBox {jukebox} doesnt exist")),
+                action: "AgentStart".to_string(),
+                secondary: None,
+            })
             .await?;
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "MissingJukebox".to_string(),
-            note: Some(format!("JukeBox {jukebox} doesnt exist")),
-            action: "AgentStart".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
+            Ok(result)
+        } else {Ok(self.clone())}
     }
 
     pub async fn set_missing_package(&mut self, category: String, package: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-        ]);
-        conditions.push(ApplicationCondition::missing_package(&category, &package, generation));
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
+        let cond = ApplicationCondition::missing_package(&category, &package, generation);
+        if ! self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+                ConditionsType::AgentStarted,
+            ]);
+            conditions.push(cond);
+            let result = self
+                .patch_status(
+                    client.clone(),
+                    json!({
+                        "conditions": conditions,
+                    }),
+                )
+                .await?;
+            self.send_event(client, Event {
+                type_: EventType::Warning,
+                reason: "MissingPackage".to_string(),
+                note: Some(format!("Package {category}/{package} doesnt exist")),
+                action: "AgentStart".to_string(),
+                secondary: None,
+            })
             .await?;
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "MissingPackage".to_string(),
-            note: Some(format!("Package {category}/{package} doesnt exist")),
-            action: "AgentStart".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
+            Ok(result)
+        } else {Ok(self.clone())}
     }
 
     pub async fn set_missing_requirement(&mut self, reason: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-        ]);
-        conditions.push(ApplicationCondition::missing_requirement(&reason, generation));
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
+        let cond = ApplicationCondition::missing_requirement(&reason, generation);
+        if ! self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+                ConditionsType::AgentStarted,
+            ]);
+            conditions.push(cond);
+            let result = self
+                .patch_status(
+                    client.clone(),
+                    json!({
+                        "conditions": conditions,
+                    }),
+                )
+                .await?;
+            self.send_event(client, Event {
+                type_: EventType::Warning,
+                reason: "MissingRequirement".to_string(),
+                note: Some(reason),
+                action: "AgentStart".to_string(),
+                secondary: None,
+            })
             .await?;
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "MissingRequirement".to_string(),
-            note: Some(reason),
-            action: "AgentStart".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
+            Ok(result)
+        } else {Ok(self.clone())}
     }
 
     pub fn rhai_get(namespace: String, name: String) -> RhaiRes<Self> {

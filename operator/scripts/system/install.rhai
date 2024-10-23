@@ -58,11 +58,14 @@ if ! (instance.spec.jukebox in packages) {
         }
     }
 }
-if ! failed {
+if failed {
+    sleep(5);
+} else {
     // all green to start agent
     let job_def = yaml_decode(hbs.render_from("{{> package.yaml }}", context));
     let job_api = k8s_resource("Job", context.vynil_namespace);
     try {
+        log_info("Create Job");
         job_api.apply(context.job_name, job_def);
     } catch (e) {
         debug(e);

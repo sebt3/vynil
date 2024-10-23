@@ -16,7 +16,7 @@ images:
     repository: sebt3/vynil-agent
   controller:
     registry: docker.io
-    repository: sebt3/vynil-controller
+    repository: sebt3/vynil-operator
 resources:
   controller:
     requests:

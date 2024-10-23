@@ -241,9 +241,14 @@ impl K8sGeneric {
             if let Some(labels) = get_labels() {
                 if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
                     handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                    handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
+                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
+                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    }
                 }
             }
             if self.scope == Scope::Namespaced {
@@ -288,9 +293,14 @@ impl K8sGeneric {
             if let Some(labels) = get_labels() {
                 if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
                     handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                    handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
+                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
+                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    }
                 }
             }
             if self.scope == Scope::Namespaced {
@@ -335,9 +345,14 @@ impl K8sGeneric {
             if let Some(labels) = get_labels() {
                 if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
                     handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                    handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
+                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
+                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    }
                 }
             }
             if self.scope == Scope::Namespaced {
@@ -382,9 +397,14 @@ impl K8sGeneric {
             if let Some(labels) = get_labels() {
                 if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
                     handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                    handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
+                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
+                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    }
                 }
             }
             if self.scope == Scope::Namespaced {

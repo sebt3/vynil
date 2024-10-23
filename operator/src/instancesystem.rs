@@ -42,7 +42,9 @@ impl Reconciler for SystemInstance {
         rhai.ctx.set_value("hbs", ctx.renderer.clone());
         rhai.ctx.set_value("packages", Map::from(ctx.packages.read().await.clone()));
         match rhai.eval(&ctx.scripts["system/install"]) {
-            Ok(_) => Ok(Action::requeue(Duration::from_secs(15 * 60))),
+            Ok(_v) => {
+                Ok(Action::requeue(Duration::from_secs(15 * 60)))
+            },
             Err(e) => {
                 warn!("While reconcile SystemInstance {}/{}: {e}", self.namespace().unwrap_or_default(), self.name_any());
                 match e {
@@ -62,7 +64,9 @@ impl Reconciler for SystemInstance {
         rhai.ctx.set_value("hbs", ctx.renderer.clone());
         rhai.ctx.set_value("packages", Map::from(ctx.packages.read().await.clone()));
         match rhai.eval(&ctx.scripts["system/delete"]) {
-            Ok(_) => Ok(Action::await_change()),
+            Ok(_v) => {
+                Ok(Action::await_change())
+            },
             Err(e) => {
                 warn!("While cleanup SystemInstance {}/{}: {e}", self.namespace().unwrap_or_default(), self.name_any());
                 match e {

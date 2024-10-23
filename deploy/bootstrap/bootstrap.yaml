@@ -61,6 +61,7 @@ spec:
       annotations:
         mayfly.cloud.namecheap.com/expire: 120h
     spec:
+      restartPolicy: OnFailure
       containers:
       - name: install
         image: docker.io/sebt3/vynil-agent:0.3.0

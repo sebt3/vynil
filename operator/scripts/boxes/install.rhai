@@ -8,6 +8,7 @@ cronjob_api.apply(context.job_name, cj_def);
 let job_def = yaml_decode(hbs.render_from("{{> scan.yaml }}", context));
 let job_api = k8s_resource("Job", context.vynil_namespace);
 try {
+    log_info("Create Job");
     job_api.apply(context.job_name, job_def);
 } catch (e) {
     debug(e);

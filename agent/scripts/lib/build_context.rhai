@@ -61,6 +61,20 @@ fn get_default(def) {
     r
 }
 
+fn get_values(options, defaults) {
+    if type_of(options) == "()" {
+        defaults
+    } else if type_of(defaults) == "map" && type_of(options) == "map" {
+        let r = #{};
+        for k in defaults.keys() {
+            r[k] = get_values(options[k],defaults[k]);
+        }
+        r
+    } else {
+        options
+    }
+}
+
 fn run(instance, args) {
     let pkg = read_package_yaml(`${args.package_dir}/package.yaml`);
     let scs = k8s_resource("StorageClass").list().items.map(|s| #{ name: s.metadata.name, provisioner: s.provisioner });
@@ -81,6 +95,7 @@ fn run(instance, args) {
         let nodes = k8s_resource("Nodes").list_meta().items.map(|c| c.metadata.name);
         cluster_config["ha"] = nodes.len() > 1;
     }
+    let defaults = get_default(pkg.options);
 
     #{
         cluster: cluster_config,
@@ -112,8 +127,8 @@ fn run(instance, args) {
             requested: args.tag,
             appslug: appslug(instance.spec["package"], instance.metadata.name)
         },
-        values: instance.spec.options,
-        defaults: get_default(pkg.options),
+        values: get_values(instance.spec.options, defaults),
+        defaults: defaults,
         package_dir: args.package_dir
     }
 }

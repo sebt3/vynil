@@ -8,7 +8,7 @@ fn maturity_filter(str, maturity) {
 }
 
 let spec = box.spec;
-let use_auth = "pull_secret" in spec && spec.pull_secret!="";
+let use_auth = "pull_secret" in spec && spec.pull_secret!="" && spec.pull_secret!=();
 try {
     let images_list = if "harbor" in spec.source {
             harbor::list_repository(spec, args.namespace)
@@ -58,7 +58,12 @@ try {
     }
     let tmp = box.set_status_updated(found);
 } catch(e) {
-    log_warn(e);
-    let tmp = box.set_status_failed(e);
+    if type_of(e) == "string" {
+        log_warn(e);
+        let tmp = box.set_status_failed(e);
+    } else {
+        log_warn(json_encode(e));
+        let tmp = box.set_status_failed(json_encode(e));
+    }
     throw e;
 };

@@ -4,24 +4,34 @@ use semver::{Prerelease, Version};
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Semver {
     pub version: Version,
+    pub use_v: bool,
 }
 // support des rc (release candidate)
 impl Semver {
     pub fn parse(str: &str) -> Result<Self> {
-        let version = Version::parse(str).map_err(|e: semver::Error| Error::Semver(e))?;
-        Ok(Self { version })
+        let use_v = str.starts_with("v");
+        let version = if use_v {
+            let mut chars = str.chars();
+            chars.next();
+            Version::parse(chars.as_str()).map_err(|e| Error::Semver(e))?
+        } else {
+            Version::parse(str).map_err(|e| Error::Semver(e))?
+        };
+        Ok(Self {
+            version,
+            use_v,
+        })
     }
 
     pub fn opt_parse(str: &str) -> Option<Self> {
-        match Version::parse(str) {
-            Ok(version) => Some(Self { version }),
+        match Self::parse(str) {
+            Ok(version) => Some(version),
             Err(_) => None,
         }
     }
 
     pub fn rhai_parse(str: &str) -> RhaiRes<Self> {
-        let version = Version::parse(str).map_err(|e: semver::Error| rhai_err(Error::Semver(e)))?;
-        Ok(Self { version })
+        Self::parse(str).map_err(|e| rhai_err(e))
     }
 
     pub fn inc_major(&mut self) {
@@ -80,7 +90,11 @@ impl Semver {
     }
 
     pub fn to_string(&mut self) -> String {
-        self.version.to_string()
+        if self.use_v {
+            format!("v{}",self.version.to_string())
+        } else {
+            self.version.to_string()
+        }
     }
 }
 

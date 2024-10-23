@@ -43,6 +43,9 @@ handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
 handlebars_helper!(labels: |ctx: Value| {
     ctx.as_object().unwrap()["instance"].as_object().unwrap()["labels"].clone()
 });
+handlebars_helper!(have_crd: |ctx: Value, name: String| {
+    ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().into_iter().any(|crd| crd.to_string()==name)
+});
 
 #[derive(Clone, Debug)]
 pub struct HandleBars<'a> {
@@ -53,6 +56,7 @@ impl HandleBars<'_> {
     pub fn new() -> HandleBars<'static> {
         let mut engine = new_hbs();
         engine.register_helper("labels_from_ctx", Box::new(labels));
+        engine.register_helper("ctx_have_crd", Box::new(have_crd));
         engine.register_helper("selector_from_ctx", Box::new(selector));
         engine.register_helper("base64_decode", Box::new(base64_decode));
         engine.register_helper("base64_encode", Box::new(base64_encode));

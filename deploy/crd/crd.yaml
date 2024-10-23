@@ -299,17 +299,17 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Distribution
+    - description: JukeBox
       jsonPath: .spec.jukebox
-      name: dist
+      name: Juke
       type: string
     - description: Category
       jsonPath: .spec.category
       name: cat
       type: string
-    - description: Component
+    - description: Package
       jsonPath: .spec.package
-      name: comp
+      name: pkg
       type: string
     - description: Version
       jsonPath: .status.tag
@@ -510,17 +510,17 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Distribution
+    - description: JukeBox
       jsonPath: .spec.jukebox
-      name: dist
+      name: Juke
       type: string
     - description: Category
       jsonPath: .spec.category
       name: cat
       type: string
-    - description: Component
+    - description: Package
       jsonPath: .spec.package
-      name: comp
+      name: pkg
       type: string
     - description: Version
       jsonPath: .status.tag

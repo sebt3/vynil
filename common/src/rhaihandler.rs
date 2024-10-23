@@ -100,10 +100,12 @@ impl Script {
                 "yaml_decode_multi",
                 |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
                     let mut res = Vec::new();
-                    for document in serde_yaml::Deserializer::from_str(&val.to_string()) {
-                        let doc =
-                            Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
-                        res.push(doc);
+                    if val.len() > 5 { // non-empty string only
+                        for document in serde_yaml::Deserializer::from_str(&val.to_string()) {
+                            let doc =
+                                Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
+                            res.push(doc);
+                        }
                     }
                     Ok(res)
                 },
@@ -285,8 +287,8 @@ impl Script {
         script
             .engine
             .register_type_with_name::<SystemInstance>("SystemInstance")
-            .register_fn("get_cluster_instance", SystemInstance::rhai_get)
-            .register_fn("list_cluster_instance", SystemInstance::rhai_list)
+            .register_fn("get_system_instance", SystemInstance::rhai_get)
+            .register_fn("list_system_instance", SystemInstance::rhai_list)
             .register_fn("options_digest", SystemInstance::get_options_digest)
             .register_fn("get_tfstate", SystemInstance::rhai_get_tfstate)
             .register_fn("get_rhaistate", SystemInstance::rhai_get_rhaistate)
