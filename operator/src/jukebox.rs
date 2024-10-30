@@ -1,18 +1,18 @@
 use crate::{manager::Context, telemetry, Error, Result, Reconciler, JukeBox};
 use chrono::Utc;
+use k8s_openapi::api::batch::v1::{CronJob, Job};
 use kube::{
-    api::{Api, ResourceExt},
+    api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},
     runtime::{
-        controller::Action,
-        finalizer::{finalizer, Event as Finalizer},
+        conditions, controller::Action, finalizer::{finalizer, Event as Finalizer}, wait::await_condition
     },
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::{Span, field, instrument, warn};
 use async_trait::async_trait;
-use common::rhaihandler::{to_dynamic, Map, Script};
+use common::get_client_name;
 
 static JUKEBOX_FINALIZER: &str = "jukeboxes.vynil.solidite.fr";
 
@@ -35,66 +35,70 @@ pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> 
 impl Reconciler for JukeBox {
     // Reconcile (for non-finalizer related changes)
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
+        tracing::info!("reconcile");
         ctx.diagnostics.write().await.last_event = Utc::now();
-        let mut rhai = Script::new(vec![]);
-        rhai.set_dynamic("context", &serde_json::to_value(ctx.base_context.clone()).unwrap());
-        rhai.ctx.set_value("box", self.clone());
-        rhai.ctx.set_value("hbs", ctx.renderer.clone());
-        match rhai.eval(&ctx.scripts["boxes/install"]) {
-            Ok(_) => {
-                tracing::info!("Updating packages cache");
-                match JukeBox::list().await {
-                    Ok(lst) => {
-                        let mut map: Map = BTreeMap::new();
-                        for i in lst.items {
-                            if let Some(status) = i.status.clone() {
-                                let pcks = if let Some(pull_secret) = i.spec.pull_secret.clone() {
-                                    let mut res: Vec<Value> = Vec::new();
-                                    for pck in status.packages {
-                                        let mut tmp = serde_json::to_value(pck).unwrap();
-                                        tmp["pull_secret"] = serde_json::to_value(pull_secret.clone()).unwrap();
-                                        res.push(tmp);
-                                    }
-                                    to_dynamic(serde_json::to_value(res).unwrap()).unwrap()
-                                } else {
-                                    to_dynamic(serde_json::to_value(status.packages).unwrap()).unwrap()
-                                };
-                                map.insert(i.name_any().into(), pcks);
-                            }
-                        }
-                        *ctx.packages.write().await = map;
-                    },
-                    Err(e) => tracing::warn!("While listing jukebox: {:?}", e)
-                };
-                Ok(Action::requeue(Duration::from_secs(15 * 60)))
-            },
-            Err(e) => {
-                warn!("While reconcile JukeBox {}: {e}", self.name_any());
-                match e {
-                    // TODO: better error handling
-                    e => Err(e)
+        let mut hbs = ctx.renderer.clone();
+        let client = ctx.client.clone();
+        let ns = ctx.client.default_namespace();
+        let job_name = format!("scan-{}", self.name_any());
+        let mut context = ctx.base_context.clone();
+        context.as_object_mut().unwrap().insert("name".to_string(), self.name_any().into());
+        context.as_object_mut().unwrap().insert("job_name".to_string(), job_name.clone().into());
+        context.as_object_mut().unwrap().insert("schedule".to_string(), self.spec.schedule.clone().into());
+        // Create the CronJob
+        let cj_def_str = hbs.render("{{> cronscan.yaml }}", &context)?;
+        let cj_def: Value = serde_yaml::from_str(&cj_def_str).map_err(|e| Error::YamlError(e))?;
+        let cron_api: Api<CronJob> = Api::namespaced(client.clone(), ns);
+        cron_api.patch(&job_name, &PatchParams::apply(&get_client_name()).force(), &Patch::Apply(cj_def)).await.map_err(|e| Error::KubeError(e))?;
+        // Create the Job
+        let job_def_str = hbs.render("{{> scan.yaml }}", &context)?;
+        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(|e| Error::YamlError(e))?;
+        let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
+        let _job = match job_api.patch(&job_name, &PatchParams::apply(&get_client_name()).force(), &Patch::Apply(job_def.clone())).await {
+            Ok(j) => j,
+            Err(_) => {
+                if let either::Left(j) = job_api.delete(&job_name, &DeleteParams::foreground()).await.map_err(|e| Error::KubeError(e))? {
+                    let uid = j.metadata.uid.unwrap_or_default();
+                    let cond = await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
+                    tokio::time::timeout(std::time::Duration::from_secs(20), cond).await.map_err(|e| Error::Elapsed(e))?.map_err(|e| Error::KubeWaitError(e))?;
                 }
+                job_api.create(&PostParams::default(), &serde_json::from_value(job_def).map_err(|e|Error::SerializationError(e))?).await.map_err(|e| Error::KubeError(e))?
             }
-        }
+        };
+        // Wait for the Job completion
+        let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
+        tokio::time::timeout(std::time::Duration::from_secs(10*60), cond).await.map_err(|e| Error::Elapsed(e))?.map_err(|e|Error::KubeWaitError(e))?;
+        tracing::info!("Updating packages cache");
+        match JukeBox::list().await {
+            Ok(lst) => ctx.set_package_cache(&lst).await,
+            Err(e) => tracing::warn!("While listing jukebox: {:?}", e)
+        };
+        Ok(Action::requeue(Duration::from_secs(15 * 60)))
     }
 
     // Reconcile with finalize cleanup (the object was deleted)
     async fn cleanup(&self, ctx: Arc<Context>) -> Result<Action> {
         ctx.diagnostics.write().await.last_event = Utc::now();
-        let mut rhai = Script::new(vec![]);
-        rhai.set_dynamic("context", &serde_json::to_value(ctx.base_context.clone()).unwrap());
-        rhai.ctx.set_value("box", self.clone());
-        rhai.ctx.set_value("hbs", ctx.renderer.clone());
-        match rhai.eval(&ctx.scripts["boxes/delete"]) {
-            Ok(_) => Ok(Action::await_change()),
-            Err(e) => {
-                warn!("While cleanup JukeBox {}: {e}", self.name_any());
-                match e {
-                    // TODO: better error handling
-                    e => Err(e)
-                }
-            }
+        let client = ctx.client.clone();
+        let ns = ctx.client.default_namespace();
+        let job_name = format!("scan-{}", self.name_any());
+        let cron_api: Api<CronJob> = Api::namespaced(client.clone(), ns);
+        let cron = cron_api.get_metadata_opt(&job_name).await;
+        if !cron.is_err() && cron.unwrap().is_some() {
+            match cron_api.delete(&job_name, &DeleteParams::foreground()).await {
+                Ok(_) => {},
+                Err(e) => tracing::warn!("Deleting CronJob {} failed with: {e}", &job_name),
+            };
         }
+        let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
+        let job = job_api.get_metadata_opt(&job_name).await;
+        if !job.is_err() && job.unwrap().is_some() {
+            match job_api.delete(&job_name, &DeleteParams::foreground()).await {
+                Ok(_) => {},
+                Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
+            };
+        }
+        Ok(Action::await_change())
     }
 }
 

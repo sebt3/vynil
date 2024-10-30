@@ -37,7 +37,6 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && mkdir -p /work \
  && chown nobody:nogroup /work
 COPY --from=builder /usr/src/operator/target/release/operator /usr/bin/operator
-COPY operator/scripts /usr/lib/vynil/scripts
 COPY operator/templates /usr/lib/vynil/templates
 USER nobody
 WORKDIR /work

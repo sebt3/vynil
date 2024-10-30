@@ -1,10 +1,10 @@
 use crate::{jukebox, JukeBox, instancesystem, SystemInstance, instancetenant, TenantInstance, Metrics};
-use common::{handlebarshandler::HandleBars, rhaihandler::{Map, to_dynamic}};
+use common::{handlebarshandler::HandleBars, vynilpackage::VynilPackage};
 use std::{sync::Arc, path::PathBuf, collections::BTreeMap};
 use chrono::{DateTime, Utc};
 use futures::{future::BoxFuture, FutureExt, StreamExt};
 use kube::{
-    api::{Api, ListParams},
+    api::{Api, ListParams, ObjectList},
     client::Client,
     runtime::{
         controller::Controller,
@@ -17,6 +17,10 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.3.0";
 
+pub struct JukeCacheItem {
+    pub pull_secret: Option<String>,
+    pub packages: Vec<VynilPackage>,
+}
 
 // Context for our reconciler
 #[derive(Clone)]
@@ -29,12 +33,24 @@ pub struct Context {
     pub metrics: Metrics,
     /// handlebars renderer
     pub renderer: HandleBars<'static>,
-    /// Rhai scripts
-    pub scripts: BTreeMap<String, String>,
     /// Base context
     pub base_context: Value,
     /// Packages cache
-    pub packages: Arc<RwLock<Map>>,
+    pub packages: Arc<RwLock<BTreeMap<String, JukeCacheItem>>>,
+}
+impl Context {
+    pub async fn set_package_cache(&self, list: &ObjectList<JukeBox>) {
+        let mut cache = BTreeMap::new();
+        for juke in list.items.clone() {
+            if let Some(status) = juke.status.clone() {
+                cache.insert(juke.name_any(), JukeCacheItem {
+                    pull_secret: juke.spec.pull_secret.clone(),
+                    packages: status.packages,
+                });
+            }
+        }
+        *self.packages.write().await = cache;
+    }
 }
 
 /// Diagnostics to be exposed by the web server
@@ -72,35 +88,19 @@ impl Manager {
             Ok(_) => (),
             Err(e) => tracing::warn!("Registering template generated: {e}")
         }
-        let mut scripts: BTreeMap<String, String> = BTreeMap::<String, String>::new();
-        for file in vec!["boxes/install", "boxes/delete", "system/delete", "system/install", "tenant/delete", "tenant/install"] {
-            scripts.insert(file.to_string(), match std::fs::read_to_string(format!("{}/scripts/{file}.rhai",controller_dir)) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("Loading {file}.rhai failed with: {e}"); String::new()
-            }});
-        }
-        let packages: Arc<RwLock<Map>> = Arc::default();
+        let packages: Arc<RwLock<BTreeMap<String, JukeCacheItem>>> = Arc::default();
         match JukeBox::list().await {
-            Ok(lst) => {
-                let mut map: Map = BTreeMap::new();
-                for i in lst.items {
-                    if let Some(status) = i.status.clone() {
-                        let pcks = if let Some(pull_secret) = i.spec.pull_secret.clone() {
-                            let mut res: Vec<Value> = Vec::new();
-                            for pck in status.packages {
-                                let mut tmp = serde_json::to_value(pck).unwrap();
-                                tmp["pull_secret"] = serde_json::to_value(pull_secret.clone()).unwrap();
-                                res.push(tmp);
-                            }
-                            to_dynamic(serde_json::to_value(res).unwrap()).unwrap()
-                        } else {
-                            to_dynamic(serde_json::to_value(status.packages).unwrap()).unwrap()
-                        };
-                        map.insert(i.name_any().into(), pcks);
+            Ok(list) => {
+                let mut cache = BTreeMap::new();
+                for juke in list.items.clone() {
+                    if let Some(status) = juke.status.clone() {
+                        cache.insert(juke.name_any(), JukeCacheItem {
+                            pull_secret: juke.spec.pull_secret.clone(),
+                            packages: status.packages,
+                        });
                     }
                 }
-                *packages.write().await = map;
+                *packages.write().await = cache;
             },
             Err(e) => tracing::warn!("While listing jukebox: {:?}", e)
         };
@@ -110,7 +110,6 @@ impl Manager {
             metrics: Metrics::default(),
             diagnostics: manager.diagnostics.clone(),
             renderer: hbs,
-            scripts,
             base_context: json!({
                 "vynil_namespace": std::env::var("VYNIL_NAMESPACE").unwrap_or_else(|_| "vynil-system".to_string()),
                 "agent_image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| DEFAULT_AGENT_IMAGE.to_string()),

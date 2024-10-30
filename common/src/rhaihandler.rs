@@ -416,4 +416,10 @@ impl Script {
             .eval_with_scope::<Dynamic>(&mut self.ctx, script)
             .map_err(|e| RhaiError(e))
     }
+    pub fn eval_truth(&mut self, script: &str) -> Result<bool, Error> {
+        self
+            .engine
+            .eval_with_scope::<bool>(&mut self.ctx, script)
+            .map_err(|e| RhaiError(e))
+    }
 }
