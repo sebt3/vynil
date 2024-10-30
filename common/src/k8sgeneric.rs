@@ -1,5 +1,5 @@
 use crate::{
-    context::{get_client, get_client_name, get_labels, get_owner},
+    context::{get_client, get_client_name, get_labels, get_owner, get_owner_ns},
     rhai_err, Error, Result, RhaiRes,
 };
 use kube::{
@@ -71,6 +71,7 @@ impl K8sObject {
 #[derive(Clone, Debug)]
 pub struct K8sGeneric {
     pub api: Option<Api<DynamicObject>>,
+    pub ns: Option<String>,
     pub scope: Scope,
 }
 
@@ -95,18 +96,20 @@ impl K8sGeneric {
         {
             let api = if cap.scope == Scope::Cluster || ns.is_none() {
                 Api::all_with(CLIENT.clone(), &res)
-            } else if let Some(namespace) = ns {
+            } else if let Some(namespace) = ns.clone() {
                 Api::namespaced_with(CLIENT.clone(), &namespace, &res)
             } else {
                 Api::default_namespaced_with(CLIENT.clone(), &res)
             };
             K8sGeneric {
                 api: Some(api),
+                ns,
                 scope: cap.scope,
             }
         } else {
             K8sGeneric {
                 api: None,
+                ns: None,
                 scope: Scope::Cluster,
             }
         }
@@ -253,10 +256,16 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced {
                 if let Some(owner) = get_owner() {
-                    if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                        handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
-                    } else {
-                        handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                    if let Some(ns) = get_owner_ns() {
+                        if let Some(mine) = self.ns.clone() {
+                            if ns == mine {
+                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                } else {
+                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -305,10 +314,16 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced {
                 if let Some(owner) = get_owner() {
-                    if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                        handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
-                    } else {
-                        handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                    if let Some(ns) = get_owner_ns() {
+                        if let Some(mine) = self.ns.clone() {
+                            if ns == mine {
+                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                } else {
+                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -357,10 +372,16 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced {
                 if let Some(owner) = get_owner() {
-                    if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                        handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
-                    } else {
-                        handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                    if let Some(ns) = get_owner_ns() {
+                        if let Some(mine) = self.ns.clone() {
+                            if ns == mine {
+                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                } else {
+                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -409,10 +430,16 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced {
                 if let Some(owner) = get_owner() {
-                    if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                        handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
-                    } else {
-                        handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                    if let Some(ns) = get_owner_ns() {
+                        if let Some(mine) = self.ns.clone() {
+                            if ns == mine {
+                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                } else {
+                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                }
+                            }
+                        }
                     }
                 }
             }

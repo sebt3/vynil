@@ -95,6 +95,7 @@ fn run(instance, args) {
         let nodes = k8s_resource("Nodes").list_meta().items.map(|c| c.metadata.name);
         cluster_config["ha"] = nodes.len() > 1;
     }
+    cluster_config["vynil_namespace"] = args.vynil_namespace;
     let defaults = get_default(pkg.options);
 
     #{

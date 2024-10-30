@@ -10,11 +10,11 @@ terraform {
     }
     postgresql = {
         source  = "cyrilgdn/postgresql"
-        version = "~> 1.19.0"
+        version = "~> 1.24.0"
     }
     mysql = {
         source  = "petoju/mysql"
-        version = "~> 3.0.43"
+        version = "~> 3.0.65"
     }
   }
 }

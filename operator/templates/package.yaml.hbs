@@ -11,7 +11,7 @@ spec:
         mayfly.cloud.namecheap.com/expire: 120h
     spec:
       containers:
-      - name: install
+      - name: {{ package_action }}
         args:
         - {{ package_type }}
         - {{ package_action }}

@@ -29,6 +29,14 @@ pub fn set_system(i: SystemInstance) {
 pub fn set_box(jb: JukeBox) {
     *CONTEXT.lock().unwrap() = VynilContext::JukeBox(jb);
 }
+pub fn get_owner_ns() -> Option<String> {
+    match &*CONTEXT.lock().unwrap() {
+        VynilContext::TenantInstance(i) => Some(i.metadata.namespace.clone().unwrap_or_default()),
+        VynilContext::SystemInstance(i) => Some(i.metadata.namespace.clone().unwrap_or_default()),
+        VynilContext::JukeBox(_j) => None,
+        VynilContext::None => None,
+    }
+}
 pub fn get_owner() -> Option<serde_json::Value> {
     match &*CONTEXT.lock().unwrap() {
         VynilContext::TenantInstance(i) => Some(serde_json::json!({

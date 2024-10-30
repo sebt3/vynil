@@ -6,13 +6,15 @@ fn run(instance, context) {
             let ns = if old.namespace != () {old.namespace} else {instance.metadata.namespace};
             let api = k8s_resource(old.kind, ns);
             if api.exist() {
-                let o = api.get_obj(old.name);
-                o.delete();
-                deleted.push(o);
+                try {
+                    let o = api.get_obj(old.name);
+                    o.delete();
+                    deleted.push(o);
+                } catch(e) {}
             }
         }
         for d in deleted {
-            log_info(`Waiting for ${d.kind} ${d.metadata.name} to be deleted`);
+            log_info(`Waiting for ${d.metadata.name} to be deleted`);
             d.wait_deleted(60*5);
         }
     }

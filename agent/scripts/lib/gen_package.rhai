@@ -9,15 +9,15 @@ fn gen_system(path, docs) {
     if name != () {
         for doc in docs {
             if doc.kind == "CustomResourceDefinition" {
-                create_dir(`${path}/crds`);
+                create_dir(`${path}/get_crds`);
                 if "conversion" in doc.spec && doc.spec.conversion != () {
                     if "webhook" in doc.spec.conversion && doc.spec.conversion.webhook != () {
                         doc.spec.conversion.webhook.clientConfig.service.name.replace(name, "{{ instance.appslug }}");
                         doc.spec.conversion.webhook.clientConfig.service.namespace = "{{ instance.namespace }}";
                     }
-                    gen_yaml(`${path}/crds/${doc.metadata.name}.yaml.hbs`, doc);
+                    gen_yaml(`${path}/get_crds/${doc.metadata.name}.yaml.hbs`, doc);
                 } else {
-                    gen_yaml(`${path}/crds/${doc.metadata.name}.yaml`, doc);
+                    gen_yaml(`${path}/get_crds/${doc.metadata.name}.yaml`, doc);
                 }
             } else if doc.kind != () && doc.kind != "Namespace" {
                 create_dir(`${path}/get_systems`);
