@@ -647,7 +647,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "flate2",
- "handlebars 6.2.0",
+ "handlebars",
  "handlebars_misc_helpers",
  "k8s-openapi",
  "kube",
@@ -1207,20 +1207,6 @@ dependencies = [
 
 [[package]]
 name = "handlebars"
-version = "5.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d08485b96a0e6393e9e4d1b8d48cf74ad6c063cd905eb33f42c1ce3f0377539b"
-dependencies = [
- "log",
- "pest",
- "pest_derive",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "handlebars"
 version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd4ccde012831f9a071a637b0d4e31df31c0f6c525784b35ae76a9ac6bc1e315"
@@ -1238,14 +1224,14 @@ dependencies = [
 
 [[package]]
 name = "handlebars_misc_helpers"
-version = "0.16.3"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5951e009629bdf4d54f36e72308f2e2119cc1254616d8f425aa7d3b612661667"
+checksum = "4a6b7773acad4d2ef705172b8b9a50f9e9d94dba9d6f6f0309a73453509e90da"
 dependencies = [
  "attohttpc",
  "cruet",
  "enquote",
- "handlebars 5.1.2",
+ "handlebars",
  "jmespath",
  "jsonnet-rs",
  "log",
