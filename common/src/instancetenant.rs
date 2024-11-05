@@ -5,6 +5,7 @@ use crate::{
     Error, Result, RhaiRes,
 };
 use chrono::{DateTime, Utc};
+use k8s_openapi::api::core::v1::Namespace;
 use kube::{
     api::{Api, ListParams, ObjectList, Patch, PatchParams},
     runtime::events::{Event, EventType, Recorder},
@@ -346,6 +347,24 @@ impl TenantInstance {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn get_tenant_namespaces(&self) ->Result<Vec<String>> {
+        let my_ns = self.metadata.namespace.clone().unwrap();
+        let ns_api: Api<Namespace> = Api::all(get_client());
+        let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
+        let label_key = std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
+        let res = vec!(my_ns);
+        if let Some(labels) = my_ns_meta.metadata.labels.clone() {
+            if labels.clone().keys().into_iter().any(|k| k== &label_key) {
+                let tenant_name = &labels[&label_key];
+                let mut lp = ListParams::default();
+                lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
+                let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
+                return Ok(my_nss.items.into_iter().map(|n| n.metadata.name.unwrap()).collect());
+            }
+        }
+        Ok(res)
     }
 
     fn have_condition(&self, cond: &ApplicationCondition) -> bool {
@@ -1002,6 +1021,12 @@ impl TenantInstance {
     pub fn rhai_set_missing_requirement(&mut self, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_missing_requirement(reason).await })
+        })
+        .map_err(|e| rhai_err(e))
+    }
+    pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<Vec<String>> {
+        block_in_place(|| {
+            Handle::current().block_on(async move { self.get_tenant_namespaces().await })
         })
         .map_err(|e| rhai_err(e))
     }

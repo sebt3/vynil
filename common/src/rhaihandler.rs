@@ -247,6 +247,7 @@ impl Script {
             .engine
             .register_type_with_name::<TenantInstance>("TenantInstance")
             .register_fn("get_tenant_instance", TenantInstance::rhai_get)
+            .register_fn("get_tenant_namespaces", TenantInstance::rhai_get_tenant_namespaces)
             .register_fn("list_tenant_instance", TenantInstance::rhai_list)
             .register_fn("options_digest", TenantInstance::get_options_digest)
             .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)

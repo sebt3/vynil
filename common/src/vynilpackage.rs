@@ -128,8 +128,10 @@ impl VynilPackageRequirement {
                 Ok((lst.items.into_iter().any(|i| i.spec.category == *category && i.spec.package == *name), format!("System package {category}/{name} is not installed")))
             },
             VynilPackageRequirement::TenantPackage { category, name } => {
-                tracing::warn!("TenantPackage Requirement is a TODO");
-                Ok((true, format!("Tenant package {category}/{name} is not installed")))
+                let allowed = inst.get_tenant_namespaces().await?;
+                let api: Api<TenantInstance> = Api::all(client);
+                let lst = api.list(&ListParams::default()).await.map_err(|e| Error::KubeError(e))?;
+                Ok((lst.items.into_iter().any(|i| i.spec.category == *category && i.spec.package == *name && allowed.contains(&i.metadata.namespace.unwrap())), format!("Tenant package {category}/{name} is not installed")))
             },
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability

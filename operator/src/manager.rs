@@ -115,6 +115,7 @@ impl Manager {
                 "agent_image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| DEFAULT_AGENT_IMAGE.to_string()),
                 "service_account": std::env::var("AGENT_ACCOUNT").unwrap_or_else(|_| "vynil-agent".to_string()),
                 "log_level": std::env::var("AGENT_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
+                "label_key": std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string()),
             }),
             packages,
         });
