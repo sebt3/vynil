@@ -3,6 +3,7 @@ fn run(instance, context) {
     if is_dir(`${context.package_dir}/crds`) {
         log_info(`Installing CRDs from ${context.package_dir}/crds from ${instance.metadata.namespace} ${instance.metadata.name}`);
         import_run("install_crds", instance, context);
+        update_k8s_crd_cache();
         instance = get_system_instance(instance.metadata.namespace, instance.metadata.name);
     }
     if is_dir(`${context.package_dir}/tofu`) {

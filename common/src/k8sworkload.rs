@@ -5,27 +5,13 @@ use crate::{
 use k8s_openapi::api::{apps::v1::Deployment, batch::v1::Job};
 use kube::{
     api::Api,
-    discovery::Discovery, runtime::wait::{await_condition, conditions, Condition}, Client, ResourceExt
+    runtime::wait::{await_condition, conditions, Condition}, Client, ResourceExt
 };
 use rhai::Dynamic;
 
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
 }
-fn populate_cache() -> Discovery {
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async move {
-            Discovery::new(CLIENT.clone())
-                .run()
-                .await
-                .expect("create discovery")
-        })
-    })
-}
-lazy_static::lazy_static! {
-    pub static ref CACHE: Discovery = populate_cache();
-}
-
 
 #[derive(Clone, Debug)]
 pub struct K8sDeploy {

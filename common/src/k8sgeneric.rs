@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use crate::{
     context::{get_client, get_client_name, get_labels, get_owner, get_owner_ns},
     rhai_err, Error, Result, RhaiRes,
@@ -6,7 +8,7 @@ use kube::{
     api::{
         Api, DeleteParams, DynamicObject, ListParams, ObjectList, PartialObjectMeta, Patch, PatchParams,
         PostParams,
-    }, discovery::{ApiCapabilities, ApiResource, Discovery, Scope}, runtime::wait::{await_condition, conditions}, Client, ResourceExt
+    }, discovery::{ApiCapabilities, ApiResource, Discovery, Scope}, runtime::wait::{await_condition, conditions, Condition}, Client, ResourceExt
 };
 use rhai::{serde::to_dynamic, Dynamic};
 use serde_json::json;
@@ -25,7 +27,11 @@ fn populate_cache() -> Discovery {
     })
 }
 lazy_static::lazy_static! {
-    pub static ref CACHE: Discovery = populate_cache();
+    pub static ref CACHE: Mutex<Discovery> = Mutex::new(populate_cache());
+}
+
+pub fn update_cache() {
+    *CACHE.lock().unwrap() = populate_cache();
 }
 
 #[derive(Clone, Debug)]
@@ -64,8 +70,46 @@ impl K8sObject {
         } else {
             "".to_string()
         }
-
     }
+
+    pub fn is_condition(cond: String) -> impl Condition<DynamicObject> {
+        move |obj: Option<&DynamicObject>| {
+            tracing::warn!("Testing conditions");
+            if let Some(dynobj) = &obj {
+                if dynobj.data.is_object() && dynobj.data.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"status".to_string()) {
+                    let status = dynobj.data.as_object().unwrap()["status"].clone();
+                    if status.is_object() && status.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"conditions".to_string()) {
+                        let conditions = status.as_object().unwrap()["conditions"].clone();
+                        if conditions.is_array() && conditions.as_array().unwrap().into_iter().any(|c| c.is_object() &&
+                            c.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"type".to_string()) &&
+                            c.as_object().unwrap()["type"].is_string() &&
+                            c.as_object().unwrap()["type"].to_string() == cond &&
+                            c.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"status".to_string()) &&
+                            c.as_object().unwrap()["status"].is_string() &&
+                            c.as_object().unwrap()["status"].to_string() == "True".to_string()
+                        ) {
+                            return true
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    pub fn wait_condition(&mut self, condition: String, timeout: i64) -> RhaiRes<()> {
+        let name = self.obj.name_any();
+        tracing::warn!("wait_condition {} {}", &condition, name);
+        let cond = await_condition(self.api.clone(), &name, Self::is_condition(condition));
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond).await.map_err(|e| Error::Elapsed(e))
+            })
+        }).map_err(|e| rhai_err(e))?.map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
+        Ok(())
+    }
+
+
 }
 
 #[derive(Clone, Debug)]
@@ -80,7 +124,7 @@ pub struct K8sGeneric {
 impl K8sGeneric {
     #[must_use]
     pub fn new(name: &str, ns: Option<String>) -> K8sGeneric {
-        if let Some((res, cap)) = CACHE
+        if let Some((res, cap)) = CACHE.lock().unwrap()
             .groups()
             .flat_map(|group| {
                 group

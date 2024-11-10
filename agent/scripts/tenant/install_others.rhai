@@ -2,7 +2,7 @@ import "install_from_dir" as dir;
 fn run(instance, context) {
     import_run("install_others_pre", instance, context);
     try {
-        let applied_objs = dir::install(instance, context, `${context.package_dir}/others`, false, true);
+        let applied_objs = dir::install_allowed(instance, context, `${context.package_dir}/others`, context.tenant.namespaces);
         if instance.status != () && instance.status.others != () {
             dir::remove(applied_objs, instance.status.others, instance.metadata.namespace);
         }

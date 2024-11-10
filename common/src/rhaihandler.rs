@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    context, handlebarshandler::HandleBars, httphandler::RestClient, instancesystem::SystemInstance, instancetenant::TenantInstance, jukebox::JukeBox, k8sgeneric::{K8sGeneric, K8sObject}, k8sworkload::{K8sDeploy, K8sJob}, ocihandler::Registry, passwordhandler::Passwords, rhai_err, shellhandler, vynilpackage::{rhai_read_package_yaml, VynilPackageSource}, Error::{self, *}, RhaiRes, Semver, Result
+    context, handlebarshandler::HandleBars, httphandler::RestClient, instancesystem::SystemInstance, instancetenant::TenantInstance, jukebox::JukeBox, k8sgeneric::{update_cache, K8sGeneric, K8sObject}, k8sworkload::{K8sDeploy, K8sJob}, ocihandler::Registry, passwordhandler::Passwords, rhai_err, shellhandler, vynilpackage::{rhai_read_package_yaml, VynilPackageSource}, Error::{self, *}, Result, RhaiRes, Semver
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 pub use rhai::{
@@ -202,6 +202,7 @@ impl Script {
             .register_get("kind", K8sObject::get_kind)
             .register_get("metadata", K8sObject::get_metadata)
             .register_fn("delete", K8sObject::rhai_delete)
+            .register_fn("wait_condition", K8sObject::wait_condition)
             .register_fn("wait_deleted", K8sObject::rhai_wait_deleted);
         script
             .engine
@@ -209,6 +210,7 @@ impl Script {
             .register_fn("k8s_resource", K8sGeneric::new_global)
             .register_fn("k8s_resource", K8sGeneric::new_ns)
             .register_fn("list", K8sGeneric::rhai_list)
+            .register_fn("update_k8s_crd_cache", update_cache)
             .register_fn("list_meta", K8sGeneric::rhai_list_meta)
             .register_fn("get", K8sGeneric::rhai_get)
             .register_fn("get_meta", K8sGeneric::rhai_get_meta)
@@ -247,6 +249,7 @@ impl Script {
             .engine
             .register_type_with_name::<TenantInstance>("TenantInstance")
             .register_fn("get_tenant_instance", TenantInstance::rhai_get)
+            .register_fn("get_tenant_name", TenantInstance::rhai_get_tenant_name)
             .register_fn("get_tenant_namespaces", TenantInstance::rhai_get_tenant_namespaces)
             .register_fn("list_tenant_instance", TenantInstance::rhai_list)
             .register_fn("options_digest", TenantInstance::get_options_digest)

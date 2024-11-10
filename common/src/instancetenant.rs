@@ -349,7 +349,23 @@ impl TenantInstance {
         }
     }
 
-    pub async fn get_tenant_namespaces(&self) ->Result<Vec<String>> {
+    pub async fn get_tenant_name(&self) -> Result<String> {
+        let my_ns = self.metadata.namespace.clone().unwrap();
+        let ns_api: Api<Namespace> = Api::all(get_client());
+        let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
+        let label_key = std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
+        if let Some(labels) = my_ns_meta.metadata.labels.clone() {
+            if labels.clone().keys().into_iter().any(|k| k== &label_key) {
+                Ok(labels[&label_key].clone())
+            } else {
+                Ok(my_ns)
+            }
+        } else {
+            Ok(my_ns)
+        }
+    }
+
+    pub async fn get_tenant_namespaces(&self) -> Result<Vec<String>> {
         let my_ns = self.metadata.namespace.clone().unwrap();
         let ns_api: Api<Namespace> = Api::all(get_client());
         let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
@@ -1021,6 +1037,12 @@ impl TenantInstance {
     pub fn rhai_set_missing_requirement(&mut self, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_missing_requirement(reason).await })
+        })
+        .map_err(|e| rhai_err(e))
+    }
+    pub fn rhai_get_tenant_name(&mut self) -> RhaiRes<String> {
+        block_in_place(|| {
+            Handle::current().block_on(async move { self.get_tenant_name().await })
         })
         .map_err(|e| rhai_err(e))
     }

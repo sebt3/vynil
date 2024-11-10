@@ -2,7 +2,7 @@ import "install_from_dir" as dir;
 fn run(instance, context) {
     import_run("install_vitals_pre", instance, context);
     try {
-        let applied_objs = dir::install(instance, context, `${context.package_dir}/vitals`, false, true);
+        let applied_objs = dir::install_allowed(instance, context, `${context.package_dir}/vitals`, context.tenant.namespaces);
         if instance.status != () && instance.status.vitals != () {
             for old in instance.status.vitals {
                 if ! applied_objs.some(|n| n.kind == old.kind && n.namespace == old.namespace && n.name == old.name) {
