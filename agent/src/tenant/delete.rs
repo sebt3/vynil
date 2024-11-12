@@ -1,6 +1,6 @@
+use clap::Args;
 use common::{context::set_tenant, instancetenant::TenantInstance, rhaihandler::Script, Result};
 use serde::{Deserialize, Serialize};
-use clap::Args;
 
 #[derive(Args, Debug, Serialize, Deserialize)]
 pub struct Parameters {
@@ -52,6 +52,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
         format!("{}/scripts", args.package_dir),
         format!("{}/tenant", args.script_dir),
         format!("{}/lib", args.script_dir),
+        format!("{}", args.config_dir),
     ]);
     let context = TenantInstance::get(args.namespace.clone(), args.instance.clone()).await?;
     set_tenant(context.clone());

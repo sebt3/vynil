@@ -1,7 +1,13 @@
-use common::{context::{set_system, set_tenant}, instancesystem::SystemInstance, instancetenant::TenantInstance, rhaihandler::Script, Result};
+use clap::Args;
+use common::{
+    context::{set_system, set_tenant},
+    instancesystem::SystemInstance,
+    instancetenant::TenantInstance,
+    rhaihandler::Script,
+    Result,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use clap::Args;
 
 #[derive(clap::ValueEnum, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -83,5 +89,5 @@ pub async fn run(args: &Parameters) -> Result<()> {
         "import(\"test\") as test;\n\
         test::run(instance, args);",
     )?;
-     Ok(())
+    Ok(())
 }

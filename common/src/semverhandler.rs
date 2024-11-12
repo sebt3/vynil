@@ -17,10 +17,7 @@ impl Semver {
         } else {
             Version::parse(str).map_err(|e| Error::Semver(e))?
         };
-        Ok(Self {
-            version,
-            use_v,
-        })
+        Ok(Self { version, use_v })
     }
 
     pub fn opt_parse(str: &str) -> Option<Self> {
@@ -91,7 +88,7 @@ impl Semver {
 
     pub fn to_string(&mut self) -> String {
         if self.use_v {
-            format!("v{}",self.version.to_string())
+            format!("v{}", self.version.to_string())
         } else {
             self.version.to_string()
         }

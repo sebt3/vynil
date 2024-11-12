@@ -1,7 +1,7 @@
 mod build;
+mod test;
 mod unpack;
 mod update;
-mod test;
 use clap::{Parser, Subcommand};
 use std::process;
 

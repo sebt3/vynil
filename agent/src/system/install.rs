@@ -1,6 +1,6 @@
+use clap::Args;
 use common::{context::set_system, instancesystem::SystemInstance, rhaihandler::Script, Result};
 use serde::{Deserialize, Serialize};
-use clap::Args;
 
 #[derive(Args, Debug, Serialize, Deserialize)]
 pub struct Parameters {
@@ -55,6 +55,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
         format!("{}/scripts", args.package_dir),
         format!("{}/system", args.script_dir),
         format!("{}/lib", args.script_dir),
+        format!("{}", args.config_dir),
     ]);
     let context = SystemInstance::get(args.namespace.clone(), args.instance.clone()).await?;
     set_system(context.clone());

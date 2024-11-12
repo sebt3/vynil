@@ -47,3 +47,11 @@ spec:
             port: http
           initialDelaySeconds: 5
           periodSeconds: 15
+        volumeMounts:
+        - name: config
+          mountPath: /etc/vynil
+      volumes:
+      - name: config
+        configMap:
+          name: vynil
+          optional: true

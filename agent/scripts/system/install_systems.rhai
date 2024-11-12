@@ -1,4 +1,5 @@
 import "install_from_dir" as dir;
+import "wait" as wait;
 fn run(instance, context) {
     import_run("install_systems_pre", instance, context);
     try {
@@ -7,11 +8,7 @@ fn run(instance, context) {
             dir::remove(applied_objs, instance.status.systems, instance.metadata.namespace);
         }
         let tmp = instance.set_status_systems(applied_objs);
-        for d in applied_objs.filter(|d| d.kind == "Deployment") {
-            log_info(`Waiting for ${d.kind} ${d.namespace} ${d.name} to be available`);
-            let deploy = get_deployment(d.namespace, d.name);
-            deploy.wait_available(60*5);
-        }
+        wait::all(applied_objs);
     } catch (e) {
         switch type_of(e) {
             "string" => instance.set_status_system_failed(e),

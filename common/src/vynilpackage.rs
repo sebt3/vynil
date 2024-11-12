@@ -1,4 +1,7 @@
-use crate::{instancesystem::SystemInstance, instancetenant::TenantInstance, rhai_err, rhaihandler::Script, Error, Result, RhaiRes};
+use crate::{
+    instancesystem::SystemInstance, instancetenant::TenantInstance, rhai_err, rhaihandler::Script, Error,
+    Result, RhaiRes,
+};
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{api::ListParams, Api, Client};
 pub use openapiv3::Schema;
@@ -80,72 +83,95 @@ impl VynilPackageRequirement {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;
                 Ok((r.is_some(), format!("CRD {crd} is not installed")))
-            },
+            }
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
                 Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed")))
-            },
+            }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
-                let lst = api.list(&ListParams::default()).await.map_err(|e| Error::KubeError(e))?;
-                Ok((lst.items.into_iter().any(|i| i.spec.category == *category && i.spec.package == *name), format!("System package {category}/{name} is not installed")))
-            },
+                let lst = api
+                    .list(&ListParams::default())
+                    .await
+                    .map_err(|e| Error::KubeError(e))?;
+                Ok((
+                    lst.items
+                        .into_iter()
+                        .any(|i| i.spec.category == *category && i.spec.package == *name),
+                    format!("System package {category}/{name} is not installed"),
+                ))
+            }
             VynilPackageRequirement::TenantPackage { category, name } => {
                 tracing::warn!("TenantPackage Requirement for a system package is invalid, skipping");
                 Ok((true, format!("Tenant package {category}/{name} is not installed")))
-            },
+            }
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
-                Ok((true, format!("Storage capability {:?} isn't available",capa)))
-            },
+                Ok((true, format!("Storage capability {:?} isn't available", capa)))
+            }
             VynilPackageRequirement::MinimumPreviousVersion(prev) => {
                 //TODO: implement MinimumPreviousVersion
                 tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
                 Ok((true, format!("Minimum {prev} version is not available")))
-            },
-            _ => {
-                Ok((true, "".to_string()))
-            },
+            }
+            _ => Ok((true, "".to_string())),
         }
     }
+
     pub async fn check_tenant(&self, inst: &TenantInstance, client: Client) -> Result<(bool, String)> {
         match self {
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;
                 Ok((r.is_some(), format!("CRD {crd} is not installed")))
-            },
+            }
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
                 Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed")))
-            },
+            }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
-                let lst = api.list(&ListParams::default()).await.map_err(|e| Error::KubeError(e))?;
-                Ok((lst.items.into_iter().any(|i| i.spec.category == *category && i.spec.package == *name), format!("System package {category}/{name} is not installed")))
-            },
+                let lst = api
+                    .list(&ListParams::default())
+                    .await
+                    .map_err(|e| Error::KubeError(e))?;
+                Ok((
+                    lst.items
+                        .into_iter()
+                        .any(|i| i.spec.category == *category && i.spec.package == *name),
+                    format!("System package {category}/{name} is not installed"),
+                ))
+            }
             VynilPackageRequirement::TenantPackage { category, name } => {
                 let allowed = inst.get_tenant_namespaces().await?;
                 let api: Api<TenantInstance> = Api::all(client);
-                let lst = api.list(&ListParams::default()).await.map_err(|e| Error::KubeError(e))?;
-                Ok((lst.items.into_iter().any(|i| i.spec.category == *category && i.spec.package == *name && allowed.contains(&i.metadata.namespace.unwrap())), format!("Tenant package {category}/{name} is not installed")))
-            },
+                let lst = api
+                    .list(&ListParams::default())
+                    .await
+                    .map_err(|e| Error::KubeError(e))?;
+                Ok((
+                    lst.items.into_iter().any(|i| {
+                        i.spec.category == *category
+                            && i.spec.package == *name
+                            && allowed.contains(&i.metadata.namespace.unwrap())
+                    }),
+                    format!("Tenant package {category}/{name} is not installed"),
+                ))
+            }
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
-                Ok((true, format!("Storage capability {:?} isn't available",capa)))
-            },
+                Ok((true, format!("Storage capability {:?} isn't available", capa)))
+            }
             VynilPackageRequirement::MinimumPreviousVersion(prev) => {
                 //TODO: implement MinimumPreviousVersion
                 tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
                 Ok((true, format!("Minimum {prev} version is not available")))
-            },
-            _ => {
-                Ok((true, "".to_string()))
-            },
+            }
+            _ => Ok((true, "".to_string())),
         }
     }
 }

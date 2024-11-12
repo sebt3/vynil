@@ -1,4 +1,4 @@
-use crate::{JukeBox, TenantInstance, SystemInstance, Error};
+use crate::{Error, JukeBox, SystemInstance, TenantInstance};
 use kube::ResourceExt;
 use prometheus::{
     register_histogram_vec, register_int_counter, register_int_counter_vec, HistogramVec, IntCounter,
@@ -87,33 +87,38 @@ impl Metrics {
             .inc();
     }
 
-    #[must_use] pub fn jukebox_count_and_measure(&self) -> ReconcileMeasurer {
+    #[must_use]
+    pub fn jukebox_count_and_measure(&self) -> ReconcileMeasurer {
         self.jukebox_reconciliations.inc();
         ReconcileMeasurer {
             start: Instant::now(),
             metric: self.jukebox_reconcile_duration.clone(),
         }
     }
+
     pub fn tenant_reconcile_failure(&self, inst: &TenantInstance, e: &Error) {
         self.tenant_failures
             .with_label_values(&[inst.name_any().as_ref(), e.metric_label().as_ref()])
             .inc();
     }
 
-    #[must_use] pub fn tenant_count_and_measure(&self) -> ReconcileMeasurer {
+    #[must_use]
+    pub fn tenant_count_and_measure(&self) -> ReconcileMeasurer {
         self.tenant_reconciliations.inc();
         ReconcileMeasurer {
             start: Instant::now(),
             metric: self.tenant_reconcile_duration.clone(),
         }
     }
+
     pub fn system_reconcile_failure(&self, inst: &SystemInstance, e: &Error) {
         self.system_failures
             .with_label_values(&[inst.name_any().as_ref(), e.metric_label().as_ref()])
             .inc();
     }
 
-    #[must_use] pub fn system_count_and_measure(&self) -> ReconcileMeasurer {
+    #[must_use]
+    pub fn system_count_and_measure(&self) -> ReconcileMeasurer {
         self.system_reconciliations.inc();
         ReconcileMeasurer {
             start: Instant::now(),

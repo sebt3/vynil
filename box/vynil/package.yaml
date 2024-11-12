@@ -9,7 +9,7 @@ metadata:
   features:
   - upgrade
   - auto_config
-  app_version: 0.3.0
+  app_version: 0.3.1
 images:
   agent:
     registry: docker.io

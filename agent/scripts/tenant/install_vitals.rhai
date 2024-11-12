@@ -1,4 +1,5 @@
 import "install_from_dir" as dir;
+import "wait" as wait;
 fn run(instance, context) {
     import_run("install_vitals_pre", instance, context);
     try {
@@ -12,6 +13,7 @@ fn run(instance, context) {
             }
         }
         let tmp = instance.set_status_vitals(applied_objs);
+        wait::all(applied_objs);
     } catch (e) {
         switch type_of(e) {
             "string" => instance.set_status_vital_failed(e),

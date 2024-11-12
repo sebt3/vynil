@@ -19,11 +19,11 @@ pub enum Commands {
     /// Delete an instance
     Delete(delete::Parameters),
     // Backup an instance
-//    Backup(backup::Parameters),
+    //    Backup(backup::Parameters),
     // Restore an instance
-//    Restore(restore::Parameters),
+    //    Restore(restore::Parameters),
     // Reconfigure an instance
-//    Reconfigure(reconfigure::Parameters),
+    //    Reconfigure(reconfigure::Parameters),
 }
 
 pub async fn run(cmd: &Parameters) {

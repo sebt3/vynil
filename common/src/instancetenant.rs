@@ -310,7 +310,7 @@ impl TenantInstance {
     }
 
     pub async fn list(namespace: String) -> Result<ObjectList<Self>> {
-        let api = Api::<Self>::namespaced(get_client(),&namespace);
+        let api = Api::<Self>::namespaced(get_client(), &namespace);
         let lp = ListParams::default();
         api.list(&lp).await.map_err(|e| Error::KubeError(e))
     }
@@ -353,9 +353,10 @@ impl TenantInstance {
         let my_ns = self.metadata.namespace.clone().unwrap();
         let ns_api: Api<Namespace> = Api::all(get_client());
         let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
-        let label_key = std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
+        let label_key =
+            std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
         if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().into_iter().any(|k| k== &label_key) {
+            if labels.clone().keys().into_iter().any(|k| k == &label_key) {
                 Ok(labels[&label_key].clone())
             } else {
                 Ok(my_ns)
@@ -369,15 +370,20 @@ impl TenantInstance {
         let my_ns = self.metadata.namespace.clone().unwrap();
         let ns_api: Api<Namespace> = Api::all(get_client());
         let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
-        let label_key = std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
-        let res = vec!(my_ns);
+        let label_key =
+            std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
+        let res = vec![my_ns];
         if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().into_iter().any(|k| k== &label_key) {
+            if labels.clone().keys().into_iter().any(|k| k == &label_key) {
                 let tenant_name = &labels[&label_key];
                 let mut lp = ListParams::default();
                 lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
                 let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
-                return Ok(my_nss.items.into_iter().map(|n| n.metadata.name.unwrap()).collect());
+                return Ok(my_nss
+                    .items
+                    .into_iter()
+                    .map(|n| n.metadata.name.unwrap())
+                    .collect());
             }
         }
         Ok(res)
@@ -385,8 +391,15 @@ impl TenantInstance {
 
     fn have_condition(&self, cond: &ApplicationCondition) -> bool {
         if let Some(status) = self.status.clone() {
-            status.conditions.clone().into_iter().any(|c| c.condition_type==cond.condition_type && c.generation== cond.generation && c.status == cond.status && c.message == cond.message)
-        } else {false}
+            status.conditions.clone().into_iter().any(|c| {
+                c.condition_type == cond.condition_type
+                    && c.generation == cond.generation
+                    && c.status == cond.status
+                    && c.message == cond.message
+            })
+        } else {
+            false
+        }
     }
 
     fn get_conditions_excluding(&self, exclude: Vec<ConditionsType>) -> Vec<ApplicationCondition> {
@@ -774,10 +787,9 @@ impl TenantInstance {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::agent_started(generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -796,17 +808,18 @@ impl TenantInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub async fn set_missing_box(&mut self, jukebox: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_box(&jukebox, generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -825,17 +838,18 @@ impl TenantInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub async fn set_missing_package(&mut self, category: String, package: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_package(&category, &package, generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -854,17 +868,18 @@ impl TenantInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub async fn set_missing_requirement(&mut self, reason: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_requirement(&reason, generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -883,7 +898,9 @@ impl TenantInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub fn rhai_get(namespace: String, name: String) -> RhaiRes<Self> {
@@ -1014,17 +1031,13 @@ impl TenantInstance {
     }
 
     pub fn rhai_set_agent_started(&mut self) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_agent_started().await })
-        })
-        .map_err(|e| rhai_err(e))
+        block_in_place(|| Handle::current().block_on(async move { self.set_agent_started().await }))
+            .map_err(|e| rhai_err(e))
     }
 
     pub fn rhai_set_missing_box(&mut self, jukebox: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_missing_box(jukebox).await })
-        })
-        .map_err(|e| rhai_err(e))
+        block_in_place(|| Handle::current().block_on(async move { self.set_missing_box(jukebox).await }))
+            .map_err(|e| rhai_err(e))
     }
 
     pub fn rhai_set_missing_package(&mut self, category: String, package: String) -> RhaiRes<Self> {
@@ -1040,16 +1053,14 @@ impl TenantInstance {
         })
         .map_err(|e| rhai_err(e))
     }
+
     pub fn rhai_get_tenant_name(&mut self) -> RhaiRes<String> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.get_tenant_name().await })
-        })
-        .map_err(|e| rhai_err(e))
+        block_in_place(|| Handle::current().block_on(async move { self.get_tenant_name().await }))
+            .map_err(|e| rhai_err(e))
     }
+
     pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<Vec<String>> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.get_tenant_namespaces().await })
-        })
-        .map_err(|e| rhai_err(e))
+        block_in_place(|| Handle::current().block_on(async move { self.get_tenant_namespaces().await }))
+            .map_err(|e| rhai_err(e))
     }
 }

@@ -4,7 +4,7 @@ kind: Kustomization
 
 images:
 - name: docker.io/sebt3/vynil-agent
-  newTag: 0.3.0
+  newTag: 0.3.1
 
 namespace: "vynil-system"
 

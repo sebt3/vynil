@@ -1,19 +1,16 @@
-use crate::{jukebox, JukeBox, instancesystem, SystemInstance, instancetenant, TenantInstance, Metrics};
-use common::{handlebarshandler::HandleBars, vynilpackage::VynilPackage};
-use std::{sync::Arc, path::PathBuf, collections::BTreeMap};
+use crate::{instancesystem, instancetenant, jukebox, JukeBox, Metrics, SystemInstance, TenantInstance};
 use chrono::{DateTime, Utc};
+use common::{handlebarshandler::HandleBars, vynilpackage::VynilPackage};
 use futures::{future::BoxFuture, FutureExt, StreamExt};
 use kube::{
     api::{Api, ListParams, ObjectList},
     client::Client,
-    runtime::{
-        controller::Controller,
-        events::Reporter,
-        watcher::Config,
-    }, ResourceExt,
+    runtime::{controller::Controller, events::Reporter, watcher::Config},
+    ResourceExt,
 };
-use serde_json::{json, Value};
 use serde::Serialize;
+use serde_json::{json, Value};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
 static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.3.0";
 
@@ -79,14 +76,19 @@ pub struct Manager {
 
 /// Manager that owns a Controller for JukeBox, SystemInstance, and TenantInstance
 impl Manager {
-    pub async fn new() -> (Self, BoxFuture<'static, ()>, BoxFuture<'static, ()>, BoxFuture<'static, ()>) {
+    pub async fn new() -> (
+        Self,
+        BoxFuture<'static, ()>,
+        BoxFuture<'static, ()>,
+        BoxFuture<'static, ()>,
+    ) {
         let client = Client::try_default().await.expect("create client");
         let manager = Manager::default();
         let controller_dir = std::env::var("CONTROLLER_BASE_DIR").unwrap_or("./operator".to_string());
         let mut hbs = HandleBars::new();
-        match hbs.register_partial_dir(PathBuf::from(format!("{}/templates",controller_dir))) {
+        match hbs.register_partial_dir(PathBuf::from(format!("{}/templates", controller_dir))) {
             Ok(_) => (),
-            Err(e) => tracing::warn!("Registering template generated: {e}")
+            Err(e) => tracing::warn!("Registering template generated: {e}"),
         }
         let packages: Arc<RwLock<BTreeMap<String, JukeCacheItem>>> = Arc::default();
         match JukeBox::list().await {
@@ -101,8 +103,8 @@ impl Manager {
                     }
                 }
                 *packages.write().await = cache;
-            },
-            Err(e) => tracing::warn!("While listing jukebox: {:?}", e)
+            }
+            Err(e) => tracing::warn!("While listing jukebox: {:?}", e),
         };
 
         let context = Arc::new(Context {
@@ -144,12 +146,20 @@ impl Manager {
             .for_each(|_| futures::future::ready(()))
             .boxed();
         let controller_tnts = Controller::new(tnts, Config::default().any_semantic())
-            .run(instancetenant::reconcile, instancetenant::error_policy, context.clone())
+            .run(
+                instancetenant::reconcile,
+                instancetenant::error_policy,
+                context.clone(),
+            )
             .filter_map(|x| async move { std::result::Result::ok(x) })
             .for_each(|_| futures::future::ready(()))
             .boxed();
         let controller_stms = Controller::new(stms, Config::default().any_semantic())
-            .run(instancesystem::reconcile, instancesystem::error_policy, context.clone())
+            .run(
+                instancesystem::reconcile,
+                instancesystem::error_policy,
+                context.clone(),
+            )
             .filter_map(|x| async move { std::result::Result::ok(x) })
             .for_each(|_| futures::future::ready(()))
             .boxed();
@@ -157,7 +167,8 @@ impl Manager {
     }
 
     /// Metrics getter
-    #[must_use] pub fn metrics(&self) -> Vec<prometheus::proto::MetricFamily> {
+    #[must_use]
+    pub fn metrics(&self) -> Vec<prometheus::proto::MetricFamily> {
         prometheus::default_registry().gather()
     }
 

@@ -8,7 +8,10 @@ use kube::{
     api::{
         Api, DeleteParams, DynamicObject, ListParams, ObjectList, PartialObjectMeta, Patch, PatchParams,
         PostParams,
-    }, discovery::{ApiCapabilities, ApiResource, Discovery, Scope}, runtime::wait::{await_condition, conditions, Condition}, Client, ResourceExt
+    },
+    discovery::{ApiCapabilities, ApiResource, Discovery, Scope},
+    runtime::wait::{await_condition, conditions, Condition},
+    Client, ResourceExt,
 };
 use rhai::{serde::to_dynamic, Dynamic};
 use serde_json::json;
@@ -43,27 +46,38 @@ impl K8sObject {
     pub fn rhai_delete(&mut self) -> RhaiRes<()> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                self.api.delete(&self.obj.name_any(), &DeleteParams::foreground())
+                self.api
+                    .delete(&self.obj.name_any(), &DeleteParams::foreground())
                     .await
                     .map_err(Error::KubeError)
                     .map(|_| ())
             })
-        }).map_err(|e| rhai_err(e))
+        })
+        .map_err(|e| rhai_err(e))
     }
+
     pub fn rhai_wait_deleted(&mut self, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
         let uid = self.obj.uid().unwrap();
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let cond = await_condition(self.api.clone(), &name, conditions::is_deleted(&uid));
-                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond).await.map_err(|e| Error::Elapsed(e))
+                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
+                    .await
+                    .map_err(|e| Error::Elapsed(e))
             })
-        }).map_err(|e| rhai_err(e))?.map_err(|e| rhai_err(Error::KubeWaitError(e))).map(|_| ())
+        })
+        .map_err(|e| rhai_err(e))?
+        .map_err(|e| rhai_err(Error::KubeWaitError(e)))
+        .map(|_| ())
     }
+
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
-        let v = serde_json::to_value(self.obj.metadata.clone()).map_err(|e| rhai_err(Error::SerializationError(e)))?;
+        let v = serde_json::to_value(self.obj.metadata.clone())
+            .map_err(|e| rhai_err(Error::SerializationError(e)))?;
         to_dynamic(v)
     }
+
     pub fn get_kind(&mut self) -> String {
         if let Some(t) = self.obj.types.clone() {
             t.kind
@@ -76,19 +90,49 @@ impl K8sObject {
         move |obj: Option<&DynamicObject>| {
             tracing::warn!("Testing conditions");
             if let Some(dynobj) = &obj {
-                if dynobj.data.is_object() && dynobj.data.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"status".to_string()) {
+                if dynobj.data.is_object()
+                    && dynobj
+                        .data
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .into_iter()
+                        .collect::<Vec<&String>>()
+                        .contains(&&"status".to_string())
+                {
                     let status = dynobj.data.as_object().unwrap()["status"].clone();
-                    if status.is_object() && status.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"conditions".to_string()) {
+                    if status.is_object()
+                        && status
+                            .as_object()
+                            .unwrap()
+                            .keys()
+                            .into_iter()
+                            .collect::<Vec<&String>>()
+                            .contains(&&"conditions".to_string())
+                    {
                         let conditions = status.as_object().unwrap()["conditions"].clone();
-                        if conditions.is_array() && conditions.as_array().unwrap().into_iter().any(|c| c.is_object() &&
-                            c.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"type".to_string()) &&
-                            c.as_object().unwrap()["type"].is_string() &&
-                            c.as_object().unwrap()["type"].to_string() == cond &&
-                            c.as_object().unwrap().keys().into_iter().collect::<Vec<&String>>().contains(&&"status".to_string()) &&
-                            c.as_object().unwrap()["status"].is_string() &&
-                            c.as_object().unwrap()["status"].to_string() == "True".to_string()
-                        ) {
-                            return true
+                        if conditions.is_array()
+                            && conditions.as_array().unwrap().into_iter().any(|c| {
+                                c.is_object()
+                                    && c.as_object()
+                                        .unwrap()
+                                        .keys()
+                                        .into_iter()
+                                        .collect::<Vec<&String>>()
+                                        .contains(&&"type".to_string())
+                                    && c.as_object().unwrap()["type"].is_string()
+                                    && c.as_object().unwrap()["type"].to_string() == cond
+                                    && c.as_object()
+                                        .unwrap()
+                                        .keys()
+                                        .into_iter()
+                                        .collect::<Vec<&String>>()
+                                        .contains(&&"status".to_string())
+                                    && c.as_object().unwrap()["status"].is_string()
+                                    && c.as_object().unwrap()["status"].to_string() == "True".to_string()
+                            })
+                        {
+                            return true;
                         }
                     }
                 }
@@ -103,13 +147,15 @@ impl K8sObject {
         let cond = await_condition(self.api.clone(), &name, Self::is_condition(condition));
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond).await.map_err(|e| Error::Elapsed(e))
+                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
+                    .await
+                    .map_err(|e| Error::Elapsed(e))
             })
-        }).map_err(|e| rhai_err(e))?.map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
+        })
+        .map_err(|e| rhai_err(e))?
+        .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
         Ok(())
     }
-
-
 }
 
 #[derive(Clone, Debug)]
@@ -124,7 +170,9 @@ pub struct K8sGeneric {
 impl K8sGeneric {
     #[must_use]
     pub fn new(name: &str, ns: Option<String>) -> K8sGeneric {
-        if let Some((res, cap)) = CACHE.lock().unwrap()
+        if let Some((res, cap)) = CACHE
+            .lock()
+            .unwrap()
             .groups()
             .flat_map(|group| {
                 group
@@ -258,10 +306,9 @@ impl K8sGeneric {
         let res = self.get_meta(&name).map_err(|e| rhai_err(e))?;
         Ok(K8sObject {
             api: self.api.clone().unwrap(),
-            obj: res
+            obj: res,
         })
     }
-
 
     pub fn delete(&self, name: &str) -> Result<()> {
         if let Some(api) = self.api.clone() {
@@ -286,15 +333,30 @@ impl K8sGeneric {
         if let Some(api) = self.api.clone() {
             let mut handle = data.clone();
             if let Some(labels) = get_labels() {
-                if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
-                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                if !handle["metadata"].as_object().unwrap().contains_key("labels") {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
+                } else if !handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
                     handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
-                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if !handle["metadata"].as_object_mut().unwrap()["labels"]
+                        .as_object_mut()
+                        .unwrap()
+                        .keys()
+                        .into_iter()
+                        .any(|name| name == k)
+                    {
+                        handle["metadata"].as_object_mut().unwrap()["labels"]
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(k.to_string(), v.clone());
                     }
                 }
             }
@@ -303,10 +365,20 @@ impl K8sGeneric {
                     if let Some(ns) = get_owner_ns() {
                         if let Some(mine) = self.ns.clone() {
                             if ns == mine {
-                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                if handle["metadata"]
+                                    .as_object()
+                                    .unwrap()
+                                    .contains_key("ownerReferences")
+                                {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .push(owner);
                                 } else {
-                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                    handle["metadata"]
+                                        .as_object_mut()
+                                        .unwrap()
+                                        .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
                             }
                         }
@@ -344,15 +416,30 @@ impl K8sGeneric {
         if let Some(api) = self.api.clone() {
             let mut handle = data.clone();
             if let Some(labels) = get_labels() {
-                if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
-                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                if !handle["metadata"].as_object().unwrap().contains_key("labels") {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
+                } else if !handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
                     handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
-                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if !handle["metadata"].as_object_mut().unwrap()["labels"]
+                        .as_object_mut()
+                        .unwrap()
+                        .keys()
+                        .into_iter()
+                        .any(|name| name == k)
+                    {
+                        handle["metadata"].as_object_mut().unwrap()["labels"]
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(k.to_string(), v.clone());
                     }
                 }
             }
@@ -361,10 +448,20 @@ impl K8sGeneric {
                     if let Some(ns) = get_owner_ns() {
                         if let Some(mine) = self.ns.clone() {
                             if ns == mine {
-                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                if handle["metadata"]
+                                    .as_object()
+                                    .unwrap()
+                                    .contains_key("ownerReferences")
+                                {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .push(owner);
                                 } else {
-                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                    handle["metadata"]
+                                        .as_object_mut()
+                                        .unwrap()
+                                        .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
                             }
                         }
@@ -402,15 +499,30 @@ impl K8sGeneric {
         if let Some(api) = self.api.clone() {
             let mut handle = patch.clone();
             if let Some(labels) = get_labels() {
-                if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
-                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                if !handle["metadata"].as_object().unwrap().contains_key("labels") {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
+                } else if !handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
                     handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
-                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if !handle["metadata"].as_object_mut().unwrap()["labels"]
+                        .as_object_mut()
+                        .unwrap()
+                        .keys()
+                        .into_iter()
+                        .any(|name| name == k)
+                    {
+                        handle["metadata"].as_object_mut().unwrap()["labels"]
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(k.to_string(), v.clone());
                     }
                 }
             }
@@ -419,10 +531,20 @@ impl K8sGeneric {
                     if let Some(ns) = get_owner_ns() {
                         if let Some(mine) = self.ns.clone() {
                             if ns == mine {
-                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                if handle["metadata"]
+                                    .as_object()
+                                    .unwrap()
+                                    .contains_key("ownerReferences")
+                                {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .push(owner);
                                 } else {
-                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                    handle["metadata"]
+                                        .as_object_mut()
+                                        .unwrap()
+                                        .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
                             }
                         }
@@ -460,15 +582,30 @@ impl K8sGeneric {
         if let Some(api) = self.api.clone() {
             let mut handle = patch.clone();
             if let Some(labels) = get_labels() {
-                if ! handle["metadata"].as_object().unwrap().contains_key("labels") {
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
-                } else if ! handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+                if !handle["metadata"].as_object().unwrap().contains_key("labels") {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
+                } else if !handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
                     handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
-                    handle["metadata"].as_object_mut().unwrap().insert("labels".to_string(), json!({}));
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("labels".to_string(), json!({}));
                 }
                 for (k, v) in labels.as_object().unwrap() {
-                    if ! handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().keys().into_iter().any(|name| name == k) {
-                        handle["metadata"].as_object_mut().unwrap()["labels"].as_object_mut().unwrap().insert(k.to_string(), v.clone());
+                    if !handle["metadata"].as_object_mut().unwrap()["labels"]
+                        .as_object_mut()
+                        .unwrap()
+                        .keys()
+                        .into_iter()
+                        .any(|name| name == k)
+                    {
+                        handle["metadata"].as_object_mut().unwrap()["labels"]
+                            .as_object_mut()
+                            .unwrap()
+                            .insert(k.to_string(), v.clone());
                     }
                 }
             }
@@ -477,10 +614,20 @@ impl K8sGeneric {
                     if let Some(ns) = get_owner_ns() {
                         if let Some(mine) = self.ns.clone() {
                             if ns == mine {
-                                if handle["metadata"].as_object().unwrap().contains_key("ownerReferences") {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"].as_array_mut().unwrap().push(owner);
+                                if handle["metadata"]
+                                    .as_object()
+                                    .unwrap()
+                                    .contains_key("ownerReferences")
+                                {
+                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                                        .as_array_mut()
+                                        .unwrap()
+                                        .push(owner);
                                 } else {
-                                    handle["metadata"].as_object_mut().unwrap().insert("ownerReferences".to_string(), vec![owner].into());
+                                    handle["metadata"]
+                                        .as_object_mut()
+                                        .unwrap()
+                                        .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
                             }
                         }
@@ -489,7 +636,13 @@ impl K8sGeneric {
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
-                    api.patch(name, &PatchParams::apply(&get_client_name()).force(), &Patch::Apply(handle)).await.map_err(Error::KubeError)
+                    api.patch(
+                        name,
+                        &PatchParams::apply(&get_client_name()).force(),
+                        &Patch::Apply(handle),
+                    )
+                    .await
+                    .map_err(Error::KubeError)
                 })
             })
         } else {
@@ -504,4 +657,3 @@ impl K8sGeneric {
         to_dynamic(v)
     }
 }
-

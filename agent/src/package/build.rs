@@ -1,7 +1,7 @@
+use clap::Args;
 use common::{rhaihandler::Script, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use clap::Args;
 
 #[derive(clap::ValueEnum, Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,5 +103,5 @@ pub async fn run(args: &Parameters) -> Result<()> {
         "import(\"build\") as build;\n\
         build::run(args);",
     )?;
-     Ok(())
+    Ok(())
 }

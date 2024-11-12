@@ -1,4 +1,4 @@
-use crate::{passwordhandler::Passwords, rhai_err, Error, Result, RhaiRes};
+use crate::{passwordhandler::Passwords, hasheshandlers::Argon, rhai_err, Error, Result, RhaiRes};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use handlebars::{handlebars_helper, Handlebars};
 use handlebars_misc_helpers::new_hbs;
@@ -31,6 +31,13 @@ handlebars_helper!(header_basic: |username:Value, password:Value| format!("Basic
     warn!("handlebars::header_basic received a non-string password: {:?}",password);
     ""
 })))));
+handlebars_helper!(argon_hash: |password:Value| Argon::new().hash(password.as_str().unwrap_or_else(|| {
+    warn!("handlebars::argon_hash received a non-string password: {:?}",password);
+    ""
+}).to_string()).unwrap_or_else(|e| {
+    warn!("handlebars::argon_hash failed to convert to string with: {e:?}");
+    String::new()
+}));
 handlebars_helper!(gen_password: |len:u32| Passwords::new().generate(len, 6, 2, 2));
 handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(len, 8, 2, 0));
 handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
@@ -61,6 +68,7 @@ impl HandleBars<'_> {
         engine.register_helper("base64_decode", Box::new(base64_decode));
         engine.register_helper("base64_encode", Box::new(base64_encode));
         engine.register_helper("header_basic", Box::new(header_basic));
+        engine.register_helper("argon_hash", Box::new(argon_hash));
         engine.register_helper("gen_password", Box::new(gen_password));
         engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
         let _ = engine.register_script_helper("image_from_ctx",
@@ -68,9 +76,11 @@ impl HandleBars<'_> {
             let im = root[\"instance\"][\"images\"][name];\n\
             let tag = if (\"tag\" in im && im[\"tag\"] != ()) {im[\"tag\"]} else {root[\"instance\"][\"package\"][\"app_version\"]};
             `${im[\"registry\"]}/${im[\"repository\"]}:${tag}`");
-        let _ = engine.register_script_helper("resources_from_ctx",
+        let _ = engine.register_script_helper(
+            "resources_from_ctx",
             "let root = params[0];let name = params[1];\n\
-            root[\"instance\"][\"resources\"][name]");
+            root[\"instance\"][\"resources\"][name]",
+        );
         // TODO helper pour load de fichier
         // TODO: add more helpers
         HandleBars { engine }
@@ -105,8 +115,10 @@ impl HandleBars<'_> {
             Ok(())
         }
     }
+
     pub fn rhai_register_helper_dir(&mut self, directory: String) -> RhaiRes<()> {
-        self.register_helper_dir(PathBuf::from(directory)).map_err(|e| rhai_err(e))
+        self.register_helper_dir(PathBuf::from(directory))
+            .map_err(|e| rhai_err(e))
     }
 
     pub fn register_partial_dir(&mut self, directory: PathBuf) -> Result<()> {
@@ -127,8 +139,10 @@ impl HandleBars<'_> {
             Ok(())
         }
     }
+
     pub fn rhai_register_partial_dir(&mut self, directory: String) -> RhaiRes<()> {
-        self.register_partial_dir(PathBuf::from(directory)).map_err(|e| rhai_err(e))
+        self.register_partial_dir(PathBuf::from(directory))
+            .map_err(|e| rhai_err(e))
     }
 
     pub fn render(&mut self, template: &str, data: &Value) -> Result<String> {

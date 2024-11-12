@@ -1,7 +1,7 @@
+use clap::Args;
 use common::{context::set_box, jukebox::JukeBox, rhaihandler::Script, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use clap::Args;
 
 #[derive(Args, Debug, Serialize, Deserialize)]
 pub struct Parameters {

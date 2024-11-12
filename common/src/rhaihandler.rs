@@ -1,19 +1,33 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    context, handlebarshandler::HandleBars, httphandler::RestClient, instancesystem::SystemInstance, instancetenant::TenantInstance, jukebox::JukeBox, k8sgeneric::{update_cache, K8sGeneric, K8sObject}, k8sworkload::{K8sDeploy, K8sJob}, ocihandler::Registry, passwordhandler::Passwords, rhai_err, shellhandler, vynilpackage::{rhai_read_package_yaml, VynilPackageSource}, Error::{self, *}, Result, RhaiRes, Semver
+    context,
+    handlebarshandler::HandleBars,
+    httphandler::RestClient,
+    instancesystem::SystemInstance,
+    instancetenant::TenantInstance,
+    hasheshandlers::Argon,
+    jukebox::JukeBox,
+    k8sgeneric::{update_cache, K8sGeneric, K8sObject},
+    k8sworkload::{K8sDaemonSet, K8sDeploy, K8sJob, K8sStatefulSet},
+    ocihandler::Registry,
+    passwordhandler::Passwords,
+    rhai_err, shellhandler,
+    vynilpackage::{rhai_read_package_yaml, VynilPackageSource},
+    Error::{self, *},
+    Result, RhaiRes, Semver,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 pub use rhai::{
     module_resolvers::{FileModuleResolver, ModuleResolversCollection},
-    Dynamic, Engine, ImmutableString, Map, Module, Scope, Array, serde::to_dynamic
+    serde::to_dynamic,
+    Array, Dynamic, Engine, ImmutableString, Map, Module, Scope,
 };
 use serde::Deserialize;
 
 
 pub fn base64_decode(input: String) -> Result<String> {
-    String::from_utf8(STANDARD.decode(input.to_string()).unwrap())
-        .map_err(|e| Error::UTF8(e))
+    String::from_utf8(STANDARD.decode(input.to_string()).unwrap()).map_err(|e| Error::UTF8(e))
 }
 
 #[derive(Debug)]
@@ -41,7 +55,7 @@ impl Script {
             .register_fn("vynil_owner", || -> Dynamic {
                 match context::get_owner() {
                     Some(o) => serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap(),
-                    None => serde_json::from_str("{}").unwrap()
+                    None => serde_json::from_str("{}").unwrap(),
                 }
             })
             .register_fn("shell_run", shellhandler::rhai_run)
@@ -76,9 +90,8 @@ impl Script {
                     .map(|v| v.into())
             })
             .register_fn("json_encode_escape", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                let str = serde_json::to_string(&val)
-                    .map_err(|e| rhai_err(Error::SerializationError(e)))?;
-                Ok(format!("{:?}",str).into())
+                let str = serde_json::to_string(&val).map_err(|e| rhai_err(Error::SerializationError(e)))?;
+                Ok(format!("{:?}", str).into())
             })
             .register_fn("json_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
                 serde_json::from_str(&val.to_string()).map_err(|e| rhai_err(Error::SerializationError(e)))
@@ -100,7 +113,8 @@ impl Script {
                 "yaml_decode_multi",
                 |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
                     let mut res = Vec::new();
-                    if val.len() > 5 { // non-empty string only
+                    if val.len() > 5 {
+                        // non-empty string only
                         for document in serde_yaml::Deserializer::from_str(&val.to_string()) {
                             let doc =
                                 Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
@@ -190,6 +204,22 @@ impl Script {
             .register_fn("wait_available", K8sDeploy::wait_available);
         script
             .engine
+            .register_type_with_name::<K8sDaemonSet>("K8sDaemonSet")
+            .register_fn("get_deamonset", K8sDaemonSet::get_deamonset)
+            .register_get("metadata", K8sDaemonSet::get_metadata)
+            .register_get("spec", K8sDaemonSet::get_spec)
+            .register_get("status", K8sDaemonSet::get_status)
+            .register_fn("wait_available", K8sDaemonSet::wait_available);
+        script
+            .engine
+            .register_type_with_name::<K8sStatefulSet>("K8sStatefulSet")
+            .register_fn("get_statefulset", K8sStatefulSet::get_sts)
+            .register_get("metadata", K8sStatefulSet::get_metadata)
+            .register_get("spec", K8sStatefulSet::get_spec)
+            .register_get("status", K8sStatefulSet::get_status)
+            .register_fn("wait_available", K8sStatefulSet::wait_available);
+        script
+            .engine
             .register_type_with_name::<K8sJob>("K8sJob")
             .register_fn("get_job", K8sJob::get_job)
             .register_get("metadata", K8sJob::get_metadata)
@@ -224,6 +254,11 @@ impl Script {
             .register_get("scope", K8sGeneric::rhai_get_scope);
         script
             .engine
+            .register_type_with_name::<Argon>("Argon")
+            .register_fn("new_argon", Argon::new)
+            .register_fn("hash", Argon::rhai_hash);
+        script
+            .engine
             .register_type_with_name::<Semver>("Semver")
             .register_fn("semver_from", Semver::rhai_parse)
             .register_fn("inc_major", Semver::inc_major)
@@ -250,7 +285,10 @@ impl Script {
             .register_type_with_name::<TenantInstance>("TenantInstance")
             .register_fn("get_tenant_instance", TenantInstance::rhai_get)
             .register_fn("get_tenant_name", TenantInstance::rhai_get_tenant_name)
-            .register_fn("get_tenant_namespaces", TenantInstance::rhai_get_tenant_namespaces)
+            .register_fn(
+                "get_tenant_namespaces",
+                TenantInstance::rhai_get_tenant_namespaces,
+            )
             .register_fn("list_tenant_instance", TenantInstance::rhai_list)
             .register_fn("options_digest", TenantInstance::get_options_digest)
             .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)
@@ -258,7 +296,10 @@ impl Script {
             .register_fn("set_agent_started", TenantInstance::rhai_set_agent_started)
             .register_fn("set_missing_box", TenantInstance::rhai_set_missing_box)
             .register_fn("set_missing_package", TenantInstance::rhai_set_missing_package)
-            .register_fn("set_missing_requirement", TenantInstance::rhai_set_missing_requirement)
+            .register_fn(
+                "set_missing_requirement",
+                TenantInstance::rhai_set_missing_requirement,
+            )
             .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
             .register_fn("set_status_vitals", TenantInstance::rhai_set_status_vitals)
             .register_fn(
@@ -299,7 +340,10 @@ impl Script {
             .register_fn("set_agent_started", SystemInstance::rhai_set_agent_started)
             .register_fn("set_missing_box", SystemInstance::rhai_set_missing_box)
             .register_fn("set_missing_package", SystemInstance::rhai_set_missing_package)
-            .register_fn("set_missing_requirement", SystemInstance::rhai_set_missing_requirement)
+            .register_fn(
+                "set_missing_requirement",
+                SystemInstance::rhai_set_missing_requirement,
+            )
             .register_fn("set_status_ready", SystemInstance::rhai_set_status_ready)
             .register_fn("set_status_crds", SystemInstance::rhai_set_status_crds)
             .register_fn(
@@ -345,7 +389,8 @@ impl Script {
             .register_get("images", VynilPackageSource::get_images)
             .register_get("resources", VynilPackageSource::get_resources);
         script.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
-        script.add_code("fn import_run(name, instance, context) {\n\
+        script.add_code(
+            "fn import_run(name, instance, context) {\n\
             try {\n\
                 import name as imp;\n\
                 return imp::run(instance, context);\n\
@@ -358,8 +403,10 @@ impl Script {
                     throw e;\n\
                 }\n\
             }\n\
-        }");
-        script.add_code("fn import_run(name, args) {\n\
+        }",
+        );
+        script.add_code(
+            "fn import_run(name, args) {\n\
             try {\n\
                 import name as imp;\n\
                 return imp::run(args);\n\
@@ -372,7 +419,8 @@ impl Script {
                     throw e;\n\
                 }\n\
             }\n\
-        }");
+        }",
+        );
         script
     }
 
@@ -415,14 +463,13 @@ impl Script {
     }
 
     pub fn eval(&mut self, script: &str) -> Result<Dynamic, Error> {
-        self
-            .engine
+        self.engine
             .eval_with_scope::<Dynamic>(&mut self.ctx, script)
             .map_err(|e| RhaiError(e))
     }
+
     pub fn eval_truth(&mut self, script: &str) -> Result<bool, Error> {
-        self
-            .engine
+        self.engine
             .eval_with_scope::<bool>(&mut self.ctx, script)
             .map_err(|e| RhaiError(e))
     }

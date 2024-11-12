@@ -55,6 +55,9 @@ pub enum Error {
     #[error("Semver error {0}")]
     Semver(#[source] semver::Error),
 
+    #[error("Argon2 password_hash error {0}")]
+    Argon2hash(#[source] argon2::password_hash::Error),
+
     #[error("Stdio error {0}")]
     Stdio(#[source] std::io::Error),
 
@@ -91,8 +94,9 @@ pub mod k8sworkload;
 pub mod ocihandler;
 pub mod passwordhandler;
 pub mod rhaihandler;
-pub mod shellhandler;
+pub mod hasheshandlers;
 mod semverhandler;
+pub mod shellhandler;
 mod tools;
 pub mod vynilpackage;
 pub use context::get_client_name;

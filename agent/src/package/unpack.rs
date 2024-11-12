@@ -1,5 +1,5 @@
 use clap::Args;
-use common::{ocihandler::Registry, Error, Result, rhaihandler::base64_decode};
+use common::{ocihandler::Registry, rhaihandler::base64_decode, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -83,16 +83,14 @@ pub async fn run(args: &Parameters) -> Result<()> {
                 args.password.clone(),
             )
         } else {
-            let pull_secret_string = std::fs::read_to_string(format!("{}/.dockerconfigjson", args.pull_path)).map_err(|e| Error::Stdio(e))?;
-            let pull_secret: serde_json::Value = serde_json::from_str(&pull_secret_string).map_err(|e| Error::SerializationError(e))?;
+            let pull_secret_string = std::fs::read_to_string(format!("{}/.dockerconfigjson", args.pull_path))
+                .map_err(|e| Error::Stdio(e))?;
+            let pull_secret: serde_json::Value =
+                serde_json::from_str(&pull_secret_string).map_err(|e| Error::SerializationError(e))?;
             let hash = pull_secret["auths"][args.registry.clone()]["auth"].clone();
             let user_pass = base64_decode(hash.as_str().unwrap().to_string())?;
             let auth = user_pass.split(":").collect::<Vec<&str>>();
-            Registry::new(
-                args.registry.clone(),
-                auth[0].to_string(),
-                auth[1].to_string(),
-            )
+            Registry::new(args.registry.clone(), auth[0].to_string(), auth[1].to_string())
         };
         cli.pull_image(&args.destination, args.image.clone(), args.tag.clone())
     }

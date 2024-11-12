@@ -6,7 +6,9 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use kube::{
-    api::{Api, ListParams, ObjectList, Patch, PatchParams}, runtime::events::{Event, EventType, Recorder}, Client, CustomResource, Resource, ResourceExt
+    api::{Api, ListParams, ObjectList, Patch, PatchParams},
+    runtime::events::{Event, EventType, Recorder},
+    Client, CustomResource, Resource, ResourceExt,
 };
 use rhai::Dynamic;
 use schemars::JsonSchema;
@@ -326,8 +328,15 @@ impl SystemInstance {
 
     fn have_condition(&self, cond: &ApplicationCondition) -> bool {
         if let Some(status) = self.status.clone() {
-            status.conditions.clone().into_iter().any(|c| c.condition_type==cond.condition_type && c.generation== cond.generation && c.status == cond.status && c.message == cond.message)
-        } else {false}
+            status.conditions.clone().into_iter().any(|c| {
+                c.condition_type == cond.condition_type
+                    && c.generation == cond.generation
+                    && c.status == cond.status
+                    && c.message == cond.message
+            })
+        } else {
+            false
+        }
     }
 
     fn get_conditions_excluding(&self, exclude: Vec<ConditionsType>) -> Vec<ApplicationCondition> {
@@ -343,7 +352,7 @@ impl SystemInstance {
     }
 
     async fn patch_status(&mut self, client: Client, patch: serde_json::Value) -> Result<Self> {
-        let api = Api::<Self>::namespaced(client.clone(),&self.namespace().unwrap());
+        let api = Api::<Self>::namespaced(client.clone(), &self.namespace().unwrap());
         let name = self.metadata.name.clone().unwrap();
         let new_status: Patch<serde_json::Value> = Patch::Merge(json!({
             "apiVersion": "vynil.solidite.fr/v1",
@@ -654,10 +663,9 @@ impl SystemInstance {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::agent_started(generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -676,17 +684,18 @@ impl SystemInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub async fn set_missing_box(&mut self, jukebox: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_box(&jukebox, generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -705,17 +714,18 @@ impl SystemInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub async fn set_missing_package(&mut self, category: String, package: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_package(&category, &package, generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -734,17 +744,18 @@ impl SystemInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub async fn set_missing_requirement(&mut self, reason: String) -> Result<Self> {
         let client = get_client();
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_requirement(&reason, generation);
-        if ! self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-                ConditionsType::AgentStarted,
-            ]);
+        if !self.have_condition(&cond) {
+            let mut conditions: Vec<ApplicationCondition> =
+                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
             conditions.push(cond);
             let result = self
                 .patch_status(
@@ -763,7 +774,9 @@ impl SystemInstance {
             })
             .await?;
             Ok(result)
-        } else {Ok(self.clone())}
+        } else {
+            Ok(self.clone())
+        }
     }
 
     pub fn rhai_get(namespace: String, name: String) -> RhaiRes<Self> {
@@ -874,17 +887,13 @@ impl SystemInstance {
     }
 
     pub fn rhai_set_agent_started(&mut self) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_agent_started().await })
-        })
-        .map_err(|e| rhai_err(e))
+        block_in_place(|| Handle::current().block_on(async move { self.set_agent_started().await }))
+            .map_err(|e| rhai_err(e))
     }
 
     pub fn rhai_set_missing_box(&mut self, jukebox: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_missing_box(jukebox).await })
-        })
-        .map_err(|e| rhai_err(e))
+        block_in_place(|| Handle::current().block_on(async move { self.set_missing_box(jukebox).await }))
+            .map_err(|e| rhai_err(e))
     }
 
     pub fn rhai_set_missing_package(&mut self, category: String, package: String) -> RhaiRes<Self> {

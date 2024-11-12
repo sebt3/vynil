@@ -1,16 +1,14 @@
 use async_trait::async_trait;
-use std::sync::Arc;
-use manager::Context;
 use kube::runtime::controller::Action;
-pub mod jukebox;
+use manager::Context;
+use std::sync::Arc;
 pub mod instancesystem;
 pub mod instancetenant;
+pub mod jukebox;
 
-pub use common::Error;
-pub use common::Result;
-pub use common::jukebox::JukeBox;
-pub use common::instancesystem::SystemInstance;
-pub use common::instancetenant::TenantInstance;
+pub use common::{
+    instancesystem::SystemInstance, instancetenant::TenantInstance, jukebox::JukeBox, Error, Result,
+};
 
 #[async_trait]
 pub trait Reconciler {
