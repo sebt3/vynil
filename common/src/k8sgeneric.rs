@@ -88,7 +88,6 @@ impl K8sObject {
 
     pub fn is_condition(cond: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            tracing::warn!("Testing conditions");
             if let Some(dynobj) = &obj {
                 if dynobj.data.is_object()
                     && dynobj
@@ -111,6 +110,7 @@ impl K8sObject {
                             .contains(&&"conditions".to_string())
                     {
                         let conditions = status.as_object().unwrap()["conditions"].clone();
+                        tracing::warn!("Testing conditions: {cond} with {:?}", conditions);
                         if conditions.is_array()
                             && conditions.as_array().unwrap().into_iter().any(|c| {
                                 c.is_object()
@@ -121,7 +121,7 @@ impl K8sObject {
                                         .collect::<Vec<&String>>()
                                         .contains(&&"type".to_string())
                                     && c.as_object().unwrap()["type"].is_string()
-                                    && c.as_object().unwrap()["type"].to_string() == cond
+                                    && c.as_object().unwrap()["type"].as_str().unwrap() == cond
                                     && c.as_object()
                                         .unwrap()
                                         .keys()
@@ -129,7 +129,7 @@ impl K8sObject {
                                         .collect::<Vec<&String>>()
                                         .contains(&&"status".to_string())
                                     && c.as_object().unwrap()["status"].is_string()
-                                    && c.as_object().unwrap()["status"].to_string() == "True".to_string()
+                                    && c.as_object().unwrap()["status"].as_str().unwrap() == "True"
                             })
                         {
                             return true;
@@ -143,7 +143,7 @@ impl K8sObject {
 
     pub fn wait_condition(&mut self, condition: String, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
-        tracing::warn!("wait_condition {} {}", &condition, name);
+        tracing::info!("wait_condition({}) for {}", &condition, name);
         let cond = await_condition(self.api.clone(), &name, Self::is_condition(condition));
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {

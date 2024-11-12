@@ -1,7 +1,7 @@
 ARG RUST_VERSION=1.81
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_NEXT=trixie
-FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
+FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential g++"
 WORKDIR /usr/src/operator
 COPY Cargo.lock .
@@ -26,7 +26,7 @@ RUN touch common/src/lib.rs operator/src/lib.rs operator/src/main.rs \
  && strip target/release/operator
 
 # Finally create the target image with run-time dependencies installed
-FROM debian:${DEBIAN_NEXT}-slim as target
+FROM debian:${DEBIAN_NEXT}-slim AS target
 ARG DEB_PACKAGES="openssl"
 # hadolint ignore=DL3027,DL3008
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \

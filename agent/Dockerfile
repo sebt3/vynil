@@ -1,7 +1,7 @@
 ARG RUST_VERSION=1.81
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_NEXT=trixie
-FROM docker.io/rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
+FROM docker.io/rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential g++"
 WORKDIR /usr/src/agent
 COPY Cargo.lock .
@@ -26,7 +26,7 @@ RUN touch common/src/lib.rs agent/src/lib.rs agent/src/main.rs \
  && cargo build -r --bin agent \
  && strip target/release/agent
 # Then create the intermediary image with run-time dependencies installed
-FROM docker.io/debian:${DEBIAN_NEXT}-slim as middle
+FROM docker.io/debian:${DEBIAN_NEXT}-slim AS middle
 ARG HELM_VERSION=v3.10.3
 ARG KUBECTL_VERSION=v1.30.3
 ARG TF_VERSION=1.8.1
@@ -52,12 +52,12 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && chmod 770 /var/lib/vynil /nonexistent \
  && chmod 700 /var/lib/vynil/keys
 # Use the intermediary image to download the most used providers for runtime caching purpose
-FROM middle as downloader
+FROM middle AS downloader
 WORKDIR /src
 COPY agent/providers.tf .
 RUN tofu init
 # Finally assemble everything together
-FROM middle as target
+FROM middle AS target
 COPY --from=builder /usr/src/agent/target/release/agent /usr/bin/agent
 COPY agent/scripts /usr/lib/vynil/scripts
 USER nobody

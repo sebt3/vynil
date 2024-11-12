@@ -1,8 +1,8 @@
-fn workload(list, duration) {
-    for wl in list.filter(|wl| ["Deployment", "DaemonSet", "StatefulSet"].contains(wl.kind)) {
+fn workload(lst, duration) {
+    for wl in lst.filter(|wl| ["Deployment", "DaemonSet", "StatefulSet"].contains(wl.kind)) {
         log_info(`Waiting for ${wl.kind} ${wl.namespace} ${wl.name} to be available`);
         if wl.kind == "Deployment" {
-            let deploy = get_deployment(wl.namespace, w.name);
+            let deploy = get_deployment(wl.namespace, wl.name);
             deploy.wait_available(duration);
         } else if wl.kind == "DaemonSet" {
             let ds = get_deamonset(wl.namespace, wl.name);
@@ -13,23 +13,23 @@ fn workload(list, duration) {
         }
     }
 }
-fn workload(list) {
-    workload(list, 2*60);
+fn workload(lst) {
+    workload(lst, 2*60);
 }
 
-fn job(list, duration) {
-    for j in applied_objs.filter(|j| j.kind == "Job") {
+fn job(lst, duration) {
+    for j in lst.filter(|j| j.kind == "Job") {
         log_info(`Waiting for ${j.kind} ${j.namespace} ${j.name} to finish`);
         let job = get_job(j.namespace, j.name);
         job.wait_done(duration);
     }
 }
-fn job(list) {
-    job(list, 5*60);
+fn job(lst) {
+    job(lst, 5*60);
 }
 
-fn vital(list, duration) {
-    for v in list {
+fn vital(lst, duration) {
+    for v in lst {
         if ["Cluster"].contains(v.kind) {
             log_info(`Waiting for ${v.kind} ${v.namespace} ${v.name} to be available`);
             let api = k8s_resource(v.kind, v.namespace);
@@ -42,23 +42,22 @@ fn vital(list, duration) {
             obj.wait_condition("ClusterAvailable", duration);
         } else if ["Redis", "MongoDBCommunity"].contains(v.kind) {
             log_info(`Waiting for ${v.kind} ${v.namespace} ${v.name} to be available`);
-            let api = k8s_resource(v.kind, v.namespace);
             let sts = get_statefulset(v.namespace, v.name);
             sts.wait_available(duration);
         }
     }
 }
-fn vital(list) {
-    vital(list, 2*60);
+fn vital(lst) {
+    vital(lst, 2*60);
 }
 
-fn all(list, duration) {
-    vital(list, duration);
-    job(list, duration);
-    workload(list, duration);
+fn all(lst, duration) {
+    vital(lst, duration);
+    job(lst, duration);
+    workload(lst, duration);
 }
-fn all(list) {
-    vital(list);
-    job(list);
-    workload(list);
+fn all(lst) {
+    vital(lst);
+    job(lst);
+    workload(lst);
 }

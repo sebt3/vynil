@@ -50,9 +50,9 @@ pub struct Parameters {
 pub async fn run(args: &Parameters) -> Result<()> {
     let mut rhai = Script::new(vec![
         format!("{}/scripts", args.package_dir),
+        format!("{}", args.config_dir),
         format!("{}/tenant", args.script_dir),
         format!("{}/lib", args.script_dir),
-        format!("{}", args.config_dir),
     ]);
     let context = TenantInstance::get(args.namespace.clone(), args.instance.clone()).await?;
     set_tenant(context.clone());
