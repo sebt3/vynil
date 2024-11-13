@@ -157,7 +157,6 @@ impl K8sDeploy {
                 if let Some(s) = &job.status {
                     if let Some(conds) = &s.conditions {
                         if let Some(pcond) = conds.iter().find(|c| c.type_ == "Available") {
-                            tracing::warn!(pcond.status);
                             return pcond.status == "True";
                         }
                     }

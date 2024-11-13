@@ -7,7 +7,7 @@ fn gen_system(path, docs) {
     let yaml = yaml_decode(file_read(path+"/package.yaml"));
     let name = if type_of(yaml["metadata"]) == "map" {yaml["metadata"]["name"]} else {()};
     if name != () {
-        for doc in docs {
+        for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map") {
             if doc.kind == "CustomResourceDefinition" {
                 create_dir(`${path}/get_crds`);
                 if "conversion" in doc.spec && doc.spec.conversion != () {

@@ -43,8 +43,10 @@ spec:
         image: {{ agent_image }}
         imagePullPolicy: IfNotPresent
         volumeMounts:
-        - mountPath: /package
-          name: package
+        - name: config
+          mountPath: /etc/vynil
+        - name: package
+          mountPath: /package
       initContainers:
       - name: unpack
         args:
@@ -80,8 +82,6 @@ spec:
         volumeMounts:
         - name: package
           mountPath: /package
-        - name: config
-          mountPath: /etc/vynil
 {{#if use_secret }}
         - name: pullsecret
           mountPath: /secret

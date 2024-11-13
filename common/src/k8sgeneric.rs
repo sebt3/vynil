@@ -110,7 +110,6 @@ impl K8sObject {
                             .contains(&&"conditions".to_string())
                     {
                         let conditions = status.as_object().unwrap()["conditions"].clone();
-                        tracing::warn!("Testing conditions: {cond} with {:?}", conditions);
                         if conditions.is_array()
                             && conditions.as_array().unwrap().into_iter().any(|c| {
                                 c.is_object()

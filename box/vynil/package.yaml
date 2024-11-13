@@ -2,10 +2,10 @@
 apiVersion: vinyl.solidite.fr/v1beta1
 kind: Package
 metadata:
+  type: system
   name: vynil
   category: core
   description: Vynil controller to manage vynil packages installations
-  type: system
   features:
   - upgrade
   - auto_config
