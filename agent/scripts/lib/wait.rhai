@@ -1,6 +1,6 @@
 fn workload(lst, duration) {
     for wl in lst.filter(|wl| ["Deployment", "DaemonSet", "StatefulSet"].contains(wl.kind)) {
-        log_info(`Waiting for ${wl.kind} ${wl.namespace} ${wl.name} to be available`);
+        log_info(`Waiting for ${wl.kind} ${wl.namespace}/${wl.name} to be available`);
         if wl.kind == "Deployment" {
             let deploy = get_deployment(wl.namespace, wl.name);
             deploy.wait_available(duration);
@@ -19,7 +19,7 @@ fn workload(lst) {
 
 fn job(lst, duration) {
     for j in lst.filter(|j| j.kind == "Job") {
-        log_info(`Waiting for ${j.kind} ${j.namespace} ${j.name} to finish`);
+        log_info(`Waiting for ${j.kind} ${j.namespace}/${j.name} to finish`);
         let job = get_job(j.namespace, j.name);
         job.wait_done(duration);
     }
@@ -31,17 +31,17 @@ fn job(lst) {
 fn vital(lst, duration) {
     for v in lst {
         if ["Cluster"].contains(v.kind) {
-            log_info(`Waiting for ${v.kind} ${v.namespace} ${v.name} to be available`);
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
             let api = k8s_resource(v.kind, v.namespace);
             let obj = api.get_obj(v.name);
             obj.wait_condition("Ready", duration);
         } else if ["RabbitmqCluster"].contains(v.kind) {
-            log_info(`Waiting for ${v.kind} ${v.namespace} ${v.name} to be available`);
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
             let api = k8s_resource(v.kind, v.namespace);
             let obj = api.get_obj(v.name);
             obj.wait_condition("ClusterAvailable", duration);
         } else if ["Redis", "MongoDBCommunity"].contains(v.kind) {
-            log_info(`Waiting for ${v.kind} ${v.namespace} ${v.name} to be available`);
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
             let sts = get_statefulset(v.namespace, v.name);
             sts.wait_available(duration);
         }

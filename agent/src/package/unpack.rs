@@ -76,7 +76,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
         tracing::error!("{:?} is not a directory", &args.destination);
         Err(Error::MissingDestination(args.destination.clone()))
     } else {
-        let mut cli = if args.pull_path == "" {
+        let mut cli = if args.pull_path.is_empty() {
             Registry::new(
                 args.registry.clone(),
                 args.username.clone(),
@@ -84,9 +84,9 @@ pub async fn run(args: &Parameters) -> Result<()> {
             )
         } else {
             let pull_secret_string = std::fs::read_to_string(format!("{}/.dockerconfigjson", args.pull_path))
-                .map_err(|e| Error::Stdio(e))?;
+                .map_err(Error::Stdio)?;
             let pull_secret: serde_json::Value =
-                serde_json::from_str(&pull_secret_string).map_err(|e| Error::SerializationError(e))?;
+                serde_json::from_str(&pull_secret_string).map_err(Error::SerializationError)?;
             let hash = pull_secret["auths"][args.registry.clone()]["auth"].clone();
             let user_pass = base64_decode(hash.as_str().unwrap().to_string())?;
             let auth = user_pass.split(":").collect::<Vec<&str>>();

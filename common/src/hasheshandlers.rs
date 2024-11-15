@@ -1,10 +1,7 @@
-use crate::{Result, Error, rhai_err, RhaiRes};
+use crate::{rhai_err, Error, Result, RhaiRes};
 use argon2::{
-    password_hash::{
-        rand_core::OsRng,
-        PasswordHasher, SaltString
-    },
-    Argon2
+    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+    Argon2,
 };
 
 #[derive(Clone, Debug)]
@@ -22,8 +19,13 @@ impl Argon {
     }
 
     pub fn hash(&self, password: String) -> Result<String> {
-        Ok(self.argon.hash_password(password.as_bytes(), &self.salt).map_err(Error::Argon2hash)?.to_string())
+        Ok(self
+            .argon
+            .hash_password(password.as_bytes(), &self.salt)
+            .map_err(Error::Argon2hash)?
+            .to_string())
     }
+
     pub fn rhai_hash(&mut self, password: String) -> RhaiRes<String> {
         self.hash(password).map_err(rhai_err)
     }

@@ -22,7 +22,7 @@ static SYSTEM_FINALIZER: &str = "systeminstances.vynil.solidite.fr";
 #[instrument(skip(ctx, inst), fields(trace_id))]
 pub async fn reconcile(inst: Arc<SystemInstance>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
-    Span::current().record("trace_id", &field::display(&trace_id));
+    Span::current().record("trace_id", field::display(&trace_id));
     let _mes = ctx.metrics.system_count_and_measure();
     let ns = inst.namespace().unwrap_or_default(); // inst is namespace scoped
     let insts: Api<SystemInstance> = Api::namespaced(ctx.client.clone(), &ns);
@@ -74,7 +74,7 @@ impl Reconciler for SystemInstance {
             .unwrap()
             .insert("digest".to_string(), self.clone().get_options_digest().into());
         let packages = ctx.packages.read().await;
-        if !packages.keys().into_iter().any(|x| *x == self.spec.jukebox) {
+        if !packages.keys().any(|x| *x == self.spec.jukebox) {
             self.clone().set_missing_box(self.spec.jukebox.clone()).await?;
             return Ok(Action::requeue(Duration::from_secs(15 * 60)));
         } else if !packages[&self.spec.jukebox]
@@ -142,21 +142,22 @@ impl Reconciler for SystemInstance {
             let mut rhai = Script::new(vec![]);
             rhai.ctx.set_value("instance", self.clone());
             let val = rhai.eval_map_string(&pck.value_script.unwrap())?;
+            tracing::info!("Using {:?} as ctrl_values", val);
             context
                 .as_object_mut()
                 .unwrap()
-                .insert("ctrl_values".to_string(), val.into());
+                .insert("ctrl_values".to_string(), format!("{:?}", val).into());
         } else {
             context
                 .as_object_mut()
                 .unwrap()
-                .insert("ctrl_values".to_string(), "{}".into());
+                .insert("ctrl_values".to_string(), "\"{}\"".into());
         }
         // Evrything is good to go
         // Create the job
         let job_def_str = hbs.render("{{> package.yaml }}", &context)?;
-        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(|e| Error::YamlError(e))?;
-        let job_api: Api<Job> = Api::namespaced(client.clone(), &my_ns);
+        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
+        let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
         let _job = match job_api
             .patch(
                 &job_name,
@@ -170,30 +171,30 @@ impl Reconciler for SystemInstance {
                 if let either::Left(j) = job_api
                     .delete(&job_name, &DeleteParams::foreground())
                     .await
-                    .map_err(|e| Error::KubeError(e))?
+                    .map_err(Error::KubeError)?
                 {
                     let uid = j.metadata.uid.unwrap_or_default();
                     let cond = await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
                     tokio::time::timeout(std::time::Duration::from_secs(20), cond)
                         .await
-                        .map_err(|e| Error::Elapsed(e))?
-                        .map_err(|e| Error::KubeWaitError(e))?;
+                        .map_err(Error::Elapsed)?
+                        .map_err(Error::KubeWaitError)?;
                 }
                 job_api
                     .create(
                         &PostParams::default(),
-                        &serde_json::from_value(job_def).map_err(|e| Error::SerializationError(e))?,
+                        &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
                     )
                     .await
-                    .map_err(|e| Error::KubeError(e))?
+                    .map_err(Error::KubeError)?
             }
         };
         // Wait for the Job completion
         let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
         tokio::time::timeout(std::time::Duration::from_secs(10 * 60), cond)
             .await
-            .map_err(|e| Error::Elapsed(e))?
-            .map_err(|e| Error::KubeWaitError(e))?;
+            .map_err(Error::Elapsed)?
+            .map_err(Error::KubeWaitError)?;
         Ok(Action::requeue(Duration::from_secs(15 * 60)))
     }
 
@@ -232,7 +233,7 @@ impl Reconciler for SystemInstance {
             .unwrap()
             .insert("digest".to_string(), self.clone().get_options_digest().into());
         let packages = ctx.packages.read().await;
-        if !packages.keys().into_iter().any(|x| *x == self.spec.jukebox) {
+        if !packages.keys().any(|x| *x == self.spec.jukebox) {
             // JukeBox doesnt exist, cannot have been installed
             return Ok(Action::await_change());
         } else if !packages[&self.spec.jukebox]
@@ -293,17 +294,17 @@ impl Reconciler for SystemInstance {
             context
                 .as_object_mut()
                 .unwrap()
-                .insert("ctrl_values".to_string(), val.into());
+                .insert("ctrl_values".to_string(), format!("{:?}", val).into());
         } else {
             context
                 .as_object_mut()
                 .unwrap()
-                .insert("ctrl_values".to_string(), "{}".into());
+                .insert("ctrl_values".to_string(), "\"{}\"".into());
         }
         // Delete the install Job
-        let job_api: Api<Job> = Api::namespaced(client.clone(), &my_ns);
+        let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
         let job = job_api.get_metadata_opt(&job_name).await;
-        if !job.is_err() && job.unwrap().is_some() {
+        if job.is_ok() && job.unwrap().is_some() {
             match job_api.delete(&job_name, &DeleteParams::foreground()).await {
                 Ok(eith) => {
                     if let either::Left(j) = eith {
@@ -311,8 +312,8 @@ impl Reconciler for SystemInstance {
                         let cond = await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
                         tokio::time::timeout(std::time::Duration::from_secs(20), cond)
                             .await
-                            .map_err(|e| Error::Elapsed(e))?
-                            .map_err(|e| Error::KubeWaitError(e))?;
+                            .map_err(Error::Elapsed)?
+                            .map_err(Error::KubeWaitError)?;
                     }
                 }
                 Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
@@ -320,21 +321,21 @@ impl Reconciler for SystemInstance {
         }
         // Create the delete Job
         let job_def_str = hbs.render("{{> package.yaml }}", &context)?;
-        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(|e| Error::YamlError(e))?;
+        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
         job_api
             .create(
                 &PostParams::default(),
-                &serde_json::from_value(job_def).map_err(|e| Error::SerializationError(e))?,
+                &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
             )
             .await
-            .map_err(|e| Error::KubeError(e))?;
+            .map_err(Error::KubeError)?;
 
         // Wait for the Job completion
         let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
         tokio::time::timeout(std::time::Duration::from_secs(10 * 60), cond)
             .await
-            .map_err(|e| Error::Elapsed(e))?
-            .map_err(|e| Error::KubeWaitError(e))?;
+            .map_err(Error::Elapsed)?
+            .map_err(Error::KubeWaitError)?;
         // Delete the delete Job
         match job_api.delete(&job_name, &DeleteParams::foreground()).await {
             Ok(_) => {}

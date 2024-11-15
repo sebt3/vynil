@@ -63,7 +63,6 @@ impl K8sDaemonSet {
 
     pub fn wait_available(&mut self, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
-        tracing::warn!("wait_available {}", name);
         let cond = await_condition(self.api.clone(), &name, Self::is_deamonset_available());
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
@@ -130,7 +129,6 @@ impl K8sStatefulSet {
 
     pub fn wait_available(&mut self, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
-        tracing::warn!("wait_available {}", name);
         let cond = await_condition(self.api.clone(), &name, Self::is_sts_available());
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
@@ -198,7 +196,6 @@ impl K8sDeploy {
 
     pub fn wait_available(&mut self, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
-        tracing::warn!("wait_available {}", name);
         let cond = await_condition(self.api.clone(), &name, Self::is_deploy_available());
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {

@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use crate::{
     context,
     handlebarshandler::HandleBars,
+    hasheshandlers::Argon,
     httphandler::RestClient,
     instancesystem::SystemInstance,
     instancetenant::TenantInstance,
-    hasheshandlers::Argon,
     jukebox::JukeBox,
     k8sgeneric::{update_cache, K8sGeneric, K8sObject},
     k8sworkload::{K8sDaemonSet, K8sDeploy, K8sJob, K8sStatefulSet},
@@ -386,6 +386,7 @@ impl Script {
             .register_get("metadata", VynilPackageSource::get_metadata)
             .register_get("requirements", VynilPackageSource::get_requirements)
             .register_get("options", VynilPackageSource::get_options)
+            .register_get("value_script", VynilPackageSource::get_value_script)
             .register_get("images", VynilPackageSource::get_images)
             .register_get("resources", VynilPackageSource::get_resources);
         script.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
@@ -473,8 +474,10 @@ impl Script {
             .eval_with_scope::<bool>(&mut self.ctx, script)
             .map_err(|e| RhaiError(e))
     }
+
     pub fn eval_map_string(&mut self, script: &str) -> Result<String, Error> {
-        let m = self.engine
+        let m = self
+            .engine
             .eval_with_scope::<Map>(&mut self.ctx, script)
             .map_err(|e| RhaiError(e))?;
         serde_json::to_string(&m).map_err(Error::SerializationError)

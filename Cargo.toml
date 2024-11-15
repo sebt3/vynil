@@ -28,10 +28,10 @@ version = "0.96.0"
 
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
-license = "	BSD-3-Clause"
+license = "BSD-3-Clause"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -48,15 +48,35 @@ strip = true
 
 # use "cargo install cargo-commander", then "cargo cmd generate"
 [package.metadata.commands]
-generate = { cmd=[
+generate_crd = { cmd=[
     "cargo run --bin agent -- crdgen > box/vynil/crds/crd.yaml",
     "cp box/vynil/crds/crd.yaml deploy/crd/crd.yaml",
 ]}
+generate = { cmd=[
+    "cargo cmd generate_crd",
+    "awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/\"operator\",/'<Cargo.toml>agent/parent.toml",
+    "awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/\"agent\",/'<Cargo.toml>operator/parent.toml",
+]}
 crd = { cmd=[
-    "cargo run --bin agent -- crdgen > box/vynil/crds/crd.yaml",
-    "cp box/vynil/crds/crd.yaml deploy/crd/crd.yaml",
+    "cargo cmd generate_crd",
     "kubectl apply -f box/vynil/crds/crd.yaml"
 ]}
 fmt = { cmd=[
     "cargo +nightly fmt"
+]}
+precommit = { cmd=[
+    "cargo update",
+    "cargo clippy --fix --allow-dirty",
+    "cargo cmd generate",
+    "cargo +nightly fmt"
+]}
+agent = { cmd=[
+    "podman build . -f agent/Dockerfile -t docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version) && podman push docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version)",
+]}
+operator = { cmd=[
+    "podman build . -f operator/Dockerfile -t docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version) && podman push docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version)",
+]}
+box = { cmd=[
+    "cargo run --bin agent -- package update --source ./box/vynil/",
+    "cargo run --bin agent -- package build -o ./box/vynil/ --tag $(cargo run --bin agent -- version) -r docker.io -n sebt3/vynil -u $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $1}') -p $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $2}')",
 ]}

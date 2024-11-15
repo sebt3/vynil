@@ -1,10 +1,10 @@
 use clap::Args;
-use common::{Result, vynilpackage::VERSION};
+use common::{vynilpackage::VERSION, Result};
 
 #[derive(Args, Debug)]
 pub struct Parameters {}
 
 pub async fn run(_args: &Parameters) -> Result<()> {
-    println!("{}",VERSION);
+    println!("{}", VERSION);
     Ok(())
 }

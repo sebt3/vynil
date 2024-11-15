@@ -184,7 +184,7 @@ spec:
                       description: Registry
                       type: string
                     requirements:
-                      description: Requirement
+                      description: Requirements
                       items:
                         description: Vynil Package Requirement
                         oneOf:
@@ -272,6 +272,10 @@ spec:
                       type: array
                     tag:
                       description: Current tag
+                      type: string
+                    value_script:
+                      description: A rhai script that produce a map to be added in the package values
+                      nullable: true
                       type: string
                   required:
                   - image

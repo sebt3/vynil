@@ -85,6 +85,7 @@ pub fn rhai_err(e: Error) -> Box<rhai::EvalAltResult> {
 }
 pub mod context;
 pub mod handlebarshandler;
+pub mod hasheshandlers;
 pub mod httphandler;
 pub mod instancesystem;
 pub mod instancetenant;
@@ -94,7 +95,6 @@ pub mod k8sworkload;
 pub mod ocihandler;
 pub mod passwordhandler;
 pub mod rhaihandler;
-pub mod hasheshandlers;
 mod semverhandler;
 pub mod shellhandler;
 mod tools;

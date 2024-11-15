@@ -1,15 +1,4 @@
----
 apiVersion: vinyl.solidite.fr/v1beta1
-kind: Package
-metadata:
-  type: system
-  name: vynil
-  category: core
-  description: Vynil controller to manage vynil packages installations
-  features:
-  - upgrade
-  - auto_config
-  app_version: 0.3.1
 images:
   agent:
     registry: docker.io
@@ -17,6 +6,16 @@ images:
   controller:
     registry: docker.io
     repository: sebt3/vynil-operator
+kind: Package
+metadata:
+  app_version: 0.3.2
+  category: core
+  description: Vynil controller to manage vynil packages installations
+  features:
+  - upgrade
+  - auto_config
+  name: vynil
+  type: system
 resources:
   controller:
     requests:

@@ -1,6 +1,6 @@
 use crate::{
     instancesystem::SystemInstance, instancetenant::TenantInstance, rhai_err, rhaihandler::Script, Error,
-    Result, RhaiRes, Semver
+    Result, RhaiRes, Semver,
 };
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{api::ListParams, Api, Client};
@@ -70,11 +70,20 @@ pub enum VynilPackageRequirement {
     /// Name of a crd that is required before installing this package
     CustomResourceDefinition(String),
     /// SystemPackage that should be installed before current package
-    SystemPackage { category: String, name: String },
+    SystemPackage {
+        category: String,
+        name: String,
+    },
     /// TenantPackage that should be installed before current package in the current Tenant
-    TenantPackage { category: String, name: String },
+    TenantPackage {
+        category: String,
+        name: String,
+    },
     /// a rhai script that return a boolean
-    Prefly { script: String, name: String },
+    Prefly {
+        script: String,
+        name: String,
+    },
     StorageCapability(StorageCapability),
     /// Forbid migration that are not supported
     MinimumPreviousVersion(String),
@@ -103,7 +112,11 @@ impl VynilPackageRequirement {
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
-                Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed"), 5 * 60))
+                Ok((
+                    rhai.eval_truth(&script)?,
+                    format!("Requirement {name} failed"),
+                    5 * 60,
+                ))
             }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
@@ -116,17 +129,25 @@ impl VynilPackageRequirement {
                         .into_iter()
                         .any(|i| i.spec.category == *category && i.spec.package == *name),
                     format!("System package {category}/{name} is not installed"),
-                    15 * 60
+                    15 * 60,
                 ))
             }
             VynilPackageRequirement::TenantPackage { category, name } => {
                 tracing::warn!("TenantPackage Requirement for a system package is invalid, skipping");
-                Ok((true, format!("Tenant package {category}/{name} is not installed"), 15 * 60))
+                Ok((
+                    true,
+                    format!("Tenant package {category}/{name} is not installed"),
+                    15 * 60,
+                ))
             }
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
-                Ok((true, format!("Storage capability {:?} isn't available", capa), 15 * 60))
+                Ok((
+                    true,
+                    format!("Storage capability {:?} isn't available", capa),
+                    15 * 60,
+                ))
             }
             VynilPackageRequirement::MinimumPreviousVersion(prev) => {
                 //TODO: implement MinimumPreviousVersion
@@ -152,7 +173,11 @@ impl VynilPackageRequirement {
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
-                Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed"), 5 * 60))
+                Ok((
+                    rhai.eval_truth(&script)?,
+                    format!("Requirement {name} failed"),
+                    5 * 60,
+                ))
             }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
@@ -188,7 +213,11 @@ impl VynilPackageRequirement {
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
-                Ok((true, format!("Storage capability {:?} isn't available", capa), 15 * 60))
+                Ok((
+                    true,
+                    format!("Storage capability {:?} isn't available", capa),
+                    15 * 60,
+                ))
             }
             VynilPackageRequirement::MinimumPreviousVersion(prev) => {
                 //TODO: implement MinimumPreviousVersion
@@ -286,6 +315,14 @@ impl VynilPackageSource {
             serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
         } else {
             Ok(Dynamic::from({}))
+        }
+    }
+
+    pub fn get_value_script(&mut self) -> RhaiRes<String> {
+        if let Some(val) = self.value_script.clone() {
+            Ok(val)
+        } else {
+            Ok("".into())
         }
     }
 

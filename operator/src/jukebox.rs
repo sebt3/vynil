@@ -22,7 +22,7 @@ static JUKEBOX_FINALIZER: &str = "jukeboxes.vynil.solidite.fr";
 #[instrument(skip(ctx, dist), fields(trace_id))]
 pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
-    Span::current().record("trace_id", &field::display(&trace_id));
+    Span::current().record("trace_id", field::display(&trace_id));
     let _mes = ctx.metrics.jukebox_count_and_measure();
     let dists: Api<JukeBox> = Api::all(ctx.client.clone());
 
@@ -61,7 +61,7 @@ impl Reconciler for JukeBox {
             .insert("schedule".to_string(), self.spec.schedule.clone().into());
         // Create the CronJob
         let cj_def_str = hbs.render("{{> cronscan.yaml }}", &context)?;
-        let cj_def: Value = serde_yaml::from_str(&cj_def_str).map_err(|e| Error::YamlError(e))?;
+        let cj_def: Value = serde_yaml::from_str(&cj_def_str).map_err(Error::YamlError)?;
         let cron_api: Api<CronJob> = Api::namespaced(client.clone(), ns);
         cron_api
             .patch(
@@ -70,10 +70,10 @@ impl Reconciler for JukeBox {
                 &Patch::Apply(cj_def),
             )
             .await
-            .map_err(|e| Error::KubeError(e))?;
+            .map_err(Error::KubeError)?;
         // Create the Job
         let job_def_str = hbs.render("{{> scan.yaml }}", &context)?;
-        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(|e| Error::YamlError(e))?;
+        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
         let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
         let _job = match job_api
             .patch(
@@ -88,30 +88,30 @@ impl Reconciler for JukeBox {
                 if let either::Left(j) = job_api
                     .delete(&job_name, &DeleteParams::foreground())
                     .await
-                    .map_err(|e| Error::KubeError(e))?
+                    .map_err(Error::KubeError)?
                 {
                     let uid = j.metadata.uid.unwrap_or_default();
                     let cond = await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
                     tokio::time::timeout(std::time::Duration::from_secs(20), cond)
                         .await
-                        .map_err(|e| Error::Elapsed(e))?
-                        .map_err(|e| Error::KubeWaitError(e))?;
+                        .map_err(Error::Elapsed)?
+                        .map_err(Error::KubeWaitError)?;
                 }
                 job_api
                     .create(
                         &PostParams::default(),
-                        &serde_json::from_value(job_def).map_err(|e| Error::SerializationError(e))?,
+                        &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
                     )
                     .await
-                    .map_err(|e| Error::KubeError(e))?
+                    .map_err(Error::KubeError)?
             }
         };
         // Wait for the Job completion
         let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
         tokio::time::timeout(std::time::Duration::from_secs(10 * 60), cond)
             .await
-            .map_err(|e| Error::Elapsed(e))?
-            .map_err(|e| Error::KubeWaitError(e))?;
+            .map_err(Error::Elapsed)?
+            .map_err(Error::KubeWaitError)?;
         tracing::info!("Updating packages cache");
         match JukeBox::list().await {
             Ok(lst) => ctx.set_package_cache(&lst).await,
@@ -128,7 +128,7 @@ impl Reconciler for JukeBox {
         let job_name = format!("scan-{}", self.name_any());
         let cron_api: Api<CronJob> = Api::namespaced(client.clone(), ns);
         let cron = cron_api.get_metadata_opt(&job_name).await;
-        if !cron.is_err() && cron.unwrap().is_some() {
+        if cron.is_ok() && cron.unwrap().is_some() {
             match cron_api.delete(&job_name, &DeleteParams::foreground()).await {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Deleting CronJob {} failed with: {e}", &job_name),
@@ -136,7 +136,7 @@ impl Reconciler for JukeBox {
         }
         let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
         let job = job_api.get_metadata_opt(&job_name).await;
-        if !job.is_err() && job.unwrap().is_some() {
+        if job.is_ok() && job.unwrap().is_some() {
             match job_api.delete(&job_name, &DeleteParams::foreground()).await {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
