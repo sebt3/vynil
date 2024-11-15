@@ -1,7 +1,7 @@
 use crate::{manager::Context, telemetry, Error, Reconciler, Result, SystemInstance};
 use async_trait::async_trait;
 use chrono::Utc;
-use common::{get_client_name, vynilpackage::VynilPackageType};
+use common::{get_client_name, rhaihandler::Script, vynilpackage::VynilPackageType};
 use k8s_openapi::api::batch::v1::Job;
 use kube::{
     api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},
@@ -131,11 +131,26 @@ impl Reconciler for SystemInstance {
             .insert("registry".to_string(), pck.registry.into());
         // Check requierements
         for req in pck.requirements {
-            let (res, mes) = req.check_system(self, client.clone()).await?;
+            let (res, mes, requeue) = req.check_system(self, client.clone()).await?;
             if !res {
                 self.clone().set_missing_requirement(mes).await?;
-                return Ok(Action::requeue(Duration::from_secs(15 * 60)));
+                return Ok(Action::requeue(Duration::from_secs(requeue)));
             }
+        }
+        // Compute the controller values
+        if pck.value_script.is_some() {
+            let mut rhai = Script::new(vec![]);
+            rhai.ctx.set_value("instance", self.clone());
+            let val = rhai.eval_map_string(&pck.value_script.unwrap())?;
+            context
+                .as_object_mut()
+                .unwrap()
+                .insert("ctrl_values".to_string(), val.into());
+        } else {
+            context
+                .as_object_mut()
+                .unwrap()
+                .insert("ctrl_values".to_string(), "{}".into());
         }
         // Evrything is good to go
         // Create the job
@@ -270,6 +285,21 @@ impl Reconciler for SystemInstance {
             .as_object_mut()
             .unwrap()
             .insert("registry".to_string(), pck.registry.into());
+        // Compute the controller values
+        if pck.value_script.is_some() {
+            let mut rhai = Script::new(vec![]);
+            rhai.ctx.set_value("instance", self.clone());
+            let val = rhai.eval_map_string(&pck.value_script.unwrap())?;
+            context
+                .as_object_mut()
+                .unwrap()
+                .insert("ctrl_values".to_string(), val.into());
+        } else {
+            context
+                .as_object_mut()
+                .unwrap()
+                .insert("ctrl_values".to_string(), "{}".into());
+        }
         // Delete the install Job
         let job_api: Api<Job> = Api::namespaced(client.clone(), &my_ns);
         let job = job_api.get_metadata_opt(&job_name).await;

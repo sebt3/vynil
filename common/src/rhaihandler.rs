@@ -473,4 +473,10 @@ impl Script {
             .eval_with_scope::<bool>(&mut self.ctx, script)
             .map_err(|e| RhaiError(e))
     }
+    pub fn eval_map_string(&mut self, script: &str) -> Result<String, Error> {
+        let m = self.engine
+            .eval_with_scope::<Map>(&mut self.ctx, script)
+            .map_err(|e| RhaiError(e))?;
+        serde_json::to_string(&m).map_err(Error::SerializationError)
+    }
 }

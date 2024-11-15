@@ -79,6 +79,10 @@ fn run(instance, args) {
     let pkg = read_package_yaml(`${args.package_dir}/package.yaml`);
     let scs = k8s_resource("StorageClass").list().items.map(|s| #{ name: s.metadata.name, provisioner: s.provisioner });
     let current = "";
+    let controller = #{};
+    try {
+        controller = json_decode(args.controller_values);
+    } catch {}
     if instance.status != () && instance.status.tag != () {
         current = instance.status.tag;
     }
@@ -100,6 +104,7 @@ fn run(instance, args) {
 
     #{
         cluster: cluster_config,
+        controller: controller,
         instance: #{
             name: instance.metadata.name,
             namespace: instance.metadata.namespace,

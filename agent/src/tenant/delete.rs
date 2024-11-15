@@ -45,6 +45,14 @@ pub struct Parameters {
         default_value = "."
     )]
     config_dir: String,
+    /// Controller computed values
+    #[arg(
+        long = "controller-values",
+        env = "CONTROLLER_VALUES",
+        value_name = "CONTROLLER_VALUES",
+        default_value = "{}"
+    )]
+    controller_values: String,
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {

@@ -37,23 +37,21 @@ try {
         let tags = tags.map(|v| v.to_string());
         // get the annotations from the highest version
         let annotations = reg.get_manifest(image.repository, tags[0]).annotations;
-        if annotations.keys().contains("fr.solidite.vynil.metadata") && annotations.keys().contains("fr.solidite.vynil.requirements") && annotations.keys().contains("fr.solidite.vynil.options") {
-            found += #{
-                registry: image.registry,
-                image: image.repository,
-                tag: tags[0],
-                metadata: json_decode(annotations["fr.solidite.vynil.metadata"]),
-                requirements: json_decode(annotations["fr.solidite.vynil.requirements"]),
-                options: json_decode(annotations["fr.solidite.vynil.options"]),
-            };
-        } else if annotations.keys().contains("fr.solidite.vynil.metadata") && annotations.keys().contains("fr.solidite.vynil.requirements") {
-            found += #{
+        if annotations.keys().contains("fr.solidite.vynil.metadata") && annotations.keys().contains("fr.solidite.vynil.requirements") {
+            let cur = #{
                 registry: image.registry,
                 image: image.repository,
                 tag: tags[0],
                 metadata: json_decode(annotations["fr.solidite.vynil.metadata"]),
                 requirements: json_decode(annotations["fr.solidite.vynil.requirements"]),
             };
+            if annotations.keys().contains("fr.solidite.vynil.options") {
+                cur["options"] = json_decode(annotations["fr.solidite.vynil.options"]);
+            }
+            if annotations.keys().contains("fr.solidite.vynil.value_script") {
+                cur["value_script"] = annotations["fr.solidite.vynil.value_script"];
+            }
+            found += cur;
         }
     }
     let tmp = box.set_status_updated(found);

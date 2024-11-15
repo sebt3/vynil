@@ -88,22 +88,22 @@ pub enum VynilPackageRequirement {
     Disk(u64),
 }
 impl VynilPackageRequirement {
-    pub async fn check_system(&self, inst: &SystemInstance, client: Client) -> Result<(bool, String)> {
+    pub async fn check_system(&self, inst: &SystemInstance, client: Client) -> Result<(bool, String, u64)> {
         match self {
             VynilPackageRequirement::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
-                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first")))
+                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"), 15 * 60))
             }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;
-                Ok((r.is_some(), format!("CRD {crd} is not installed")))
+                Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
             }
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
-                Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed")))
+                Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed"), 5 * 60))
             }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
@@ -116,42 +116,43 @@ impl VynilPackageRequirement {
                         .into_iter()
                         .any(|i| i.spec.category == *category && i.spec.package == *name),
                     format!("System package {category}/{name} is not installed"),
+                    15 * 60
                 ))
             }
             VynilPackageRequirement::TenantPackage { category, name } => {
                 tracing::warn!("TenantPackage Requirement for a system package is invalid, skipping");
-                Ok((true, format!("Tenant package {category}/{name} is not installed")))
+                Ok((true, format!("Tenant package {category}/{name} is not installed"), 15 * 60))
             }
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
-                Ok((true, format!("Storage capability {:?} isn't available", capa)))
+                Ok((true, format!("Storage capability {:?} isn't available", capa), 15 * 60))
             }
             VynilPackageRequirement::MinimumPreviousVersion(prev) => {
                 //TODO: implement MinimumPreviousVersion
                 tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
-                Ok((true, format!("Minimum {prev} version is not available")))
+                Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
             }
-            _ => Ok((true, "".to_string())),
+            _ => Ok((true, "".to_string(), 15 * 60)),
         }
     }
 
-    pub async fn check_tenant(&self, inst: &TenantInstance, client: Client) -> Result<(bool, String)> {
+    pub async fn check_tenant(&self, inst: &TenantInstance, client: Client) -> Result<(bool, String, u64)> {
         match self {
             VynilPackageRequirement::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
-                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first")))
+                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"), 15 * 60))
             }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;
-                Ok((r.is_some(), format!("CRD {crd} is not installed")))
+                Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
             }
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
-                Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed")))
+                Ok((rhai.eval_truth(&script)?, format!("Requirement {name} failed"), 5 * 60))
             }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
@@ -164,6 +165,7 @@ impl VynilPackageRequirement {
                         .into_iter()
                         .any(|i| i.spec.category == *category && i.spec.package == *name),
                     format!("System package {category}/{name} is not installed"),
+                    15 * 60,
                 ))
             }
             VynilPackageRequirement::TenantPackage { category, name } => {
@@ -180,19 +182,20 @@ impl VynilPackageRequirement {
                             && allowed.contains(&i.metadata.namespace.unwrap())
                     }),
                     format!("Tenant package {category}/{name} is not installed"),
+                    15 * 60,
                 ))
             }
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
-                Ok((true, format!("Storage capability {:?} isn't available", capa)))
+                Ok((true, format!("Storage capability {:?} isn't available", capa), 15 * 60))
             }
             VynilPackageRequirement::MinimumPreviousVersion(prev) => {
                 //TODO: implement MinimumPreviousVersion
                 tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
-                Ok((true, format!("Minimum {prev} version is not available")))
+                Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
             }
-            _ => Ok((true, "".to_string())),
+            _ => Ok((true, "".to_string(), 15 * 60)),
         }
     }
 }
@@ -208,10 +211,12 @@ pub struct VynilPackage {
     pub tag: String,
     /// Metadata for a package
     pub metadata: VynilPackageMeta,
-    /// Requirement
+    /// Requirements
     pub requirements: Vec<VynilPackageRequirement>,
     /// Component options
     pub options: Option<BTreeMap<String, serde_json::Value>>,
+    /// A rhai script that produce a map to be added in the package values
+    pub value_script: Option<String>,
 }
 
 /// Image definitions
@@ -260,7 +265,8 @@ pub struct VynilPackageSource {
     pub images: Option<BTreeMap<String, Image>>,
     /// Images definition
     pub resources: Option<BTreeMap<String, Resource>>,
-    // TODO: config externe
+    /// A rhai script that produce a map to be added in the package values
+    pub value_script: Option<String>,
 }
 impl VynilPackageSource {
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {

@@ -72,6 +72,9 @@ fn run(args) {
     if valid.options != () {
         annotations["fr.solidite.vynil.options"] = json_encode(valid.options);
     }
+    if valid.value_script != () && valid.value_script != "" {
+        annotations["fr.solidite.vynil.value_script"] = valid.value_script;
+    }
     try {
         reg.push_image(args.temp, args.repository, version.to_string(), annotations);
     } catch(e) {
