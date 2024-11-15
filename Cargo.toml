@@ -50,6 +50,7 @@ strip = true
 [package.metadata.commands]
 generate = { cmd=[
     "cargo run --bin agent -- crdgen > box/vynil/crds/crd.yaml",
+    "cp box/vynil/crds/crd.yaml deploy/crd/crd.yaml",
 ]}
 crd = { cmd=[
     "cargo run --bin agent -- crdgen > box/vynil/crds/crd.yaml",

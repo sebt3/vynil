@@ -201,6 +201,8 @@ spec:
                         - required:
                           - minimum_previous_version
                         - required:
+                          - vynil_version
+                        - required:
                           - cpu
                         - required:
                           - memory
@@ -208,9 +210,11 @@ spec:
                           - disk
                         properties:
                           cpu:
+                            description: Sum of all requests (Informative only)
                             format: double
                             type: number
                           custom_resource_definition:
+                            description: Name of a crd that is required before installing this package
                             type: string
                           disk:
                             format: uint64
@@ -221,8 +225,10 @@ spec:
                             minimum: 0.0
                             type: integer
                           minimum_previous_version:
+                            description: Forbid migration that are not supported
                             type: string
                           prefly:
+                            description: a rhai script that return a boolean
                             properties:
                               name:
                                 type: string
@@ -238,6 +244,7 @@ spec:
                             - ROX
                             type: string
                           system_package:
+                            description: SystemPackage that should be installed before current package
                             properties:
                               category:
                                 type: string
@@ -248,6 +255,7 @@ spec:
                             - name
                             type: object
                           tenant_package:
+                            description: TenantPackage that should be installed before current package in the current Tenant
                             properties:
                               category:
                                 type: string
@@ -257,6 +265,9 @@ spec:
                             - category
                             - name
                             type: object
+                          vynil_version:
+                            description: Minimum vynil version
+                            type: string
                         type: object
                       type: array
                     tag:

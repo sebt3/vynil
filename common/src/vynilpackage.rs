@@ -1,6 +1,6 @@
 use crate::{
     instancesystem::SystemInstance, instancetenant::TenantInstance, rhai_err, rhaihandler::Script, Error,
-    Result, RhaiRes,
+    Result, RhaiRes, Semver
 };
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{api::ListParams, Api, Client};
@@ -13,6 +13,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Vynil package type
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
@@ -65,20 +67,34 @@ pub enum StorageCapability {
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VynilPackageRequirement {
+    /// Name of a crd that is required before installing this package
     CustomResourceDefinition(String),
+    /// SystemPackage that should be installed before current package
     SystemPackage { category: String, name: String },
+    /// TenantPackage that should be installed before current package in the current Tenant
     TenantPackage { category: String, name: String },
-    Prefly { script: String, name: String }, // a rhai script that return a boolean
+    /// a rhai script that return a boolean
+    Prefly { script: String, name: String },
     StorageCapability(StorageCapability),
-    MinimumPreviousVersion(String), // Forbid migration that are not supported
-    // A titre informatif pour l'utilisateur
-    Cpu(f64),    // Sum of all requests
-    Memory(u64), // MB, Sum of all requests
-    Disk(u64),   // MB, Sum of all requests
+    /// Forbid migration that are not supported
+    MinimumPreviousVersion(String),
+    /// Minimum vynil version
+    VynilVersion(String),
+    /// Sum of all requests (Informative only)
+    Cpu(f64),
+    // MB, Sum of all requests (Informative only)
+    Memory(u64),
+    // MB, Sum of all requests (Informative only)
+    Disk(u64),
 }
 impl VynilPackageRequirement {
     pub async fn check_system(&self, inst: &SystemInstance, client: Client) -> Result<(bool, String)> {
         match self {
+            VynilPackageRequirement::VynilVersion(v) => {
+                let requested = Semver::parse(v)?;
+                let current = Semver::parse(VERSION)?;
+                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first")))
+            }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;
@@ -122,6 +138,11 @@ impl VynilPackageRequirement {
 
     pub async fn check_tenant(&self, inst: &TenantInstance, client: Client) -> Result<(bool, String)> {
         match self {
+            VynilPackageRequirement::VynilVersion(v) => {
+                let requested = Semver::parse(v)?;
+                let current = Semver::parse(VERSION)?;
+                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first")))
+            }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;

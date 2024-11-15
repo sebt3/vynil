@@ -4,6 +4,7 @@ mod package;
 mod run;
 mod system;
 mod tenant;
+mod version;
 use clap::{Parser, Subcommand};
 use std::process;
 
@@ -29,6 +30,8 @@ pub enum Commands {
     Tenant(tenant::Parameters),
     /// box sub-command
     Box(boxes::Parameters),
+    /// Version sub-command
+    Version(version::Parameters),
 }
 
 #[tokio::main]
@@ -42,6 +45,10 @@ async fn main() {
     common::context::init_k8s();
     let args = Parameters::parse();
     match &args.command {
+        Commands::Version(args) => version::run(args).await.unwrap_or_else(|e| {
+            tracing::error!("Version failed with: {e:}");
+            process::exit(1)
+        }),
         Commands::Run(args) => run::run(args).await.unwrap_or_else(|e| {
             tracing::error!("Run failed with: {e:}");
             process::exit(1)
