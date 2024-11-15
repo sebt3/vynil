@@ -7,6 +7,17 @@ fn run(instance, context) {
         if instance.status != () && instance.status.systems != () {
             dir::remove(applied_objs, instance.status.systems, instance.metadata.namespace);
         }
+        let added = import_run("install_systems_add", instance, context);
+        switch type_of(added) {
+            "map" => {
+                if dir::validate_add_item(added) {
+                    applied_objs.push(added);
+                }
+            },
+            "array" => {
+                applied_objs += added.filter(|i|dir::validate_add_item(i));
+            }
+        }
         let tmp = instance.set_status_systems(applied_objs);
         wait::all(applied_objs);
     } catch (e) {

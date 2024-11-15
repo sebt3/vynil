@@ -4,6 +4,17 @@ fn run(instance, context) {
     import_run("install_vitals_pre", instance, context);
     try {
         let applied_objs = dir::install_allowed(instance, context, `${context.package_dir}/vitals`, context.tenant.namespaces);
+        let added = import_run("install_vitals_add", instance, context);
+        switch type_of(added) {
+            "map" => {
+                if dir::validate_add_item(added) {
+                    applied_objs.push(added);
+                }
+            },
+            "array" => {
+                applied_objs += added.filter(|i|dir::validate_add_item(i));
+            }
+        }
         if instance.status != () && instance.status.vitals != () {
             for old in instance.status.vitals {
                 if ! applied_objs.some(|n| n.kind == old.kind && n.namespace == old.namespace && n.name == old.name) {

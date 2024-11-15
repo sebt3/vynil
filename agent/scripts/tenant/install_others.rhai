@@ -7,6 +7,17 @@ fn run(instance, context) {
         if instance.status != () && instance.status.others != () {
             dir::remove(applied_objs, instance.status.others, instance.metadata.namespace);
         }
+        let added = import_run("install_others_add", instance, context);
+        switch type_of(added) {
+            "map" => {
+                if dir::validate_add_item(added) {
+                    applied_objs.push(added);
+                }
+            },
+            "array" => {
+                applied_objs += added.filter(|i|dir::validate_add_item(i));
+            }
+        }
         let tmp = instance.set_status_others(applied_objs);
         wait::all(applied_objs);
     } catch (e) {
