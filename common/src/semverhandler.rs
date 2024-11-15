@@ -13,9 +13,9 @@ impl Semver {
         let version = if use_v {
             let mut chars = str.chars();
             chars.next();
-            Version::parse(chars.as_str()).map_err(|e| Error::Semver(e))?
+            Version::parse(chars.as_str()).map_err(Error::Semver)?
         } else {
-            Version::parse(str).map_err(|e| Error::Semver(e))?
+            Version::parse(str).map_err(Error::Semver)?
         };
         Ok(Self { version, use_v })
     }
@@ -28,7 +28,7 @@ impl Semver {
     }
 
     pub fn rhai_parse(str: &str) -> RhaiRes<Self> {
-        Self::parse(str).map_err(|e| rhai_err(e))
+        Self::parse(str).map_err(rhai_err)
     }
 
     pub fn inc_major(&mut self) {
@@ -66,7 +66,7 @@ impl Semver {
     }
 
     pub fn rhai_inc_beta(&mut self) -> RhaiRes<()> {
-        self.inc_beta().map_err(|e| rhai_err(e))
+        self.inc_beta().map_err(rhai_err)
     }
 
     pub fn inc_alpha(&mut self) -> Result<()> {
@@ -83,12 +83,12 @@ impl Semver {
     }
 
     pub fn rhai_inc_alpha(&mut self) -> RhaiRes<()> {
-        self.inc_alpha().map_err(|e| rhai_err(e))
+        self.inc_alpha().map_err(rhai_err)
     }
 
     pub fn to_string(&mut self) -> String {
         if self.use_v {
-            format!("v{}", self.version.to_string())
+            format!("v{}", self.version)
         } else {
             self.version.to_string()
         }

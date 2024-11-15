@@ -19,6 +19,12 @@ const SYMBOLS: &[char] = &[
 pub struct Passwords {
     rng: Box<dyn RngCore>,
 }
+impl Default for Passwords {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Passwords {
     #[must_use]
     pub fn new() -> Passwords {

@@ -20,7 +20,7 @@ impl Registry {
     #[must_use]
     pub fn new(registry: String, username: String, password: String) -> Self {
         Self {
-            auth: if username == "" || password == "" {
+            auth: if username.is_empty() || password.is_empty() {
                 RegistryAuth::Anonymous
             } else {
                 RegistryAuth::Basic(username, password)
@@ -82,10 +82,10 @@ impl Registry {
                     .await
             })
         })
-        .map_err(|e| Error::OCIDistrib(e))?;
+        .map_err(Error::OCIDistrib)?;
         for layer in data.layers {
             let mut archive = Archive::new(GzDecoder::new(&layer.data[..]));
-            archive.unpack(dest_dir).map_err(|e| Error::Stdio(e))?;
+            archive.unpack(dest_dir).map_err(Error::Stdio)?;
         }
         Ok(())
     }
@@ -94,17 +94,17 @@ impl Registry {
         let client = Client::new(ClientConfig::default());
         let image: Reference = format!("{}/{}", self.registry.clone(), repository)
             .parse()
-            .map_err(|e| Error::OCIParseError(e))?;
+            .map_err(Error::OCIParseError)?;
         let ret = client
             .list_tags(&image, &self.auth.clone(), Some(100), None)
             .await
-            .map_err(|e| Error::OCIDistrib(e))?;
+            .map_err(Error::OCIDistrib)?;
         Ok(ret.tags)
     }
 
     pub fn rhai_list_tags(&mut self, repository: String) -> RhaiRes<Dynamic> {
         block_in_place(|| Handle::current().block_on(async move { self.list_tags(repository).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
             .map(|lst| lst.into_iter().collect())
     }
 

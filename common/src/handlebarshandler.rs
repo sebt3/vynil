@@ -13,7 +13,7 @@ use tracing::*;
 handlebars_helper!(base64_decode: |arg:Value| String::from_utf8(STANDARD.decode(arg.as_str().unwrap_or_else(|| {
     warn!("handlebars::base64_decode received a non-string parameter: {:?}",arg);
     ""
-}).to_string()).unwrap_or_else(|e| {
+})).unwrap_or_else(|e| {
     warn!("handlebars::base64_decode failed to decode with: {e:?}");
     vec![]
 })).unwrap_or_else(|e| {
@@ -23,7 +23,7 @@ handlebars_helper!(base64_decode: |arg:Value| String::from_utf8(STANDARD.decode(
 handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwrap_or_else(|| {
     warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
     ""
-}).to_string()));
+})));
 handlebars_helper!(header_basic: |username:Value, password:Value| format!("Basic {}",STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
     warn!("handlebars::header_basic received a non-string username: {:?}",username);
     ""
@@ -42,7 +42,7 @@ handlebars_helper!(gen_password: |len:u32| Passwords::new().generate(len, 6, 2, 
 handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(len, 8, 2, 0));
 handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
     let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["selector"].as_object().unwrap().clone();
-    if comp != "" {
+    if !comp.is_empty() {
         sel.insert("app.kubernetes.io/componant".into(), Value::from(comp));
     }
     sel
@@ -51,7 +51,7 @@ handlebars_helper!(labels: |ctx: Value| {
     ctx.as_object().unwrap()["instance"].as_object().unwrap()["labels"].clone()
 });
 handlebars_helper!(have_crd: |ctx: Value, name: String| {
-    ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().into_iter().any(|crd| crd.to_string()==name)
+    ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().iter().any(|crd| *crd==name)
 });
 
 #[derive(Clone, Debug)]
@@ -89,7 +89,7 @@ impl HandleBars<'_> {
     pub fn register_template(&mut self, name: &str, template: &str) -> Result<()> {
         self.engine
             .register_template_string(name, template)
-            .map_err(|e| Error::HbsTemplateError(e))
+            .map_err(Error::HbsTemplateError)
     }
 
     pub fn rhai_register_template(&mut self, name: String, template: String) -> RhaiRes<()> {
@@ -118,7 +118,7 @@ impl HandleBars<'_> {
 
     pub fn rhai_register_helper_dir(&mut self, directory: String) -> RhaiRes<()> {
         self.register_helper_dir(PathBuf::from(directory))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn register_partial_dir(&mut self, directory: PathBuf) -> Result<()> {
@@ -129,7 +129,7 @@ impl HandleBars<'_> {
                 let filename = path.file_name().unwrap().to_str().unwrap();
                 if re_rhai.is_match(filename) {
                     let name = filename[0..(filename.len() - 4)].to_string();
-                    let tmpl = std::fs::read_to_string(path).map_err(|e| Error::Stdio(e))?;
+                    let tmpl = std::fs::read_to_string(path).map_err(Error::Stdio)?;
                     tracing::debug!("registering {}", name);
                     self.register_template(&name, &tmpl)?;
                 }
@@ -142,13 +142,13 @@ impl HandleBars<'_> {
 
     pub fn rhai_register_partial_dir(&mut self, directory: String) -> RhaiRes<()> {
         self.register_partial_dir(PathBuf::from(directory))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn render(&mut self, template: &str, data: &Value) -> Result<String> {
         self.engine
             .render_template(template, data)
-            .map_err(|e| Error::HbsRenderError(e))
+            .map_err(Error::HbsRenderError)
     }
 
     pub fn rhai_render(&mut self, template: String, data: rhai::Map) -> RhaiRes<String> {

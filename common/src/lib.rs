@@ -4,35 +4,35 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("SerializationError: {0}")]
-    SerializationError(#[source] serde_json::Error),
+    SerializationError(#[from] serde_json::Error),
 
     #[error("YamlError: {0}")]
-    YamlError(#[source] serde_yaml::Error),
+    YamlError(#[from] serde_yaml::Error),
 
     #[error("K8s error: {0}")]
-    KubeError(#[source] kube::Error),
+    KubeError(#[from] kube::Error),
 
     #[error("K8s wait error: {0}")]
-    KubeWaitError(#[source] kube::runtime::wait::Error),
+    KubeWaitError(#[from] kube::runtime::wait::Error),
 
     #[error("Elapsed wait error: {0}")]
-    Elapsed(#[source] tokio::time::error::Elapsed),
+    Elapsed(#[from] tokio::time::error::Elapsed),
 
     #[error("Finalizer error: {0}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)
     // so boxing this error to break cycles
-    FinalizerError(#[source] Box<kube::runtime::finalizer::Error<Error>>),
+    FinalizerError(#[from] Box<kube::runtime::finalizer::Error<Error>>),
 
     #[error("Registering template failed with error: {0}")]
-    HbsTemplateError(#[source] handlebars::TemplateError),
+    HbsTemplateError(#[from] handlebars::TemplateError),
     #[error("Renderer error: {0}")]
-    HbsRenderError(#[source] handlebars::RenderError),
+    HbsRenderError(#[from] handlebars::RenderError),
 
     #[error("Rhai script error: {0}")]
-    RhaiError(#[source] Box<rhai::EvalAltResult>),
+    RhaiError(#[from] Box<rhai::EvalAltResult>),
 
     #[error("Reqwest error: {0}")]
-    ReqwestError(#[source] reqwest::Error),
+    ReqwestError(#[from] reqwest::Error),
 
     #[error("Json decoding error: {0}")]
     JsonError(#[source] serde_json::Error),
@@ -50,24 +50,24 @@ pub enum Error {
     MissingDestination(PathBuf),
 
     #[error("UTF8 error {0}")]
-    UTF8(#[source] std::string::FromUtf8Error),
+    UTF8(#[from] std::string::FromUtf8Error),
 
     #[error("Semver error {0}")]
-    Semver(#[source] semver::Error),
+    Semver(#[from] semver::Error),
 
     #[error("Argon2 password_hash error {0}")]
-    Argon2hash(#[source] argon2::password_hash::Error),
+    Argon2hash(#[from] argon2::password_hash::Error),
 
     #[error("Stdio error {0}")]
-    Stdio(#[source] std::io::Error),
+    Stdio(#[from] std::io::Error),
 
     #[error("OCI jukebox error {0}")]
-    OCIDistrib(#[source] oci_client::errors::OciDistributionError),
+    OCIDistrib(#[from] oci_client::errors::OciDistributionError),
     #[error("OCI parse error {0}")]
-    OCIParseError(#[source] oci_client::ParseError),
+    OCIParseError(#[from] oci_client::ParseError),
 
     #[error("Base64 decode error {0}")]
-    Base64DecodeError(#[source] base64::DecodeError),
+    Base64DecodeError(#[from] base64::DecodeError),
 
     #[error("Error: {0}")]
     Other(String),

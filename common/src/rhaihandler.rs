@@ -27,7 +27,7 @@ use serde::Deserialize;
 
 
 pub fn base64_decode(input: String) -> Result<String> {
-    String::from_utf8(STANDARD.decode(input.to_string()).unwrap()).map_err(|e| Error::UTF8(e))
+    String::from_utf8(STANDARD.decode(&input).unwrap()).map_err(Error::UTF8)
 }
 
 #[derive(Debug)]
@@ -76,9 +76,7 @@ impl Script {
             .register_fn(
                 "base64_decode",
                 |val: ImmutableString| -> RhaiRes<ImmutableString> {
-                    base64_decode(val.to_string())
-                        .map_err(|e| rhai_err(e))
-                        .map(|v| v.into())
+                    base64_decode(val.to_string()).map_err(rhai_err).map(|v| v.into())
                 },
             )
             .register_fn("base64_encode", |val: ImmutableString| -> ImmutableString {
@@ -94,7 +92,7 @@ impl Script {
                 Ok(format!("{:?}", str).into())
             })
             .register_fn("json_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_json::from_str(&val.to_string()).map_err(|e| rhai_err(Error::SerializationError(e)))
+                serde_json::from_str(val.as_ref()).map_err(|e| rhai_err(Error::SerializationError(e)))
             })
             .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
                 serde_yaml::to_string(&val)
@@ -107,7 +105,7 @@ impl Script {
                     .map(|v| v.into())
             })
             .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_yaml::from_str(&val.to_string()).map_err(|e| rhai_err(Error::YamlError(e)))
+                serde_yaml::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
             })
             .register_fn(
                 "yaml_decode_multi",
@@ -115,7 +113,7 @@ impl Script {
                     let mut res = Vec::new();
                     if val.len() > 5 {
                         // non-empty string only
-                        for document in serde_yaml::Deserializer::from_str(&val.to_string()) {
+                        for document in serde_yaml::Deserializer::from_str(val.as_ref()) {
                             let doc =
                                 Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
                             res.push(doc);
@@ -466,20 +464,20 @@ impl Script {
     pub fn eval(&mut self, script: &str) -> Result<Dynamic, Error> {
         self.engine
             .eval_with_scope::<Dynamic>(&mut self.ctx, script)
-            .map_err(|e| RhaiError(e))
+            .map_err(RhaiError)
     }
 
     pub fn eval_truth(&mut self, script: &str) -> Result<bool, Error> {
         self.engine
             .eval_with_scope::<bool>(&mut self.ctx, script)
-            .map_err(|e| RhaiError(e))
+            .map_err(RhaiError)
     }
 
     pub fn eval_map_string(&mut self, script: &str) -> Result<String, Error> {
         let m = self
             .engine
             .eval_with_scope::<Map>(&mut self.ctx, script)
-            .map_err(|e| RhaiError(e))?;
+            .map_err(RhaiError)?;
         serde_json::to_string(&m).map_err(Error::SerializationError)
     }
 }

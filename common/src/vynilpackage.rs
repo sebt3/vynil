@@ -106,24 +106,21 @@ impl VynilPackageRequirement {
             }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
-                let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;
+                let r = api.get_metadata_opt(crd).await.map_err(Error::KubeError)?;
                 Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
             }
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
                 Ok((
-                    rhai.eval_truth(&script)?,
+                    rhai.eval_truth(script)?,
                     format!("Requirement {name} failed"),
                     5 * 60,
                 ))
             }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
-                let lst = api
-                    .list(&ListParams::default())
-                    .await
-                    .map_err(|e| Error::KubeError(e))?;
+                let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
                 Ok((
                     lst.items
                         .into_iter()
@@ -167,24 +164,21 @@ impl VynilPackageRequirement {
             }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
-                let r = api.get_metadata_opt(crd).await.map_err(|e| Error::KubeError(e))?;
+                let r = api.get_metadata_opt(crd).await.map_err(Error::KubeError)?;
                 Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
             }
             VynilPackageRequirement::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
                 Ok((
-                    rhai.eval_truth(&script)?,
+                    rhai.eval_truth(script)?,
                     format!("Requirement {name} failed"),
                     5 * 60,
                 ))
             }
             VynilPackageRequirement::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
-                let lst = api
-                    .list(&ListParams::default())
-                    .await
-                    .map_err(|e| Error::KubeError(e))?;
+                let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
                 Ok((
                     lst.items
                         .into_iter()
@@ -196,10 +190,7 @@ impl VynilPackageRequirement {
             VynilPackageRequirement::TenantPackage { category, name } => {
                 let allowed = inst.get_tenant_namespaces().await?;
                 let api: Api<TenantInstance> = Api::all(client);
-                let lst = api
-                    .list(&ListParams::default())
-                    .await
-                    .map_err(|e| Error::KubeError(e))?;
+                let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
                 Ok((
                     lst.items.into_iter().any(|i| {
                         i.spec.category == *category
@@ -314,7 +305,7 @@ impl VynilPackageSource {
             let v = serde_json::to_string(&opt).map_err(|e| rhai_err(Error::SerializationError(e)))?;
             serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
         } else {
-            Ok(Dynamic::from({}))
+            Ok(Dynamic::from(()))
         }
     }
 
@@ -331,7 +322,7 @@ impl VynilPackageSource {
             let v = serde_json::to_string(&opt).map_err(|e| rhai_err(Error::SerializationError(e)))?;
             serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
         } else {
-            Ok(Dynamic::from({}))
+            Ok(Dynamic::from(()))
         }
     }
 
@@ -340,7 +331,7 @@ impl VynilPackageSource {
             let v = serde_json::to_string(&opt).map_err(|e| rhai_err(Error::SerializationError(e)))?;
             serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
         } else {
-            Ok(Dynamic::from({}))
+            Ok(Dynamic::from(()))
         }
     }
 
@@ -356,10 +347,10 @@ impl VynilPackageSource {
 }
 
 pub fn read_package_yaml(file: &PathBuf) -> Result<VynilPackageSource> {
-    let f = fs::File::open(Path::new(&file)).map_err(|e| Error::Stdio(e))?;
+    let f = fs::File::open(Path::new(&file)).map_err(Error::Stdio)?;
     let deserializer = serde_yaml::Deserializer::from_reader(f);
-    serde_yaml::with::singleton_map_recursive::deserialize(deserializer).map_err(|e| Error::YamlError(e))
+    serde_yaml::with::singleton_map_recursive::deserialize(deserializer).map_err(Error::YamlError)
 }
 pub fn rhai_read_package_yaml(file: String) -> RhaiRes<VynilPackageSource> {
-    read_package_yaml(&PathBuf::from(&file)).map_err(|e| rhai_err(e))
+    read_package_yaml(&PathBuf::from(&file)).map_err(rhai_err)
 }

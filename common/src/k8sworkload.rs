@@ -35,9 +35,9 @@ impl K8sDaemonSet {
         let api: Api<DaemonSet> = Api::namespaced(CLIENT.clone(), &namespace);
         let d = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async move { api.get(&name).await.map_err(|e| Error::KubeError(e)) })
+                .block_on(async move { api.get(&name).await.map_err(Error::KubeError) })
         })
-        .map_err(|e| rhai_err(e))?;
+        .map_err(rhai_err)?;
         Ok(K8sDaemonSet {
             api: Api::namespaced(CLIENT.clone(), &namespace),
             obj: d,
@@ -68,10 +68,10 @@ impl K8sDaemonSet {
             tokio::runtime::Handle::current().block_on(async move {
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
                     .await
-                    .map_err(|e| Error::Elapsed(e))
+                    .map_err(Error::Elapsed)
             })
         })
-        .map_err(|e| rhai_err(e))?
+        .map_err(rhai_err)?
         .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
         Ok(())
     }
@@ -101,9 +101,9 @@ impl K8sStatefulSet {
         let api: Api<StatefulSet> = Api::namespaced(CLIENT.clone(), &namespace);
         let d = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async move { api.get(&name).await.map_err(|e| Error::KubeError(e)) })
+                .block_on(async move { api.get(&name).await.map_err(Error::KubeError) })
         })
-        .map_err(|e| rhai_err(e))?;
+        .map_err(rhai_err)?;
         Ok(K8sStatefulSet {
             api: Api::namespaced(CLIENT.clone(), &namespace),
             obj: d,
@@ -134,10 +134,10 @@ impl K8sStatefulSet {
             tokio::runtime::Handle::current().block_on(async move {
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
                     .await
-                    .map_err(|e| Error::Elapsed(e))
+                    .map_err(Error::Elapsed)
             })
         })
-        .map_err(|e| rhai_err(e))?
+        .map_err(rhai_err)?
         .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
         Ok(())
     }
@@ -168,9 +168,9 @@ impl K8sDeploy {
         let api: Api<Deployment> = Api::namespaced(CLIENT.clone(), &namespace);
         let d = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async move { api.get(&name).await.map_err(|e| Error::KubeError(e)) })
+                .block_on(async move { api.get(&name).await.map_err(Error::KubeError) })
         })
-        .map_err(|e| rhai_err(e))?;
+        .map_err(rhai_err)?;
         Ok(K8sDeploy {
             api: Api::namespaced(CLIENT.clone(), &namespace),
             obj: d,
@@ -201,10 +201,10 @@ impl K8sDeploy {
             tokio::runtime::Handle::current().block_on(async move {
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
                     .await
-                    .map_err(|e| Error::Elapsed(e))
+                    .map_err(Error::Elapsed)
             })
         })
-        .map_err(|e| rhai_err(e))?
+        .map_err(rhai_err)?
         .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
         Ok(())
     }
@@ -220,9 +220,9 @@ impl K8sJob {
         let api: Api<Job> = Api::namespaced(CLIENT.clone(), &namespace);
         let j = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async move { api.get(&name).await.map_err(|e| Error::KubeError(e)) })
+                .block_on(async move { api.get(&name).await.map_err(Error::KubeError) })
         })
-        .map_err(|e| rhai_err(e))?;
+        .map_err(rhai_err)?;
         Ok(K8sJob {
             api: Api::namespaced(CLIENT.clone(), &namespace),
             obj: j,
@@ -253,10 +253,10 @@ impl K8sJob {
             tokio::runtime::Handle::current().block_on(async move {
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
                     .await
-                    .map_err(|e| Error::Elapsed(e))
+                    .map_err(Error::Elapsed)
             })
         })
-        .map_err(|e| rhai_err(e))?
+        .map_err(rhai_err)?
         .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
         Ok(())
     }

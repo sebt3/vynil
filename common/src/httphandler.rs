@@ -97,7 +97,7 @@ impl RestClient {
             .headers
             .clone()
             .into_iter()
-            .any(|(c, _)| c == "Content-Type".to_string())
+            .any(|(c, _)| c == *"Content-Type")
         {
             self
         } else {
@@ -109,12 +109,7 @@ impl RestClient {
         for (key, val) in self.headers.clone() {
             debug!("RestClient.header: {:} {:}", key, val);
         }
-        if self
-            .headers
-            .clone()
-            .into_iter()
-            .any(|(c, _)| c == "Accept".to_string())
-        {
+        if self.headers.clone().into_iter().any(|(c, _)| c == *"Accept") {
             self
         } else {
             self.add_header("Accept", "application/json")
@@ -138,13 +133,13 @@ impl RestClient {
         let five_sec = std::time::Duration::from_secs(60 * 5);
         if self.server_ca.is_none() && (self.client_cert.is_none() || self.client_key.is_none()) {
             Client::builder()
-                .user_agent(&get_client_name())
+                .user_agent(get_client_name())
                 .timeout(five_sec)
                 .build()
         } else if self.client_cert.is_none() || self.client_key.is_none() {
             match Certificate::from_pem(self.server_ca.clone().unwrap().as_bytes()) {
                 Ok(c) => Client::builder()
-                    .user_agent(&get_client_name())
+                    .user_agent(get_client_name())
                     .timeout(five_sec)
                     .add_root_certificate(c)
                     .use_rustls_tls()
@@ -162,7 +157,7 @@ impl RestClient {
                 Ok(identity) => {
                     if self.server_ca.is_none() {
                         Client::builder()
-                            .user_agent(&get_client_name())
+                            .user_agent(get_client_name())
                             .timeout(five_sec)
                             .use_rustls_tls()
                             .identity(identity)
@@ -170,7 +165,7 @@ impl RestClient {
                     } else {
                         match Certificate::from_pem(self.server_ca.clone().unwrap().as_bytes()) {
                             Ok(c) => Client::builder()
-                                .user_agent(&get_client_name())
+                                .user_agent(get_client_name())
                                 .timeout(five_sec)
                                 .add_root_certificate(c)
                                 .use_rustls_tls()
@@ -205,15 +200,13 @@ impl RestClient {
     }
 
     pub fn body_get(&mut self, path: &str) -> Result<String, Error> {
-        let response = self
-            .http_get(path)
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+        let response = self.http_get(path).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
                 Handle::current().block_on(async move { response.text().await })
             })
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+            .map_err(Error::ReqwestError)?;
             return Err(Error::MethodFailed(
                 "Get".to_string(),
                 status.as_u16(),
@@ -226,13 +219,13 @@ impl RestClient {
         }
         let text =
             tokio::task::block_in_place(|| Handle::current().block_on(async move { response.text().await }))
-                .or_else(|e| return Err(Error::ReqwestError(e)))?;
+                .map_err(Error::ReqwestError)?;
         Ok(text)
     }
 
     pub fn json_get(&mut self, path: &str) -> Result<Value, Error> {
-        let text = self.body_get(path).or_else(|e| return Err(e))?;
-        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        let text = self.body_get(path)?;
+        let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
         Ok(json)
     }
 
@@ -263,7 +256,7 @@ impl RestClient {
                         );
                         ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        Ok(ret.into())
+                        Ok(ret)
                     })
                 })
             }
@@ -291,9 +284,7 @@ impl RestClient {
     }
 
     pub fn header_head(&mut self, path: &str) -> Result<Vec<(String, String)>, Error> {
-        let response = self
-            .http_get(path)
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+        let response = self.http_get(path).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             return Err(Error::MethodFailed(
@@ -337,7 +328,7 @@ impl RestClient {
                     })
                     .collect::<Vec<(String, String)>>();
                 ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
-                Ok(ret.into())
+                Ok(ret)
             }
             Err(e) => Err(format!("{e}").into()),
         }
@@ -360,15 +351,13 @@ impl RestClient {
     }
 
     pub fn body_patch(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self
-            .http_patch(path, body)
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+        let response = self.http_patch(path, body).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
                 Handle::current().block_on(async move { response.text().await })
             })
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+            .map_err(Error::ReqwestError)?;
             return Err(Error::MethodFailed(
                 "Patch".to_string(),
                 status.as_u16(),
@@ -381,14 +370,14 @@ impl RestClient {
         }
         let text =
             tokio::task::block_in_place(|| Handle::current().block_on(async move { response.text().await }))
-                .or_else(|e| return Err(Error::ReqwestError(e)))?;
+                .map_err(Error::ReqwestError)?;
         Ok(text)
     }
 
     pub fn json_patch(&mut self, path: &str, input: &Value) -> Result<Value, Error> {
-        let body = serde_json::to_string(input).or_else(|e| return Err(Error::JsonError(e)))?;
-        let text = self.body_patch(path, body.as_str()).or_else(|e| return Err(e))?;
-        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        let body = serde_json::to_string(input).map_err(Error::JsonError)?;
+        let text = self.body_patch(path, body.as_str())?;
+        let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
         Ok(json)
     }
 
@@ -424,7 +413,7 @@ impl RestClient {
                         );
                         ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        Ok(ret.into())
+                        Ok(ret)
                     })
                 })
             }
@@ -449,15 +438,13 @@ impl RestClient {
     }
 
     pub fn body_put(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self
-            .http_put(path, body)
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+        let response = self.http_put(path, body).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
                 Handle::current().block_on(async move { response.text().await })
             })
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+            .map_err(Error::ReqwestError)?;
             return Err(Error::MethodFailed(
                 "Put".to_string(),
                 status.as_u16(),
@@ -470,14 +457,14 @@ impl RestClient {
         }
         let text =
             tokio::task::block_in_place(|| Handle::current().block_on(async move { response.text().await }))
-                .or_else(|e| return Err(Error::ReqwestError(e)))?;
+                .map_err(Error::ReqwestError)?;
         Ok(text)
     }
 
     pub fn json_put(&mut self, path: &str, input: &Value) -> Result<Value, Error> {
-        let body = serde_json::to_string(input).or_else(|e| return Err(Error::JsonError(e)))?;
-        let text = self.body_put(path, body.as_str()).or_else(|e| return Err(e))?;
-        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        let body = serde_json::to_string(input).map_err(Error::JsonError)?;
+        let text = self.body_put(path, body.as_str())?;
+        let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
         Ok(json)
     }
 
@@ -513,7 +500,7 @@ impl RestClient {
                         );
                         ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        Ok(ret.into())
+                        Ok(ret)
                     })
                 })
             }
@@ -538,15 +525,13 @@ impl RestClient {
     }
 
     pub fn body_post(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self
-            .http_post(path, body)
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+        let response = self.http_post(path, body).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
                 Handle::current().block_on(async move { response.text().await })
             })
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+            .map_err(Error::ReqwestError)?;
             return Err(Error::MethodFailed(
                 "Post".to_string(),
                 status.as_u16(),
@@ -559,14 +544,14 @@ impl RestClient {
         }
         let text =
             tokio::task::block_in_place(|| Handle::current().block_on(async move { response.text().await }))
-                .or_else(|e| return Err(Error::ReqwestError(e)))?;
+                .map_err(Error::ReqwestError)?;
         Ok(text)
     }
 
     pub fn json_post(&mut self, path: &str, input: &Value) -> Result<Value, Error> {
-        let body = serde_json::to_string(input).or_else(|e| return Err(Error::JsonError(e)))?;
-        let text = self.body_post(path, body.as_str()).or_else(|e| return Err(e))?;
-        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        let body = serde_json::to_string(input).map_err(Error::JsonError)?;
+        let text = self.body_post(path, body.as_str())?;
+        let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
         Ok(json)
     }
 
@@ -602,7 +587,7 @@ impl RestClient {
                         );
                         ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        Ok(ret.into())
+                        Ok(ret)
                     })
                 })
             }
@@ -625,15 +610,13 @@ impl RestClient {
     }
 
     pub fn body_delete(&mut self, path: &str) -> Result<String, Error> {
-        let response = self
-            .http_delete(path)
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+        let response = self.http_delete(path).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
                 Handle::current().block_on(async move { response.text().await })
             })
-            .or_else(|e| return Err(Error::ReqwestError(e)))?;
+            .map_err(Error::ReqwestError)?;
             return Err(Error::MethodFailed(
                 "Delete".to_string(),
                 status.as_u16(),
@@ -646,13 +629,14 @@ impl RestClient {
         }
         let text =
             tokio::task::block_in_place(|| Handle::current().block_on(async move { response.text().await }))
-                .or_else(|e| return Err(Error::ReqwestError(e)))?;
+                .map_err(Error::ReqwestError)?;
         Ok(text)
     }
 
     pub fn json_delete(&mut self, path: &str) -> Result<Value, Error> {
-        let text = self.body_delete(path).or_else(|e| return Err(e))?;
-        let json = serde_json::from_str(&text).or_else(|_| return Ok(json!({"body": text})))?;
+        let text = self.body_delete(path)?;
+        let json =
+            serde_json::from_str(&text).or_else(|_| Ok::<serde_json::Value, Error>(json!({"body": text})))?;
         Ok(json)
     }
 
@@ -683,7 +667,7 @@ impl RestClient {
                         );
                         ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        Ok(ret.into())
+                        Ok(ret)
                     })
                 })
             }
@@ -692,7 +676,7 @@ impl RestClient {
     }
 
     pub fn obj_read(&mut self, method: ReadMethod, path: &str, key: &str) -> Result<Value, Error> {
-        let full_path = if key == "" {
+        let full_path = if key.is_empty() {
             path.to_string()
         } else {
             format!("{path}/{key}")
@@ -720,7 +704,7 @@ impl RestClient {
         input: &Value,
         use_slash: bool,
     ) -> Result<Value, Error> {
-        let full_path = if key == "" {
+        let full_path = if key.is_empty() {
             path.to_string()
         } else if use_slash {
             format!("{path}/{key}/")
@@ -739,7 +723,7 @@ impl RestClient {
     }
 
     pub fn obj_delete(&mut self, method: DeleteMethod, path: &str, key: &str) -> Result<Value, Error> {
-        let full_path = if key == "" {
+        let full_path = if key.is_empty() {
             path.to_string()
         } else {
             format!("{path}/{key}")

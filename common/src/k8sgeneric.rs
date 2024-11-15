@@ -53,7 +53,7 @@ impl K8sObject {
                     .map(|_| ())
             })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_wait_deleted(&mut self, timeout: i64) -> RhaiRes<()> {
@@ -64,10 +64,10 @@ impl K8sObject {
                 let cond = await_condition(self.api.clone(), &name, conditions::is_deleted(&uid));
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
                     .await
-                    .map_err(|e| Error::Elapsed(e))
+                    .map_err(Error::Elapsed)
             })
         })
-        .map_err(|e| rhai_err(e))?
+        .map_err(rhai_err)?
         .map_err(|e| rhai_err(Error::KubeWaitError(e)))
         .map(|_| ())
     }
@@ -95,7 +95,6 @@ impl K8sObject {
                         .as_object()
                         .unwrap()
                         .keys()
-                        .into_iter()
                         .collect::<Vec<&String>>()
                         .contains(&&"status".to_string())
                 {
@@ -105,18 +104,16 @@ impl K8sObject {
                             .as_object()
                             .unwrap()
                             .keys()
-                            .into_iter()
                             .collect::<Vec<&String>>()
                             .contains(&&"conditions".to_string())
                     {
                         let conditions = status.as_object().unwrap()["conditions"].clone();
                         if conditions.is_array()
-                            && conditions.as_array().unwrap().into_iter().any(|c| {
+                            && conditions.as_array().unwrap().iter().any(|c| {
                                 c.is_object()
                                     && c.as_object()
                                         .unwrap()
                                         .keys()
-                                        .into_iter()
                                         .collect::<Vec<&String>>()
                                         .contains(&&"type".to_string())
                                     && c.as_object().unwrap()["type"].is_string()
@@ -124,7 +121,6 @@ impl K8sObject {
                                     && c.as_object()
                                         .unwrap()
                                         .keys()
-                                        .into_iter()
                                         .collect::<Vec<&String>>()
                                         .contains(&&"status".to_string())
                                     && c.as_object().unwrap()["status"].is_string()
@@ -148,10 +144,10 @@ impl K8sObject {
             tokio::runtime::Handle::current().block_on(async move {
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
                     .await
-                    .map_err(|e| Error::Elapsed(e))
+                    .map_err(Error::Elapsed)
             })
         })
-        .map_err(|e| rhai_err(e))?
+        .map_err(rhai_err)?
         .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
         Ok(())
     }
@@ -207,11 +203,11 @@ impl K8sGeneric {
     }
 
     pub fn new_ns(name: String, ns: String) -> K8sGeneric {
-        K8sGeneric::new(&name.as_str(), Some(ns))
+        K8sGeneric::new(name.as_str(), Some(ns))
     }
 
     pub fn new_global(name: String) -> K8sGeneric {
-        K8sGeneric::new(&name.as_str(), None)
+        K8sGeneric::new(name.as_str(), None)
     }
 
     pub fn rhai_get_scope(&mut self) -> String {
@@ -242,7 +238,7 @@ impl K8sGeneric {
     }
 
     pub fn rhai_list(&mut self) -> RhaiRes<Dynamic> {
-        let res = self.list().map_err(|e| rhai_err(e))?;
+        let res = self.list().map_err(rhai_err)?;
         let v = serde_json::to_value(res).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         to_dynamic(v)
     }
@@ -262,7 +258,7 @@ impl K8sGeneric {
     }
 
     pub fn rhai_list_meta(&mut self) -> RhaiRes<Dynamic> {
-        let res = self.list_meta().map_err(|e| rhai_err(e))?;
+        let res = self.list_meta().map_err(rhai_err)?;
         let v = serde_json::to_value(res).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         to_dynamic(v)
     }
@@ -279,7 +275,7 @@ impl K8sGeneric {
     }
 
     pub fn rhai_get(&mut self, name: String) -> RhaiRes<Dynamic> {
-        let res = self.get(&name).map_err(|e| rhai_err(e))?;
+        let res = self.get(&name).map_err(rhai_err)?;
         let v = serde_json::to_value(res).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         to_dynamic(v)
     }
@@ -296,13 +292,13 @@ impl K8sGeneric {
     }
 
     pub fn rhai_get_meta(&mut self, name: String) -> RhaiRes<Dynamic> {
-        let res = self.get_meta(&name).map_err(|e| rhai_err(e))?;
+        let res = self.get_meta(&name).map_err(rhai_err)?;
         let v = serde_json::to_value(res).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         to_dynamic(v)
     }
 
     pub fn rhai_get_obj(&mut self, name: String) -> RhaiRes<K8sObject> {
-        let res = self.get_meta(&name).map_err(|e| rhai_err(e))?;
+        let res = self.get_meta(&name).map_err(rhai_err)?;
         Ok(K8sObject {
             api: self.api.clone().unwrap(),
             obj: res,
@@ -325,7 +321,7 @@ impl K8sGeneric {
     }
 
     pub fn rhai_delete(&mut self, name: String) -> RhaiRes<()> {
-        self.delete(&name).map_err(|e| rhai_err(e))
+        self.delete(&name).map_err(rhai_err)
     }
 
     pub fn create(&self, data: serde_json::Map<String, serde_json::Value>) -> Result<DynamicObject> {
@@ -349,7 +345,6 @@ impl K8sGeneric {
                         .as_object_mut()
                         .unwrap()
                         .keys()
-                        .into_iter()
                         .any(|name| name == k)
                     {
                         handle["metadata"].as_object_mut().unwrap()["labels"]
@@ -432,7 +427,6 @@ impl K8sGeneric {
                         .as_object_mut()
                         .unwrap()
                         .keys()
-                        .into_iter()
                         .any(|name| name == k)
                     {
                         handle["metadata"].as_object_mut().unwrap()["labels"]
@@ -515,7 +509,6 @@ impl K8sGeneric {
                         .as_object_mut()
                         .unwrap()
                         .keys()
-                        .into_iter()
                         .any(|name| name == k)
                     {
                         handle["metadata"].as_object_mut().unwrap()["labels"]
@@ -598,7 +591,6 @@ impl K8sGeneric {
                         .as_object_mut()
                         .unwrap()
                         .keys()
-                        .into_iter()
                         .any(|name| name == k)
                     {
                         handle["metadata"].as_object_mut().unwrap()["labels"]

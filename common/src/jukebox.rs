@@ -167,13 +167,13 @@ pub struct JukeBoxStatus {
 impl JukeBox {
     pub async fn get(name: String) -> Result<Self> {
         let api = Api::<Self>::all(get_client());
-        api.get(&name).await.map_err(|e| Error::KubeError(e))
+        api.get(&name).await.map_err(Error::KubeError)
     }
 
     pub async fn list() -> Result<ObjectList<Self>> {
         let api = Api::<Self>::all(get_client());
         let lp = ListParams::default();
-        api.list(&lp).await.map_err(|e| Error::KubeError(e))
+        api.list(&lp).await.map_err(Error::KubeError)
     }
 
     fn get_conditions_excluding(&self, exclude: Vec<ConditionsType>) -> Vec<ApplicationCondition> {
@@ -199,7 +199,7 @@ impl JukeBox {
         let ps = PatchParams::apply(get_short_name().as_str());
         api.patch_status(&name, &ps, &new_status)
             .await
-            .map_err(|e| Error::KubeError(e))
+            .map_err(Error::KubeError)
     }
 
     async fn send_event(&mut self, client: Client, ev: Event) -> Result<()> {
@@ -268,13 +268,12 @@ impl JukeBox {
     }
 
     pub fn rhai_get(name: String) -> RhaiRes<Self> {
-        block_in_place(|| Handle::current().block_on(async move { Self::get(name).await }))
-            .map_err(|e| rhai_err(e))
+        block_in_place(|| Handle::current().block_on(async move { Self::get(name).await })).map_err(rhai_err)
     }
 
     pub fn rhai_list() -> RhaiRes<Vec<Self>> {
         block_in_place(|| Handle::current().block_on(async move { Self::list().await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
             .map(|lst| lst.into_iter().collect())
     }
 
@@ -296,16 +295,16 @@ impl JukeBox {
     pub fn rhai_set_status_updated(&mut self, list: Dynamic) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(|e| Error::SerializationError(e))?;
-                let lst = serde_json::from_str(&v).map_err(|e| Error::SerializationError(e))?;
+                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
                 self.set_status_updated(lst).await
             })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_failed(&mut self, reason: String) -> RhaiRes<JukeBox> {
         block_in_place(|| Handle::current().block_on(async move { self.set_status_failed(reason).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 }

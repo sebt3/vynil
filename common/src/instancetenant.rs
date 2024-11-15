@@ -306,13 +306,13 @@ pub struct TenantInstanceStatus {
 impl TenantInstance {
     pub async fn get(namespace: String, name: String) -> Result<Self> {
         let api = Api::<Self>::namespaced(get_client(), &namespace);
-        api.get(&name).await.map_err(|e| Error::KubeError(e))
+        api.get(&name).await.map_err(Error::KubeError)
     }
 
     pub async fn list(namespace: String) -> Result<ObjectList<Self>> {
         let api = Api::<Self>::namespaced(get_client(), &namespace);
         let lp = ListParams::default();
-        api.list(&lp).await.map_err(|e| Error::KubeError(e))
+        api.list(&lp).await.map_err(Error::KubeError)
     }
 
     pub fn get_options_digest(&mut self) -> String {
@@ -356,7 +356,7 @@ impl TenantInstance {
         let label_key =
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
         if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().into_iter().any(|k| k == &label_key) {
+            if labels.clone().keys().any(|k| k == &label_key) {
                 Ok(labels[&label_key].clone())
             } else {
                 Ok(my_ns)
@@ -374,7 +374,7 @@ impl TenantInstance {
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
         let res = vec![my_ns];
         if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().into_iter().any(|k| k == &label_key) {
+            if labels.clone().keys().any(|k| k == &label_key) {
                 let tenant_name = &labels[&label_key];
                 let mut lp = ListParams::default();
                 lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
@@ -425,7 +425,7 @@ impl TenantInstance {
         let ps = PatchParams::apply(get_short_name().as_str());
         api.patch_status(&name, &ps, &new_status)
             .await
-            .map_err(|e| Error::KubeError(e))
+            .map_err(Error::KubeError)
     }
 
     async fn send_event(&mut self, client: Client, ev: Event) -> Result<()> {
@@ -905,12 +905,12 @@ impl TenantInstance {
 
     pub fn rhai_get(namespace: String, name: String) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { Self::get(namespace, name).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_list(namespace: String) -> RhaiRes<Vec<Self>> {
         block_in_place(|| Handle::current().block_on(async move { Self::list(namespace).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
             .map(|lst| lst.into_iter().collect())
     }
 
@@ -930,7 +930,7 @@ impl TenantInstance {
     }
 
     pub fn rhai_get_tfstate(&mut self) -> RhaiRes<String> {
-        let res = self.get_tfstate().map_err(|e| rhai_err(e))?;
+        let res = self.get_tfstate().map_err(rhai_err)?;
         if res.is_some() {
             Ok(res.unwrap())
         } else {
@@ -939,7 +939,7 @@ impl TenantInstance {
     }
 
     pub fn rhai_get_rhaistate(&mut self) -> RhaiRes<String> {
-        let res = self.get_rhaistate().map_err(|e| rhai_err(e))?;
+        let res = self.get_rhaistate().map_err(rhai_err)?;
         if res.is_some() {
             Ok(res.unwrap())
         } else {
@@ -949,118 +949,118 @@ impl TenantInstance {
 
     pub fn rhai_set_status_ready(&mut self, tag: String) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { self.set_status_ready(tag).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_set_tfstate(&mut self, tfstate: String) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { self.set_tfstate(tfstate).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_tofu_failed(&mut self, tfstate: String, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_status_tofu_failed(tfstate, reason).await })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_rhaistate(&mut self, rhaistate: String) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { self.set_rhaistate(rhaistate).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_rhai_failed(&mut self, rhaistate: String, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_status_rhai_failed(rhaistate, reason).await })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_vitals(&mut self, list: Dynamic) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(|e| Error::SerializationError(e))?;
-                let lst = serde_json::from_str(&v).map_err(|e| Error::SerializationError(e))?;
+                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
                 self.set_status_vitals(lst).await
             })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_vital_failed(&mut self, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_status_vital_failed(reason).await })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_scalables(&mut self, list: Dynamic) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(|e| Error::SerializationError(e))?;
-                let lst = serde_json::from_str(&v).map_err(|e| Error::SerializationError(e))?;
+                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
                 self.set_status_scalables(lst).await
             })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_scalable_failed(&mut self, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_status_scalable_failed(reason).await })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_others(&mut self, list: Dynamic) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(|e| Error::SerializationError(e))?;
-                let lst = serde_json::from_str(&v).map_err(|e| Error::SerializationError(e))?;
+                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
                 self.set_status_others(lst).await
             })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_status_other_failed(&mut self, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_status_other_failed(reason).await })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_agent_started(&mut self) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { self.set_agent_started().await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_set_missing_box(&mut self, jukebox: String) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { self.set_missing_box(jukebox).await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_set_missing_package(&mut self, category: String, package: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_missing_package(category, package).await })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_set_missing_requirement(&mut self, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_missing_requirement(reason).await })
         })
-        .map_err(|e| rhai_err(e))
+        .map_err(rhai_err)
     }
 
     pub fn rhai_get_tenant_name(&mut self) -> RhaiRes<String> {
         block_in_place(|| Handle::current().block_on(async move { self.get_tenant_name().await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<Vec<String>> {
         block_in_place(|| Handle::current().block_on(async move { self.get_tenant_namespaces().await }))
-            .map_err(|e| rhai_err(e))
+            .map_err(rhai_err)
     }
 }
