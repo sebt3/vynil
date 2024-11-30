@@ -141,7 +141,9 @@ impl Reconciler for TenantInstance {
         if pck.value_script.is_some() {
             let mut rhai = Script::new(vec![]);
             rhai.ctx.set_value("instance", self.clone());
-            let val = rhai.eval_map_string(&pck.value_script.unwrap())?;
+            let val = rhai.eval_map_string(
+                serde_json::from_str(&pck.value_script.unwrap()).map_err(Error::JsonError)?,
+            )?;
             context
                 .as_object_mut()
                 .unwrap()
@@ -289,7 +291,9 @@ impl Reconciler for TenantInstance {
         if pck.value_script.is_some() {
             let mut rhai = Script::new(vec![]);
             rhai.ctx.set_value("instance", self.clone());
-            let val = rhai.eval_map_string(&pck.value_script.unwrap())?;
+            let val = rhai.eval_map_string(
+                serde_json::from_str(&pck.value_script.unwrap()).map_err(Error::JsonError)?,
+            )?;
             context
                 .as_object_mut()
                 .unwrap()

@@ -290,20 +290,31 @@ pub struct VynilPackageSource {
 }
 impl VynilPackageSource {
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
-        let v = serde_json::to_string(&self.metadata).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-        serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
+        let v = serde_json::to_string(&self.metadata)
+            .map_err(Error::JsonError)
+            .map_err(rhai_err)?;
+        serde_json::from_str(&v)
+            .map_err(Error::JsonError)
+            .map_err(rhai_err)
     }
 
     pub fn get_requirements(&mut self) -> RhaiRes<Dynamic> {
-        let v =
-            serde_json::to_string(&self.requirements).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-        serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
+        let v = serde_json::to_string(&self.requirements)
+            .map_err(Error::JsonError)
+            .map_err(rhai_err)?;
+        serde_json::from_str(&v)
+            .map_err(Error::JsonError)
+            .map_err(rhai_err)
     }
 
     pub fn get_options(&mut self) -> RhaiRes<Dynamic> {
         if let Some(opt) = self.options.clone() {
-            let v = serde_json::to_string(&opt).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-            serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
+            let v = serde_json::to_string(&opt)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)?;
+            serde_json::from_str(&v)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)
         } else {
             Ok(Dynamic::from(()))
         }
@@ -319,8 +330,12 @@ impl VynilPackageSource {
 
     pub fn get_images(&mut self) -> RhaiRes<Dynamic> {
         if let Some(opt) = self.images.clone() {
-            let v = serde_json::to_string(&opt).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-            serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
+            let v = serde_json::to_string(&opt)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)?;
+            serde_json::from_str(&v)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)
         } else {
             Ok(Dynamic::from(()))
         }
@@ -328,8 +343,12 @@ impl VynilPackageSource {
 
     pub fn get_resources(&mut self) -> RhaiRes<Dynamic> {
         if let Some(opt) = self.resources.clone() {
-            let v = serde_json::to_string(&opt).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-            serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
+            let v = serde_json::to_string(&opt)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)?;
+            serde_json::from_str(&v)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)
         } else {
             Ok(Dynamic::from(()))
         }
@@ -339,7 +358,8 @@ impl VynilPackageSource {
         if let Some(options) = self.options.clone() {
             for (_key, val) in &options {
                 let _schema: &Schema = &serde_json::from_str(serde_json::to_string(val).unwrap().as_str())
-                    .map_err(|e| rhai_err(Error::SerializationError(e)))?;
+                    .map_err(Error::JsonError)
+                    .map_err(rhai_err)?;
             }
         }
         Ok(())

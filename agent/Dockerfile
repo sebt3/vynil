@@ -20,7 +20,7 @@ COPY agent/Cargo.toml agent/Cargo.toml
 RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -r --bin agent
 # Get our sources
 COPY common common/
-COPY agent agent/
+COPY agent/src agent/src/
 # Update the crates entrypoints so cargo is aware these should rebuild
 RUN touch common/src/lib.rs agent/src/lib.rs agent/src/main.rs \
  && cargo build -r --bin agent \

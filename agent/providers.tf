@@ -2,11 +2,11 @@ terraform {
   required_providers {
     kubernetes = {
         source  = "hashicorp/kubernetes"
-        version = "~> 2.20.0"
+        version = "~> 2.34.0"
     }
     kubectl = {
         source  = "gavinbunney/kubectl"
-        version = "~> 1.14.0"
+        version = "~> 1.16.0"
     }
     postgresql = {
         source  = "cyrilgdn/postgresql"
@@ -14,7 +14,7 @@ terraform {
     }
     mysql = {
         source  = "petoju/mysql"
-        version = "~> 3.0.65"
+        version = "~> 3.0.67"
     }
   }
 }

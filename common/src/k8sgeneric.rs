@@ -138,7 +138,7 @@ impl K8sObject {
 
     pub fn wait_condition(&mut self, condition: String, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
-        tracing::info!("wait_condition({}) for {}", &condition, name);
+        tracing::debug!("wait_condition({}) for {}", &condition, name);
         let cond = await_condition(self.api.clone(), &name, Self::is_condition(condition));
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
@@ -148,7 +148,44 @@ impl K8sObject {
             })
         })
         .map_err(rhai_err)?
-        .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
+        .map_err(Error::KubeWaitError)
+        .map_err(rhai_err)?;
+        Ok(())
+    }
+
+    pub fn is_for(
+        cond: Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>,
+    ) -> impl Condition<DynamicObject> {
+        move |obj: Option<&DynamicObject>| {
+            if let Some(dynobj) = &obj {
+                if dynobj.data.is_object() {
+                    return cond(dynobj).unwrap_or_else(|e| {
+                        tracing::warn!("wait_for closure error: {:?}", e);
+                        false
+                    });
+                }
+            }
+            false
+        }
+    }
+
+    pub fn wait_for(
+        &mut self,
+        condition: Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>,
+        timeout: i64,
+    ) -> RhaiRes<()> {
+        let name = self.obj.name_any();
+        let cond = await_condition(self.api.clone(), &name, Self::is_for(condition));
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
+                    .await
+                    .map_err(Error::Elapsed)
+            })
+        })
+        .map_err(rhai_err)?
+        .map_err(Error::KubeWaitError)
+        .map_err(rhai_err)?;
         Ok(())
     }
 }

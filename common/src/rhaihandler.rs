@@ -18,11 +18,13 @@ use crate::{
     Result, RhaiRes, Semver,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use kube::api::DynamicObject;
 pub use rhai::{
     module_resolvers::{FileModuleResolver, ModuleResolversCollection},
     serde::to_dynamic,
     Array, Dynamic, Engine, ImmutableString, Map, Module, Scope,
 };
+use rhai::{FnPtr, NativeCallContext};
 use serde::Deserialize;
 
 
@@ -226,12 +228,25 @@ impl Script {
             .register_fn("wait_done", K8sJob::wait_done);
         script
             .engine
+            .register_type_with_name::<DynamicObject>("DynamicObject")
+            .register_get("data", |obj: &mut DynamicObject| -> Dynamic {
+                Dynamic::from(obj.data.clone())
+            });
+        script
+            .engine
             .register_type_with_name::<K8sObject>("K8sObject")
             .register_get("kind", K8sObject::get_kind)
             .register_get("metadata", K8sObject::get_metadata)
             .register_fn("delete", K8sObject::rhai_delete)
             .register_fn("wait_condition", K8sObject::wait_condition)
-            .register_fn("wait_deleted", K8sObject::rhai_wait_deleted);
+            .register_fn("wait_deleted", K8sObject::rhai_wait_deleted)
+            /*.register_fn("wait_for", |context: NativeCallContext, k8sobj: &mut K8sObject, fnp: FnPtr, timeout: i64| {
+                let condition = Box::new(move |obj: &DynamicObject| -> RhaiRes<bool> {
+                    fnp.call_within_context(&context, (obj.clone(),))
+                });
+                tracing::warn!("wait_for");
+                k8sobj.wait_for(condition, timeout)
+            })*/;
         script
             .engine
             .register_type_with_name::<K8sGeneric>("K8sGeneric")
@@ -468,16 +483,22 @@ impl Script {
     }
 
     pub fn eval_truth(&mut self, script: &str) -> Result<bool, Error> {
-        self.engine
+        tracing::debug!("START: eval_truth({})", script);
+        let r = self
+            .engine
             .eval_with_scope::<bool>(&mut self.ctx, script)
-            .map_err(RhaiError)
+            .map_err(RhaiError);
+        tracing::debug!("END: eval_truth({})", script);
+        r
     }
 
     pub fn eval_map_string(&mut self, script: &str) -> Result<String, Error> {
+        tracing::debug!("START: eval_map_string({})", script);
         let m = self
             .engine
             .eval_with_scope::<Map>(&mut self.ctx, script)
             .map_err(RhaiError)?;
+        tracing::debug!("END: eval_map_string({})", script);
         serde_json::to_string(&m).map_err(Error::SerializationError)
     }
 }
