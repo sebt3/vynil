@@ -40,7 +40,15 @@ fn vital(lst, duration) {
             let api = k8s_resource(v.kind, v.namespace);
             let obj = api.get_obj(v.name);
             obj.wait_condition("ClusterAvailable", duration);
-        } else if ["Redis", "MongoDBCommunity"].contains(v.kind) {
+        } else if ["RedisSentinel"].contains(v.kind) {
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            let sts = get_statefulset(v.namespace, `${v.name}--sentinel`);
+            sts.wait_available(duration);
+        } else if ["RedisCluster"].contains(v.kind) {
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            let sts = get_statefulset(v.namespace, `${v.name}-leader`);
+            sts.wait_available(duration);
+        } else if ["Redis", "RedisReplication", "MongoDBCommunity"].contains(v.kind) {
             log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
             let sts = get_statefulset(v.namespace, v.name);
             sts.wait_available(duration);

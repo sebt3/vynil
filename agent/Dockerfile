@@ -1,7 +1,7 @@
 ARG RUST_VERSION=1.81
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_NEXT=trixie
-FROM docker.io/rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} docker.io/rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential g++"
 WORKDIR /usr/src/agent
 COPY Cargo.lock .

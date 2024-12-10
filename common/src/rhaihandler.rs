@@ -12,6 +12,7 @@ use crate::{
     k8sworkload::{K8sDaemonSet, K8sDeploy, K8sJob, K8sStatefulSet},
     ocihandler::Registry,
     passwordhandler::Passwords,
+    chronohandler::DateTimeHandler,
     rhai_err, shellhandler,
     vynilpackage::{rhai_read_package_yaml, VynilPackageSource},
     Error::{self, *},
@@ -23,8 +24,8 @@ pub use rhai::{
     module_resolvers::{FileModuleResolver, ModuleResolversCollection},
     serde::to_dynamic,
     Array, Dynamic, Engine, ImmutableString, Map, Module, Scope,
+//    FnPtr, NativeCallContext,
 };
-use rhai::{FnPtr, NativeCallContext};
 use serde::Deserialize;
 
 
@@ -286,6 +287,11 @@ impl Script {
             .register_fn("<=", |a: Semver, b: Semver| a <= b)
             .register_fn(">=", |a: Semver, b: Semver| a >= b)
             .register_fn("to_string", Semver::to_string);
+        script
+            .engine
+            .register_type_with_name::<DateTimeHandler>("DateTimeHandler")
+            .register_fn("date_now", DateTimeHandler::now)
+            .register_fn("format", DateTimeHandler::rhai_format);
         script
             .engine
             .register_type_with_name::<Registry>("Registry")

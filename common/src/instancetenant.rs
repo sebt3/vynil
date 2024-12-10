@@ -315,6 +315,33 @@ impl TenantInstance {
         api.list(&lp).await.map_err(Error::KubeError)
     }
 
+    pub fn have_child(&self) -> bool {
+        if let Some(status) = self.status.clone() {
+            if status.rhaistate.is_some() {
+                return true;
+            }
+            if status.tfstate.is_some() {
+                return true;
+            }
+            if let Some(child) = status.vitals.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
+            if let Some(child) = status.others.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
+            if let Some(child) = status.scalables.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn get_options_digest(&mut self) -> String {
         if let Some(ref opt) = self.spec.options {
             sha256::digest(serde_json::to_string(opt).unwrap())
@@ -1059,8 +1086,16 @@ impl TenantInstance {
             .map_err(rhai_err)
     }
 
-    pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<Vec<String>> {
-        block_in_place(|| Handle::current().block_on(async move { self.get_tenant_namespaces().await }))
-            .map_err(rhai_err)
+    pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<Dynamic> {
+        block_in_place(|| Handle::current().block_on(async move {
+            let arr = self.get_tenant_namespaces().await;
+            if arr.is_ok() {
+                let arr = arr.unwrap();
+                let v = serde_json::to_string(&arr).map_err( Error::SerializationError)?;
+                serde_json::from_str::<Dynamic>(&v).map_err(Error::SerializationError)
+            } else {
+                arr.map(|_| Dynamic::from(""))
+            }
+        })).map_err(rhai_err)
     }
 }

@@ -97,6 +97,7 @@ pub mod passwordhandler;
 pub mod rhaihandler;
 mod semverhandler;
 pub mod shellhandler;
+pub mod chronohandler;
 mod tools;
 pub mod vynilpackage;
 pub use context::get_client_name;

@@ -4,9 +4,6 @@ fn run(instance, context) {
     import_run("install_systems_pre", instance, context);
     try {
         let applied_objs = dir::install(instance, context, `${context.package_dir}/systems`, true, false);
-        if instance.status != () && instance.status.systems != () {
-            dir::remove(applied_objs, instance.status.systems, instance.metadata.namespace);
-        }
         let added = import_run("install_systems_add", instance, context);
         switch type_of(added) {
             "map" => {
@@ -17,6 +14,9 @@ fn run(instance, context) {
             "array" => {
                 applied_objs += added.filter(|i|dir::validate_add_item(i));
             }
+        }
+        if instance.status != () && instance.status.systems != () {
+            dir::remove(applied_objs, instance.status.systems, instance.metadata.namespace);
         }
         let tmp = instance.set_status_systems(applied_objs);
         wait::all(applied_objs);

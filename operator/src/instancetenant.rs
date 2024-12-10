@@ -114,7 +114,7 @@ impl Reconciler for TenantInstance {
             .find(|p| {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
-                    && p.metadata.usage == VynilPackageType::System
+                    && p.metadata.usage == VynilPackageType::Tenant
             })
             .unwrap();
         context
@@ -141,9 +141,9 @@ impl Reconciler for TenantInstance {
         if pck.value_script.is_some() {
             let mut rhai = Script::new(vec![]);
             rhai.ctx.set_value("instance", self.clone());
-            let val = rhai.eval_map_string(
-                serde_json::from_str(&pck.value_script.unwrap()).map_err(Error::JsonError)?,
-            )?;
+            let value_script = pck.value_script.unwrap();
+            let script = serde_json::from_str::<String>(&value_script).map_err(Error::JsonError)?;
+            let val = rhai.eval_map_string(&script)?;
             context
                 .as_object_mut()
                 .unwrap()
@@ -156,6 +156,7 @@ impl Reconciler for TenantInstance {
         }
         // Evrything is good to go
         // Create the job
+        tracing::info!("Creating with: {:?}", &context);
         let job_def_str = hbs.render("{{> package.yaml }}", &context)?;
         let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
         let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
@@ -244,10 +245,13 @@ impl Reconciler for TenantInstance {
             .any(|p| {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
-                    && p.metadata.usage == VynilPackageType::System
+                    && p.metadata.usage == VynilPackageType::Tenant
             })
         {
-            // Package doesnt exist, cannot have been installed
+            // Package doesnt exist
+            if self.have_child() {
+                return Err(Error::Other(String::from("This install have child but the package cannot be found")));
+            }
             return Ok(Action::await_change());
         }
         if let Some(pull_secret) = packages[&self.spec.jukebox].pull_secret.clone() {
@@ -272,7 +276,7 @@ impl Reconciler for TenantInstance {
             .find(|p| {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
-                    && p.metadata.usage == VynilPackageType::System
+                    && p.metadata.usage == VynilPackageType::Tenant
             })
             .unwrap();
         context
@@ -291,9 +295,9 @@ impl Reconciler for TenantInstance {
         if pck.value_script.is_some() {
             let mut rhai = Script::new(vec![]);
             rhai.ctx.set_value("instance", self.clone());
-            let val = rhai.eval_map_string(
-                serde_json::from_str(&pck.value_script.unwrap()).map_err(Error::JsonError)?,
-            )?;
+            let value_script = pck.value_script.unwrap();
+            let script = serde_json::from_str::<String>(&value_script).map_err(Error::JsonError)?;
+            let val = rhai.eval_map_string(&script)?;
             context
                 .as_object_mut()
                 .unwrap()
@@ -323,6 +327,7 @@ impl Reconciler for TenantInstance {
             };
         }
         // Create the delete Job
+        tracing::info!("Deleting with: {:?}", &context);
         let job_def_str = hbs.render("{{> package.yaml }}", &context)?;
         let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
         job_api

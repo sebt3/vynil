@@ -4,9 +4,6 @@ fn run(instance, context) {
     import_run("install_scalables_pre", instance, context);
     try {
         let applied_objs = dir::install_allowed(instance, context, `${context.package_dir}/scalables`, context.tenant.namespaces);
-        if instance.status != () && instance.status.scalables != () {
-            dir::remove(applied_objs, instance.status.scalables, instance.metadata.namespace);
-        }
         // TODO: scale a target
         let added = import_run("install_scalables_add", instance, context);
         switch type_of(added) {
@@ -18,6 +15,9 @@ fn run(instance, context) {
             "array" => {
                 applied_objs += added.filter(|i|dir::validate_add_item(i));
             }
+        }
+        if instance.status != () && instance.status.scalables != () {
+            dir::remove(applied_objs, instance.status.scalables, instance.metadata.namespace);
         }
         let tmp = instance.set_status_scalables(applied_objs);
         wait::all(applied_objs);

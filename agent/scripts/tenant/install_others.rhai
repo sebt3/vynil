@@ -4,9 +4,6 @@ fn run(instance, context) {
     import_run("install_others_pre", instance, context);
     try {
         let applied_objs = dir::install_allowed(instance, context, `${context.package_dir}/others`, context.tenant.namespaces);
-        if instance.status != () && instance.status.others != () {
-            dir::remove(applied_objs, instance.status.others, instance.metadata.namespace);
-        }
         let added = import_run("install_others_add", instance, context);
         switch type_of(added) {
             "map" => {
@@ -17,6 +14,9 @@ fn run(instance, context) {
             "array" => {
                 applied_objs += added.filter(|i|dir::validate_add_item(i));
             }
+        }
+        if instance.status != () && instance.status.others != () {
+            dir::remove(applied_objs, instance.status.others, instance.metadata.namespace);
         }
         let tmp = instance.set_status_others(applied_objs);
         wait::all(applied_objs);

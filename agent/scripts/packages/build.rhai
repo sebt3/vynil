@@ -31,7 +31,7 @@ fn build(args) {
                 }
             }
         } else if base in ["scripts"] && is_dir(item) {
-            copy::dir_exts(item, args.temp+"/"+base, [".rhai"], true);
+            copy::dir_exts(item, args.temp+"/"+base, [".rhai", ".sh"], true);
         } else if base == "tofu" && is_dir(item) {
             copy::dir_exts(item, args.temp+"/"+base, [".tf", ".tpl", ".tftpl"], true);
         } else if base == "files" && is_dir(item) {

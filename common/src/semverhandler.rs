@@ -6,7 +6,7 @@ pub struct Semver {
     pub version: Version,
     pub use_v: bool,
 }
-// support des rc (release candidate)
+// TODO: support des rc (release candidate)
 impl Semver {
     pub fn parse(str: &str) -> Result<Self> {
         let use_v = str.starts_with("v");

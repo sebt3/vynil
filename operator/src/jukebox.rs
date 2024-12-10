@@ -40,7 +40,6 @@ pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> 
 impl Reconciler for JukeBox {
     // Reconcile (for non-finalizer related changes)
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
-        tracing::info!("reconcile");
         ctx.diagnostics.write().await.last_event = Utc::now();
         let mut hbs = ctx.renderer.clone();
         let client = ctx.client.clone();

@@ -43,7 +43,7 @@ handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(l
 handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
     let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["selector"].as_object().unwrap().clone();
     if !comp.is_empty() {
-        sel.insert("app.kubernetes.io/componant".into(), Value::from(comp));
+        sel.insert("app.kubernetes.io/component".into(), Value::from(comp));
     }
     sel
 });
@@ -53,6 +53,13 @@ handlebars_helper!(labels: |ctx: Value| {
 handlebars_helper!(have_crd: |ctx: Value, name: String| {
     ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().iter().any(|crd| *crd==name)
 });
+handlebars_helper!(concat: |a: Value, b: Value| format!("{}{}", a.as_str().unwrap_or_else(|| {
+    warn!("handlebars::concat received a non-string parameter: {:?}", a);
+    ""
+}),b.as_str().unwrap_or_else(|| {
+    warn!("handlebars::concat received a non-string parameter: {:?}", b);
+    ""
+})));
 
 #[derive(Clone, Debug)]
 pub struct HandleBars<'a> {
@@ -62,6 +69,7 @@ impl HandleBars<'_> {
     #[must_use]
     pub fn new() -> HandleBars<'static> {
         let mut engine = new_hbs();
+        engine.register_helper("concat", Box::new(concat));
         engine.register_helper("labels_from_ctx", Box::new(labels));
         engine.register_helper("ctx_have_crd", Box::new(have_crd));
         engine.register_helper("selector_from_ctx", Box::new(selector));

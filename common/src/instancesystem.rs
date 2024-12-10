@@ -292,6 +292,28 @@ impl SystemInstance {
         api.list(&lp).await.map_err(Error::KubeError)
     }
 
+    pub fn have_child(&self) -> bool {
+        if let Some(status) = self.status.clone() {
+            if status.rhaistate.is_some() {
+                return true;
+            }
+            if status.tfstate.is_some() {
+                return true;
+            }
+            if let Some(child) = status.systems.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
+            if let Some(child) = status.crds.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn get_options_digest(&mut self) -> String {
         if let Some(ref opt) = self.spec.options {
             sha256::digest(serde_json::to_string(opt).unwrap())
