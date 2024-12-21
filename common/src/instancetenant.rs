@@ -1087,15 +1087,18 @@ impl TenantInstance {
     }
 
     pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<Dynamic> {
-        block_in_place(|| Handle::current().block_on(async move {
-            let arr = self.get_tenant_namespaces().await;
-            if arr.is_ok() {
-                let arr = arr.unwrap();
-                let v = serde_json::to_string(&arr).map_err( Error::SerializationError)?;
-                serde_json::from_str::<Dynamic>(&v).map_err(Error::SerializationError)
-            } else {
-                arr.map(|_| Dynamic::from(""))
-            }
-        })).map_err(rhai_err)
+        block_in_place(|| {
+            Handle::current().block_on(async move {
+                let arr = self.get_tenant_namespaces().await;
+                if arr.is_ok() {
+                    let arr = arr.unwrap();
+                    let v = serde_json::to_string(&arr).map_err(Error::SerializationError)?;
+                    serde_json::from_str::<Dynamic>(&v).map_err(Error::SerializationError)
+                } else {
+                    arr.map(|_| Dynamic::from(""))
+                }
+            })
+        })
+        .map_err(rhai_err)
     }
 }

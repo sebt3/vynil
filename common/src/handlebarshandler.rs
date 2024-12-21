@@ -24,6 +24,13 @@ handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwra
     warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
     ""
 })));
+handlebars_helper!(to_decimal: |arg:Value| format!("{}", u32::from_str_radix(arg.as_str().unwrap_or_else(|| {
+    warn!("handlebars::to_decimal received a non-string parameter: {:?}",arg);
+    ""
+}), 8).unwrap_or_else(|_| {
+    warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
+    0
+})));
 handlebars_helper!(header_basic: |username:Value, password:Value| format!("Basic {}",STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
     warn!("handlebars::header_basic received a non-string username: {:?}",username);
     ""
@@ -36,6 +43,13 @@ handlebars_helper!(argon_hash: |password:Value| Argon::new().hash(password.as_st
     ""
 }).to_string()).unwrap_or_else(|e| {
     warn!("handlebars::argon_hash failed to convert to string with: {e:?}");
+    String::new()
+}));
+handlebars_helper!(bcrypt_hash: |password:Value| crate::hasheshandlers::bcrypt_hash(password.as_str().unwrap_or_else(|| {
+    warn!("handlebars::bcrypt_hash received a non-string password: {:?}",password);
+    ""
+}).to_string()).unwrap_or_else(|e| {
+    warn!("handlebars::bcrypt_hash failed to convert to string with: {e:?}");
     String::new()
 }));
 handlebars_helper!(gen_password: |len:u32| Passwords::new().generate(len, 6, 2, 2));
@@ -70,6 +84,7 @@ impl HandleBars<'_> {
     pub fn new() -> HandleBars<'static> {
         let mut engine = new_hbs();
         engine.register_helper("concat", Box::new(concat));
+        engine.register_helper("to_decimal", Box::new(to_decimal));
         engine.register_helper("labels_from_ctx", Box::new(labels));
         engine.register_helper("ctx_have_crd", Box::new(have_crd));
         engine.register_helper("selector_from_ctx", Box::new(selector));
@@ -77,6 +92,7 @@ impl HandleBars<'_> {
         engine.register_helper("base64_encode", Box::new(base64_encode));
         engine.register_helper("header_basic", Box::new(header_basic));
         engine.register_helper("argon_hash", Box::new(argon_hash));
+        engine.register_helper("bcrypt_hash", Box::new(bcrypt_hash));
         engine.register_helper("gen_password", Box::new(gen_password));
         engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
         let _ = engine.register_script_helper("image_from_ctx",

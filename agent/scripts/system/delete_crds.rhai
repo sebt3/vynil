@@ -1,5 +1,8 @@
 fn run(instance, context) {
-    import_run("delete_crds_pre", instance, context);
+    let ctx = import_run("delete_crds_pre", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
     let api = k8s_resource("CustomResourceDefinition");
     if instance.status != () && instance.status.crds != () {
         for old in instance.status.crds {
@@ -20,5 +23,9 @@ fn run(instance, context) {
             } catch (e) {}
         }
     }
-    import_run("delete_crds_post", instance, context);
+    ctx = import_run("delete_crds_post", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    context
 }

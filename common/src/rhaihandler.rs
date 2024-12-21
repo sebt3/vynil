@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
+    chronohandler::DateTimeHandler,
     context,
     handlebarshandler::HandleBars,
     hasheshandlers::Argon,
@@ -12,7 +13,6 @@ use crate::{
     k8sworkload::{K8sDaemonSet, K8sDeploy, K8sJob, K8sStatefulSet},
     ocihandler::Registry,
     passwordhandler::Passwords,
-    chronohandler::DateTimeHandler,
     rhai_err, shellhandler,
     vynilpackage::{rhai_read_package_yaml, VynilPackageSource},
     Error::{self, *},
@@ -23,8 +23,14 @@ use kube::api::DynamicObject;
 pub use rhai::{
     module_resolvers::{FileModuleResolver, ModuleResolversCollection},
     serde::to_dynamic,
-    Array, Dynamic, Engine, ImmutableString, Map, Module, Scope,
-//    FnPtr, NativeCallContext,
+    Array,
+    Dynamic,
+    Engine,
+    ImmutableString,
+    Map,
+    Module,
+    Scope,
+    //    FnPtr, NativeCallContext,
 };
 use serde::Deserialize;
 
@@ -67,6 +73,9 @@ impl Script {
             .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
             .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))
             .register_fn("log_error", |s: ImmutableString| tracing::error!("{s}"))
+            .register_fn("bcrypt_hash", |s: ImmutableString| {
+                crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
+            })
             .register_fn("gen_password", |len: u32| -> String {
                 Passwords::new().generate(len, 6, 2, 2)
             })

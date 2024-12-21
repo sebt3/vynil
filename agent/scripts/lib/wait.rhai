@@ -42,7 +42,7 @@ fn vital(lst, duration) {
             obj.wait_condition("ClusterAvailable", duration);
         } else if ["RedisSentinel"].contains(v.kind) {
             log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
-            let sts = get_statefulset(v.namespace, `${v.name}--sentinel`);
+            let sts = get_statefulset(v.namespace, `${v.name}-sentinel`);
             sts.wait_available(duration);
         } else if ["RedisCluster"].contains(v.kind) {
             log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);

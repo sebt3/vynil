@@ -1,5 +1,8 @@
 fn run(instance, context) {
-    import_run("install_crds_pre", instance, context);
+    let ctx = import_run("install_crds_pre", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
     let hbs = new_hbs();
     hbs.register_partial_dir(`${context.package_dir}/handlebars/partials`);
     hbs.register_helper_dir(`${context.package_dir}/handlebars/helpers`);
@@ -53,5 +56,9 @@ fn run(instance, context) {
         }
         throw e;
     }
-    import_run("install_crds_post", instance, context);
+    ctx = import_run("install_crds_post", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    context
 }

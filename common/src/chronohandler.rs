@@ -8,13 +8,13 @@ pub struct DateTimeHandler {
 impl DateTimeHandler {
     #[must_use]
     pub fn now() -> Self {
-        Self {
-            date: Local::now()
-        }
+        Self { date: Local::now() }
     }
+
     pub fn format(&self, fmt: &str) -> String {
         format!("{}", self.date.format(fmt))
     }
+
     pub fn rhai_format(&mut self, fmt: String) -> ImmutableString {
         self.format(&fmt).into()
     }

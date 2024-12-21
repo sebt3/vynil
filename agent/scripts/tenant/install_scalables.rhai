@@ -1,7 +1,10 @@
 import "install_from_dir" as dir;
 import "wait" as wait;
 fn run(instance, context) {
-    import_run("install_scalables_pre", instance, context);
+    let ctx = import_run("install_scalables_pre", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
     try {
         let applied_objs = dir::install_allowed(instance, context, `${context.package_dir}/scalables`, context.tenant.namespaces);
         // TODO: scale a target
@@ -28,5 +31,9 @@ fn run(instance, context) {
         }
         throw e;
     }
-    import_run("install_scalables_post", instance, context);
+    ctx = import_run("install_scalables_post", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    context
 }

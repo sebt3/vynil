@@ -58,6 +58,9 @@ pub enum Error {
     #[error("Argon2 password_hash error {0}")]
     Argon2hash(#[from] argon2::password_hash::Error),
 
+    #[error("Bcrypt hash error {0}")]
+    BcryptError(#[from] bcrypt::BcryptError),
+
     #[error("Stdio error {0}")]
     Stdio(#[from] std::io::Error),
 
@@ -83,6 +86,7 @@ pub type RhaiRes<T> = std::result::Result<T, Box<rhai::EvalAltResult>>;
 pub fn rhai_err(e: Error) -> Box<rhai::EvalAltResult> {
     format!("{e}").into()
 }
+pub mod chronohandler;
 pub mod context;
 pub mod handlebarshandler;
 pub mod hasheshandlers;
@@ -97,7 +101,6 @@ pub mod passwordhandler;
 pub mod rhaihandler;
 mod semverhandler;
 pub mod shellhandler;
-pub mod chronohandler;
 mod tools;
 pub mod vynilpackage;
 pub use context::get_client_name;

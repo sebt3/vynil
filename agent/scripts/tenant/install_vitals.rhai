@@ -1,7 +1,10 @@
 import "install_from_dir" as dir;
 import "wait" as wait;
 fn run(instance, context) {
-    import_run("install_vitals_pre", instance, context);
+    let ctx = import_run("install_vitals_pre", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
     try {
         let applied_objs = dir::install_allowed(instance, context, `${context.package_dir}/vitals`, context.tenant.namespaces);
         let added = import_run("install_vitals_add", instance, context);
@@ -32,5 +35,9 @@ fn run(instance, context) {
         }
         throw e;
     }
-    import_run("install_vitals_post", instance, context);
+    ctx = import_run("install_vitals_post", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    context
 }

@@ -1,5 +1,8 @@
 fn run(instance, context) {
-    import_run("delete_systems_pre", instance, context);
+    let ctx = import_run("delete_systems_pre", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
     if instance.status != () && instance.status.systems != () {
         let deleted = [];
         for old in instance.status.systems {
@@ -18,5 +21,9 @@ fn run(instance, context) {
             d.wait_deleted(60*5);
         }
     }
-    import_run("delete_systems_post", instance, context);
+    ctx = import_run("delete_systems_post", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    context
 }

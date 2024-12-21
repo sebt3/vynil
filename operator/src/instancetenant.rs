@@ -250,7 +250,9 @@ impl Reconciler for TenantInstance {
         {
             // Package doesnt exist
             if self.have_child() {
-                return Err(Error::Other(String::from("This install have child but the package cannot be found")));
+                return Err(Error::Other(String::from(
+                    "This install have child but the package cannot be found",
+                )));
             }
             return Ok(Action::await_change());
         }
