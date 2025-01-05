@@ -68,14 +68,18 @@ pub fn get_owner() -> Option<serde_json::Value> {
 }
 pub fn get_labels() -> Option<serde_json::Value> {
     match &*CONTEXT.lock().unwrap() {
-        VynilContext::TenantInstance(i) => Some(serde_json::json!({
-            "app.kubernetes.io/managed-by": "vynil",
-            "app.kubernetes.io/name": i.spec.package,
-            "app.kubernetes.io/instance": i.metadata.name.clone().unwrap_or_default(),
-            "vynil.solidite.fr/owner-namespace": i.metadata.namespace.clone().unwrap_or_default(),
-            "vynil.solidite.fr/owner-category": i.spec.category,
-            "vynil.solidite.fr/owner-type": "tenant"
-        })),
+        VynilContext::TenantInstance(i) => {
+            let tenant = i.clone().rhai_get_tenant_name().unwrap_or(String::new());
+            Some(serde_json::json!({
+                "app.kubernetes.io/managed-by": "vynil",
+                "app.kubernetes.io/name": i.spec.package,
+                "app.kubernetes.io/instance": i.metadata.name.clone().unwrap_or_default(),
+                "vynil.solidite.fr/owner-namespace": i.metadata.namespace.clone().unwrap_or_default(),
+                "vynil.solidite.fr/owner-category": i.spec.category,
+                "vynil.solidite.fr/owner-type": "tenant",
+                "vynil.solidite.fr/tenant": tenant
+            }))
+        }
         VynilContext::SystemInstance(i) => Some(serde_json::json!({
             "app.kubernetes.io/managed-by": "vynil",
             "app.kubernetes.io/name": i.spec.package,

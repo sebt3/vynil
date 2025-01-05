@@ -34,6 +34,7 @@ openapiv3 = "2.0.0"
 sha256 = "1.5.0"
 argon2 = { version = "0.5.3", features = ["std"] }
 bcrypt = "0.16.0"
+crc32fast = "1.4.2"
 
 [lib]
 name = "common"

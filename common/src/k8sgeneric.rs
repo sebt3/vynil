@@ -41,6 +41,7 @@ pub fn update_cache() {
 pub struct K8sObject {
     pub api: Api<DynamicObject>,
     pub obj: PartialObjectMeta,
+    pub kind: String,
 }
 impl K8sObject {
     pub fn rhai_delete(&mut self) -> RhaiRes<()> {
@@ -138,8 +139,56 @@ impl K8sObject {
 
     pub fn wait_condition(&mut self, condition: String, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
-        tracing::debug!("wait_condition({}) for {}", &condition, name);
         let cond = await_condition(self.api.clone(), &name, Self::is_condition(condition));
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
+                    .await
+                    .map_err(Error::Elapsed)
+            })
+        })
+        .map_err(rhai_err)?
+        .map_err(Error::KubeWaitError)
+        .map_err(rhai_err)?;
+        Ok(())
+    }
+
+    pub fn is_status(prop: String) -> impl Condition<DynamicObject> {
+        move |obj: Option<&DynamicObject>| {
+            if let Some(dynobj) = &obj {
+                if dynobj.data.is_object()
+                    && dynobj
+                        .data
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .collect::<Vec<&String>>()
+                        .contains(&&"status".to_string())
+                {
+                    let status = dynobj.data.as_object().unwrap()["status"].clone();
+                    if status.is_object()
+                        && status
+                            .as_object()
+                            .unwrap()
+                            .keys()
+                            .collect::<Vec<&String>>()
+                            .contains(&&prop)
+                    {
+                        let conditions = status.as_object().unwrap()[&prop].clone();
+                        if conditions.is_boolean() && conditions.as_bool().unwrap() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    pub fn wait_status(&mut self, prop: String, timeout: i64) -> RhaiRes<()> {
+        let name = self.obj.name_any();
+        tracing::debug!("wait_status({}) for {} {}", &prop, self.kind, name);
+        let cond = await_condition(self.api.clone(), &name, Self::is_status(prop));
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
@@ -195,6 +244,7 @@ pub struct K8sGeneric {
     pub api: Option<Api<DynamicObject>>,
     pub ns: Option<String>,
     pub scope: Scope,
+    pub kind: String,
 }
 
 // TODO: scale et exec
@@ -229,12 +279,14 @@ impl K8sGeneric {
                 api: Some(api),
                 ns,
                 scope: cap.scope,
+                kind: res.kind,
             }
         } else {
             K8sGeneric {
                 api: None,
                 ns: None,
                 scope: Scope::Cluster,
+                kind: String::new(),
             }
         }
     }
@@ -339,6 +391,7 @@ impl K8sGeneric {
         Ok(K8sObject {
             api: self.api.clone().unwrap(),
             obj: res,
+            kind: self.kind.clone(),
         })
     }
 

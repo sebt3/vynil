@@ -34,7 +34,7 @@ spec:
         description: Custom resource representing a JukeBox, source of vynil packages
         properties:
           spec:
-            description: Describe a source of vynil packages jukeboxution
+            description: Describe a source of vynil packages jukebox
             properties:
               maturity:
                 description: Jukebox maturity (stable/beta/alpha)
@@ -345,13 +345,31 @@ spec:
         description: Custom resource representing an Vynil tenant package installation
         properties:
           spec:
-            description: Describe a source of vynil packages jukeboxution
+            description: Describe a source of vynil packages jukebox
             properties:
               category:
                 description: The category name
                 type: string
+              initFrom:
+                description: Init from a previous backup
+                nullable: true
+                properties:
+                  secretName:
+                    description: 'Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"'
+                    nullable: true
+                    type: string
+                  snapshot:
+                    description: Snapshot id for restoration
+                    type: string
+                  subPath:
+                    description: Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
+                    nullable: true
+                    type: string
+                required:
+                - snapshot
+                type: object
               jukebox:
-                description: The jukeboxution source name
+                description: The jukebox source name
                 type: string
               options:
                 description: Parameters
@@ -408,6 +426,8 @@ spec:
                       - TofuInstalled
                       - VitalApplied
                       - ScalableApplied
+                      - InitFrom
+                      - ScheduleBackup
                       - OtherApplied
                       - RhaiApplied
                       type: string
@@ -556,13 +576,13 @@ spec:
         description: Custom resource representing an Vynil cluster package installation
         properties:
           spec:
-            description: Describe a source of vynil packages jukeboxution
+            description: Describe a source of vynil packages jukebox
             properties:
               category:
                 description: The category name
                 type: string
               jukebox:
-                description: The jukeboxution source name
+                description: The jukebox source name
                 type: string
               options:
                 description: Parameters

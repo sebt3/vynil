@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio::{runtime::Handle, task::block_in_place};
 use tracing::field::debug;
 
-/// Describe a source of vynil packages jukeboxution
+/// Describe a source of vynil packages jukebox
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     kind = "SystemInstance",
@@ -38,7 +38,7 @@ use tracing::field::debug;
     {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
 )]
 pub struct SystemInstanceSpec {
-    /// The jukeboxution source name
+    /// The jukebox source name
     pub jukebox: String,
     /// The category name
     pub category: String,
@@ -476,10 +476,12 @@ impl SystemInstance {
                 }),
             )
             .await?;
+        let mut note = reason;
+        note.truncate(1023);
         self.send_event(client, Event {
             type_: EventType::Warning,
             reason: "CRDApplyFailed".to_string(),
-            note: Some(reason),
+            note: Some(note),
             action: "CRDApply".to_string(),
             secondary: None,
         })
@@ -540,10 +542,12 @@ impl SystemInstance {
                 }),
             )
             .await?;
+        let mut note = reason;
+        note.truncate(1023);
         self.send_event(client, Event {
             type_: EventType::Warning,
             reason: "SystemApplyFailed".to_string(),
-            note: Some(reason),
+            note: Some(note),
             action: "SystemApply".to_string(),
             secondary: None,
         })
@@ -605,10 +609,12 @@ impl SystemInstance {
                 }),
             )
             .await?;
+        let mut note = reason;
+        note.truncate(1023);
         self.send_event(client, Event {
             type_: EventType::Warning,
             reason: "TofuApplyFailed".to_string(),
-            note: Some(reason),
+            note: Some(note),
             action: "TofuApply".to_string(),
             secondary: None,
         })
@@ -670,10 +676,12 @@ impl SystemInstance {
                 }),
             )
             .await?;
+        let mut note = reason;
+        note.truncate(1023);
         self.send_event(client, Event {
             type_: EventType::Warning,
             reason: "RhaiApplyFailed".to_string(),
-            note: Some(reason),
+            note: Some(note),
             action: "RhaiApply".to_string(),
             secondary: None,
         })
@@ -787,10 +795,12 @@ impl SystemInstance {
                     }),
                 )
                 .await?;
+            let mut note = reason;
+            note.truncate(1023);
             self.send_event(client, Event {
                 type_: EventType::Warning,
                 reason: "MissingRequirement".to_string(),
-                note: Some(reason),
+                note: Some(note),
                 action: "AgentStart".to_string(),
                 secondary: None,
             })

@@ -43,7 +43,7 @@ pub enum JukeBoxMaturity {
     Alpha,
 }
 
-/// Describe a source of vynil packages jukeboxution
+/// Describe a source of vynil packages jukebox
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     kind = "JukeBox",
@@ -256,10 +256,12 @@ impl JukeBox {
                 }),
             )
             .await?;
+        let mut note = reason;
+        note.truncate(1023);
         self.send_event(client, Event {
             type_: EventType::Warning,
             reason: "ScanFailed".to_string(),
-            note: Some(reason),
+            note: Some(note),
             action: "Scan".to_string(),
             secondary: None,
         })
