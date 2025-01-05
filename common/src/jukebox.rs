@@ -43,7 +43,7 @@ pub enum JukeBoxMaturity {
     Alpha,
 }
 
-/// Describe a source of vynil packages jukeboxution
+/// Describe a source of vynil packages jukebox
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     kind = "JukeBox",

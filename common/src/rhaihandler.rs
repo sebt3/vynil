@@ -44,7 +44,6 @@ pub struct Script {
     pub engine: Engine,
     pub ctx: Scope<'static>,
 }
-
 impl Script {
     #[must_use]
     pub fn new(resolver_path: Vec<String>) -> Script {
@@ -76,14 +75,20 @@ impl Script {
             .register_fn("bcrypt_hash", |s: ImmutableString| {
                 crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
             })
-            .register_fn("gen_password", |len: u32| -> String {
+            .register_fn("gen_password", |len: i64| -> String {
                 Passwords::new().generate(len, 6, 2, 2)
             })
-            .register_fn("gen_password_alphanum", |len: u32| -> String {
+            .register_fn("gen_password_alphanum", |len: i64| -> String {
                 Passwords::new().generate(len, 8, 2, 0)
             })
             .register_fn("get_env", |var: ImmutableString| -> String {
                 std::env::var(var.to_string()).unwrap_or("".into())
+            })
+            .register_fn("to_decimal", |val: ImmutableString| -> RhaiRes<u32> {
+                Ok(u32::from_str_radix(val.as_str(), 8).unwrap_or_else(|_| {
+                    tracing::warn!("to_decimal received a non-valid parameter: {:?}", val);
+                    0
+                }))
             })
             .register_fn(
                 "base64_decode",
@@ -249,6 +254,7 @@ impl Script {
             .register_get("metadata", K8sObject::get_metadata)
             .register_fn("delete", K8sObject::rhai_delete)
             .register_fn("wait_condition", K8sObject::wait_condition)
+            .register_fn("wait_status", K8sObject::wait_status)
             .register_fn("wait_deleted", K8sObject::rhai_wait_deleted)
             /*.register_fn("wait_for", |context: NativeCallContext, k8sobj: &mut K8sObject, fnp: FnPtr, timeout: i64| {
                 let condition = Box::new(move |obj: &DynamicObject| -> RhaiRes<bool> {
@@ -354,6 +360,14 @@ impl Script {
                 "set_status_rhai_failed",
                 TenantInstance::rhai_set_status_rhai_failed,
             )
+            .register_fn(
+                "set_status_schedule_backup_failed",
+                TenantInstance::rhai_set_status_schedule_backup_failed,
+            )
+            .register_fn(
+                "set_status_init_failed",
+                TenantInstance::rhai_set_status_init_failed,
+            )
             .register_get("metadata", TenantInstance::get_metadata)
             .register_get("spec", TenantInstance::get_spec)
             .register_get("status", TenantInstance::get_status);
@@ -418,6 +432,22 @@ impl Script {
             .register_get("images", VynilPackageSource::get_images)
             .register_get("resources", VynilPackageSource::get_resources);
         script.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
+        script.add_code(
+            "fn import_run(name, instance, context, args) {\n\
+            try {\n\
+                import name as imp;\n\
+                return imp::run(instance, context, args);\n\
+            } catch(e) {\n\
+                if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorModuleNotFound\" {\n\
+                    log_debug(`No ${name} module, skipping.`);\n\
+                } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
+                    log_debug(`No ${name}::run function, skipping.`);\n\
+                } else {\n\
+                    throw e;\n\
+                }\n\
+            }\n\
+        }",
+        );
         script.add_code(
             "fn import_run(name, instance, context) {\n\
             try {\n\

@@ -33,7 +33,7 @@ impl Passwords {
         }
     }
 
-    pub fn generate(&mut self, length: u32, alpha: u32, numbers: u32, symbols: u32) -> String {
+    pub fn generate(&mut self, length: i64, alpha: u32, numbers: u32, symbols: u32) -> String {
         let mut character_sets = vec![ALPHA];
         if numbers > 0 {
             character_sets.push(NUMBERS);

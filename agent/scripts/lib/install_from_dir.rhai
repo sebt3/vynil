@@ -34,11 +34,17 @@ fn get_objects(context, dir) {
     hbs.register_helper_dir(`${context.package_dir}/handlebars/helpers`);
     let ret = [];
     for file in read_dir(dir) {
-        let objects = if file.ends_with(".yaml") || file.ends_with(".yml") {
-            yaml_decode_multi(file_read(file))
-        } else if file.ends_with(".yaml.hbs") || file.ends_with(".yml.hbs") {
-            yaml_decode_multi(hbs.render_from(file_read(file), context))
-        } else {[]};
+        let objects = [];
+        try {
+            objects = if file.ends_with(".yaml") || file.ends_with(".yml") {
+                yaml_decode_multi(file_read(file))
+            } else if file.ends_with(".yaml.hbs") || file.ends_with(".yml.hbs") {
+                yaml_decode_multi(hbs.render_from(file_read(file), context))
+            } else {[]};
+        } catch(e) {
+            log_error(`While parsing ${file} :`);
+            throw e;
+        }
         for obj in objects.filter(|obj| type_of(obj) != "map" || ! obj.keys().contains("kind") || ! obj.keys().contains("metadata") || type_of(obj.metadata) != "map") {
             log_warn(`No kind for an object in file ${file}`);
             log_debug(yaml_encode(obj));

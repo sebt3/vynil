@@ -17,7 +17,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::{runtime::Handle, task::block_in_place};
 
-/// Describe a source of vynil packages jukeboxution
+/// InitFrom contains the informations for the backup to use to initialize the installation
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitFrom {
+    /// Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"
+    pub secret_name: Option<String>,
+    /// Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
+    pub sub_path: Option<String>,
+    /// Snapshot id for restoration
+    pub snapshot: String,
+}
+
+/// Describe a source of vynil packages jukebox
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     kind = "TenantInstance",
@@ -37,8 +49,9 @@ use tokio::{runtime::Handle, task::block_in_place};
     {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
     {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
 )]
+#[serde(rename_all = "camelCase")]
 pub struct TenantInstanceSpec {
-    /// The jukeboxution source name
+    /// The jukebox source name
     pub jukebox: String,
     /// The category name
     pub category: String,
@@ -46,6 +59,8 @@ pub struct TenantInstanceSpec {
     pub package: String,
     /// The package version
     pub version: Option<String>,
+    /// Init from a previous backup
+    pub init_from: Option<InitFrom>,
     /// Parameters
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -61,6 +76,8 @@ pub enum ConditionsType {
     TofuInstalled,
     VitalApplied,
     ScalableApplied,
+    InitFrom,
+    ScheduleBackup,
     OtherApplied,
     RhaiApplied,
 }
@@ -266,6 +283,24 @@ impl ApplicationCondition {
             generation,
         )
     }
+
+    pub fn init_ko(message: &str, generation: i64) -> ApplicationCondition {
+        ApplicationCondition::new(
+            message,
+            ConditionsStatus::False,
+            ConditionsType::InitFrom,
+            generation,
+        )
+    }
+
+    pub fn schedule_ko(message: &str, generation: i64) -> ApplicationCondition {
+        ApplicationCondition::new(
+            message,
+            ConditionsStatus::False,
+            ConditionsType::ScheduleBackup,
+            generation,
+        )
+    }
 }
 
 
@@ -467,6 +502,8 @@ impl TenantInstance {
             ConditionsType::AgentStarted,
             ConditionsType::Ready,
             ConditionsType::Installed,
+            ConditionsType::InitFrom,
+            ConditionsType::ScheduleBackup,
         ]);
         conditions.push(ApplicationCondition::ready_ok(generation));
         conditions.push(ApplicationCondition::installed_ok(generation));
@@ -615,6 +652,78 @@ impl TenantInstance {
             reason: "RhaiApplyFailed".to_string(),
             note: Some(reason),
             action: "RhaiApply".to_string(),
+            secondary: None,
+        })
+        .await?;
+        Ok(result)
+    }
+
+    pub async fn set_status_init_failed(&mut self, reason: String) -> Result<Self> {
+        let client = get_client();
+        let generation = self.metadata.generation.unwrap_or(1);
+        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+            ConditionsType::AgentStarted,
+            ConditionsType::InitFrom,
+            ConditionsType::Installed,
+        ]);
+        conditions.push(ApplicationCondition::init_ko(&reason, generation));
+        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
+        if !conditions
+            .clone()
+            .into_iter()
+            .any(|c| c.condition_type == ConditionsType::Ready)
+        {
+            conditions.push(ApplicationCondition::ready_ko(generation));
+        }
+        let result: TenantInstance = self
+            .patch_status(
+                client.clone(),
+                json!({
+                    "conditions": conditions
+                }),
+            )
+            .await?;
+        self.send_event(client, Event {
+            type_: EventType::Warning,
+            reason: "InitFromFail".to_string(),
+            note: Some(reason),
+            action: "InitFrom".to_string(),
+            secondary: None,
+        })
+        .await?;
+        Ok(result)
+    }
+
+    pub async fn set_status_schedule_backup_failed(&mut self, reason: String) -> Result<Self> {
+        let client = get_client();
+        let generation = self.metadata.generation.unwrap_or(1);
+        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+            ConditionsType::AgentStarted,
+            ConditionsType::ScheduleBackup,
+            ConditionsType::Installed,
+        ]);
+        conditions.push(ApplicationCondition::schedule_ko(&reason, generation));
+        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
+        if !conditions
+            .clone()
+            .into_iter()
+            .any(|c| c.condition_type == ConditionsType::Ready)
+        {
+            conditions.push(ApplicationCondition::ready_ko(generation));
+        }
+        let result: TenantInstance = self
+            .patch_status(
+                client.clone(),
+                json!({
+                    "conditions": conditions
+                }),
+            )
+            .await?;
+        self.send_event(client, Event {
+            type_: EventType::Warning,
+            reason: "ScheduleBackupFailed".to_string(),
+            note: Some(reason),
+            action: "ScheduleBackup".to_string(),
             secondary: None,
         })
         .await?;
@@ -987,6 +1096,20 @@ impl TenantInstance {
     pub fn rhai_set_status_tofu_failed(&mut self, tfstate: String, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_status_tofu_failed(tfstate, reason).await })
+        })
+        .map_err(rhai_err)
+    }
+
+    pub fn rhai_set_status_schedule_backup_failed(&mut self, reason: String) -> RhaiRes<Self> {
+        block_in_place(|| {
+            Handle::current().block_on(async move { self.set_status_schedule_backup_failed(reason).await })
+        })
+        .map_err(rhai_err)
+    }
+
+    pub fn rhai_set_status_init_failed(&mut self, reason: String) -> RhaiRes<Self> {
+        block_in_place(|| {
+            Handle::current().block_on(async move { self.set_status_init_failed(reason).await })
         })
         .map_err(rhai_err)
     }

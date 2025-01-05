@@ -34,6 +34,8 @@ spec:
           value: "1"
         - name: RUST_LOG
           value: {{ log_level }},agent={{ log_level }}
+        - name: AGENT_IMAGE
+          value: {{ agent_image }}
         - name: VYNIL_NAMESPACE
           valueFrom:
             fieldRef:
@@ -84,6 +86,8 @@ spec:
         volumeMounts:
         - name: package
           mountPath: /package
+        - name: cache
+          mountPath: /var/cache/restic
 {{#if use_secret }}
         - name: pullsecret
           mountPath: /secret
@@ -97,6 +101,9 @@ spec:
       serviceAccountName: vynil-agent
       volumes:
       - name: package
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: cache
         emptyDir:
           sizeLimit: 500Mi
       - name: config

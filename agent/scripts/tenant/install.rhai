@@ -17,6 +17,10 @@ fn run(instance, context) {
         }
         instance = get_tenant_instance(instance.metadata.namespace, instance.metadata.name);
     }
+    // there is some vitals, currently running initial installation and an initFrom is set
+    if instance.status != () && instance.status.vitals != () && type_of(instance.status.tag) == "()" && instance.spec.initFrom != () {
+        import_run("init_from", instance, context);
+    }
     if is_dir(`${context.package_dir}/others`) {
         ctx = import_run("install_others", instance, context);
         if type_of(ctx) == "map" {
@@ -30,6 +34,11 @@ fn run(instance, context) {
             context = ctx;
         }
         instance = get_tenant_instance(instance.metadata.namespace, instance.metadata.name);
+    }
+    // there is some vitals to backup and backup flag is set
+    if instance.status != () && instance.status.vitals != () && context.namespace.use_backup {
+        // this need the scalables objects to be set
+        import_run("schedule_backup", instance, context);
     }
     ctx = import_run("install_post", instance, context);
     if type_of(ctx) == "map" {
