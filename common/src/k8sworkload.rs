@@ -85,7 +85,6 @@ pub struct K8sStatefulSet {
 impl K8sStatefulSet {
     pub fn is_sts_available() -> impl Condition<StatefulSet> {
         |obj: Option<&StatefulSet>| {
-            tracing::warn!("Testing conditions");
             if let Some(sts) = &obj {
                 if let Some(spec) = &sts.spec {
                     if let Some(s) = &sts.status {

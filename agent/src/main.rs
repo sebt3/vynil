@@ -18,7 +18,7 @@ pub struct Parameters {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Run given git repo as a jukeboxution source
+    /// Run given git repo as a jukebox source
     Run(run::Parameters),
     /// generate CRDs
     Crdgen(crdgen::Parameters),

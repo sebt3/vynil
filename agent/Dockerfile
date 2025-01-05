@@ -58,10 +58,12 @@ COPY agent/providers.tf .
 RUN tofu init
 # Finally assemble everything together
 FROM middle AS target
+RUN mkdir -p /var/cache/restic /backup /secrets && chown nobody:nogroup /var/cache/restic /backup /secrets
 COPY --from=builder /usr/src/agent/target/release/agent /usr/bin/agent
 COPY agent/scripts /usr/lib/vynil/scripts
+COPY agent/templates /usr/lib/vynil/templates
 USER nobody
 COPY --from=downloader /src/.terraform/providers /nonexistent/.terraform.d/plugins
 WORKDIR /work
-ENV SCRIPT_DIRECTORY=/usr/lib/vynil/scripts PACKAGE_DIRECTORY=/package CONFIG_DIR=/etc/vynil
+ENV SCRIPT_DIRECTORY=/usr/lib/vynil/scripts TEMPLATE_DIRECTORY=/usr/lib/vynil/templates PACKAGE_DIRECTORY=/package CONFIG_DIR=/etc/vynil XDG_CACHE_HOME=/var/cache/restic
 ENTRYPOINT ["agent"]

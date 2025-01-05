@@ -94,6 +94,6 @@ fn run(instance, args) {
         },
         values: get_values(instance.spec.options, defaults),
         defaults: defaults,
-        package_dir: args.package_dir
+        package_dir: args.package_dir,
     }
 }
