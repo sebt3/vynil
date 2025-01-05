@@ -49,8 +49,8 @@ fn get_default_access_modes_from_all(all) {
         ["ReadWriteMany"]
     } else if all.contains("ReadOnlyMany") && all.contains("ReadWriteOnce") {
         ["ReadOnlyMany", "ReadWriteOnce"]
-    } else if all.contains("ReadWriteOncePod") {
-        ["ReadWriteOncePod"]
+    } else if all.contains("ReadWriteOnce") {
+        ["ReadWriteOnce"]
     } else {
         all
     }

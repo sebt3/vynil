@@ -10,7 +10,7 @@ pub struct Parameters {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Update a jukeboxution
+    /// Update a jukebox
     Scan(scan::Parameters),
 }
 

@@ -7,6 +7,21 @@ fn maturity_filter(str, maturity) {
     else {!str.contains("alpha") && !str.contains("beta")}
 }
 
+fn security_filter(v) {
+    try{
+        let x = semver_from(v);
+        return true
+    }catch(e){
+        log_error(v);
+        if type_of(e) == "string" {
+            log_warn(e);
+        } else {
+            log_warn(json_encode(e));
+        }
+    }
+    return false
+}
+
 let spec = box.spec;
 let use_auth = "pull_secret" in spec && spec.pull_secret!="" && spec.pull_secret!=();
 try {
@@ -28,9 +43,10 @@ try {
         log_info(`Scanning ${image.registry}/${image.repository}`);
         let reg = new_registry(image.registry, auth.user, auth.pass);
         // list all tags for this image, sort
-        let tags = reg.list_tags(image.repository)
+        let got_tags = reg.list_tags(image.repository);
+        let tags = got_tags
             .filter(|str| maturity_filter(str, spec.maturity))
-            .filter(|v| try{let x = semver_from(v);true}catch(e){false})
+            .filter(|v| security_filter(v))
             .map(|v| semver_from(v));
         if tags.len() < 1 {continue;} // No found tags, skip
         tags.sort(|a,b| if a==b {0} else if a<b {1} else {-1});
