@@ -21,6 +21,8 @@ fn build(args) {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs", ".yaml", ".yml"]);
         } else if base in ["vitals", "scalables", "others"] && is_dir(item) && valid.metadata.type == "tenant" {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs", ".yaml", ".yml"]);
+        } else if base == "pods" && is_dir(item) && valid.metadata.type == "tenant" {
+            copy::dir_exts(item, args.temp+"/"+base, [".hbs"]);
         } else if base == "handlebars" && is_dir(item) {
             for sub in read_dir(item) {
                 let subbase = basename(sub);

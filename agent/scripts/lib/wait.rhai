@@ -52,6 +52,16 @@ fn vital(lst, duration) {
             log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
             let sts = get_statefulset(v.namespace, v.name);
             sts.wait_available(duration);
+        } else if ["BucketClaim"].contains(v.kind) {
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            let api = k8s_resource(v.kind, v.namespace);
+            let obj = api.get_obj(v.name);
+            obj.wait_status("bucketReady", duration);
+        } else if ["BucketAccess"].contains(v.kind) {
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            let api = k8s_resource(v.kind, v.namespace);
+            let obj = api.get_obj(v.name);
+            obj.wait_status("accessGranted", duration);
         }
     }
 }

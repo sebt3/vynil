@@ -41,3 +41,6 @@ impl Argon {
 pub fn bcrypt_hash(password: String) -> Result<String> {
     hash(&password, DEFAULT_COST).map_err(Error::BcryptError)
 }
+pub fn crc32_hash(text: String) -> u32 {
+    crc32fast::hash(text.as_bytes())
+}

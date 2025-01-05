@@ -28,7 +28,7 @@ version = "0.96.0"
 
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 license = "BSD-3-Clause"
@@ -77,6 +77,7 @@ operator = { cmd=[
     "podman build . -f operator/Dockerfile -t docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version) && podman push docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version)",
 ]}
 box = { cmd=[
+    "cargo cmd generate_crd",
     "cargo run --bin agent -- package update --source ./box/vynil/",
     "cargo run --bin agent -- package build -o ./box/vynil/ --tag $(cargo run --bin agent -- version) -r docker.io -n sebt3/vynil -u $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $1}') -p $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $2}')",
 ]}

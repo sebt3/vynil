@@ -27,9 +27,9 @@ RUN touch common/src/lib.rs agent/src/lib.rs agent/src/main.rs \
  && strip target/release/agent
 # Then create the intermediary image with run-time dependencies installed
 FROM docker.io/debian:${DEBIAN_NEXT}-slim AS middle
-ARG HELM_VERSION=v3.10.3
+ARG HELM_VERSION=v3.17.0
 ARG KUBECTL_VERSION=v1.30.3
-ARG TF_VERSION=1.8.1
+ARG TF_VERSION=1.9.0
 ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client mariadb-client-compat restic"
 # hadolint ignore=DL3008,DL4006,SC2035
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
@@ -58,10 +58,12 @@ COPY agent/providers.tf .
 RUN tofu init
 # Finally assemble everything together
 FROM middle AS target
+RUN mkdir -p /var/cache/restic /backup /secrets && chown nobody:nogroup /var/cache/restic /backup /secrets
 COPY --from=builder /usr/src/agent/target/release/agent /usr/bin/agent
 COPY agent/scripts /usr/lib/vynil/scripts
+COPY agent/templates /usr/lib/vynil/templates
 USER nobody
 COPY --from=downloader /src/.terraform/providers /nonexistent/.terraform.d/plugins
 WORKDIR /work
-ENV SCRIPT_DIRECTORY=/usr/lib/vynil/scripts PACKAGE_DIRECTORY=/package CONFIG_DIR=/etc/vynil
+ENV SCRIPT_DIRECTORY=/usr/lib/vynil/scripts TEMPLATE_DIRECTORY=/usr/lib/vynil/templates PACKAGE_DIRECTORY=/package CONFIG_DIR=/etc/vynil XDG_CACHE_HOME=/var/cache/restic
 ENTRYPOINT ["agent"]

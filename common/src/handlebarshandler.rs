@@ -3,6 +3,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use handlebars::{handlebars_helper, Handlebars};
 use handlebars_misc_helpers::new_hbs;
 use regex::Regex;
+use url::form_urlencoded;
 pub use serde_json::Value;
 use std::{
     fs,
@@ -24,11 +25,15 @@ handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwra
     warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
     ""
 })));
+handlebars_helper!(url_encode: |arg:Value| form_urlencoded::byte_serialize(arg.as_str().unwrap_or_else(|| {
+    warn!("handlebars::url_encode received a non-string parameter: {:?}",arg);
+    ""
+}).as_bytes()).collect::<String>());
 handlebars_helper!(to_decimal: |arg:Value| format!("{}", u32::from_str_radix(arg.as_str().unwrap_or_else(|| {
     warn!("handlebars::to_decimal received a non-string parameter: {:?}",arg);
     ""
 }), 8).unwrap_or_else(|_| {
-    warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
+    warn!("handlebars::to_decimal received a non-string parameter: {:?}",arg);
     0
 })));
 handlebars_helper!(header_basic: |username:Value, password:Value| format!("Basic {}",STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
@@ -52,8 +57,12 @@ handlebars_helper!(bcrypt_hash: |password:Value| crate::hasheshandlers::bcrypt_h
     warn!("handlebars::bcrypt_hash failed to convert to string with: {e:?}");
     String::new()
 }));
-handlebars_helper!(gen_password: |len:u32| Passwords::new().generate(len, 6, 2, 2));
-handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(len, 8, 2, 0));
+handlebars_helper!(crc32_hash: |password:Value| crate::hasheshandlers::crc32_hash(password.as_str().unwrap_or_else(|| {
+    warn!("handlebars::crc32_hash received a non-string password: {:?}",password);
+    ""
+}).to_string()));
+handlebars_helper!(gen_password: |len:u32| Passwords::new().generate(len.into(), 6, 2, 2));
+handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(len.into(), 8, 2, 0));
 handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
     let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["selector"].as_object().unwrap().clone();
     if !comp.is_empty() {
@@ -61,8 +70,12 @@ handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
     }
     sel
 });
-handlebars_helper!(labels: |ctx: Value| {
-    ctx.as_object().unwrap()["instance"].as_object().unwrap()["labels"].clone()
+handlebars_helper!(labels: |ctx: Value, {comp:str=""}| {
+    let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["labels"].as_object().unwrap().clone();
+    if !comp.is_empty() {
+        sel.insert("app.kubernetes.io/component".into(), Value::from(comp));
+    }
+    sel
 });
 handlebars_helper!(have_crd: |ctx: Value, name: String| {
     ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().iter().any(|crd| *crd==name)

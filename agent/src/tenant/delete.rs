@@ -36,6 +36,23 @@ pub struct Parameters {
         default_value = "./agent/scripts"
     )]
     script_dir: String,
+    /// Agent template directory
+    #[arg(
+        short = 't',
+        long = "template-dir",
+        env = "TEMPLATE_DIRECTORY",
+        value_name = "TEMPLATE_DIRECTORY",
+        default_value = "./agent/templates"
+    )]
+    template_dir: String,
+    /// Agent image
+    #[arg(
+        long = "agent-image",
+        env = "AGENT_IMAGE",
+        value_name = "AGENT_IMAGE",
+        default_value = "docker.io/sebt3/vynil-agent:0.3.3"
+    )]
+    agent_image: String,
     /// Configuration directory
     #[arg(
         short = 'c',
