@@ -110,7 +110,7 @@ pub fn get_client_name() -> String {
         Some(p) => {
             if p == "agent".to_string() {
                 "agent.vynil.solidite.fr".to_string()
-            } else if p == "controller".to_string() {
+            } else if p == "operator".to_string() {
                 "controller.vynil.solidite.fr".to_string()
             } else {
                 "vynil.solidite.fr".to_string()
@@ -131,6 +131,9 @@ pub fn get_short_name() -> String {
 pub fn get_client() -> Client {
     tokio::runtime::Handle::current()
         .block_on(async move { Client::try_default().await.expect("create client") })
+}
+pub async fn get_client_async() -> Client {
+    Client::try_default().await.expect("create client")
 }
 pub fn get_reporter() -> Reporter {
     Reporter {

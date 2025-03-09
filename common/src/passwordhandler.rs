@@ -1,6 +1,6 @@
 use rand::{
-    distributions::{Distribution, Uniform, WeightedIndex},
-    thread_rng, RngCore,
+    distr::{Distribution, uniform::Uniform, weighted::WeightedIndex},
+    rng, RngCore,
 };
 
 //const LOWER: &[char] = &['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
@@ -29,7 +29,7 @@ impl Passwords {
     #[must_use]
     pub fn new() -> Passwords {
         Passwords {
-            rng: Box::new(thread_rng()),
+            rng: Box::new(rng()),
         }
     }
 
@@ -51,7 +51,7 @@ impl Passwords {
         let mut password = String::with_capacity(length as usize);
         for _ in 0..length {
             let selected_set = character_sets.get(weighted_dist.sample(&mut self.rng)).unwrap();
-            let dist_char = Uniform::from(0..selected_set.len());
+            let dist_char = Uniform::new_inclusive(0,selected_set.len()).unwrap();
             let index = dist_char.sample(&mut self.rng);
             password.push(selected_set[index]);
         }

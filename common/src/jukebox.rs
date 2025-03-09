@@ -1,5 +1,5 @@
 use crate::{
-    context::{get_client, get_reporter, get_short_name},
+    context::{get_client_async, get_reporter, get_short_name},
     rhai_err,
     vynilpackage::VynilPackage,
     Error, Result, RhaiRes,
@@ -166,12 +166,18 @@ pub struct JukeBoxStatus {
 
 impl JukeBox {
     pub async fn get(name: String) -> Result<Self> {
-        let api = Api::<Self>::all(get_client());
+        let api = Api::<Self>::all(get_client_async().await);
         api.get(&name).await.map_err(Error::KubeError)
     }
 
     pub async fn list() -> Result<ObjectList<Self>> {
-        let api = Api::<Self>::all(get_client());
+        let api = Api::<Self>::all(get_client_async().await);
+        let lp = ListParams::default();
+        api.list(&lp).await.map_err(Error::KubeError)
+    }
+
+    pub async fn list_with_client(cl: Client) -> Result<ObjectList<Self>> {
+        let api = Api::<Self>::all(cl);
         let lp = ListParams::default();
         api.list(&lp).await.map_err(Error::KubeError)
     }
@@ -225,7 +231,7 @@ impl JukeBox {
 
     pub async fn set_status_updated(&mut self, packages: Vec<VynilPackage>) -> Result<Self> {
         let count = packages.len();
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let conditions: Vec<ApplicationCondition> = vec![
             ApplicationCondition::updated_ok(generation),
@@ -252,7 +258,7 @@ impl JukeBox {
     }
 
     pub async fn set_status_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
             self.get_conditions_excluding(vec![ConditionsType::Updated]);

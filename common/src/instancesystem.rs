@@ -1,5 +1,5 @@
 use crate::{
-    context::{get_client, get_reporter, get_short_name},
+    context::{get_client_async, get_reporter, get_short_name},
     rhai_err,
     tools::{base64_gz_decode, encode_base64_gz},
     Error, Result, RhaiRes,
@@ -282,12 +282,12 @@ pub struct SystemInstanceStatus {
 
 impl SystemInstance {
     pub async fn get(namespace: String, name: String) -> Result<Self> {
-        let api = Api::<Self>::namespaced(get_client(), &namespace);
+        let api = Api::<Self>::namespaced(get_client_async().await, &namespace);
         api.get(&name).await.map_err(Error::KubeError)
     }
 
     pub async fn list(namespace: String) -> Result<ObjectList<Self>> {
-        let api = Api::<Self>::namespaced(get_client(), &namespace);
+        let api = Api::<Self>::namespaced(get_client_async().await, &namespace);
         let lp = ListParams::default();
         api.list(&lp).await.map_err(Error::KubeError)
     }
@@ -409,7 +409,7 @@ impl SystemInstance {
     }
 
     pub async fn set_status_ready(&mut self, tag: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -441,7 +441,7 @@ impl SystemInstance {
 
     pub async fn set_status_crds(&mut self, crds: Vec<String>) -> Result<Self> {
         let count = crds.len();
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
             self.get_conditions_excluding(vec![ConditionsType::CrdApplied]);
@@ -468,7 +468,7 @@ impl SystemInstance {
     }
 
     pub async fn set_status_crd_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -507,7 +507,7 @@ impl SystemInstance {
 
     pub async fn set_status_systems(&mut self, systems: Vec<Children>) -> Result<Self> {
         let count = systems.len();
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
             self.get_conditions_excluding(vec![ConditionsType::SystemApplied]);
@@ -534,7 +534,7 @@ impl SystemInstance {
     }
 
     pub async fn set_status_system_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation: i64 = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -572,7 +572,7 @@ impl SystemInstance {
     }
 
     pub async fn set_tfstate(&mut self, tfstate: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(tfstate)?;
         let mut conditions: Vec<ApplicationCondition> =
@@ -599,7 +599,7 @@ impl SystemInstance {
     }
 
     pub async fn set_status_tofu_failed(&mut self, tfstate: String, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation: i64 = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(tfstate)?;
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
@@ -639,7 +639,7 @@ impl SystemInstance {
     }
 
     pub async fn set_rhaistate(&mut self, rhaistate: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(rhaistate)?;
         let mut conditions: Vec<ApplicationCondition> =
@@ -666,7 +666,7 @@ impl SystemInstance {
     }
 
     pub async fn set_status_rhai_failed(&mut self, rhaistate: String, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(rhaistate)?;
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
@@ -706,7 +706,7 @@ impl SystemInstance {
     }
 
     pub async fn set_agent_started(&mut self) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::agent_started(generation);
         if !self.have_condition(&cond) {
@@ -736,7 +736,7 @@ impl SystemInstance {
     }
 
     pub async fn set_missing_box(&mut self, jukebox: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_box(&jukebox, generation);
         if !self.have_condition(&cond) {
@@ -766,7 +766,7 @@ impl SystemInstance {
     }
 
     pub async fn set_missing_package(&mut self, category: String, package: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_package(&category, &package, generation);
         if !self.have_condition(&cond) {
@@ -796,7 +796,7 @@ impl SystemInstance {
     }
 
     pub async fn set_missing_requirement(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_requirement(&reason, generation);
         if !self.have_condition(&cond) {

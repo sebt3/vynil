@@ -1,5 +1,5 @@
 use crate::{
-    context::{get_client, get_reporter, get_short_name},
+    context::{get_client_async, get_reporter, get_short_name},
     rhai_err,
     tools::{base64_gz_decode, encode_base64_gz},
     Error, Result, RhaiRes,
@@ -340,12 +340,12 @@ pub struct TenantInstanceStatus {
 
 impl TenantInstance {
     pub async fn get(namespace: String, name: String) -> Result<Self> {
-        let api = Api::<Self>::namespaced(get_client(), &namespace);
+        let api = Api::<Self>::namespaced(get_client_async().await, &namespace);
         api.get(&name).await.map_err(Error::KubeError)
     }
 
     pub async fn list(namespace: String) -> Result<ObjectList<Self>> {
-        let api = Api::<Self>::namespaced(get_client(), &namespace);
+        let api = Api::<Self>::namespaced(get_client_async().await, &namespace);
         let lp = ListParams::default();
         api.list(&lp).await.map_err(Error::KubeError)
     }
@@ -413,7 +413,7 @@ impl TenantInstance {
 
     pub async fn get_tenant_name(&self) -> Result<String> {
         let my_ns = self.metadata.namespace.clone().unwrap();
-        let ns_api: Api<Namespace> = Api::all(get_client());
+        let ns_api: Api<Namespace> = Api::all(get_client_async().await);
         let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
         let label_key =
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
@@ -430,7 +430,7 @@ impl TenantInstance {
 
     pub async fn get_tenant_namespaces(&self) -> Result<Vec<String>> {
         let my_ns = self.metadata.namespace.clone().unwrap();
-        let ns_api: Api<Namespace> = Api::all(get_client());
+        let ns_api: Api<Namespace> = Api::all(get_client_async().await);
         let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
         let label_key =
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
@@ -512,7 +512,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_ready(&mut self, tag: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -545,7 +545,7 @@ impl TenantInstance {
     }
 
     pub async fn set_tfstate(&mut self, tfstate: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(tfstate)?;
         let mut conditions: Vec<ApplicationCondition> =
@@ -572,7 +572,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_tofu_failed(&mut self, tfstate: String, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(tfstate)?;
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
@@ -612,7 +612,7 @@ impl TenantInstance {
     }
 
     pub async fn set_rhaistate(&mut self, rhaistate: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(rhaistate)?;
         let mut conditions: Vec<ApplicationCondition> =
@@ -639,7 +639,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_rhai_failed(&mut self, rhaistate: String, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let encoded = encode_base64_gz(rhaistate)?;
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
@@ -679,7 +679,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_init_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -717,7 +717,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_schedule_backup_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -756,7 +756,7 @@ impl TenantInstance {
 
     pub async fn set_status_vitals(&mut self, vitals: Vec<Children>) -> Result<Self> {
         let count = vitals.len();
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
             self.get_conditions_excluding(vec![ConditionsType::VitalApplied]);
@@ -782,7 +782,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_vital_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -821,7 +821,7 @@ impl TenantInstance {
 
     pub async fn set_status_scalables(&mut self, scalables: Vec<Children>) -> Result<Self> {
         let count = scalables.len();
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
             self.get_conditions_excluding(vec![ConditionsType::ScalableApplied]);
@@ -847,7 +847,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_scalable_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -886,7 +886,7 @@ impl TenantInstance {
 
     pub async fn set_status_others(&mut self, others: Vec<Children>) -> Result<Self> {
         let count = others.len();
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
             self.get_conditions_excluding(vec![ConditionsType::OtherApplied]);
@@ -912,7 +912,7 @@ impl TenantInstance {
     }
 
     pub async fn set_status_other_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
@@ -950,7 +950,7 @@ impl TenantInstance {
     }
 
     pub async fn set_agent_started(&mut self) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::agent_started(generation);
         if !self.have_condition(&cond) {
@@ -980,7 +980,7 @@ impl TenantInstance {
     }
 
     pub async fn set_missing_box(&mut self, jukebox: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_box(&jukebox, generation);
         if !self.have_condition(&cond) {
@@ -1010,7 +1010,7 @@ impl TenantInstance {
     }
 
     pub async fn set_missing_package(&mut self, category: String, package: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_package(&category, &package, generation);
         if !self.have_condition(&cond) {
@@ -1040,7 +1040,7 @@ impl TenantInstance {
     }
 
     pub async fn set_missing_requirement(&mut self, reason: String) -> Result<Self> {
-        let client = get_client();
+        let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let cond = ApplicationCondition::missing_requirement(&reason, generation);
         if !self.have_condition(&cond) {
