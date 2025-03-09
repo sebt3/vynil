@@ -1,7 +1,6 @@
-use crate::{manager::Context, telemetry, Error, JukeBox, Reconciler, Result};
+use crate::{get_client_name, manager::Context, telemetry, Error, JukeBox, Reconciler, Result};
 use async_trait::async_trait;
 use chrono::Utc;
-use common::get_client_name;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use kube::{
     api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},

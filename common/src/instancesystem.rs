@@ -135,7 +135,7 @@ impl ApplicationCondition {
 
     pub fn missing_box(name: &str, generation: i64) -> ApplicationCondition {
         ApplicationCondition::new(
-            &format!("SystemInstance {name} is missing"),
+            &format!("JukeBox {name} is missing"),
             ConditionsStatus::False,
             ConditionsType::AgentStarted,
             generation,

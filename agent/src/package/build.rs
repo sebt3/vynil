@@ -49,7 +49,13 @@ pub struct Parameters {
     )]
     build: BuildType,
     /// version
-    #[arg(long = "tag", env = "TAG", value_name = "TAG", default_value = "")]
+    #[arg(
+        short = 'T',
+        long = "tag",
+        env = "TAG",
+        value_name = "TAG",
+        default_value = ""
+    )]
     tag: String,
     /// Registry
     #[arg(

@@ -71,6 +71,7 @@ impl Script {
             })
             .register_fn("shell_run", shellhandler::rhai_run)
             .register_fn("shell_output", shellhandler::rhai_get_stdout)
+            .register_fn("sha256", |v: String| sha256::digest(v))
             .register_fn("log_debug", |s: ImmutableString| tracing::debug!("{s}"))
             .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
             .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))

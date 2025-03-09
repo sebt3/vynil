@@ -1,5 +1,21 @@
 import "copy_dir" as copy;
 import "package_yaml" as pck;
+
+fn security_filter(v) {
+    try{
+        let x = semver_from(v);
+        return true
+    }catch(e){
+        log_error(v);
+        if type_of(e) == "string" {
+            log_warn(e);
+        } else {
+            log_warn(json_encode(e));
+        }
+    }
+    return false
+}
+
 fn improve_package(src, dest) {
     if ! is_file(src) {
         throw src+" doesnt exist";
@@ -52,7 +68,7 @@ fn run(args) {
     } else {
         try {
             let tags = reg.list_tags(args.repository)
-                .filter(|v| try{let x = semver_from(v);true}catch(e){false})
+                .filter(|v| security_filter(v))
                 .map(|v| semver_from(v));
             tags.sort(|a,b| if a==b {0} else if a<b {1} else {-1});
             if tags.len() > 0 {

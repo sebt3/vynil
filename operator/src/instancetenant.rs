@@ -1,7 +1,7 @@
-use crate::{manager::Context, telemetry, Error, Reconciler, Result, TenantInstance};
+use crate::{get_client_name, manager::Context, telemetry, Error, Reconciler, Result, TenantInstance};
 use async_trait::async_trait;
 use chrono::Utc;
-use common::{get_client_name, rhaihandler::Script, vynilpackage::VynilPackageType};
+use common::{rhaihandler::Script, vynilpackage::VynilPackageType};
 use k8s_openapi::api::batch::v1::Job;
 use kube::{
     api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},

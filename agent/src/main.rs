@@ -41,8 +41,6 @@ async fn main() {
             .filter_or("LOG_LEVEL", "info")
             .write_style_or("LOG_STYLE", "auto"),
     );
-    common::context::set_agent();
-    common::context::init_k8s();
     let args = Parameters::parse();
     match &args.command {
         Commands::Version(args) => version::run(args).await.unwrap_or_else(|e| {

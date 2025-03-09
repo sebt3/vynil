@@ -106,6 +106,7 @@ impl HandleBars<'_> {
         engine.register_helper("header_basic", Box::new(header_basic));
         engine.register_helper("argon_hash", Box::new(argon_hash));
         engine.register_helper("bcrypt_hash", Box::new(bcrypt_hash));
+        engine.register_helper("url_encode", Box::new(url_encode));
         engine.register_helper("gen_password", Box::new(gen_password));
         engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
         let _ = engine.register_script_helper("image_from_ctx",

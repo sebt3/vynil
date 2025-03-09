@@ -17,8 +17,6 @@ pub enum VynilContext {
 
 lazy_static::lazy_static! {
     pub static ref CONTEXT: Mutex<VynilContext> = Mutex::new(VynilContext::None);
-    pub static ref CLIENT_NAME: Mutex<String> = Mutex::new("vynil.solidite.fr".to_string());
-    pub static ref KUBERNETES: Mutex<Option<Context>> = Mutex::new(None);
 }
 pub fn set_tenant(i: TenantInstance) {
     *CONTEXT.lock().unwrap() = VynilContext::TenantInstance(i);
@@ -96,52 +94,47 @@ pub fn get_labels() -> Option<serde_json::Value> {
         VynilContext::None => None,
     }
 }
-pub fn set_agent() {
-    *CLIENT_NAME.lock().unwrap() = "agent.vynil.solidite.fr".to_string()
+
+fn get_prog_name() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .file_name()?
+        .to_str()?
+        .to_owned()
+        .into()
 }
-pub fn set_controller() {
-    *CLIENT_NAME.lock().unwrap() = "controller.vynil.solidite.fr".to_string()
-}
+
 pub fn get_client_name() -> String {
-    CLIENT_NAME.lock().unwrap().to_string()
+    match get_prog_name() {
+        None => "vynil.solidite.fr".to_string(),
+        Some(p) => {
+            if p == "agent".to_string() {
+                "agent.vynil.solidite.fr".to_string()
+            } else if p == "controller".to_string() {
+                "controller.vynil.solidite.fr".to_string()
+            } else {
+                "vynil.solidite.fr".to_string()
+            }
+        }
+    }
 }
 pub fn get_short_name() -> String {
     let long = get_client_name();
     let lst = long.split(".").collect::<Vec<&str>>();
-    if lst.len() > 1 {
+    if lst.len() > 3 {
         format!("{}-{}", lst[1], lst[0])
     } else {
         "vynil".to_string()
     }
 }
 
-pub fn init_k8s() {
-    *KUBERNETES.lock().unwrap() = Some(Context {
-        client: tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async move { Client::try_default().await.expect("create client") })
-        }),
-        reporter: Reporter {
-            controller: get_short_name(),
-            instance: Some(std::env::var("POD_NAME").unwrap_or_else(|_| "unknown".to_string())),
-        },
-    });
-}
 pub fn get_client() -> Client {
-    match (*KUBERNETES.lock().unwrap()).clone() {
-        Some(ctx) => ctx.client,
-        None => tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async move { Client::try_default().await.expect("create client") })
-        }),
-    }
+    tokio::runtime::Handle::current()
+        .block_on(async move { Client::try_default().await.expect("create client") })
 }
 pub fn get_reporter() -> Reporter {
-    match (*KUBERNETES.lock().unwrap()).clone() {
-        Some(ctx) => ctx.reporter,
-        None => Reporter {
-            controller: get_short_name(),
-            instance: Some(std::env::var("POD_NAME").unwrap_or_else(|_| "unknown".to_string())),
-        },
+    Reporter {
+        controller: get_short_name(),
+        instance: Some(std::env::var("POD_NAME").unwrap_or_else(|_| "unknown".to_string())),
     }
 }
