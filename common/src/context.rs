@@ -5,7 +5,6 @@ use std::sync::Mutex;
 #[derive(Clone)]
 pub struct Context {
     pub client: Client,
-    pub reporter: Reporter,
 }
 
 pub enum VynilContext {
@@ -17,6 +16,7 @@ pub enum VynilContext {
 
 lazy_static::lazy_static! {
     pub static ref CONTEXT: Mutex<VynilContext> = Mutex::new(VynilContext::None);
+    pub static ref KUBERNETES: Mutex<Option<Context>> = Mutex::new(None);
 }
 pub fn set_tenant(i: TenantInstance) {
     *CONTEXT.lock().unwrap() = VynilContext::TenantInstance(i);
@@ -128,9 +128,23 @@ pub fn get_short_name() -> String {
     }
 }
 
+pub fn init_k8s() {
+    *KUBERNETES.lock().unwrap() = Some(Context {
+        client: tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { Client::try_default().await.expect("create client") })
+        }),
+    });
+}
+
 pub fn get_client() -> Client {
-    tokio::runtime::Handle::current()
-        .block_on(async move { Client::try_default().await.expect("create client") })
+    match (*KUBERNETES.lock().unwrap()).clone() {
+        Some(ctx) => ctx.client,
+        None => tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { Client::try_default().await.expect("create client") })
+        }),
+    }
 }
 pub async fn get_client_async() -> Client {
     Client::try_default().await.expect("create client")

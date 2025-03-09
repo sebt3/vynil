@@ -1,5 +1,5 @@
 use rand::{
-    distr::{Distribution, uniform::Uniform, weighted::WeightedIndex},
+    distr::{uniform::Uniform, weighted::WeightedIndex, Distribution},
     rng, RngCore,
 };
 
@@ -28,9 +28,7 @@ impl Default for Passwords {
 impl Passwords {
     #[must_use]
     pub fn new() -> Passwords {
-        Passwords {
-            rng: Box::new(rng()),
-        }
+        Passwords { rng: Box::new(rng()) }
     }
 
     pub fn generate(&mut self, length: i64, alpha: u32, numbers: u32, symbols: u32) -> String {
@@ -51,7 +49,7 @@ impl Passwords {
         let mut password = String::with_capacity(length as usize);
         for _ in 0..length {
             let selected_set = character_sets.get(weighted_dist.sample(&mut self.rng)).unwrap();
-            let dist_char = Uniform::new_inclusive(0,selected_set.len()).unwrap();
+            let dist_char = Uniform::new_inclusive(0, selected_set.len() - 1).unwrap();
             let index = dist_char.sample(&mut self.rng);
             password.push(selected_set[index]);
         }
