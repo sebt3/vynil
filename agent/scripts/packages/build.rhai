@@ -93,9 +93,5 @@ fn run(args) {
     if valid.value_script != () && valid.value_script != "" {
         annotations["fr.solidite.vynil.value_script"] = json_encode(valid.value_script);
     }
-    try {
-        reg.push_image(args.temp, args.repository, version.to_string(), annotations);
-    } catch(e) {
-        log_error(`Pushing image failed with: ${e}`);
-    }
+    reg.push_image(args.temp, args.repository, version.to_string(), annotations);
 }
