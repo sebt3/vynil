@@ -27,6 +27,7 @@ pub enum Commands {
 }
 
 pub async fn run(cmd: &Parameters) {
+    common::context::init_k8s();
     match &cmd.command {
         Commands::Install(args) => install::run(args).await.unwrap_or_else(|e| {
             tracing::error!("Installing a package failed with: {e:}");

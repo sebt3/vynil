@@ -15,6 +15,7 @@ pub enum Commands {
 }
 
 pub async fn run(cmd: &Parameters) {
+    common::context::init_k8s();
     match &cmd.command {
         Commands::Scan(args) => scan::run(args).await.unwrap_or_else(|e| {
             tracing::error!("Scanning JukeBox failed with: {e:}");

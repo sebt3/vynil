@@ -42,7 +42,6 @@ async fn main() {
             .write_style_or("LOG_STYLE", "auto"),
     );
     let args = Parameters::parse();
-    common::context::init_k8s();
     match &args.command {
         Commands::Version(args) => version::run(args).await.unwrap_or_else(|e| {
             tracing::error!("Version failed with: {e:}");

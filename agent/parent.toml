@@ -17,7 +17,7 @@ serde_yaml = "0.9.25"
 tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
 chrono = { version = "0.4.38", features = ["serde"] }
 schemars = { version = "0.8.12", features = ["chrono"] }
-actix-web = "4.9.0"
+actix-web = "4.10.2"
 base64 = "0.22.1"
 
 [workspace.dependencies.kube]
@@ -26,7 +26,7 @@ version = "0.96.0"
 
 
 [workspace.package]
-version = "0.3.4"
+version = "0.3.5"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 license = "BSD-3-Clause"
