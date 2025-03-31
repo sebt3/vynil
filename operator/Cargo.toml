@@ -36,7 +36,7 @@ futures = "0.3.28"
 prometheus = "0.13.4"
 tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
 tracing-opentelemetry = "0.29.0"
-opentelemetry = { version = "0.28.0", features = ["trace"] }
+opentelemetry = { version = "0.29.0", features = ["trace"] }
 opentelemetry-otlp = { version = "0.26.0", features = ["tokio"], optional = true }
 opentelemetry_sdk = { version = "0.28.0", features = ["rt-tokio"] }
 tonic = { version = "0.12", optional = true }
