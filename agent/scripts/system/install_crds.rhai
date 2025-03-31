@@ -4,6 +4,7 @@ fn run(instance, context) {
         context = ctx;
     }
     let hbs = new_hbs();
+    hbs.register_partial_dir(context.config_dir);
     hbs.register_partial_dir(`${context.package_dir}/handlebars/partials`);
     hbs.register_helper_dir(`${context.package_dir}/handlebars/helpers`);
     let applied_crds = [];

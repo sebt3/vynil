@@ -30,6 +30,7 @@ const LAST = [
 
 fn get_objects(context, dir) {
     let hbs = new_hbs();
+    hbs.register_partial_dir(context.config_dir);
     hbs.register_partial_dir(`${context.package_dir}/handlebars/partials`);
     hbs.register_helper_dir(`${context.package_dir}/handlebars/helpers`);
     let ret = [];
