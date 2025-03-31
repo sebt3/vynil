@@ -2,6 +2,7 @@ mod build;
 mod test;
 mod unpack;
 mod update;
+mod validate;
 use clap::{Parser, Subcommand};
 use std::process;
 
@@ -19,6 +20,8 @@ pub enum Commands {
     Update(update::Parameters),
     /// Test a package
     Test(test::Parameters),
+    /// Validate a package
+    Validate(validate::Parameters),
     /// Unpack a directory into a package
     Unpack(unpack::Parameters),
 }
@@ -39,6 +42,10 @@ pub async fn run(cmd: &Parameters) {
         }),
         Commands::Unpack(args) => unpack::run(args).await.unwrap_or_else(|e| {
             tracing::error!("Unpacking OCI image to directory failed with: {e:}");
+            process::exit(4)
+        }),
+        Commands::Validate(args) => validate::run(args).await.unwrap_or_else(|e| {
+            tracing::error!("The package failed to validate: {e:}");
             process::exit(4)
         }),
     }
