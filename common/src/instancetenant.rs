@@ -74,6 +74,7 @@ pub enum ConditionsType {
     Restored,
     AgentStarted,
     TofuInstalled,
+    BeforeApplied,
     VitalApplied,
     ScalableApplied,
     InitFrom,
@@ -230,6 +231,24 @@ impl ApplicationCondition {
         )
     }
 
+    pub fn before_ko(message: &str, generation: i64) -> ApplicationCondition {
+        ApplicationCondition::new(
+            message,
+            ConditionsStatus::False,
+            ConditionsType::BeforeApplied,
+            generation,
+        )
+    }
+
+    pub fn before_ok(generation: i64) -> ApplicationCondition {
+        ApplicationCondition::new(
+            "befores templates applied succesfully",
+            ConditionsStatus::True,
+            ConditionsType::BeforeApplied,
+            generation,
+        )
+    }
+
     pub fn scalable_ko(message: &str, generation: i64) -> ApplicationCondition {
         ApplicationCondition::new(
             message,
@@ -329,6 +348,8 @@ pub struct TenantInstanceStatus {
     pub tfstate: Option<String>,
     /// Current rhai status (gzip+base64) (for custom package information)
     pub rhaistate: Option<String>,
+    /// List of before children
+    pub befores: Option<Vec<Children>>,
     /// List of vital children
     pub vitals: Option<Vec<Children>>,
     /// List of scalable children
@@ -357,6 +378,11 @@ impl TenantInstance {
             }
             if status.tfstate.is_some() {
                 return true;
+            }
+            if let Some(child) = status.befores.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
             }
             if let Some(child) = status.vitals.clone() {
                 if child.len() > 0 {
@@ -748,6 +774,71 @@ impl TenantInstance {
             reason: "ScheduleBackupFailed".to_string(),
             note: Some(note),
             action: "ScheduleBackup".to_string(),
+            secondary: None,
+        })
+        .await?;
+        Ok(result)
+    }
+
+    pub async fn set_status_befores(&mut self, befores: Vec<Children>) -> Result<Self> {
+        let count = befores.len();
+        let client = get_client_async().await;
+        let generation = self.metadata.generation.unwrap_or(1);
+        let mut conditions: Vec<ApplicationCondition> =
+            self.get_conditions_excluding(vec![ConditionsType::VitalApplied]);
+        conditions.push(ApplicationCondition::before_ok(generation));
+        let result: TenantInstance = self
+            .patch_status(
+                client.clone(),
+                json!({
+                    "conditions": conditions,
+                    "befores": befores
+                }),
+            )
+            .await?;
+        self.send_event(client, Event {
+            type_: EventType::Normal,
+            reason: "BeforeApplySucceed".to_string(),
+            note: Some(format!("Applied {} Objects", count)),
+            action: "BeforeApply".to_string(),
+            secondary: None,
+        })
+        .await?;
+        Ok(result)
+    }
+
+    pub async fn set_status_before_failed(&mut self, reason: String) -> Result<Self> {
+        let client = get_client_async().await;
+        let generation = self.metadata.generation.unwrap_or(1);
+        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+            ConditionsType::AgentStarted,
+            ConditionsType::VitalApplied,
+            ConditionsType::Installed,
+        ]);
+        conditions.push(ApplicationCondition::before_ko(&reason, generation));
+        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
+        if !conditions
+            .clone()
+            .into_iter()
+            .any(|c| c.condition_type == ConditionsType::Ready)
+        {
+            conditions.push(ApplicationCondition::ready_ko(generation));
+        }
+        let result: TenantInstance = self
+            .patch_status(
+                client.clone(),
+                json!({
+                    "conditions": conditions,
+                }),
+            )
+            .await?;
+        let mut note = reason;
+        note.truncate(1023);
+        self.send_event(client, Event {
+            type_: EventType::Warning,
+            reason: "BeforeApplyFailed".to_string(),
+            note: Some(note),
+            action: "BeforeApply".to_string(),
             secondary: None,
         })
         .await?;
@@ -1154,6 +1245,24 @@ impl TenantInstance {
     pub fn rhai_set_status_rhai_failed(&mut self, rhaistate: String, reason: String) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move { self.set_status_rhai_failed(rhaistate, reason).await })
+        })
+        .map_err(rhai_err)
+    }
+
+    pub fn rhai_set_status_befores(&mut self, list: Dynamic) -> RhaiRes<Self> {
+        block_in_place(|| {
+            Handle::current().block_on(async move {
+                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
+                self.set_status_befores(lst).await
+            })
+        })
+        .map_err(rhai_err)
+    }
+
+    pub fn rhai_set_status_before_failed(&mut self, reason: String) -> RhaiRes<Self> {
+        block_in_place(|| {
+            Handle::current().block_on(async move { self.set_status_before_failed(reason).await })
         })
         .map_err(rhai_err)
     }

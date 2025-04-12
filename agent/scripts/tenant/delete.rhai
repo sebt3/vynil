@@ -24,5 +24,11 @@ fn run(instance, context) {
             context = ctx;
         }
     }
+    if is_dir(`${context.package_dir}/befores`) {
+        ctx = import_run("delete_befores", instance, context);
+        if type_of(ctx) == "map" {
+            context = ctx;
+        }
+    }
     import_run("delete_post", instance, context);
 }

@@ -3,6 +3,13 @@ fn run(instance, context) {
     if type_of(ctx) == "map" {
         context = ctx;
     }
+    if is_dir(`${context.package_dir}/befores`) {
+        ctx = import_run("install_befores", instance, context);
+        if type_of(ctx) == "map" {
+            context = ctx;
+        }
+        instance = get_tenant_instance(instance.metadata.namespace, instance.metadata.name);
+    }
     if is_dir(`${context.package_dir}/vitals`) {
         ctx = import_run("install_vitals", instance, context);
         if type_of(ctx) == "map" {

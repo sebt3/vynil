@@ -343,6 +343,11 @@ impl Script {
                 TenantInstance::rhai_set_missing_requirement,
             )
             .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
+            .register_fn("set_status_befores", TenantInstance::rhai_set_status_befores)
+            .register_fn(
+                "set_status_before_failed",
+                TenantInstance::rhai_set_status_before_failed,
+            )
             .register_fn("set_status_vitals", TenantInstance::rhai_set_status_vitals)
             .register_fn(
                 "set_status_vital_failed",

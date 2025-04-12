@@ -10,6 +10,7 @@ const FIRST = [
     "ConfigMap",
     "PersistentVolume",
     "PersistentVolumeClaim",
+    "NetworkPolicy"
 ];
 const LAST = [
     "Pod",
