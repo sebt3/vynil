@@ -3,6 +3,7 @@
 metadata:
   annotations:
     mayfly.cloud.namecheap.com/expire: 120h
+  labels: {{json_to_str (selector_from_ctx this comp="backup")}}
 spec:
   containers:
   - name: backup
