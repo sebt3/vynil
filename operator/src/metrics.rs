@@ -83,7 +83,7 @@ impl Default for Metrics {
 impl Metrics {
     pub fn jukebox_reconcile_failure(&self, jukebox: &JukeBox, e: &Error) {
         self.jukebox_failures
-            .with_label_values(&[jukebox.name_any().as_ref(), e.metric_label().as_ref()])
+            .with_label_values(&[jukebox.name_any(), e.metric_label()])
             .inc();
     }
 
@@ -98,7 +98,7 @@ impl Metrics {
 
     pub fn tenant_reconcile_failure(&self, inst: &TenantInstance, e: &Error) {
         self.tenant_failures
-            .with_label_values(&[inst.name_any().as_ref(), e.metric_label().as_ref()])
+            .with_label_values(&[inst.name_any(), e.metric_label()])
             .inc();
     }
 
@@ -113,7 +113,7 @@ impl Metrics {
 
     pub fn system_reconcile_failure(&self, inst: &SystemInstance, e: &Error) {
         self.system_failures
-            .with_label_values(&[inst.name_any().as_ref(), e.metric_label().as_ref()])
+            .with_label_values(&[inst.name_any(), e.metric_label()])
             .inc();
     }
 
@@ -136,6 +136,6 @@ impl Drop for ReconcileMeasurer {
     fn drop(&mut self) {
         #[allow(clippy::cast_precision_loss)]
         let duration = self.start.elapsed().as_millis() as f64 / 1000.0;
-        self.metric.with_label_values(&[]).observe(duration);
+        self.metric.with_label_values(&[""]).observe(duration);
     }
 }
