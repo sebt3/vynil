@@ -22,7 +22,11 @@ static JUKEBOX_FINALIZER: &str = "jukeboxes.vynil.solidite.fr";
 pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
-    let _mes = ctx.metrics.jukebox_count_and_measure();
+    if trace_id != opentelemetry::trace::TraceId::INVALID {
+        Span::current().record("trace_id", field::display(&trace_id));
+    }
+    let _mes = ctx.metrics.jukebox.count_and_measure(&trace_id);
+    ctx.diagnostics.write().await.last_event = Utc::now();
     let dists: Api<JukeBox> = Api::all(ctx.client.clone());
 
     finalizer(&dists, JUKEBOX_FINALIZER, dist, |event| async {
@@ -147,6 +151,6 @@ impl Reconciler for JukeBox {
 #[must_use]
 pub fn error_policy(dist: Arc<JukeBox>, error: &Error, ctx: Arc<Context>) -> Action {
     warn!("reconcile failed for {:?}: {:?}", dist.metadata.name, error);
-    ctx.metrics.jukebox_reconcile_failure(&dist, error);
+    ctx.metrics.jukebox.reconcile_failure(&dist, error);
     Action::requeue(Duration::from_secs(5 * 60))
 }

@@ -1,141 +1,231 @@
 use crate::{Error, JukeBox, SystemInstance, TenantInstance};
 use kube::ResourceExt;
-use prometheus::{
-    register_histogram_vec, register_int_counter, register_int_counter_vec, HistogramVec, IntCounter,
-    IntCounterVec,
+use opentelemetry::trace::TraceId;
+use prometheus_client::{
+    encoding::EncodeLabelSet,
+    metrics::{counter::Counter, exemplar::HistogramWithExemplars, family::Family},
+    registry::{Registry, Unit},
 };
+use std::sync::Arc;
 use tokio::time::Instant;
 
 #[derive(Clone)]
 pub struct Metrics {
-    pub jukebox_reconciliations: IntCounter,
-    pub jukebox_failures: IntCounterVec,
-    pub jukebox_reconcile_duration: HistogramVec,
-    pub tenant_reconciliations: IntCounter,
-    pub tenant_failures: IntCounterVec,
-    pub tenant_reconcile_duration: HistogramVec,
-    pub system_reconciliations: IntCounter,
-    pub system_failures: IntCounterVec,
-    pub system_reconcile_duration: HistogramVec,
+    pub jukebox: ReconcileMetricsJukebox,
+    pub system_instance: ReconcileMetricsSystemInstance,
+    pub tenant_instance: ReconcileMetricsTenantInstance,
+    pub reg_box: Arc<Registry>,
+    pub reg_sys: Arc<Registry>,
+    pub reg_tnt: Arc<Registry>,
 }
 
 impl Default for Metrics {
     fn default() -> Self {
-        let jukebox_reconcile_duration = register_histogram_vec!(
-            "jukebox_controller_reconcile_duration_seconds",
-            "The duration of reconcile to complete in seconds",
-            &[],
-            vec![0.01, 0.1, 0.25, 0.5, 1., 5., 15., 60.]
-        )
-        .unwrap();
-        let jukebox_failures = register_int_counter_vec!(
-            "jukebox_controller_reconciliation_errors_total",
-            "reconciliation errors",
-            &["instance", "error"]
-        )
-        .unwrap();
-        let jukebox_reconciliations =
-            register_int_counter!("jukebox_controller_reconciliations_total", "reconciliations").unwrap();
-        let tenant_reconcile_duration = register_histogram_vec!(
-            "tenant_controller_reconcile_duration_seconds",
-            "The duration of reconcile to complete in seconds",
-            &[],
-            vec![0.01, 0.1, 0.25, 0.5, 1., 5., 15., 60.]
-        )
-        .unwrap();
-        let tenant_failures = register_int_counter_vec!(
-            "tenant_controller_reconciliation_errors_total",
-            "reconciliation errors",
-            &["instance", "error"]
-        )
-        .unwrap();
-        let tenant_reconciliations =
-            register_int_counter!("tenant_controller_reconciliations_total", "reconciliations").unwrap();
-        let system_reconcile_duration = register_histogram_vec!(
-            "system_controller_reconcile_duration_seconds",
-            "The duration of reconcile to complete in seconds",
-            &[],
-            vec![0.01, 0.1, 0.25, 0.5, 1., 5., 15., 60.]
-        )
-        .unwrap();
-        let system_failures = register_int_counter_vec!(
-            "system_controller_reconciliation_errors_total",
-            "reconciliation errors",
-            &["instance", "error"]
-        )
-        .unwrap();
-        let system_reconciliations =
-            register_int_counter!("system_controller_reconciliations_total", "reconciliations").unwrap();
-        Metrics {
-            jukebox_reconciliations,
-            jukebox_failures,
-            jukebox_reconcile_duration,
-            tenant_reconciliations,
-            tenant_failures,
-            tenant_reconcile_duration,
-            system_reconciliations,
-            system_failures,
-            system_reconcile_duration,
+        let mut reg_box = Registry::with_prefix("jukebox_reconcile");
+        let mut reg_sys = Registry::with_prefix("system_instance_reconcile");
+        let mut reg_tnt = Registry::with_prefix("tenant_instance_reconcile");
+        let jukebox = ReconcileMetricsJukebox::default().register(&mut reg_box);
+        let system_instance = ReconcileMetricsSystemInstance::default().register(&mut reg_sys);
+        let tenant_instance = ReconcileMetricsTenantInstance::default().register(&mut reg_tnt);
+        Self {
+            reg_box: Arc::new(reg_box),
+            reg_sys: Arc::new(reg_sys),
+            reg_tnt: Arc::new(reg_tnt),
+            jukebox,
+            system_instance,
+            tenant_instance,
         }
     }
 }
 
-impl Metrics {
-    pub fn jukebox_reconcile_failure(&self, jukebox: &JukeBox, e: &Error) {
-        self.jukebox_failures
-            .with_label_values(&[jukebox.name_any(), e.metric_label()])
-            .inc();
-    }
+#[derive(Clone, Hash, PartialEq, Eq, EncodeLabelSet, Debug, Default)]
+pub struct TraceLabel {
+    pub trace_id: String,
+}
+impl TryFrom<&TraceId> for TraceLabel {
+    type Error = Error;
 
-    #[must_use]
-    pub fn jukebox_count_and_measure(&self) -> ReconcileMeasurer {
-        self.jukebox_reconciliations.inc();
-        ReconcileMeasurer {
-            start: Instant::now(),
-            metric: self.jukebox_reconcile_duration.clone(),
-        }
-    }
-
-    pub fn tenant_reconcile_failure(&self, inst: &TenantInstance, e: &Error) {
-        self.tenant_failures
-            .with_label_values(&[inst.name_any(), e.metric_label()])
-            .inc();
-    }
-
-    #[must_use]
-    pub fn tenant_count_and_measure(&self) -> ReconcileMeasurer {
-        self.tenant_reconciliations.inc();
-        ReconcileMeasurer {
-            start: Instant::now(),
-            metric: self.tenant_reconcile_duration.clone(),
-        }
-    }
-
-    pub fn system_reconcile_failure(&self, inst: &SystemInstance, e: &Error) {
-        self.system_failures
-            .with_label_values(&[inst.name_any(), e.metric_label()])
-            .inc();
-    }
-
-    #[must_use]
-    pub fn system_count_and_measure(&self) -> ReconcileMeasurer {
-        self.system_reconciliations.inc();
-        ReconcileMeasurer {
-            start: Instant::now(),
-            metric: self.system_reconcile_duration.clone(),
+    fn try_from(id: &TraceId) -> Result<TraceLabel, Error> {
+        if std::matches!(id, &TraceId::INVALID) {
+            Err(Error::Other("Invalid trace ID".to_string()))
+        } else {
+            let trace_id = id.to_string();
+            Ok(Self { trace_id })
         }
     }
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ErrorLabels {
+    pub instance: String,
+    pub error: String,
+}
+
+
+#[derive(Clone)]
+pub struct ReconcileMetricsJukebox {
+    pub runs: Counter,
+    pub failures: Family<ErrorLabels, Counter>,
+    pub duration: HistogramWithExemplars<TraceLabel>,
+}
+
+impl Default for ReconcileMetricsJukebox {
+    fn default() -> Self {
+        Self {
+            runs: Counter::default(),
+            failures: Family::<ErrorLabels, Counter>::default(),
+            duration: HistogramWithExemplars::new([0.01, 0.1, 0.25, 0.5, 1., 5., 15., 60.].into_iter()),
+        }
+    }
+}
+
+impl ReconcileMetricsJukebox {
+    /// Register API metrics to start tracking them.
+    pub fn register(self, r: &mut Registry) -> Self {
+        r.register_with_unit(
+            "duration",
+            "reconcile duration",
+            Unit::Seconds,
+            self.duration.clone(),
+        );
+        r.register("failures", "reconciliation errors", self.failures.clone());
+        r.register("runs", "reconciliations", self.runs.clone());
+        self
+    }
+
+    pub fn reconcile_failure(&self, doc: &JukeBox, e: &Error) {
+        self.failures
+            .get_or_create(&ErrorLabels {
+                instance: doc.name_any(),
+                error: e.metric_label(),
+            })
+            .inc();
+    }
+
+    pub fn count_and_measure(&self, trace_id: &TraceId) -> ReconcileMeasurer {
+        self.runs.inc();
+        ReconcileMeasurer {
+            start: Instant::now(),
+            labels: trace_id.try_into().ok(),
+            metric: self.duration.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ReconcileMetricsSystemInstance {
+    pub runs: Counter,
+    pub failures: Family<ErrorLabels, Counter>,
+    pub duration: HistogramWithExemplars<TraceLabel>,
+}
+
+impl Default for ReconcileMetricsSystemInstance {
+    fn default() -> Self {
+        Self {
+            runs: Counter::default(),
+            failures: Family::<ErrorLabels, Counter>::default(),
+            duration: HistogramWithExemplars::new([0.01, 0.1, 0.25, 0.5, 1., 5., 15., 60.].into_iter()),
+        }
+    }
+}
+
+impl ReconcileMetricsSystemInstance {
+    /// Register API metrics to start tracking them.
+    pub fn register(self, r: &mut Registry) -> Self {
+        r.register_with_unit(
+            "duration",
+            "reconcile duration",
+            Unit::Seconds,
+            self.duration.clone(),
+        );
+        r.register("failures", "reconciliation errors", self.failures.clone());
+        r.register("runs", "reconciliations", self.runs.clone());
+        self
+    }
+
+    pub fn reconcile_failure(&self, doc: &SystemInstance, e: &Error) {
+        self.failures
+            .get_or_create(&ErrorLabels {
+                instance: doc.name_any(),
+                error: e.metric_label(),
+            })
+            .inc();
+    }
+
+    pub fn count_and_measure(&self, trace_id: &TraceId) -> ReconcileMeasurer {
+        self.runs.inc();
+        ReconcileMeasurer {
+            start: Instant::now(),
+            labels: trace_id.try_into().ok(),
+            metric: self.duration.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ReconcileMetricsTenantInstance {
+    pub runs: Counter,
+    pub failures: Family<ErrorLabels, Counter>,
+    pub duration: HistogramWithExemplars<TraceLabel>,
+}
+
+impl Default for ReconcileMetricsTenantInstance {
+    fn default() -> Self {
+        Self {
+            runs: Counter::default(),
+            failures: Family::<ErrorLabels, Counter>::default(),
+            duration: HistogramWithExemplars::new([0.01, 0.1, 0.25, 0.5, 1., 5., 15., 60.].into_iter()),
+        }
+    }
+}
+
+impl ReconcileMetricsTenantInstance {
+    /// Register API metrics to start tracking them.
+    pub fn register(self, r: &mut Registry) -> Self {
+        r.register_with_unit(
+            "duration",
+            "reconcile duration",
+            Unit::Seconds,
+            self.duration.clone(),
+        );
+        r.register("failures", "reconciliation errors", self.failures.clone());
+        r.register("runs", "reconciliations", self.runs.clone());
+        self
+    }
+
+    pub fn reconcile_failure(&self, doc: &TenantInstance, e: &Error) {
+        self.failures
+            .get_or_create(&ErrorLabels {
+                instance: doc.name_any(),
+                error: e.metric_label(),
+            })
+            .inc();
+    }
+
+    pub fn count_and_measure(&self, trace_id: &TraceId) -> ReconcileMeasurer {
+        self.runs.inc();
+        ReconcileMeasurer {
+            start: Instant::now(),
+            labels: trace_id.try_into().ok(),
+            metric: self.duration.clone(),
+        }
+    }
+}
+
+/// Smart function duration measurer
+///
+/// Relies on Drop to calculate duration and register the observation in the histogram
 pub struct ReconcileMeasurer {
     start: Instant,
-    metric: HistogramVec,
+    labels: Option<TraceLabel>,
+    metric: HistogramWithExemplars<TraceLabel>,
 }
 
 impl Drop for ReconcileMeasurer {
     fn drop(&mut self) {
         #[allow(clippy::cast_precision_loss)]
         let duration = self.start.elapsed().as_millis() as f64 / 1000.0;
-        self.metric.with_label_values(&[""]).observe(duration);
+        let labels = self.labels.take();
+        self.metric.observe(duration, labels);
     }
 }

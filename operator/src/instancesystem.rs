@@ -23,7 +23,11 @@ static SYSTEM_FINALIZER: &str = "systeminstances.vynil.solidite.fr";
 pub async fn reconcile(inst: Arc<SystemInstance>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
-    let _mes = ctx.metrics.system_count_and_measure();
+    if trace_id != opentelemetry::trace::TraceId::INVALID {
+        Span::current().record("trace_id", field::display(&trace_id));
+    }
+    let _mes = ctx.metrics.system_instance.count_and_measure(&trace_id);
+    ctx.diagnostics.write().await.last_event = Utc::now();
     let ns = inst.namespace().unwrap_or_default(); // inst is namespace scoped
     let insts: Api<SystemInstance> = Api::namespaced(ctx.client.clone(), &ns);
 
@@ -361,6 +365,6 @@ pub fn error_policy(inst: Arc<SystemInstance>, error: &Error, ctx: Arc<Context>)
         "reconcile failed for '{:?}.{:?}': {:?}",
         inst.metadata.namespace, inst.metadata.name, error
     );
-    ctx.metrics.system_reconcile_failure(&inst, error);
+    ctx.metrics.system_instance.reconcile_failure(&inst, error);
     Action::requeue(Duration::from_secs(5 * 60))
 }

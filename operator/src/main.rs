@@ -1,6 +1,5 @@
 #![allow(unused_imports, unused_variables)]
 pub use controller::*;
-use prometheus::{Encoder, TextEncoder};
 use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::{prelude::*, EnvFilter, Registry};
 
@@ -13,10 +12,9 @@ use actix_web::{
 #[get("/metrics")]
 async fn metrics(c: Data<Manager>, _req: HttpRequest) -> impl Responder {
     let metrics = c.metrics();
-    let encoder = TextEncoder::new();
-    let mut buffer = vec![];
-    encoder.encode(&metrics, &mut buffer).unwrap();
-    HttpResponse::Ok().body(buffer)
+    HttpResponse::Ok()
+        .content_type("application/openmetrics-text; version=1.0.0; charset=utf-8")
+        .body(metrics)
 }
 
 #[get("/health")]

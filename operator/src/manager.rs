@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.3.8";
+static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.3.9";
 
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,
@@ -72,6 +72,8 @@ impl Default for Diagnostics {
 pub struct Manager {
     /// Diagnostics populated by the reconciler
     diagnostics: Arc<RwLock<Diagnostics>>,
+    /// Metrics
+    metrics: Arc<Metrics>,
 }
 
 /// Manager that owns a Controller for JukeBox, SystemInstance, and TenantInstance
@@ -167,9 +169,15 @@ impl Manager {
     }
 
     /// Metrics getter
-    #[must_use]
-    pub fn metrics(&self) -> Vec<prometheus::proto::MetricFamily> {
-        prometheus::default_registry().gather()
+    pub fn metrics(&self) -> String {
+        let mut buffer = String::new();
+        let reg_box = &self.metrics.reg_box;
+        let reg_sys = &self.metrics.reg_sys;
+        let reg_tnt = &self.metrics.reg_tnt;
+        prometheus_client::encoding::text::encode(&mut buffer, reg_box).unwrap();
+        prometheus_client::encoding::text::encode(&mut buffer, reg_sys).unwrap();
+        prometheus_client::encoding::text::encode(&mut buffer, reg_tnt).unwrap();
+        buffer
     }
 
     /// State getter
