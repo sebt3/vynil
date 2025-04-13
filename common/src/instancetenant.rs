@@ -542,6 +542,7 @@ impl TenantInstance {
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
+            ConditionsType::BeforeApplied,
             ConditionsType::Ready,
             ConditionsType::Installed,
             ConditionsType::InitFrom,
@@ -785,7 +786,7 @@ impl TenantInstance {
         let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::VitalApplied]);
+            self.get_conditions_excluding(vec![ConditionsType::BeforeApplied]);
         conditions.push(ApplicationCondition::before_ok(generation));
         let result: TenantInstance = self
             .patch_status(
@@ -812,7 +813,7 @@ impl TenantInstance {
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
             ConditionsType::AgentStarted,
-            ConditionsType::VitalApplied,
+            ConditionsType::BeforeApplied,
             ConditionsType::Installed,
         ]);
         conditions.push(ApplicationCondition::before_ko(&reason, generation));

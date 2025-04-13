@@ -202,7 +202,7 @@ checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
 
 [[package]]
 name = "agent"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "clap",
  "common",
@@ -753,7 +753,7 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "common"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "actix-web",
  "argon2",
@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "operator"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -4317,7 +4317,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vynil"
-version = "0.3.9"
+version = "0.3.10"
 
 [[package]]
 name = "want"

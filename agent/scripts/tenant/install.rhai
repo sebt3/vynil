@@ -46,6 +46,8 @@ fn run(instance, context) {
     if instance.status != () && instance.status.vitals != () && context.namespace.use_backup {
         // this need the scalables objects to be set
         import_run("schedule_backup", instance, context);
+    } else {
+        import_run("delete_backup", instance, context);
     }
     ctx = import_run("install_post", instance, context);
     if type_of(ctx) == "map" {

@@ -41,7 +41,7 @@ fn get_objects(context, dir) {
             objects = if file.ends_with(".yaml") || file.ends_with(".yml") {
                 yaml_decode_multi(file_read(file))
             } else if file.ends_with(".yaml.hbs") || file.ends_with(".yml.hbs") {
-                yaml_decode_multi(hbs.render_from(file_read(file), context))
+                yaml_decode_multi(hbs.render_named(file, file_read(file), context))
             } else {[]};
         } catch(e) {
             log_error(`While parsing ${file} :`);

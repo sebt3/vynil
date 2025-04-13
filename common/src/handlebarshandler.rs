@@ -194,4 +194,21 @@ impl HandleBars<'_> {
             .render_template(template.as_str(), &data)
             .map_err(|e| format!("{e}").into())
     }
+
+    pub fn render_named(&mut self, name: &str, template: &str, data: &Value) -> Result<String> {
+        self.engine
+            .register_template_string(name, template)
+            .map_err(Error::HbsTemplateError)?;
+        self.engine.render(name, data).map_err(Error::HbsRenderError)
+    }
+
+    pub fn rhai_render_named(&mut self, name: String, template: String, data: rhai::Map) -> RhaiRes<String> {
+        self.engine
+            .register_template_string(name.as_str(), template)
+            .map_err(Error::HbsTemplateError)
+            .map_err(rhai_err)?;
+        self.engine
+            .render(name.as_str(), &data)
+            .map_err(|e| format!("{e}").into())
+    }
 }

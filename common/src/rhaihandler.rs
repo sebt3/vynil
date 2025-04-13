@@ -198,7 +198,8 @@ impl Script {
             .register_fn("register_template", HandleBars::rhai_register_template)
             .register_fn("register_partial_dir", HandleBars::rhai_register_partial_dir)
             .register_fn("register_helper_dir", HandleBars::rhai_register_helper_dir)
-            .register_fn("render_from", HandleBars::rhai_render);
+            .register_fn("render_from", HandleBars::rhai_render)
+            .register_fn("render_named", HandleBars::rhai_render_named);
         script
             .engine
             .register_type_with_name::<RestClient>("RestClient")
