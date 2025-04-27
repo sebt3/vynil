@@ -94,4 +94,6 @@ fn run(args) {
         annotations["fr.solidite.vynil.value_script"] = json_encode(valid.value_script);
     }
     reg.push_image(args.temp, args.repository, version.to_string(), annotations);
+    let str_ver = version.to_string();
+    print(`${args.repository} version ${str_ver} uploaded`);
 }
