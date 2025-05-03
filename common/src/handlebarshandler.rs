@@ -88,6 +88,31 @@ handlebars_helper!(concat: |a: Value, b: Value| format!("{}{}", a.as_str().unwra
     ""
 })));
 
+handlebars_helper!(render_template: |template: String, data: Value| {
+    let mut hbs = HandleBars::new();
+    hbs.render(&template, &data).unwrap_or_else(|e| {
+        warn!("handlebars::render_template failed with: {:?}",e);
+        String::new()
+    })
+});
+
+
+handlebars_helper!(render_file: |file: String, data: Value| {
+    let mut hbs = HandleBars::new();
+    match std::fs::read_to_string(file.clone()) {
+        Ok(template) => {
+            hbs.render_named(&file, &template, &data).unwrap_or_else(|e| {
+                warn!("handlebars::render_file failed to render with: {:?}",e);
+                String::new()
+            })
+        },
+        Err(e) => {
+            warn!("handlebars::render_file failed to read {file} with: {:?}", e);
+            String::new()
+        }
+    }
+});
+
 #[derive(Clone, Debug)]
 pub struct HandleBars<'a> {
     engine: Handlebars<'a>,
@@ -109,6 +134,8 @@ impl HandleBars<'_> {
         engine.register_helper("url_encode", Box::new(url_encode));
         engine.register_helper("gen_password", Box::new(gen_password));
         engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
+        engine.register_helper("render_template", Box::new(render_template));
+        engine.register_helper("render_file", Box::new(render_file));
         let _ = engine.register_script_helper("image_from_ctx",
             "let root = params[0];let name = params[1];\n\
             let im = root[\"instance\"][\"images\"][name];\n\
