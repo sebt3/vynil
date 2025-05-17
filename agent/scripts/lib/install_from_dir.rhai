@@ -191,3 +191,23 @@ fn validate_add_item(item) {
         _ => false
     }
 }
+
+fn template(instance, context, dir) {
+    let all = get_objects(context, dir);
+    for k in global::FIRST {
+        for obj in all.filter(|o| o.kind==k) {
+            print("---");
+            print(yaml_encode(obj));
+        }
+    }
+    for obj in all.filter(|o| !global::FIRST.contains(o.kind) && !global::LAST.contains(o.kind)) {
+        print("---");
+        print(yaml_encode(obj));
+}
+    for k in global::LAST {
+        for obj in all.filter(|o| o.kind==k) {
+            print("---");
+            print(yaml_encode(obj));
+        }
+    }
+}

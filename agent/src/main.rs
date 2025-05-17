@@ -3,6 +3,7 @@ mod crdgen;
 mod package;
 mod run;
 mod system;
+mod template;
 mod tenant;
 mod version;
 use clap::{Parser, Subcommand};
@@ -28,6 +29,8 @@ pub enum Commands {
     System(system::Parameters),
     /// Tenant limited instance sub-command
     Tenant(tenant::Parameters),
+    /// Template sub-command
+    Template(template::Parameters),
     /// box sub-command
     Box(boxes::Parameters),
     /// Version sub-command
@@ -55,6 +58,7 @@ async fn main() {
             tracing::error!("CRD generation failed with: {e:}");
             process::exit(2)
         }),
+        Commands::Template(args) => template::run(args).await,
         Commands::Package(args) => package::run(args).await,
         Commands::System(args) => system::run(args).await,
         Commands::Tenant(args) => tenant::run(args).await,

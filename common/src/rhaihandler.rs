@@ -463,6 +463,31 @@ impl Script {
         }",
         );
         script.add_code(
+            "fn import_template(name, instance, context, args) {\n\
+            try {\n\
+                import name as imp;\n\
+                return imp::template(instance, context, args);\n\
+            } catch(e) {\n\
+                if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorModuleNotFound\" {\n\
+                    log_debug(`No ${name} module, skipping.`);\n\
+                } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
+                    try {\n\
+                        import name as imp;\n\
+                        return imp::run(instance, context, args);\n\
+                    } catch(e) {\n\
+                        if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
+                            log_debug(`No ${name}::run function, skipping.`);\n\
+                        } else {\n\
+                            throw e;\n\
+                        }\n\
+                    }\n\
+                } else {\n\
+                    throw e;\n\
+                }\n\
+            }\n\
+        }",
+        );
+        script.add_code(
             "fn import_run(name, instance, context) {\n\
             try {\n\
                 import name as imp;\n\
@@ -479,6 +504,31 @@ impl Script {
         }",
         );
         script.add_code(
+            "fn import_template(name, instance, context) {\n\
+            try {\n\
+                import name as imp;\n\
+                return imp::template(instance, context);\n\
+            } catch(e) {\n\
+                if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorModuleNotFound\" {\n\
+                    log_debug(`No ${name} module, skipping.`);\n\
+                } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
+                    try {\n\
+                        import name as imp;\n\
+                        return imp::run(instance, context);\n\
+                    } catch(e) {\n\
+                        if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
+                            log_debug(`No ${name}::run function, skipping.`);\n\
+                        } else {\n\
+                            throw e;\n\
+                        }\n\
+                    }\n\
+                } else {\n\
+                    throw e;\n\
+                }\n\
+            }\n\
+        }",
+        );
+        script.add_code(
             "fn import_run(name, args) {\n\
             try {\n\
                 import name as imp;\n\
@@ -488,6 +538,31 @@ impl Script {
                     log_debug(`No ${name} module, skipping.`);\n\
                 } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
                     log_debug(`No ${name}::run function, skipping.`);\n\
+                } else {\n\
+                    throw e;\n\
+                }\n\
+            }\n\
+        }",
+        );
+        script.add_code(
+            "fn import_template(name, args) {\n\
+            try {\n\
+                import name as imp;\n\
+                return imp::template(args);\n\
+            } catch(e) {\n\
+                if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorModuleNotFound\" {\n\
+                    log_debug(`No ${name} module, skipping.`);\n\
+                } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
+                    try {\n\
+                        import name as imp;\n\
+                        return imp::run(args);\n\
+                    } catch(e) {\n\
+                        if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
+                            log_debug(`No ${name}::run function, skipping.`);\n\
+                        } else {\n\
+                            throw e;\n\
+                        }\n\
+                    }\n\
                 } else {\n\
                     throw e;\n\
                 }\n\

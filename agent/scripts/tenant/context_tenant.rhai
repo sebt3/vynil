@@ -1,8 +1,12 @@
-fn run(instance, context) {
+fn template(instance, context) {
     context.tenant["use_backup"] = false;
     context.tenant["ha"] = context.cluster.ha;
     context["namespace"] = context.tenant;
     context.namespace["name"] = instance.metadata.namespace;
+    context
+}
+fn run(instance, context) {
+    context = template(instance, context);
     let ns_api = k8s_resource("Namespace");
     try {
         let prefix = "vynil.solidite.fr/";

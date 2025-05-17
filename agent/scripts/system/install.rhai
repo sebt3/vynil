@@ -3,7 +3,7 @@ fn run(instance, context) {
     if type_of(ctx) == "map" {
         context = ctx;
     }
-   if is_dir(`${context.package_dir}/crds`) {
+    if is_dir(`${context.package_dir}/crds`) {
         log_info(`Installing CRDs from ${context.package_dir}/crds from ${instance.metadata.namespace} ${instance.metadata.name}`);
         ctx = import_run("install_crds", instance, context);
         if type_of(ctx) == "map" {
