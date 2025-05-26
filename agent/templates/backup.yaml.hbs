@@ -7,10 +7,10 @@ metadata:
 spec:
   containers:
   - name: backup
-    image: {{ agent_image }}
+    image: {{agent_image}}
     imagePullPolicy: IfNotPresent
     args:
-    - tenant
+    - {{instance.package.type}}
     - backup
     env: {{json_to_str envs}}
     envFrom: {{json_to_str envs_from}}
@@ -29,7 +29,7 @@ spec:
         - DAC_OVERRIDE
         - DAC_READ_SEARCH
   volumes: {{json_to_str volumes}}
-  serviceAccountName: {{ service_account }}
+  serviceAccountName: {{service_account}}
   restartPolicy: Never
   securityContext:
     runAsGroup: 0

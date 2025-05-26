@@ -2,12 +2,14 @@ use async_trait::async_trait;
 use kube::runtime::controller::Action;
 use manager::Context;
 use std::sync::Arc;
+pub mod instanceservice;
 pub mod instancesystem;
 pub mod instancetenant;
 pub mod jukebox;
 
 pub use common::{
-    instancesystem::SystemInstance, instancetenant::TenantInstance, jukebox::JukeBox, Error, Result,
+    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
+    jukebox::JukeBox, Error, Result,
 };
 
 #[async_trait]

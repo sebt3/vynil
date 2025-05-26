@@ -1,6 +1,6 @@
 use crate::{
-    instancesystem::SystemInstance, instancetenant::TenantInstance, rhai_err, rhaihandler::Script, Error,
-    Result, RhaiRes, Semver,
+    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
+    rhai_err, rhaihandler::Script, Error, Result, RhaiRes, Semver,
 };
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{api::ListParams, Api, Client};
@@ -198,6 +198,56 @@ impl VynilPackageRequirement {
                             && allowed.contains(&i.metadata.namespace.unwrap())
                     }),
                     format!("Tenant package {category}/{name} is not installed"),
+                    15 * 60,
+                ))
+            }
+            VynilPackageRequirement::StorageCapability(capa) => {
+                //TODO: implement StorageCapability
+                tracing::warn!("StorageCapability Requirement is a TODO");
+                Ok((
+                    true,
+                    format!("Storage capability {:?} isn't available", capa),
+                    15 * 60,
+                ))
+            }
+            VynilPackageRequirement::MinimumPreviousVersion(prev) => {
+                //TODO: implement MinimumPreviousVersion
+                tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
+                Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
+            }
+            _ => Ok((true, "".to_string(), 15 * 60)),
+        }
+    }
+
+    pub async fn check_service(&self, inst: &ServiceInstance, client: Client) -> Result<(bool, String, u64)> {
+        match self {
+            VynilPackageRequirement::VynilVersion(v) => {
+                let requested = Semver::parse(v)?;
+                let current = Semver::parse(VERSION)?;
+                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"), 15 * 60))
+            }
+            VynilPackageRequirement::CustomResourceDefinition(crd) => {
+                let api: Api<CustomResourceDefinition> = Api::all(client);
+                let r = api.get_metadata_opt(crd).await.map_err(Error::KubeError)?;
+                Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
+            }
+            VynilPackageRequirement::Prefly { script, name } => {
+                let mut rhai = Script::new(vec![]);
+                rhai.ctx.set_value("instance", inst.clone());
+                Ok((
+                    rhai.eval_truth(script)?,
+                    format!("Requirement {name} failed"),
+                    5 * 60,
+                ))
+            }
+            VynilPackageRequirement::SystemPackage { category, name } => {
+                let api: Api<SystemInstance> = Api::all(client);
+                let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
+                Ok((
+                    lst.items
+                        .into_iter()
+                        .any(|i| i.spec.category == *category && i.spec.package == *name),
+                    format!("System package {category}/{name} is not installed"),
                     15 * 60,
                 ))
             }

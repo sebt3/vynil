@@ -91,6 +91,7 @@ pub mod context;
 pub mod handlebarshandler;
 pub mod hasheshandlers;
 pub mod httphandler;
+pub mod instanceservice;
 pub mod instancesystem;
 pub mod instancetenant;
 pub mod jukebox;

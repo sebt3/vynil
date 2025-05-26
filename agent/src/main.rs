@@ -2,6 +2,7 @@ mod boxes;
 mod crdgen;
 mod package;
 mod run;
+mod service;
 mod system;
 mod template;
 mod tenant;
@@ -27,6 +28,8 @@ pub enum Commands {
     Package(package::Parameters),
     /// System instance sub-command
     System(system::Parameters),
+    /// Service instance sub-command
+    Service(service::Parameters),
     /// Tenant limited instance sub-command
     Tenant(tenant::Parameters),
     /// Template sub-command
@@ -61,6 +64,7 @@ async fn main() {
         Commands::Template(args) => template::run(args).await,
         Commands::Package(args) => package::run(args).await,
         Commands::System(args) => system::run(args).await,
+        Commands::Service(args) => service::run(args).await,
         Commands::Tenant(args) => tenant::run(args).await,
         Commands::Box(args) => boxes::run(args).await,
     }

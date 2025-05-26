@@ -324,6 +324,7 @@ fn run(instance, args) {
                 category: instance.spec.category,
                 app_version: pkg.metadata.app_version,
                 options: pkg.options,
+                "type": pkg.metadata["type"],
             },
             labels: #{
                 "app.kubernetes.io/name": instance.spec["package"],
@@ -331,7 +332,7 @@ fn run(instance, args) {
                 "app.kubernetes.io/managed-by": "vynil",
                 "vynil.solidite.fr/owner-namespace": instance.metadata.namespace,
                 "vynil.solidite.fr/owner-category": instance.spec.category,
-                "vynil.solidite.fr/owner-type": "system",
+                "vynil.solidite.fr/owner-type": pkg.metadata["type"],
             },
             selector: #{
                 "app.kubernetes.io/name": instance.spec["package"],

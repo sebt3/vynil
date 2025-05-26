@@ -202,7 +202,7 @@ checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
 
 [[package]]
 name = "agent"
-version = "0.3.11"
+version = "0.4.0"
 dependencies = [
  "clap",
  "common",
@@ -753,7 +753,7 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "common"
-version = "0.3.11"
+version = "0.4.0"
 dependencies = [
  "actix-web",
  "argon2",
@@ -1125,12 +1125,12 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "errno"
-version = "0.3.11"
+version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "976dd42dc7e85965fe702eb8164f21f450704bdde31faefd6471dba214cb594e"
+checksum = "cea14ef9355e3beab063703aa9dab15afd25f0667c341310c1e5274bb1d0da18"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "operator"
-version = "0.3.11"
+version = "0.4.0"
 dependencies = [
  "actix-web",
  "async-trait",
@@ -4323,7 +4323,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vynil"
-version = "0.3.11"
+version = "0.4.0"
 
 [[package]]
 name = "want"

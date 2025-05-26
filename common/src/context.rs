@@ -1,4 +1,7 @@
-use crate::{instancesystem::SystemInstance, instancetenant::TenantInstance, jukebox::JukeBox};
+use crate::{
+    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
+    jukebox::JukeBox,
+};
 use kube::{client::Client, runtime::events::Reporter};
 use std::sync::Mutex;
 
@@ -9,6 +12,7 @@ pub struct Context {
 
 pub enum VynilContext {
     JukeBox(JukeBox),
+    ServiceInstance(ServiceInstance),
     TenantInstance(TenantInstance),
     SystemInstance(SystemInstance),
     None,
@@ -21,6 +25,9 @@ lazy_static::lazy_static! {
 pub fn set_tenant(i: TenantInstance) {
     *CONTEXT.lock().unwrap() = VynilContext::TenantInstance(i);
 }
+pub fn set_service(i: ServiceInstance) {
+    *CONTEXT.lock().unwrap() = VynilContext::ServiceInstance(i);
+}
 pub fn set_system(i: SystemInstance) {
     *CONTEXT.lock().unwrap() = VynilContext::SystemInstance(i);
 }
@@ -31,6 +38,7 @@ pub fn get_owner_ns() -> Option<String> {
     match &*CONTEXT.lock().unwrap() {
         VynilContext::TenantInstance(i) => Some(i.metadata.namespace.clone().unwrap_or_default()),
         VynilContext::SystemInstance(i) => Some(i.metadata.namespace.clone().unwrap_or_default()),
+        VynilContext::ServiceInstance(i) => Some(i.metadata.namespace.clone().unwrap_or_default()),
         VynilContext::JukeBox(_j) => None,
         VynilContext::None => None,
     }
@@ -40,6 +48,14 @@ pub fn get_owner() -> Option<serde_json::Value> {
         VynilContext::TenantInstance(i) => Some(serde_json::json!({
             "apiVersion": "vynil.solidite.fr/v1".to_string(),
             "kind": "TenantInstance".to_string(),
+            "name": i.metadata.name.clone().unwrap_or_default(),
+            "uid": i.metadata.uid.clone().unwrap_or_default(),
+            "blockOwnerDeletion": true,
+            "controller": true,
+        })),
+        VynilContext::ServiceInstance(i) => Some(serde_json::json!({
+            "apiVersion": "vynil.solidite.fr/v1".to_string(),
+            "kind": "ServiceInstance".to_string(),
             "name": i.metadata.name.clone().unwrap_or_default(),
             "uid": i.metadata.uid.clone().unwrap_or_default(),
             "blockOwnerDeletion": true,
@@ -85,6 +101,14 @@ pub fn get_labels() -> Option<serde_json::Value> {
             "vynil.solidite.fr/owner-namespace": i.metadata.namespace.clone().unwrap_or_default(),
             "vynil.solidite.fr/owner-category": i.spec.category,
             "vynil.solidite.fr/owner-type": "system"
+        })),
+        VynilContext::ServiceInstance(i) => Some(serde_json::json!({
+            "app.kubernetes.io/managed-by": "vynil",
+            "app.kubernetes.io/name": i.spec.package,
+            "app.kubernetes.io/instance": i.metadata.name.clone().unwrap_or_default(),
+            "vynil.solidite.fr/owner-namespace": i.metadata.namespace.clone().unwrap_or_default(),
+            "vynil.solidite.fr/owner-category": i.spec.category,
+            "vynil.solidite.fr/owner-type": "service"
         })),
         VynilContext::JukeBox(j) => Some(serde_json::json!({
             "app.kubernetes.io/managed-by": "vynil",

@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.3.11";
+static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.4.0";
 
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,

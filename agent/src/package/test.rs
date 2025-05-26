@@ -1,6 +1,7 @@
 use clap::Args;
 use common::{
-    context::{set_system, set_tenant},
+    context::{set_service, set_system, set_tenant},
+    instanceservice::ServiceInstance,
     instancesystem::SystemInstance,
     instancetenant::TenantInstance,
     rhaihandler::Script,
@@ -14,6 +15,8 @@ use std::path::PathBuf;
 pub enum PackageType {
     /// Tenant package type
     Tenant,
+    /// Service package type
+    Service,
     #[default]
     /// System package type
     System,
@@ -75,19 +78,25 @@ pub struct Parameters {
 
 pub async fn run(args: &Parameters) -> Result<()> {
     common::context::init_k8s();
-    let mut path = vec![format!("{}/scripts", args.source.to_string_lossy())];
+    let mut paths = vec![format!("{}/scripts", args.source.to_string_lossy())];
     if args.package_type == PackageType::System {
-        path.push(format!("{}/system", args.script_dir));
+        paths.push(format!("{}/system", args.script_dir));
+    } else if args.package_type == PackageType::Service {
+        paths.push(format!("{}/service", args.script_dir));
     } else {
-        path.push(format!("{}/tenant", args.script_dir));
+        paths.push(format!("{}/tenant", args.script_dir));
     }
-    path.push(format!("{}/packages", args.script_dir));
-    path.push(format!("{}/lib", args.script_dir));
-    let mut rhai = Script::new(path);
+    paths.push(format!("{}/packages", args.script_dir));
+    paths.push(format!("{}/lib", args.script_dir));
+    let mut rhai = Script::new(paths);
     rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
     if args.package_type == PackageType::System {
         let context = SystemInstance::get(args.namespace.clone(), args.instance.clone()).await?;
         set_system(context.clone());
+        rhai.ctx.set_value("instance", context);
+    } else if args.package_type == PackageType::Service {
+        let context = ServiceInstance::get(args.namespace.clone(), args.instance.clone()).await?;
+        set_service(context.clone());
         rhai.ctx.set_value("instance", context);
     } else {
         let context = TenantInstance::get(args.namespace.clone(), args.instance.clone()).await?;

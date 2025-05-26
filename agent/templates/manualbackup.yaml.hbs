@@ -13,24 +13,25 @@ data:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ instance.appslug }}-backup
+  name: {{instance.appslug}}-backup
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ instance.appslug }}-backup
+  name: {{instance.appslug}}-backup
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{cluster.vynil_namespace}}:backups
 subjects:
 - kind: ServiceAccount
-  name: {{ instance.appslug }}-backup
-  namespace: {{ instance.namespace }}
+  name: {{instance.appslug}}-backup
+  namespace: {{instance.namespace}}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: '{{ instance.appslug }}-backups'
+  name: '{{instance.appslug}}-backups'
+  labels: {{json_to_str (selector_from_ctx this comp="backup")}}
 spec:
-  template: {{> backup.yaml }}
+  template: {{> backup.yaml}}

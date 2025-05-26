@@ -1,5 +1,8 @@
 use clap::Args;
-use common::{instancesystem::SystemInstance, instancetenant::TenantInstance, jukebox::JukeBox, Error};
+use common::{
+    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
+    jukebox::JukeBox, Error,
+};
 use kube::CustomResourceExt;
 
 #[derive(Args, Debug)]
@@ -36,6 +39,24 @@ pub async fn run(_args: &Parameters) -> std::result::Result<(), Error> {
     print!("{}", serde_yaml::to_string(&crd).unwrap());
     println!("---");
     let mut crd = TenantInstance::crd();
+    if let Some(ref mut schema) = crd.spec.versions[0].schema {
+        if let Some(ref mut api) = schema.open_api_v3_schema {
+            if let Some(ref mut props) = api.properties {
+                props.entry("spec".into()).and_modify(|spec| {
+                    if let Some(ref mut props) = spec.properties {
+                        props.entry("options".into()).and_modify(|spec| {
+                            spec.x_kubernetes_preserve_unknown_fields = Some(true);
+                            spec.additional_properties = None;
+                            //print!("{:?}", spec.additional_properties);
+                        });
+                    }
+                });
+            }
+        }
+    }
+    print!("{}", serde_yaml::to_string(&crd).unwrap());
+    println!("---");
+    let mut crd = ServiceInstance::crd();
     if let Some(ref mut schema) = crd.spec.versions[0].schema {
         if let Some(ref mut api) = schema.open_api_v3_schema {
             if let Some(ref mut props) = api.properties {

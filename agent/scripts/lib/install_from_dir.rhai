@@ -142,6 +142,7 @@ fn install_allowed_obj(obj, allowed, namespace) {
 }
 
 fn install_allowed(instance, context, dir, allowed) {
+    // Just like template but output apply the objects
     let all = get_objects(context, dir);
     let applied_objs = [];
     for k in global::FIRST {
@@ -193,6 +194,7 @@ fn validate_add_item(item) {
 }
 
 fn template(instance, context, dir) {
+    // Just like install_allowed but output the objects
     let all = get_objects(context, dir);
     for k in global::FIRST {
         for obj in all.filter(|o| o.kind==k) {
@@ -203,7 +205,7 @@ fn template(instance, context, dir) {
     for obj in all.filter(|o| !global::FIRST.contains(o.kind) && !global::LAST.contains(o.kind)) {
         print("---");
         print(yaml_encode(obj));
-}
+    }
     for k in global::LAST {
         for obj in all.filter(|o| o.kind==k) {
             print("---");

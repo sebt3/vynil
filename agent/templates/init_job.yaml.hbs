@@ -3,7 +3,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: "{{ instance.appslug }}-backups-scripts"
+  name: "{{instance.appslug}}-backups-scripts"
 data:
 {{#each files}}
   {{name}}: {{json_to_str content}}
@@ -13,27 +13,28 @@ data:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ instance.appslug }}-backup
+  name: {{instance.appslug}}-backup
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ instance.appslug }}-backup
+  name: {{instance.appslug}}-backup
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{cluster.vynil_namespace}}:backups
 subjects:
 - kind: ServiceAccount
-  name: {{ instance.appslug }}-backup
-  namespace: {{ instance.namespace }}
+  name: {{instance.appslug}}-backup
+  namespace: {{instance.namespace}}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: '{{ instance.appslug }}-init-restore'
+  name: '{{instance.appslug}}-init-restore'
+  labels: {{json_to_str (selector_from_ctx this comp="restore")}}
 spec:
   backoffLimit: 3
   parallelism: 1
   suspend: false
-  template: {{> restore.yaml }}
+  template: {{> restore.yaml}}

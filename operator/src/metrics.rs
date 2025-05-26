@@ -1,4 +1,4 @@
-use crate::{Error, JukeBox, SystemInstance, TenantInstance};
+use crate::{Error, JukeBox, ServiceInstance, SystemInstance, TenantInstance};
 use kube::ResourceExt;
 use opentelemetry::trace::TraceId;
 use prometheus_client::{
@@ -13,9 +13,11 @@ use tokio::time::Instant;
 pub struct Metrics {
     pub jukebox: ReconcileMetricsJukebox,
     pub system_instance: ReconcileMetricsSystemInstance,
+    pub service_instance: ReconcileMetricsServiceInstance,
     pub tenant_instance: ReconcileMetricsTenantInstance,
     pub reg_box: Arc<Registry>,
     pub reg_sys: Arc<Registry>,
+    pub reg_svc: Arc<Registry>,
     pub reg_tnt: Arc<Registry>,
 }
 
@@ -23,16 +25,20 @@ impl Default for Metrics {
     fn default() -> Self {
         let mut reg_box = Registry::with_prefix("jukebox_reconcile");
         let mut reg_sys = Registry::with_prefix("system_instance_reconcile");
+        let mut reg_svc = Registry::with_prefix("service_instance_reconcile");
         let mut reg_tnt = Registry::with_prefix("tenant_instance_reconcile");
         let jukebox = ReconcileMetricsJukebox::default().register(&mut reg_box);
         let system_instance = ReconcileMetricsSystemInstance::default().register(&mut reg_sys);
+        let service_instance = ReconcileMetricsServiceInstance::default().register(&mut reg_svc);
         let tenant_instance = ReconcileMetricsTenantInstance::default().register(&mut reg_tnt);
         Self {
             reg_box: Arc::new(reg_box),
             reg_sys: Arc::new(reg_sys),
+            reg_svc: Arc::new(reg_svc),
             reg_tnt: Arc::new(reg_tnt),
             jukebox,
             system_instance,
+            service_instance,
             tenant_instance,
         }
     }
@@ -194,6 +200,56 @@ impl ReconcileMetricsTenantInstance {
     }
 
     pub fn reconcile_failure(&self, doc: &TenantInstance, e: &Error) {
+        self.failures
+            .get_or_create(&ErrorLabels {
+                instance: doc.name_any(),
+                error: e.metric_label(),
+            })
+            .inc();
+    }
+
+    pub fn count_and_measure(&self, trace_id: &TraceId) -> ReconcileMeasurer {
+        self.runs.inc();
+        ReconcileMeasurer {
+            start: Instant::now(),
+            labels: trace_id.try_into().ok(),
+            metric: self.duration.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ReconcileMetricsServiceInstance {
+    pub runs: Counter,
+    pub failures: Family<ErrorLabels, Counter>,
+    pub duration: HistogramWithExemplars<TraceLabel>,
+}
+
+impl Default for ReconcileMetricsServiceInstance {
+    fn default() -> Self {
+        Self {
+            runs: Counter::default(),
+            failures: Family::<ErrorLabels, Counter>::default(),
+            duration: HistogramWithExemplars::new([0.01, 0.1, 0.25, 0.5, 1., 5., 15., 60.].into_iter()),
+        }
+    }
+}
+
+impl ReconcileMetricsServiceInstance {
+    /// Register API metrics to start tracking them.
+    pub fn register(self, r: &mut Registry) -> Self {
+        r.register_with_unit(
+            "duration",
+            "reconcile duration",
+            Unit::Seconds,
+            self.duration.clone(),
+        );
+        r.register("failures", "reconciliation errors", self.failures.clone());
+        r.register("runs", "reconciliations", self.runs.clone());
+        self
+    }
+
+    pub fn reconcile_failure(&self, doc: &ServiceInstance, e: &Error) {
         self.failures
             .get_or_create(&ErrorLabels {
                 instance: doc.name_any(),

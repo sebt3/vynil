@@ -35,9 +35,9 @@ fn build(args) {
         let base = basename(item);
         if base in ["systems", "crds"] && is_dir(item) && valid.metadata.type == "system" {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs", ".yaml", ".yml"]);
-        } else if base in ["vitals", "scalables", "others", "befores"] && is_dir(item) && valid.metadata.type == "tenant" {
+        } else if base in ["vitals", "scalables", "others", "befores"] && is_dir(item) && valid.metadata.type in ["tenant", "service"] {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs", ".yaml", ".yml"]);
-        } else if base == "pods" && is_dir(item) && valid.metadata.type == "tenant" {
+        } else if base == "pods" && is_dir(item) && valid.metadata.type in ["tenant", "service"] {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs"]);
         } else if base == "handlebars" && is_dir(item) {
             for sub in read_dir(item) {

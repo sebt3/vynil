@@ -64,9 +64,13 @@ fn run(instance, context, use_init_from) {
             name: secret_name
         }
     }];
+    let restic_tags = `namespace:${context.instance.namespace},instance:${context.instance.name},component:${context.instance["package"].name},version:${context.instance.requested}`;
+    if context.instance["package"].type == "tenant" {
+        restic_tags += `,tenant:${context.tenant.name}`;
+    }
     context["envs"] = [#{
         name: "RESTIC_TAGS",
-        value: `tenant:${context.tenant.name},namespace:${context.instance.namespace},instance:${context.instance.name},component:${context.instance["package"].name},version:${context.instance.requested}`
+        value: restic_tags
     }, #{
         name: "RESTIC_HOST",
         value: context.instance.appslug

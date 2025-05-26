@@ -146,3 +146,7 @@ fn gen_tenant(path, docs) {
         }
     }
 }
+
+fn gen_system(path, docs) {
+    gen_tenant(path, docs)
+}

@@ -4,6 +4,7 @@ use crate::{
     handlebarshandler::HandleBars,
     hasheshandlers::Argon,
     httphandler::RestClient,
+    instanceservice::ServiceInstance,
     instancesystem::SystemInstance,
     instancetenant::TenantInstance,
     jukebox::JukeBox,
@@ -385,6 +386,64 @@ impl Script {
             .register_get("metadata", TenantInstance::get_metadata)
             .register_get("spec", TenantInstance::get_spec)
             .register_get("status", TenantInstance::get_status);
+        script
+            .engine
+            .register_type_with_name::<ServiceInstance>("ServiceInstance")
+            .register_fn("get_service_instance", ServiceInstance::rhai_get)
+            .register_fn("list_service_instance", ServiceInstance::rhai_list)
+            .register_fn("options_digest", ServiceInstance::get_options_digest)
+            .register_fn("get_tfstate", ServiceInstance::rhai_get_tfstate)
+            .register_fn("get_rhaistate", ServiceInstance::rhai_get_rhaistate)
+            .register_fn("set_services", ServiceInstance::rhai_set_services)
+            .register_fn("set_agent_started", ServiceInstance::rhai_set_agent_started)
+            .register_fn("set_missing_box", ServiceInstance::rhai_set_missing_box)
+            .register_fn("set_missing_package", ServiceInstance::rhai_set_missing_package)
+            .register_fn(
+                "set_missing_requirement",
+                ServiceInstance::rhai_set_missing_requirement,
+            )
+            .register_fn("set_status_ready", ServiceInstance::rhai_set_status_ready)
+            .register_fn("set_status_befores", ServiceInstance::rhai_set_status_befores)
+            .register_fn(
+                "set_status_before_failed",
+                ServiceInstance::rhai_set_status_before_failed,
+            )
+            .register_fn("set_status_vitals", ServiceInstance::rhai_set_status_vitals)
+            .register_fn(
+                "set_status_vital_failed",
+                ServiceInstance::rhai_set_status_vital_failed,
+            )
+            .register_fn("set_status_scalables", ServiceInstance::rhai_set_status_scalables)
+            .register_fn(
+                "set_status_scalable_failed",
+                ServiceInstance::rhai_set_status_scalable_failed,
+            )
+            .register_fn("set_status_others", ServiceInstance::rhai_set_status_others)
+            .register_fn(
+                "set_status_other_failed",
+                ServiceInstance::rhai_set_status_other_failed,
+            )
+            .register_fn("set_tfstate", ServiceInstance::rhai_set_tfstate)
+            .register_fn(
+                "set_status_tofu_failed",
+                ServiceInstance::rhai_set_status_tofu_failed,
+            )
+            .register_fn("set_rhaistate", ServiceInstance::rhai_set_rhaistate)
+            .register_fn(
+                "set_status_rhai_failed",
+                ServiceInstance::rhai_set_status_rhai_failed,
+            )
+            .register_fn(
+                "set_status_schedule_backup_failed",
+                ServiceInstance::rhai_set_status_schedule_backup_failed,
+            )
+            .register_fn(
+                "set_status_init_failed",
+                ServiceInstance::rhai_set_status_init_failed,
+            )
+            .register_get("metadata", ServiceInstance::get_metadata)
+            .register_get("spec", ServiceInstance::get_spec)
+            .register_get("status", ServiceInstance::get_status);
         script
             .engine
             .register_type_with_name::<SystemInstance>("SystemInstance")
