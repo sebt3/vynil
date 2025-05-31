@@ -1,11 +1,11 @@
 use clap::Args;
 use common::{
+    Result,
     context::{set_service, set_system, set_tenant},
     instanceservice::ServiceInstance,
     instancesystem::SystemInstance,
     instancetenant::TenantInstance,
     rhaihandler::Script,
-    Result,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -66,6 +66,23 @@ pub struct Parameters {
         default_value = "./agent/scripts"
     )]
     script_dir: String,
+    /// Configuration directory
+    #[arg(
+        short = 'c',
+        long = "config-dir",
+        env = "CONFIG_DIR",
+        value_name = "CONFIG_DIR",
+        default_value = "."
+    )]
+    config_dir: String,
+    /// Agent template directory
+    #[arg(
+        long = "template-dir",
+        env = "TEMPLATE_DIRECTORY",
+        value_name = "TEMPLATE_DIRECTORY",
+        default_value = "./agent/templates"
+    )]
+    template_dir: String,
     /// Controller computed values
     #[arg(
         long = "controller-values",

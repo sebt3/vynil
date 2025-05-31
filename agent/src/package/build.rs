@@ -1,5 +1,5 @@
 use clap::Args;
-use common::{rhaihandler::Script, Result};
+use common::{Result, rhaihandler::Script};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

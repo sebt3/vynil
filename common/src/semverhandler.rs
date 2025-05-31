@@ -1,4 +1,4 @@
-use crate::{rhai_err, Error, Result, RhaiRes};
+use crate::{Error, Result, RhaiRes, rhai_err};
 use semver::{Prerelease, Version};
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]

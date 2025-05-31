@@ -1,5 +1,5 @@
 use clap::Args;
-use common::{vynilpackage::VERSION, Result};
+use common::{Result, vynilpackage::VERSION};
 
 #[derive(Args, Debug)]
 pub struct Parameters {}

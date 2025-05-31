@@ -1,5 +1,5 @@
 use clap::Args;
-use common::{context::set_box, jukebox::JukeBox, rhaihandler::Script, Result};
+use common::{Result, context::set_box, jukebox::JukeBox, rhaihandler::Script};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

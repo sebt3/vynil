@@ -1,5 +1,5 @@
 use clap::Args;
-use common::{rhaihandler::Script, Error, Result};
+use common::{Error, Result, rhaihandler::Script};
 use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]

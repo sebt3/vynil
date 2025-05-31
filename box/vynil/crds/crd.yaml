@@ -167,6 +167,7 @@ spec:
                           enum:
                           - tenant
                           - system
+                          - service
                           type: string
                       required:
                       - category

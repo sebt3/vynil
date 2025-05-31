@@ -44,8 +44,17 @@ fn run(instance, context) {
     }
     // there is some vitals to backup and backup flag is set
     if instance.status != () && instance.status.vitals != () && context.namespace.use_backup {
-        // this need the scalables objects to be set
-        import_run("schedule_backup", instance, context);
+        let found = false;
+        try {
+            let settings = k8s_resource("Secrets", context.instance.namespace).get("backup-settings");
+            found = true;
+        } catch {}
+        if found {
+            // this need the scalables objects to be set
+            import_run("schedule_backup", instance, context);
+        } else {
+            import_run("delete_backup", instance, context);
+        }
     } else {
         import_run("delete_backup", instance, context);
     }

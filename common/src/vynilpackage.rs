@@ -1,9 +1,9 @@
 use crate::{
-    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
-    rhai_err, rhaihandler::Script, Error, Result, RhaiRes, Semver,
+    Error, Result, RhaiRes, Semver, instanceservice::ServiceInstance, instancesystem::SystemInstance,
+    instancetenant::TenantInstance, rhai_err, rhaihandler::Script,
 };
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
-use kube::{api::ListParams, Api, Client};
+use kube::{Api, Client, api::ListParams};
 pub use openapiv3::Schema;
 use rhai::Dynamic;
 use schemars::JsonSchema;
@@ -23,6 +23,7 @@ pub enum VynilPackageType {
     #[default]
     Tenant,
     System,
+    Service,
 }
 
 /// Vynil package feature
@@ -102,7 +103,13 @@ impl VynilPackageRequirement {
             VynilPackageRequirement::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
-                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"), 15 * 60))
+                Ok((
+                    current >= requested,
+                    format!(
+                        "Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"
+                    ),
+                    15 * 60,
+                ))
             }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
@@ -160,7 +167,13 @@ impl VynilPackageRequirement {
             VynilPackageRequirement::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
-                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"), 15 * 60))
+                Ok((
+                    current >= requested,
+                    format!(
+                        "Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"
+                    ),
+                    15 * 60,
+                ))
             }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
@@ -224,7 +237,13 @@ impl VynilPackageRequirement {
             VynilPackageRequirement::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
-                Ok((current>=requested, format!("Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"), 15 * 60))
+                Ok((
+                    current >= requested,
+                    format!(
+                        "Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"
+                    ),
+                    15 * 60,
+                ))
             }
             VynilPackageRequirement::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);

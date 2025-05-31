@@ -237,6 +237,7 @@ fn template(instance, args) {
     } else {#{}};
     cluster_config["storage_classes"] = scs;
     cluster_config["crds"] = defaults.crds;
+    cluster_config["services"] = #{};
     if ! ("prefered_storage" in cluster_config) {
         cluster_config["prefered_storage"] = sce::get_prefered_sc(scs);
     }
@@ -311,6 +312,50 @@ fn run(instance, args) {
     }
     cluster_config["vynil_namespace"] = args.vynil_namespace;
     let defaults = get_default(pkg.options);
+    cluster_config["services"] = #{};
+    try {
+        let svcs = k8s_resource("ServiceInstance").list().items;
+        let lst = #{};
+        if type_of(instance) == "TenantInstance" {
+            let tenant = instance.get_tenant_name();
+            for svc in svcs {
+                if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
+                    for s in svc.status.services {
+                        if "tenant" in s {
+                            if s.tenant == tenant {
+                                if "service" in s {
+                                    lst[s.key] = s.service;
+                                } else {
+                                    lst[s.key] = s.definition;
+                                }
+                            }
+                        } else {
+                            if "service" in s {
+                                lst[s.key] = s.service;
+                            } else {
+                                lst[s.key] = s.definition;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            for svc in svcs {
+                if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
+                    for s in svc.status.services {
+                        if ! ("tenant" in s) {
+                            if "service" in s {
+                                lst[s.key] = s.service;
+                            } else {
+                                lst[s.key] = s.definition;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cluster_config["services"] = lst;
+    } catch {}
 
     #{
         cluster: cluster_config,

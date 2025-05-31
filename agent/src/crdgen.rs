@@ -1,7 +1,7 @@
 use clap::Args;
 use common::{
-    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
-    jukebox::JukeBox, Error,
+    Error, instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
+    jukebox::JukeBox,
 };
 use kube::CustomResourceExt;
 

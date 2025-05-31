@@ -5,6 +5,7 @@ fn run(instance, context) {
     if type_of(ctx) == "map" {
         context = ctx;
     }
+    let deleted = [];
     try {
         context = ctx::run(instance, context, false);
         let ctx = import_run("delete_backup_prepare", instance, context);
@@ -18,6 +19,16 @@ fn run(instance, context) {
                 o.delete();
                 deleted.push(o);
             } catch(e) {}
+        }
+        api = k8s_resource("Job", instance.metadata.namespace);
+        if api.exist() {
+            for job in api.list(`app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`).items {
+                try {
+                    let o = api.get_obj(job.metadata.name);
+                    o.delete();
+                    deleted.push(o);
+                } catch(e) {}
+            }
         }
         api = k8s_resource("RoleBinding", instance.metadata.namespace);
         if api.exist() {
@@ -36,6 +47,10 @@ fn run(instance, context) {
             } catch(e) {}
         }
     } catch (e) {
+    }
+    for d in deleted {
+        log_info(`Waiting for ${d.metadata.name} to be deleted`);
+        d.wait_deleted(60*5);
     }
     ctx = import_run("delete_backup_post", instance, context);
     if type_of(ctx) == "map" {

@@ -1,4 +1,6 @@
 use crate::{
+    Error::{self, *},
+    Result, RhaiRes, Semver,
     chronohandler::DateTimeHandler,
     context,
     handlebarshandler::HandleBars,
@@ -8,20 +10,16 @@ use crate::{
     instancesystem::SystemInstance,
     instancetenant::TenantInstance,
     jukebox::JukeBox,
-    k8sgeneric::{update_cache, K8sGeneric, K8sObject},
+    k8sgeneric::{K8sGeneric, K8sObject, update_cache},
     k8sworkload::{K8sDaemonSet, K8sDeploy, K8sJob, K8sStatefulSet},
     ocihandler::Registry,
     passwordhandler::Passwords,
     rhai_err, shellhandler,
-    vynilpackage::{rhai_read_package_yaml, VynilPackageSource},
-    Error::{self, *},
-    Result, RhaiRes, Semver,
+    vynilpackage::{VynilPackageSource, rhai_read_package_yaml},
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use kube::api::DynamicObject;
 pub use rhai::{
-    module_resolvers::{FileModuleResolver, ModuleResolversCollection},
-    serde::to_dynamic,
     Array,
     Dynamic,
     Engine,
@@ -30,6 +28,8 @@ pub use rhai::{
     Module,
     Scope,
     //    FnPtr, NativeCallContext,
+    module_resolvers::{FileModuleResolver, ModuleResolversCollection},
+    serde::to_dynamic,
 };
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -279,6 +279,7 @@ impl Script {
             .register_fn("k8s_resource", K8sGeneric::new_global)
             .register_fn("k8s_resource", K8sGeneric::new_ns)
             .register_fn("list", K8sGeneric::rhai_list)
+            .register_fn("list", K8sGeneric::rhai_list_labels)
             .register_fn("update_k8s_crd_cache", update_cache)
             .register_fn("list_meta", K8sGeneric::rhai_list_meta)
             .register_fn("get", K8sGeneric::rhai_get)

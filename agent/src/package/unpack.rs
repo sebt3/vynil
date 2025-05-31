@@ -1,5 +1,5 @@
 use clap::Args;
-use common::{ocihandler::Registry, rhaihandler::base64_decode, Error, Result};
+use common::{Error, Result, ocihandler::Registry, rhaihandler::base64_decode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

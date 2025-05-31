@@ -1,6 +1,6 @@
 use super::Contexts;
 use clap::Args;
-use common::{rhaihandler::Script, Result};
+use common::{Result, rhaihandler::Script};
 use serde::{Deserialize, Serialize};
 
 #[derive(Args, Debug, Serialize, Deserialize)]

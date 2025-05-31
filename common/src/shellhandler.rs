@@ -1,4 +1,4 @@
-use crate::{rhai_err, Error, Result, RhaiRes};
+use crate::{Error, Result, RhaiRes, rhai_err};
 use std::process::{Command, Output, Stdio};
 
 pub fn run(command: String) -> Result<Output> {

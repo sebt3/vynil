@@ -1,11 +1,11 @@
-use crate::{get_client_name, Error, Error::*, RhaiRes};
+use crate::{Error, Error::*, RhaiRes, get_client_name};
 use actix_web::Result;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Certificate, Client, Response};
 use rhai::{Dynamic, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tracing::*;
 

@@ -1,12 +1,11 @@
 #![allow(unused_imports, unused_variables)]
 pub use controller::*;
 use tracing::{debug, error, info, trace, warn};
-use tracing_subscriber::{prelude::*, EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Registry, prelude::*};
 
 use actix_web::{
-    get, middleware,
+    App, HttpRequest, HttpResponse, HttpServer, Responder, get, middleware,
     web::{self, Data},
-    App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 
 #[get("/metrics")]

@@ -1,7 +1,7 @@
 fn template(instance, context) {
     context.namespace.ha = context.cluster.ha;
     context.namespace.use_backup = false;
-    context.namespace.name = instance.metadata.namespace,
+    context.namespace.name = instance.metadata.namespace;
     context
 }
 fn run(instance, context) {

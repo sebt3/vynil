@@ -1,6 +1,6 @@
 use crate::{Error, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use std::io::{Read as _, Write};
 
 pub fn encode_base64_gz(data: String) -> Result<String> {

@@ -8,8 +8,8 @@ pub mod instancetenant;
 pub mod jukebox;
 
 pub use common::{
-    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
-    jukebox::JukeBox, Error, Result,
+    Error, Result, instanceservice::ServiceInstance, instancesystem::SystemInstance,
+    instancetenant::TenantInstance, jukebox::JukeBox,
 };
 
 #[async_trait]

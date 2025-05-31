@@ -1,10 +1,10 @@
-use crate::{rhai_err, rhaihandler::Map, Error, Result, RhaiRes};
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use crate::{Error, Result, RhaiRes, rhai_err, rhaihandler::Map};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use oci_client::{
+    Client, Reference,
     client::{ClientConfig, Config, ImageLayer},
     manifest,
     secrets::RegistryAuth,
-    Client, Reference,
 };
 use rhai::Dynamic;
 use std::{collections::BTreeMap, path::PathBuf};

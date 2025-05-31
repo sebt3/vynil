@@ -1,12 +1,12 @@
-use crate::{context::get_client, rhai_err, Error, RhaiRes};
+use crate::{Error, RhaiRes, context::get_client, rhai_err};
 use k8s_openapi::api::{
     apps::v1::{DaemonSet, Deployment, StatefulSet},
     batch::v1::Job,
 };
 use kube::{
-    api::Api,
-    runtime::wait::{await_condition, conditions, Condition},
     Client, ResourceExt,
+    api::Api,
+    runtime::wait::{Condition, await_condition, conditions},
 };
 use rhai::Dynamic;
 

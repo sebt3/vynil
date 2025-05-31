@@ -8,7 +8,7 @@ images:
     repository: sebt3/vynil-operator
 kind: Package
 metadata:
-  app_version: 0.4.1
+  app_version: 0.4.2
   category: core
   description: Vynil controller to manage vynil packages installations
   features:

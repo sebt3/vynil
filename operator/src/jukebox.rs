@@ -1,4 +1,4 @@
-use crate::{get_client_name, manager::Context, telemetry, Error, JukeBox, Reconciler, Result};
+use crate::{Error, JukeBox, Reconciler, Result, get_client_name, manager::Context, telemetry};
 use async_trait::async_trait;
 use chrono::Utc;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
@@ -7,14 +7,14 @@ use kube::{
     runtime::{
         conditions,
         controller::Action,
-        finalizer::{finalizer, Event as Finalizer},
+        finalizer::{Event as Finalizer, finalizer},
         wait::await_condition,
     },
 };
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::time::Duration;
-use tracing::{field, instrument, warn, Span};
+use tracing::{Span, field, instrument, warn};
 
 static JUKEBOX_FINALIZER: &str = "jukeboxes.vynil.solidite.fr";
 

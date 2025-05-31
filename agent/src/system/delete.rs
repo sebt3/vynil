@@ -1,5 +1,5 @@
 use clap::Args;
-use common::{context::set_system, instancesystem::SystemInstance, rhaihandler::Script, Result};
+use common::{Result, context::set_system, instancesystem::SystemInstance, rhaihandler::Script};
 use serde::{Deserialize, Serialize};
 
 #[derive(Args, Debug, Serialize, Deserialize)]

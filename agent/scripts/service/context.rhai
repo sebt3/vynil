@@ -43,5 +43,6 @@ fn run(instance, args) {
     if type_of(ctx) == "map" {
         context = ctx;
     }
+    print(yaml_encode(context));
     context
 }

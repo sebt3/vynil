@@ -1,6 +1,6 @@
 use super::Contexts;
 use clap::Args;
-use common::{rhaihandler::Script, Result};
+use common::{Result, rhaihandler::Script};
 use serde::{Deserialize, Serialize};
 
 #[derive(Args, Debug, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ pub struct Parameters {
         long = "agent-image",
         env = "AGENT_IMAGE",
         value_name = "AGENT_IMAGE",
-        default_value = "docker.io/sebt3/vynil-agent:0.4.1"
+        default_value = "docker.io/sebt3/vynil-agent:0.4.2"
     )]
     agent_image: String,
     /// version

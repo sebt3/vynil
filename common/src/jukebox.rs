@@ -1,14 +1,14 @@
 use crate::{
+    Error, Result, RhaiRes,
     context::{get_client_async, get_reporter, get_short_name},
     rhai_err,
     vynilpackage::VynilPackage,
-    Error, Result, RhaiRes,
 };
 use chrono::{DateTime, Utc};
 use kube::{
+    Client, CustomResource, Resource,
     api::{Api, ListParams, ObjectList, Patch, PatchParams},
     runtime::events::{Event, EventType, Recorder},
-    Client, CustomResource, Resource,
 };
 use rhai::Dynamic;
 use schemars::JsonSchema;

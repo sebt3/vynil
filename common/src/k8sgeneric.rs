@@ -1,19 +1,20 @@
 use std::sync::Mutex;
 
 use crate::{
+    Error, Result, RhaiRes,
     context::{get_client, get_client_name, get_labels, get_owner, get_owner_ns},
-    rhai_err, Error, Result, RhaiRes,
+    rhai_err,
 };
 use kube::{
+    Client, ResourceExt,
     api::{
         Api, DeleteParams, DynamicObject, ListParams, ObjectList, PartialObjectMeta, Patch, PatchParams,
         PostParams,
     },
     discovery::{ApiCapabilities, ApiResource, Discovery, Scope},
-    runtime::wait::{await_condition, conditions, Condition},
-    Client, ResourceExt,
+    runtime::wait::{Condition, await_condition, conditions},
 };
-use rhai::{serde::to_dynamic, Dynamic};
+use rhai::{Dynamic, serde::to_dynamic};
 use serde_json::json;
 
 lazy_static::lazy_static! {
@@ -328,6 +329,26 @@ impl K8sGeneric {
 
     pub fn rhai_list(&mut self) -> RhaiRes<Dynamic> {
         let res = self.list().map_err(rhai_err)?;
+        let v = serde_json::to_value(res).map_err(|e| rhai_err(Error::SerializationError(e)))?;
+        to_dynamic(v)
+    }
+
+    pub fn list_labels(&self, labels: String) -> Result<ObjectList<DynamicObject>> {
+        if let Some(api) = self.api.clone() {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    let mut lp = ListParams::default();
+                    lp = lp.labels(&labels);
+                    api.list(&lp).await.map_err(Error::KubeError)
+                })
+            })
+        } else {
+            Err(Error::UnsupportedMethod)
+        }
+    }
+
+    pub fn rhai_list_labels(&mut self, labels: String) -> RhaiRes<Dynamic> {
+        let res = self.list_labels(labels).map_err(rhai_err)?;
         let v = serde_json::to_value(res).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         to_dynamic(v)
     }

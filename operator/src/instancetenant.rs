@@ -1,4 +1,4 @@
-use crate::{get_client_name, manager::Context, telemetry, Error, Reconciler, Result, TenantInstance};
+use crate::{Error, Reconciler, Result, TenantInstance, get_client_name, manager::Context, telemetry};
 use async_trait::async_trait;
 use chrono::Utc;
 use common::{rhaihandler::Script, vynilpackage::VynilPackageType};
@@ -8,14 +8,14 @@ use kube::{
     runtime::{
         conditions,
         controller::Action,
-        finalizer::{finalizer, Event as Finalizer},
+        finalizer::{Event as Finalizer, finalizer},
         wait::await_condition,
     },
 };
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::time::Duration;
-use tracing::{field, instrument, warn, Span};
+use tracing::{Span, field, instrument, warn};
 static TENANT_FINALIZER: &str = "tenantinstances.vynil.solidite.fr";
 
 
