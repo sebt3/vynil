@@ -17,7 +17,7 @@ metadata:
   name: {{instance.namespace}}-{{instance.appslug}}-resources
 rules:
 - apiGroups: ["vynil.solidite.fr"]
-  resources: ["jukeboxes", "jukeboxes/status", "systeminstances", "systeminstances/status", "tenantinstances", "tenantinstances/status"]
+  resources: ["jukeboxes", "jukeboxes/status", "systeminstances", "systeminstances/status", "serviceinstances", "serviceinstances/status", "tenantinstances", "tenantinstances/status"]
   verbs: ["get", "watch", "list", "patch"]
 - apiGroups: ["events.k8s.io"]
   resources: ["events"]
@@ -110,7 +110,7 @@ metadata:
   name: {{instance.namespace}}-{{instance.appslug}}:aggregate-to-view
 rules:
 - apiGroups: ["vynil.solidite.fr"]
-  resources: ["jukeboxes", "systeminstances", "tenantinstances"]
+  resources: ["jukeboxes", "systeminstances", "tenantinstances", "serviceinstances"]
   verbs: ["get", "watch", "list"]
 ---
 kind: ClusterRole

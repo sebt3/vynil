@@ -15,12 +15,12 @@ fn run(instance, context) {
             context = ctx;
         }
     }
-    /*if is_dir(`${context.package_dir}/others`) {
+    if is_dir(`${context.package_dir}/others`) {
         ctx = import_run("template_others", instance, context);
         if type_of(ctx) == "map" {
             context = ctx;
         }
-    }*/
+    }
     if is_dir(`${context.package_dir}/scalables`) {
         ctx = import_run("template_scalables", instance, context);
         if type_of(ctx) == "map" {

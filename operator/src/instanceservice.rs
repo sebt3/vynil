@@ -88,7 +88,7 @@ impl Reconciler for ServiceInstance {
             .any(|p| {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
-                    && p.metadata.usage == VynilPackageType::Tenant
+                    && p.metadata.usage == VynilPackageType::Service
             })
         {
             self.clone()
@@ -118,7 +118,7 @@ impl Reconciler for ServiceInstance {
             .find(|p| {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
-                    && p.metadata.usage == VynilPackageType::Tenant
+                    && p.metadata.usage == VynilPackageType::Service
             })
             .unwrap();
         context
@@ -249,7 +249,7 @@ impl Reconciler for ServiceInstance {
             .any(|p| {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
-                    && p.metadata.usage == VynilPackageType::Tenant
+                    && p.metadata.usage == VynilPackageType::Service
             })
         {
             // Package doesnt exist
@@ -282,7 +282,7 @@ impl Reconciler for ServiceInstance {
             .find(|p| {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
-                    && p.metadata.usage == VynilPackageType::Tenant
+                    && p.metadata.usage == VynilPackageType::Service
             })
             .unwrap();
         context

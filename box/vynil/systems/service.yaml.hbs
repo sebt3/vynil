@@ -3,6 +3,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{instance.appslug}}-controller
+  labels:
+    app.kubernetes.io/component: controller
 spec:
   ports:
   - port: 80
@@ -10,3 +12,24 @@ spec:
     protocol: TCP
     name: http
   selector: {{json_to_str (selector_from_ctx this comp="controller")}}
+
+{{#if (ctx_have_crd this "servicemonitors.monitoring.coreos.com") }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: '{{ instance.appslug }}-controller'
+spec:
+  endpoints:
+  - interval: 60s
+    path: /metrics
+    port: http
+    scrapeTimeout: 3s
+    honorLabels: true
+  jobLabel: app.kubernetes.io/name
+  namespaceSelector:
+    matchNames:
+    - {{ instance.namespace }}
+  selector:
+    matchLabels: {{json_to_str (selector_from_ctx this comp="controller")}}
+{{/if}}
