@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 
     common::context::init_k8s();
     // Start kubernetes controller
-    let (manager, controller_jbs, controller_tnts, controller_stms) = Manager::new().await;
+    let (manager, controller_jbs, controller_tnts, controller_stms, controller_svcs) = Manager::new().await;
 
     // Start web server
     let server = HttpServer::new(move || {
@@ -67,6 +67,7 @@ async fn main() -> Result<()> {
         _ = controller_jbs => warn!("JukeBox controller exited"),
         _ = controller_tnts => warn!("TenantInstance controller exited"),
         _ = controller_stms => warn!("SystemInstance controller exited"),
+        _ = controller_svcs => warn!("ServiceInstance controller exited"),
         _ = server.run() => info!("actix exited"),
     }
     Ok(())

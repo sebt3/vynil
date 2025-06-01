@@ -25,7 +25,7 @@ pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> 
     if trace_id != opentelemetry::trace::TraceId::INVALID {
         Span::current().record("trace_id", field::display(&trace_id));
     }
-    let _mes = ctx.metrics.jukebox.count_and_measure(&trace_id);
+    let _mes = ctx.metrics.jukebox.count_and_measure(&dist, &trace_id);
     ctx.diagnostics.write().await.last_event = Utc::now();
     let dists: Api<JukeBox> = Api::all(ctx.client.clone());
 

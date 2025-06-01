@@ -26,7 +26,7 @@ pub async fn reconcile(inst: Arc<ServiceInstance>, ctx: Arc<Context>) -> Result<
     if trace_id != opentelemetry::trace::TraceId::INVALID {
         Span::current().record("trace_id", field::display(&trace_id));
     }
-    let _mes = ctx.metrics.service_instance.count_and_measure(&trace_id);
+    let _mes = ctx.metrics.service_instance.count_and_measure(&inst, &trace_id);
     ctx.diagnostics.write().await.last_event = Utc::now();
     let ns = inst.namespace().unwrap_or_default(); // inst is namespace scoped
     let insts: Api<ServiceInstance> = Api::namespaced(ctx.client.clone(), &ns);

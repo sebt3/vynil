@@ -1,4 +1,7 @@
-use crate::{JukeBox, Metrics, SystemInstance, TenantInstance, instancesystem, instancetenant, jukebox};
+use crate::{
+    JukeBox, Metrics, ServiceInstance, SystemInstance, TenantInstance, instanceservice, instancesystem,
+    instancetenant, jukebox,
+};
 use chrono::{DateTime, Utc};
 use common::{handlebarshandler::HandleBars, vynilpackage::VynilPackage};
 use futures::{FutureExt, StreamExt, future::BoxFuture};
@@ -12,7 +15,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.4.2";
+static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.4.3";
 
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,
@@ -27,7 +30,7 @@ pub struct Context {
     /// Diagnostics read by the web server
     pub diagnostics: Arc<RwLock<Diagnostics>>,
     /// Prometheus metrics
-    pub metrics: Metrics,
+    pub metrics: Arc<Metrics>,
     /// handlebars renderer
     pub renderer: HandleBars<'static>,
     /// Base context
@@ -83,6 +86,7 @@ impl Manager {
         BoxFuture<'static, ()>,
         BoxFuture<'static, ()>,
         BoxFuture<'static, ()>,
+        BoxFuture<'static, ()>,
     ) {
         let client = Client::try_default().await.expect("create client");
         let manager = Manager::default();
@@ -111,7 +115,7 @@ impl Manager {
 
         let context = Arc::new(Context {
             client: client.clone(),
-            metrics: Metrics::default(),
+            metrics: manager.metrics.clone(),
             diagnostics: manager.diagnostics.clone(),
             renderer: hbs,
             base_context: json!({
@@ -126,6 +130,7 @@ impl Manager {
 
         let jbs = Api::<JukeBox>::all(client.clone());
         let tnts = Api::<TenantInstance>::all(client.clone());
+        let svcs = Api::<ServiceInstance>::all(client.clone());
         let stms = Api::<SystemInstance>::all(client);
         // Ensure CRD is installed before loop-watching
         let _r = jbs
@@ -137,6 +142,10 @@ impl Manager {
             .await
             .expect("is the crd installed?");
         let _r = stms
+            .list(&ListParams::default().limit(1))
+            .await
+            .expect("is the crd installed?");
+        let _r = svcs
             .list(&ListParams::default().limit(1))
             .await
             .expect("is the crd installed?");
@@ -165,18 +174,31 @@ impl Manager {
             .filter_map(|x| async move { std::result::Result::ok(x) })
             .for_each(|_| futures::future::ready(()))
             .boxed();
-        (manager, controller_jbs, controller_tnts, controller_stms)
+        let controller_svcs = Controller::new(svcs, Config::default().any_semantic())
+            .run(
+                instanceservice::reconcile,
+                instanceservice::error_policy,
+                context.clone(),
+            )
+            .filter_map(|x| async move { std::result::Result::ok(x) })
+            .for_each(|_| futures::future::ready(()))
+            .boxed();
+        (
+            manager,
+            controller_jbs,
+            controller_tnts,
+            controller_stms,
+            controller_svcs,
+        )
     }
 
     /// Metrics getter
     pub fn metrics(&self) -> String {
         let mut buffer = String::new();
-        let reg_box = &self.metrics.reg_box;
-        let reg_sys = &self.metrics.reg_sys;
-        let reg_tnt = &self.metrics.reg_tnt;
-        prometheus_client::encoding::text::encode(&mut buffer, reg_box).unwrap();
-        prometheus_client::encoding::text::encode(&mut buffer, reg_sys).unwrap();
-        prometheus_client::encoding::text::encode(&mut buffer, reg_tnt).unwrap();
+        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_box).unwrap();
+        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_sys).unwrap();
+        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_svc).unwrap();
+        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_tnt).unwrap();
         buffer
     }
 
