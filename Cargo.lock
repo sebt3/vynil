@@ -2587,7 +2587,7 @@ dependencies = [
  "json-patch 4.0.0",
  "k8s-openapi",
  "kube",
- "opentelemetry 0.29.1",
+ "opentelemetry 0.30.0",
  "opentelemetry-otlp",
  "opentelemetry_sdk 0.30.0",
  "prometheus-client",
