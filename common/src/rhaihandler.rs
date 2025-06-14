@@ -372,6 +372,7 @@ impl Script {
                 TenantInstance::rhai_set_status_tofu_failed,
             )
             .register_fn("set_rhaistate", TenantInstance::rhai_set_rhaistate)
+            .register_fn("set_services", TenantInstance::rhai_set_services)
             .register_fn(
                 "set_status_rhai_failed",
                 TenantInstance::rhai_set_status_rhai_failed,

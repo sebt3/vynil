@@ -37,9 +37,26 @@ fn run(instance, args) {
     context["tenant"] = #{
         name: name,
         namespaces: nss,
+        services: context["cluster"]["services"],
         maintenance_start_hour: "1",
         maintenance_start_minut: "0",
     };
+    for ns in nss {
+        try {
+            let svcs = k8s_resource("TenantInstance", ns).list().items;
+            for svc in svcs {
+                if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
+                    for s in svc.status.services {
+                        if "service" in s {
+                            context["tenant"]["services"][s.key] = s.service;
+                        } else {
+                            context["tenant"]["services"][s.key] = s.definition;
+                        }
+                    }
+                }
+            }
+        } catch {}
+    }
     ctx = import_run("context_tenant", instance, context);
     if type_of(ctx) == "map" {
         context = ctx;

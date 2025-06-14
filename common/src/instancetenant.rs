@@ -335,6 +335,28 @@ pub struct Children {
     pub namespace: Option<String>,
 }
 
+/// GlobalPublished describe a published service open to use
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalPublished {
+    /// FQDN of the service
+    pub fqdn: String,
+    /// Port of the service
+    pub port: u32,
+}
+
+/// Published describe a published service
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Published {
+    /// key of the service
+    pub key: String,
+    /// service as fqdn+port
+    pub service: Option<GlobalPublished>,
+    /// Definition of the service stored in a children object
+    pub definition: Option<Children>,
+}
+
 /// The status object of `TenantInstance`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct TenantInstanceStatus {
@@ -356,7 +378,8 @@ pub struct TenantInstanceStatus {
     pub scalables: Option<Vec<Children>>,
     /// List of other children
     pub others: Option<Vec<Children>>,
-    // TODO: External configs
+    /// List of the services
+    pub services: Option<Vec<Published>>,
 }
 
 impl TenantInstance {
@@ -635,6 +658,19 @@ impl TenantInstance {
             secondary: None,
         })
         .await?;
+        Ok(result)
+    }
+
+    pub async fn set_services(&mut self, services: Vec<Published>) -> Result<Self> {
+        let client = get_client_async().await;
+        let result = self
+            .patch_status(
+                client.clone(),
+                json!({
+                    "services": services
+                }),
+            )
+            .await?;
         Ok(result)
     }
 
@@ -1196,6 +1232,17 @@ impl TenantInstance {
         } else {
             Ok("".to_string())
         }
+    }
+
+    pub fn rhai_set_services(&mut self, services: Dynamic) -> RhaiRes<Self> {
+        block_in_place(|| {
+            Handle::current().block_on(async move {
+                let v = serde_json::to_string(&services).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
+                self.set_services(lst).await
+            })
+        })
+        .map_err(rhai_err)
     }
 
     pub fn rhai_get_rhaistate(&mut self) -> RhaiRes<String> {

@@ -511,6 +511,53 @@ spec:
                   type: object
                 nullable: true
                 type: array
+              services:
+                description: List of the services
+                items:
+                  description: Published describe a published service
+                  properties:
+                    definition:
+                      description: Definition of the service stored in a children object
+                      nullable: true
+                      properties:
+                        kind:
+                          description: kind of k8s object
+                          type: string
+                        name:
+                          description: Name of the object
+                          type: string
+                        namespace:
+                          description: Namespace is only used for Cluster TenantInstance for namespaced object
+                          nullable: true
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    key:
+                      description: key of the service
+                      type: string
+                    service:
+                      description: service as fqdn+port
+                      nullable: true
+                      properties:
+                        fqdn:
+                          description: FQDN of the service
+                          type: string
+                        port:
+                          description: Port of the service
+                          format: uint32
+                          minimum: 0.0
+                          type: integer
+                      required:
+                      - fqdn
+                      - port
+                      type: object
+                  required:
+                  - key
+                  type: object
+                nullable: true
+                type: array
               tag:
                 description: Current tag
                 nullable: true
@@ -767,6 +814,7 @@ spec:
               services:
                 description: List of the services
                 items:
+                  description: Published describe a published service
                   properties:
                     definition:
                       description: Definition of the service stored in a children object

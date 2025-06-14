@@ -334,7 +334,7 @@ pub struct Children {
     pub namespace: Option<String>,
 }
 
-/// Published describe a published service
+/// GlobalPublished describe a published service open to use
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalPublished {
@@ -344,7 +344,7 @@ pub struct GlobalPublished {
     pub port: u32,
 }
 
-
+/// Published describe a published service
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Published {
