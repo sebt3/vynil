@@ -73,10 +73,46 @@ impl Reconciler for JukeBox {
             )
             .await
             .map_err(Error::KubeError)?;
+
+        // Support job deletion annotation to force reinstall
+        let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
+        if self.annotations().contains_key("vynil.solidite.fr/force-scan") {
+            // remove the annotation
+            let stms = Api::<JukeBox>::all(client.clone());
+            let pp = PatchParams::default();
+            let patch = Patch::Json::<()>(
+                serde_json::from_value(serde_json::json!([
+                    {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
+                ]))
+                .unwrap(),
+            );
+            let _patched = stms
+                .patch(&self.name_any(), &pp, &patch)
+                .await
+                .map_err(Error::KubeError)?;
+            // delete the job if exist
+            let job = job_api.get_metadata_opt(&job_name).await;
+            if job.is_ok() && job.unwrap().is_some() {
+                match job_api.delete(&job_name, &DeleteParams::foreground()).await {
+                    Ok(eith) => {
+                        if let either::Left(j) = eith {
+                            let uid = j.metadata.uid.unwrap_or_default();
+                            let cond =
+                                await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
+                            tokio::time::timeout(std::time::Duration::from_secs(20), cond)
+                                .await
+                                .map_err(Error::Elapsed)?
+                                .map_err(Error::KubeWaitError)?;
+                        }
+                    }
+                    Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
+                };
+            }
+        }
+
         // Create the Job
         let job_def_str = hbs.render("{{> scan.yaml }}", &context)?;
         let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
-        let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
         let _job = match job_api
             .patch(
                 &job_name,

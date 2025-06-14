@@ -3,12 +3,22 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ job_name }}
+  labels:
+    namespace: {{namespace}}
+    instance: {{name}}
+    type: {{package_type}}
+    action: {{package_action}}
 spec:
   backoffLimit: 3
   template:
     metadata:
       annotations:
         mayfly.cloud.namecheap.com/expire: 120h
+      labels:
+        namespace: {{namespace}}
+        instance: {{name}}
+        type: {{package_type}}
+        action: {{package_action}}
     spec:
       containers:
       - name: {{ package_action }}

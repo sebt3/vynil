@@ -159,6 +159,46 @@ impl Reconciler for ServiceInstance {
                 .insert("ctrl_values".to_string(), "\"{}\"".into());
         }
         // Evrything is good to go
+
+        // Support job deletion annotation to force reinstall
+        let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
+        if self
+            .annotations()
+            .contains_key("vynil.solidite.fr/force-reinstall")
+        {
+            // remove the annotation
+            let stms = Api::<ServiceInstance>::namespaced(client.clone(), &self.namespace().unwrap());
+            let pp = PatchParams::default();
+            let patch = Patch::Json::<()>(
+                serde_json::from_value(serde_json::json!([
+                    {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-reinstall"}
+                ]))
+                .unwrap(),
+            );
+            let _patched = stms
+                .patch(&self.name_any(), &pp, &patch)
+                .await
+                .map_err(Error::KubeError)?;
+            // delete the job if exist
+            let job = job_api.get_metadata_opt(&job_name).await;
+            if job.is_ok() && job.unwrap().is_some() {
+                match job_api.delete(&job_name, &DeleteParams::foreground()).await {
+                    Ok(eith) => {
+                        if let either::Left(j) = eith {
+                            let uid = j.metadata.uid.unwrap_or_default();
+                            let cond =
+                                await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
+                            tokio::time::timeout(std::time::Duration::from_secs(20), cond)
+                                .await
+                                .map_err(Error::Elapsed)?
+                                .map_err(Error::KubeWaitError)?;
+                        }
+                    }
+                    Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
+                };
+            }
+        }
+
         // Create the job
         tracing::info!("Creating with: {:?}", &context);
         let job_def_str = hbs.render("{{> package.yaml }}", &context)?;
@@ -196,11 +236,11 @@ impl Reconciler for ServiceInstance {
             }
         };
         // Wait for the Job completion
-        let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
+        /*let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
         tokio::time::timeout(std::time::Duration::from_secs(10 * 60), cond)
             .await
             .map_err(Error::Elapsed)?
-            .map_err(Error::KubeWaitError)?;
+            .map_err(Error::KubeWaitError)?;*/
         Ok(Action::requeue(Duration::from_secs(15 * 60)))
     }
 
