@@ -29,7 +29,7 @@ regex = "1.11.1"
 semver = { version = "1.0.24", features = ["serde"] }
 tar = "0.4.43"
 flate2 = "1.0.33"
-oci-client = "0.14.0"
+oci-client = "0.15.0"
 openapiv3 = "2.0.0"
 sha256 = "1.5.0"
 argon2 = { version = "0.5.3", features = ["std"] }
