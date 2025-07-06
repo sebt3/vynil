@@ -1,3 +1,14 @@
+fn installs(lst, duration) {
+    for i in lst.filter(|i| ["ServiceInstance", "SystemInstance", "TenantInstance"].contains(i.kind)) {
+        log_info(`Waiting for ${i.kind} ${i.namespace}/${i.name} to be available`);
+        let api = k8s_resource(i.kind, i.namespace);
+        let obj = api.get_obj(i.name);
+        obj.wait_condition("Ready", duration);
+    }
+}
+fn installs(lst) {
+    installs(lst, 5*60);
+}
 fn workload(lst, duration) {
     for wl in lst.filter(|wl| ["Deployment", "DaemonSet", "StatefulSet"].contains(wl.kind)) {
         log_info(`Waiting for ${wl.kind} ${wl.namespace}/${wl.name} to be available`);
@@ -53,28 +64,44 @@ fn vital(lst, duration) {
             let sts = get_statefulset(v.namespace, v.name);
             sts.wait_available(duration);
         } else if ["BucketClaim"].contains(v.kind) {
-            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be ready`);
             let api = k8s_resource(v.kind, v.namespace);
             let obj = api.get_obj(v.name);
             obj.wait_status("bucketReady", duration);
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to have a name`);
+            obj.wait_status_prop("bucketName", duration);
         } else if ["BucketAccess"].contains(v.kind) {
-            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be granted`);
             let api = k8s_resource(v.kind, v.namespace);
             let obj = api.get_obj(v.name);
             obj.wait_status("accessGranted", duration);
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to have an id`);
+            obj.wait_status_prop("accountID", duration);
+        } else if ["NdbCluster"].contains(v.kind) {
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            let api = k8s_resource(v.kind, v.namespace);
+            let obj = api.get_obj(v.name);
+            obj.wait_condition("UpToDate", duration);
+        } else if ["Dragonfly"].contains(v.kind) {
+            log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
+            let api = k8s_resource(v.kind, v.namespace);
+            let obj = api.get_obj(v.name);
+            obj.wait_status_string("phase", "ready", duration);
         }
     }
 }
 fn vital(lst) {
-    vital(lst, 2*60);
+    vital(lst, 3*60);
 }
 
 fn all(lst, duration) {
+    installs(lst, duration);
     vital(lst, duration);
     job(lst, duration);
     workload(lst, duration);
 }
 fn all(lst) {
+    installs(lst);
     vital(lst);
     job(lst);
     workload(lst);

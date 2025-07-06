@@ -186,10 +186,108 @@ impl K8sObject {
         }
     }
 
+    pub fn have_status(prop: String) -> impl Condition<DynamicObject> {
+        move |obj: Option<&DynamicObject>| {
+            if let Some(dynobj) = &obj {
+                if dynobj.data.is_object()
+                    && dynobj
+                        .data
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .collect::<Vec<&String>>()
+                        .contains(&&"status".to_string())
+                {
+                    let status = dynobj.data.as_object().unwrap()["status"].clone();
+                    if status.is_object()
+                        && status
+                            .as_object()
+                            .unwrap()
+                            .keys()
+                            .collect::<Vec<&String>>()
+                            .contains(&&prop)
+                    {
+                        let conditions = status.as_object().unwrap()[&prop].clone();
+                        if !conditions.is_null() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    pub fn have_status_value(prop: String, value: String) -> impl Condition<DynamicObject> {
+        move |obj: Option<&DynamicObject>| {
+            if let Some(dynobj) = &obj {
+                if dynobj.data.is_object()
+                    && dynobj
+                        .data
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .collect::<Vec<&String>>()
+                        .contains(&&"status".to_string())
+                {
+                    let status = dynobj.data.as_object().unwrap()["status"].clone();
+                    if status.is_object()
+                        && status
+                            .as_object()
+                            .unwrap()
+                            .keys()
+                            .collect::<Vec<&String>>()
+                            .contains(&&prop)
+                    {
+                        let conditions = status.as_object().unwrap()[&prop].clone();
+                        if conditions.is_string() {
+                            return conditions.as_str().unwrap() == &value;
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
+
     pub fn wait_status(&mut self, prop: String, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
         tracing::debug!("wait_status({}) for {} {}", &prop, self.kind, name);
         let cond = await_condition(self.api.clone(), &name, Self::is_status(prop));
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
+                    .await
+                    .map_err(Error::Elapsed)
+            })
+        })
+        .map_err(rhai_err)?
+        .map_err(Error::KubeWaitError)
+        .map_err(rhai_err)?;
+        Ok(())
+    }
+
+    pub fn wait_status_prop(&mut self, prop: String, timeout: i64) -> RhaiRes<()> {
+        let name = self.obj.name_any();
+        tracing::debug!("wait_status({}) for {} {}", &prop, self.kind, name);
+        let cond = await_condition(self.api.clone(), &name, Self::have_status(prop));
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
+                    .await
+                    .map_err(Error::Elapsed)
+            })
+        })
+        .map_err(rhai_err)?
+        .map_err(Error::KubeWaitError)
+        .map_err(rhai_err)?;
+        Ok(())
+    }
+
+    pub fn wait_status_string(&mut self, prop: String, value: String, timeout: i64) -> RhaiRes<()> {
+        let name = self.obj.name_any();
+        tracing::debug!("wait_status({}) for {} {}", &prop, self.kind, name);
+        let cond = await_condition(self.api.clone(), &name, Self::have_status_value(prop, value));
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 tokio::time::timeout(std::time::Duration::from_secs(timeout as u64), cond)
