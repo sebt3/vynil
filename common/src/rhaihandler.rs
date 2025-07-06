@@ -265,6 +265,8 @@ impl Script {
             .register_fn("delete", K8sObject::rhai_delete)
             .register_fn("wait_condition", K8sObject::wait_condition)
             .register_fn("wait_status", K8sObject::wait_status)
+            .register_fn("wait_status_prop", K8sObject::wait_status_prop)
+            .register_fn("wait_status_string", K8sObject::wait_status_string)
             .register_fn("wait_deleted", K8sObject::rhai_wait_deleted)
             /*.register_fn("wait_for", |context: NativeCallContext, k8sobj: &mut K8sObject, fnp: FnPtr, timeout: i64| {
                 let condition = Box::new(move |obj: &DynamicObject| -> RhaiRes<bool> {
