@@ -41,7 +41,7 @@ fn job(lst) {
 
 fn vital(lst, duration) {
     for v in lst {
-        if ["Cluster"].contains(v.kind) {
+        if ["Cluster", "MariaDB"].contains(v.kind) {
             log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
             let api = k8s_resource(v.kind, v.namespace);
             let obj = api.get_obj(v.name);

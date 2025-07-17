@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.4.6";
+static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.4.7";
 
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,
@@ -49,7 +49,14 @@ impl Context {
                 });
             }
         }
-        *self.packages.write().await = cache;
+        let jukes = list.items.clone().iter().map(|j| j.name_any()).reduce(|j, r| {format!("{j},{r}")}).unwrap_or(String::new());
+        if cache.len() > 0 {
+            let len = cache.len();
+            tracing::info!("Updating packages cache with {len} packages from {jukes}");
+            *self.packages.write().await = cache;
+        } else {
+            tracing::warn!("No packages found from the jukebox list ({jukes}) to update the cache");
+        }
     }
 }
 

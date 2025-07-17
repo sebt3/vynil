@@ -1,6 +1,5 @@
 #![allow(unused_imports, unused_variables)]
 pub use controller::*;
-use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
 
 use actix_web::{
@@ -64,11 +63,11 @@ async fn main() -> Result<()> {
     .shutdown_timeout(5);
 
     tokio::select! {
-        _ = controller_jbs => warn!("JukeBox controller exited"),
-        _ = controller_tnts => warn!("TenantInstance controller exited"),
-        _ = controller_stms => warn!("SystemInstance controller exited"),
-        _ = controller_svcs => warn!("ServiceInstance controller exited"),
-        _ = server.run() => info!("actix exited"),
+        _ = controller_jbs => tracing::warn!("JukeBox controller exited"),
+        _ = controller_tnts => tracing::warn!("TenantInstance controller exited"),
+        _ = controller_stms => tracing::warn!("SystemInstance controller exited"),
+        _ = controller_svcs => tracing::warn!("ServiceInstance controller exited"),
+        _ = server.run() => tracing::info!("actix exited"),
     }
     Ok(())
 }

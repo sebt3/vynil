@@ -14,7 +14,7 @@ use kube::{
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::time::Duration;
-use tracing::{Span, field, instrument, warn};
+use tracing::{Span, field, instrument};
 
 static JUKEBOX_FINALIZER: &str = "jukeboxes.vynil.solidite.fr";
 
@@ -150,7 +150,7 @@ impl Reconciler for JukeBox {
             .await
             .map_err(Error::Elapsed)?
             .map_err(Error::KubeWaitError)?;
-        tracing::info!("Updating packages cache");
+        //tracing::info!("Updating packages cache");
         match JukeBox::list().await {
             Ok(lst) => ctx.set_package_cache(&lst).await,
             Err(e) => tracing::warn!("While listing jukebox: {:?}", e),
@@ -186,7 +186,7 @@ impl Reconciler for JukeBox {
 
 #[must_use]
 pub fn error_policy(dist: Arc<JukeBox>, error: &Error, ctx: Arc<Context>) -> Action {
-    warn!("reconcile failed for {:?}: {:?}", dist.metadata.name, error);
+    tracing::warn!("reconcile failed for JukeBox {:?}: {:?}", dist.metadata.name, error);
     ctx.metrics.jukebox.reconcile_failure(&dist, error);
     Action::requeue(Duration::from_secs(5 * 60))
 }

@@ -15,7 +15,7 @@ use kube::{
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::time::Duration;
-use tracing::{Span, field, instrument, warn};
+use tracing::{Span, field, instrument};
 static SERVICE_FINALIZER: &str = "serviceinstances.vynil.solidite.fr";
 
 
@@ -200,7 +200,7 @@ impl Reconciler for ServiceInstance {
         }
 
         // Create the job
-        tracing::info!("Creating with: {:?}", &context);
+        //tracing::info!("Creating with: {:?}", &context);
         let job_def_str = hbs.render("{{> package.yaml }}", &context)?;
         let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
         let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
@@ -401,8 +401,8 @@ impl Reconciler for ServiceInstance {
 
 #[must_use]
 pub fn error_policy(inst: Arc<ServiceInstance>, error: &Error, ctx: Arc<Context>) -> Action {
-    warn!(
-        "reconcile failed for '{:?}.{:?}': {:?}",
+    tracing::warn!(
+        "reconcile failed for ServiceInstance '{:?}.{:?}': {:?}",
         inst.metadata.namespace, inst.metadata.name, error
     );
     ctx.metrics.service_instance.reconcile_failure(&inst, error);

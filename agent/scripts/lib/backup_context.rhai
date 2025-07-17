@@ -4,6 +4,7 @@ fn from_args(context) {
     context["statefulset_list"] = get_env("STATEFULSET_LIST").split(" ").filter(|x| x!="");
     context["secret_list"] = get_env("SECRET_LIST").split(" ").filter(|x| x!="");
     context["pg_list"] = get_env("PG_LIST").split(" ").filter(|x| x!="");
+    context["mysql_list"] = get_env("MYSQL_LIST").split(" ").filter(|x| x!="");
     context["restic_tags"] = get_env("RESTIC_TAGS");
     context["snapshot"] = get_env("RESTIC_SNAPSHOT");
     context["max_dayly"] = get_env("RESTIC_MAX_DAYLY");
@@ -147,6 +148,7 @@ fn run(instance, context, use_init_from) {
     context["schedule"] = `${context.namespace.maintenance_start_minut} ${context.namespace.maintenance_start_hour} * * *`;
     context["service_account"] = `${context.instance.appslug}-backup`;
     let pgs = [];
+    let mysqls = [];
     let secrets = [];
     for v in instance.status.vitals {
         let name = v.name;
@@ -210,6 +212,94 @@ fn run(instance, context, use_init_from) {
                     }
                 };
             }
+        } else if v.kind == "MariaDB" {
+            if name.is_empty() {
+                name = "mariadb";
+            }
+            try {
+                let mariadb = k8s_resource("MariaDB", context.instance.namespace).get(v.name);
+                let sname = ndb.spec?.rootPasswordSecretKeyRef?.name;
+                let username = ndb.spec?.username;
+                let upass = ndb.spec?.passwordSecretKeyRef?.name;
+                let dbname = ndb.spec?.database;
+                if sname != () {
+                    mysqls += name;
+                    context["envs"] += #{
+                        name: `${name}_username`,
+                        value: "root"
+                    };
+                    context["envs"] += #{
+                        name: `${name}_password`,
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: sname,
+                                key: ndb.spec?.rootPasswordSecretKeyRef?.key ?? "password"
+                            }
+                        }
+                    };
+                    context["envs"] += #{
+                        name: `${name}_host`,
+                        value: `${v.name}.${context.instance.namespace}.svc`
+                    };
+                    context["envs"] += #{
+                        name: `${name}_dbname`,
+                        value: dbname ?? "*"
+                    };
+                } else if upass != () && username != () && dbname != () {
+                    mysqls += name;
+                    context["envs"] += #{
+                        name: `${name}_username`,
+                        value: username
+                    };
+                    context["envs"] += #{
+                        name: `${name}_password`,
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: upass,
+                                key: ndb.spec?.passwordSecretKeyRef?.key ?? "password"
+                            }
+                        }
+                    };
+                    context["envs"] += #{
+                        name: `${name}_host`,
+                        value: `${v.name}.${context.instance.namespace}.svc`
+                    };
+                    context["envs"] += #{
+                        name: `${name}_dbname`,
+                        value: dbname
+                    };
+                }
+            } catch {}
+        } else if v.kind == "NdbCluster" {
+            if name.is_empty() {
+                name = "ndb";
+            }
+            try {
+                let ndb = k8s_resource("NdbCluster", context.instance.namespace).get(v.name);
+                let sname = ndb.spec?.mysqlNode?.rootPasswordSecretName;
+                if sname != () {
+                    mysqls += name;
+                    for i in ["username", "password"] {
+                        context["envs"] += #{
+                            name: `${name}_${i}`,
+                            valueFrom: #{
+                                secretKeyRef: #{
+                                    name: sname,
+                                    key: i
+                                }
+                            }
+                        };
+                    }
+                    context["envs"] += #{
+                        name: `${name}_host`,
+                        value: `${v.name}-mysqld.${context.instance.namespace}.svc`
+                    };
+                    context["envs"] += #{
+                        name: `${name}_dbname`,
+                        value: "*"
+                    };
+                }
+            } catch {}
         }
     }
     let deploy = [];
@@ -239,6 +329,12 @@ fn run(instance, context, use_init_from) {
         context["envs"] += #{
             name: `PG_LIST`,
             value: pgs.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` })
+        };
+    }
+    if mysqls.len() > 0 {
+        context["envs"] += #{
+            name: `MYSQL_LIST`,
+            value: mysqls.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` })
         };
     }
     if secrets.len() > 0 {

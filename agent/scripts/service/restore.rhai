@@ -35,6 +35,14 @@ fn run(args) {
     } else {
         import_run("restore_postgresql", context);
     }
+    if is_file(`${args.package_dir}/scripts/restore_mysql.sh`) {
+        let rc = shell_run(`${context.package_dir}/scripts/restore_mysql.sh`);
+        if rc != 0 {
+            throw `${context.package_dir}/scripts/restore_mysql.sh FAILED returning ${rc}`;
+        }
+    } else {
+        import_run("restore_mysql", context);
+    }
     import_run("maintenance_stop", context);
     import_run("restore_post", context);
 }
