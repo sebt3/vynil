@@ -1,10 +1,11 @@
 use crate::{
-    Error, Result, RhaiRes,
+    Children, Error, Published, Result, RhaiRes,
     context::{get_client_async, get_reporter, get_short_name},
     rhai_err,
     tools::{base64_gz_decode, encode_base64_gz},
 };
 use chrono::{DateTime, Utc};
+use k8s_openapi::api::core::v1::Namespace;
 use kube::{
     Client, CustomResource, Resource, ResourceExt,
     api::{Api, ListParams, ObjectList, Patch, PatchParams},
@@ -321,43 +322,6 @@ impl ApplicationCondition {
     }
 }
 
-
-/// Children describe a k8s object
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Children {
-    /// kind of k8s object
-    pub kind: String,
-    /// Name of the object
-    pub name: String,
-    /// Namespace is only used for Cluster ServiceInstance for namespaced object
-    pub namespace: Option<String>,
-}
-
-/// GlobalPublished describe a published service open to use
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GlobalPublished {
-    /// FQDN of the service
-    pub fqdn: String,
-    /// Port of the service
-    pub port: u32,
-}
-
-/// Published describe a published service
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Published {
-    /// key of the service
-    pub key: String,
-    /// Tenant using this definition
-    pub tenant: Option<String>,
-    /// service as fqdn+port
-    pub service: Option<GlobalPublished>,
-    /// Definition of the service stored in a children object
-    pub definition: Option<Children>,
-}
-
 /// The status object of `ServiceInstance`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct ServiceInstanceStatus {
@@ -393,6 +357,34 @@ impl ServiceInstance {
         let api = Api::<Self>::namespaced(get_client_async().await, &namespace);
         let lp = ListParams::default();
         api.list(&lp).await.map_err(Error::KubeError)
+    }
+
+    pub async fn get_all_services_names() -> Result<Vec<String>> {
+        let client = get_client_async().await;
+        let mut list: Vec<String> = Vec::new();
+        let lp = ListParams::default();
+        for ns in Api::<Namespace>::all(client.clone())
+            .list(&lp)
+            .await
+            .map_err(Error::KubeError)?
+            .iter()
+            .map(|ns| ns.name_any())
+        {
+            let api = Api::<Self>::namespaced(client.clone(), &ns);
+            api.list(&lp)
+                .await
+                .map_err(Error::KubeError)?
+                .iter()
+                .map(|i| {
+                    let res: Vec<String> = i.get_services().iter().map(|s| s.key.clone()).collect();
+                    res
+                })
+                .for_each(|mut l| {
+                    list.append(&mut l);
+                });
+        }
+        list.sort();
+        Ok(list)
     }
 
     pub fn have_child(&self) -> bool {
@@ -458,6 +450,32 @@ impl ServiceInstance {
             }
         } else {
             Ok(None)
+        }
+    }
+
+    pub fn get_services(&self) -> Vec<Published> {
+        if let Some(status) = self.status.clone() {
+            if let Some(svcs) = status.services {
+                svcs
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn get_services_string(&self) -> String {
+        if let Some(status) = self.status.clone() {
+            if let Some(svcs) = status.services {
+                let mut tmp: Vec<String> = svcs.iter().map(|s| s.key.clone()).collect();
+                tmp.sort();
+                tmp.join(",")
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
         }
     }
 
@@ -1171,6 +1189,11 @@ impl ServiceInstance {
             .map(|lst| lst.into_iter().collect())
     }
 
+    pub fn rhai_list_services_names() -> RhaiRes<Vec<String>> {
+        block_in_place(|| Handle::current().block_on(async move { Self::get_all_services_names().await }))
+            .map_err(rhai_err)
+    }
+
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
         let v = serde_json::to_string(&self.metadata).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
@@ -1310,6 +1333,10 @@ impl ServiceInstance {
             })
         })
         .map_err(rhai_err)
+    }
+
+    pub fn rhai_get_services(&mut self) -> String {
+        block_in_place(|| Handle::current().block_on(async move { self.get_services_string() }))
     }
 
     pub fn rhai_set_status_others(&mut self, list: Dynamic) -> RhaiRes<Self> {

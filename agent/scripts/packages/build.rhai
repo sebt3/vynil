@@ -90,6 +90,9 @@ fn run(args) {
     if valid.options != () {
         annotations["fr.solidite.vynil.options"] = json_encode(valid.options);
     }
+    if valid.recommandations != () {
+        annotations["fr.solidite.vynil.recommandations"] = json_encode(valid.recommandations);
+    }
     if valid.value_script != () && valid.value_script != "" {
         annotations["fr.solidite.vynil.value_script"] = json_encode(valid.value_script);
     }

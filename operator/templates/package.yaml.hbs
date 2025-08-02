@@ -36,6 +36,12 @@ spec:
           value: {{ digest }}
         - name: CONTROLLER_VALUES
           value: {{ ctrl_values }}
+        - name: RECOMMANDED_CRDS
+          value: {{ rec_crds }}
+        - name: RECOMMANDED_SYSTEM_SERVICES
+          value: {{ rec_system_services }}
+        - name: RECOMMANDED_TENANT_SERVICES
+          value: {{ rec_tenant_services }}
         - name: TAG
           value: {{ tag }}
         - name: LOG_LEVEL

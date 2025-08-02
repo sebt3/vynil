@@ -336,6 +336,10 @@ impl Script {
                 "get_tenant_namespaces",
                 TenantInstance::rhai_get_tenant_namespaces,
             )
+            .register_fn(
+                "get_tenant_services_names",
+                TenantInstance::rhai_get_tenant_services_names,
+            )
             .register_fn("list_tenant_instance", TenantInstance::rhai_list)
             .register_fn("options_digest", TenantInstance::get_options_digest)
             .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)
@@ -375,6 +379,7 @@ impl Script {
             )
             .register_fn("set_rhaistate", TenantInstance::rhai_set_rhaistate)
             .register_fn("set_services", TenantInstance::rhai_set_services)
+            .register_fn("get_services", TenantInstance::rhai_get_services)
             .register_fn(
                 "set_status_rhai_failed",
                 TenantInstance::rhai_set_status_rhai_failed,
@@ -395,10 +400,12 @@ impl Script {
             .register_type_with_name::<ServiceInstance>("ServiceInstance")
             .register_fn("get_service_instance", ServiceInstance::rhai_get)
             .register_fn("list_service_instance", ServiceInstance::rhai_list)
+            .register_fn("list_services_names", ServiceInstance::rhai_list_services_names)
             .register_fn("options_digest", ServiceInstance::get_options_digest)
             .register_fn("get_tfstate", ServiceInstance::rhai_get_tfstate)
             .register_fn("get_rhaistate", ServiceInstance::rhai_get_rhaistate)
             .register_fn("set_services", ServiceInstance::rhai_set_services)
+            .register_fn("get_services", TenantInstance::rhai_get_services)
             .register_fn("set_agent_started", ServiceInstance::rhai_set_agent_started)
             .register_fn("set_missing_box", ServiceInstance::rhai_set_missing_box)
             .register_fn("set_missing_package", ServiceInstance::rhai_set_missing_package)
@@ -504,6 +511,7 @@ impl Script {
             .register_fn("validate_options", VynilPackageSource::validate_options)
             .register_get("metadata", VynilPackageSource::get_metadata)
             .register_get("requirements", VynilPackageSource::get_requirements)
+            .register_get("recommandations", VynilPackageSource::get_recommandations)
             .register_get("options", VynilPackageSource::get_options)
             .register_get("value_script", VynilPackageSource::get_value_script)
             .register_get("images", VynilPackageSource::get_images)

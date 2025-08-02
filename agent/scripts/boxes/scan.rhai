@@ -64,6 +64,9 @@ try {
             if annotations.keys().contains("fr.solidite.vynil.options") {
                 cur["options"] = json_decode(annotations["fr.solidite.vynil.options"]);
             }
+            if annotations.keys().contains("fr.solidite.vynil.recommandations") {
+                cur["recommandations"] = json_decode(annotations["fr.solidite.vynil.recommandations"]);
+            }
             if annotations.keys().contains("fr.solidite.vynil.value_script") {
                 cur["value_script"] = annotations["fr.solidite.vynil.value_script"];
             }

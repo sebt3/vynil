@@ -1,8 +1,13 @@
 use crate::{Error, Reconciler, Result, TenantInstance, get_client_name, manager::Context, telemetry};
 use async_trait::async_trait;
 use chrono::Utc;
-use common::{rhaihandler::Script, vynilpackage::VynilPackageType};
-use k8s_openapi::api::batch::v1::Job;
+use common::{
+    rhaihandler::Script,
+    vynilpackage::{VynilPackageRecommandation, VynilPackageType},
+};
+use k8s_openapi::{
+    api::batch::v1::Job, apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
+};
 use kube::{
     api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},
     runtime::{
@@ -77,6 +82,15 @@ impl Reconciler for TenantInstance {
             .as_object_mut()
             .unwrap()
             .insert("digest".to_string(), self.clone().get_options_digest().into());
+        let current_version = if let Some(status) = self.status.clone() {
+            if let Some(v) = status.tag {
+                v
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
         let packages = ctx.packages.read().await;
         if !packages.keys().any(|x| *x == self.spec.jukebox) {
             self.clone().set_missing_box(self.spec.jukebox.clone()).await?;
@@ -89,6 +103,7 @@ impl Reconciler for TenantInstance {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
                     && p.metadata.usage == VynilPackageType::Tenant
+                    && (p.is_min_version_ok(current_version.clone()))
             })
         {
             self.clone()
@@ -119,6 +134,7 @@ impl Reconciler for TenantInstance {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
                     && p.metadata.usage == VynilPackageType::Tenant
+                    && (p.is_min_version_ok(current_version.clone()))
             })
             .unwrap();
         context
@@ -141,6 +157,53 @@ impl Reconciler for TenantInstance {
                 return Ok(Action::requeue(Duration::from_secs(requeue)));
             }
         }
+        // Build recommandations strings
+        let mut rec_crds: Vec<String> = Vec::new();
+        let mut rec_tenant_services: Vec<String> = Vec::new();
+        let current_tenant_services = self.get_tenant_services_names().await?;
+        let mut rec_system_services: Vec<String> = Vec::new();
+        let current_system_services =
+            common::instanceservice::ServiceInstance::get_all_services_names().await?;
+        if let Some(recos) = pck.recommandations {
+            for reco in recos {
+                match reco {
+                    VynilPackageRecommandation::CustomResourceDefinition(crd) => {
+                        let api: Api<CustomResourceDefinition> = Api::all(client.clone());
+                        let r = api.get_metadata_opt(&crd).await.map_err(Error::KubeError)?;
+                        if r.is_some() {
+                            rec_crds.push(crd);
+                        }
+                    }
+                    VynilPackageRecommandation::TenantService(svc) => {
+                        if current_tenant_services.contains(&svc) {
+                            rec_tenant_services.push(svc);
+                        }
+                    }
+                    VynilPackageRecommandation::SystemService(svc) => {
+                        if current_system_services.contains(&svc) {
+                            rec_system_services.push(svc);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            rec_crds.sort();
+            rec_tenant_services.sort();
+            rec_system_services.sort();
+        }
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("rec_crds".to_string(), rec_crds.join(",").into());
+        context.as_object_mut().unwrap().insert(
+            "rec_tenant_services".to_string(),
+            rec_tenant_services.join(",").into(),
+        );
+        context.as_object_mut().unwrap().insert(
+            "rec_system_services".to_string(),
+            rec_system_services.join(",").into(),
+        );
+
         // Compute the controller values
         if pck.value_script.is_some() {
             let mut rhai = Script::new(vec![]);
@@ -337,6 +400,18 @@ impl Reconciler for TenantInstance {
             .as_object_mut()
             .unwrap()
             .insert("registry".to_string(), pck.registry.into());
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("rec_crds".to_string(), "".into());
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("rec_tenant_services".to_string(), "".into());
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("rec_system_services".to_string(),"".into());
         // Compute the controller values
         if pck.value_script.is_some() {
             let mut rhai = Script::new(vec![]);
@@ -403,7 +478,9 @@ impl Reconciler for TenantInstance {
 pub fn error_policy(inst: Arc<TenantInstance>, error: &Error, ctx: Arc<Context>) -> Action {
     tracing::warn!(
         "reconcile failed for TenantInstance '{:?}.{:?}': {:?}",
-        inst.metadata.namespace, inst.metadata.name, error
+        inst.metadata.namespace,
+        inst.metadata.name,
+        error
     );
     ctx.metrics.tenant_instance.reconcile_failure(&inst, error);
     Action::requeue(Duration::from_secs(5 * 60))

@@ -1,5 +1,5 @@
 use crate::{
-    Error, Result, RhaiRes,
+    Children, Error, Published, Result, RhaiRes,
     context::{get_client_async, get_reporter, get_short_name},
     rhai_err,
     tools::{base64_gz_decode, encode_base64_gz},
@@ -322,41 +322,6 @@ impl ApplicationCondition {
     }
 }
 
-
-/// Children describe a k8s object
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Children {
-    /// kind of k8s object
-    pub kind: String,
-    /// Name of the object
-    pub name: String,
-    /// Namespace is only used for Cluster TenantInstance for namespaced object
-    pub namespace: Option<String>,
-}
-
-/// GlobalPublished describe a published service open to use
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GlobalPublished {
-    /// FQDN of the service
-    pub fqdn: String,
-    /// Port of the service
-    pub port: u32,
-}
-
-/// Published describe a published service
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Published {
-    /// key of the service
-    pub key: String,
-    /// service as fqdn+port
-    pub service: Option<GlobalPublished>,
-    /// Definition of the service stored in a children object
-    pub definition: Option<Children>,
-}
-
 /// The status object of `TenantInstance`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct TenantInstanceStatus {
@@ -460,6 +425,32 @@ impl TenantInstance {
         }
     }
 
+    pub fn get_services(&self) -> Vec<Published> {
+        if let Some(status) = self.status.clone() {
+            if let Some(svcs) = status.services {
+                svcs
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn get_services_string(&self) -> String {
+        if let Some(status) = self.status.clone() {
+            if let Some(svcs) = status.services {
+                let mut tmp: Vec<String> = svcs.iter().to_owned().map(|s| s.key.clone()).collect();
+                tmp.sort();
+                tmp.join(",")
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    }
+
     pub async fn get_tenant_name(&self) -> Result<String> {
         let my_ns = self.metadata.namespace.clone().unwrap();
         let ns_api: Api<Namespace> = Api::all(get_client_async().await);
@@ -497,6 +488,21 @@ impl TenantInstance {
                     .collect());
             }
         }
+        Ok(res)
+    }
+
+    pub async fn get_tenant_services_names(&self) -> Result<Vec<String>> {
+        let mut res: Vec<String> = Vec::new();
+        let cli = get_client_async().await;
+        for ns in self.get_tenant_namespaces().await? {
+            let api = Api::<Self>::namespaced(cli.clone(), &ns);
+            let lp = ListParams::default();
+            for tnt in api.list(&lp).await.map_err(Error::KubeError)? {
+                let mut svcs: Vec<String> = tnt.get_services().iter().map(|i| i.key.clone()).collect();
+                res.append(&mut svcs);
+            }
+        }
+        res.sort();
         Ok(res)
     }
 
@@ -1245,6 +1251,10 @@ impl TenantInstance {
         .map_err(rhai_err)
     }
 
+    pub fn rhai_get_services(&mut self) -> String {
+        block_in_place(|| Handle::current().block_on(async move { self.get_services_string() }))
+    }
+
     pub fn rhai_get_rhaistate(&mut self) -> RhaiRes<String> {
         let res = self.get_rhaistate().map_err(rhai_err)?;
         if res.is_some() {
@@ -1402,6 +1412,22 @@ impl TenantInstance {
         block_in_place(|| {
             Handle::current().block_on(async move {
                 let arr = self.get_tenant_namespaces().await;
+                if arr.is_ok() {
+                    let arr = arr.unwrap();
+                    let v = serde_json::to_string(&arr).map_err(Error::SerializationError)?;
+                    serde_json::from_str::<Dynamic>(&v).map_err(Error::SerializationError)
+                } else {
+                    arr.map(|_| Dynamic::from(""))
+                }
+            })
+        })
+        .map_err(rhai_err)
+    }
+
+    pub fn rhai_get_tenant_services_names(&mut self) -> RhaiRes<Dynamic> {
+        block_in_place(|| {
+            Handle::current().block_on(async move {
+                let arr = self.get_tenant_services_names().await;
                 if arr.is_ok() {
                     let arr = arr.unwrap();
                     let v = serde_json::to_string(&arr).map_err(Error::SerializationError)?;

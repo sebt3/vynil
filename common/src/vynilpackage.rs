@@ -70,6 +70,10 @@ pub enum StorageCapability {
 pub enum VynilPackageRequirement {
     /// Name of a crd that is required before installing this package
     CustomResourceDefinition(String),
+    /// Name of a System Service that should be installed before current package
+    SystemService(String),
+    /// Name of a Tenant Service that should be installed before current package
+    TenantService(String),
     /// SystemPackage that should be installed before current package
     SystemPackage {
         category: String,
@@ -158,6 +162,14 @@ impl VynilPackageRequirement {
                 tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
                 Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
             }
+            VynilPackageRequirement::SystemService(svc) => {
+                let lst = ServiceInstance::get_all_services_names().await?;
+                Ok((
+                    lst.iter().any(|i| svc == i),
+                    format!("System Service {svc} is not available"),
+                    15 * 60,
+                ))
+            }
             _ => Ok((true, "".to_string(), 15 * 60)),
         }
     }
@@ -214,6 +226,14 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
+            VynilPackageRequirement::TenantService(svc) => Ok((
+                inst.get_tenant_services_names()
+                    .await?
+                    .into_iter()
+                    .any(|i| i == *svc),
+                format!("Tenant service {svc} is not installed"),
+                15 * 60,
+            )),
             VynilPackageRequirement::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
@@ -227,6 +247,14 @@ impl VynilPackageRequirement {
                 //TODO: implement MinimumPreviousVersion
                 tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
                 Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
+            }
+            VynilPackageRequirement::SystemService(svc) => {
+                let lst = ServiceInstance::get_all_services_names().await?;
+                Ok((
+                    lst.iter().any(|i| svc == i),
+                    format!("System Service {svc} is not available"),
+                    15 * 60,
+                ))
             }
             _ => Ok((true, "".to_string(), 15 * 60)),
         }
@@ -284,9 +312,30 @@ impl VynilPackageRequirement {
                 tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
                 Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
             }
+            VynilPackageRequirement::SystemService(svc) => {
+                let lst = ServiceInstance::get_all_services_names().await?;
+                Ok((
+                    lst.iter().any(|i| svc == i),
+                    format!("System Service {svc} is not available"),
+                    15 * 60,
+                ))
+            }
             _ => Ok((true, "".to_string(), 15 * 60)),
         }
     }
+}
+
+
+/// Vynil Package Recommandation
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VynilPackageRecommandation {
+    /// Name of a crd that is required before installing this package
+    CustomResourceDefinition(String),
+    /// Name of a System Service that should be installed before current package
+    SystemService(String),
+    /// Name of a Tenant Service that should be installed before current package
+    TenantService(String),
 }
 
 /// Vynil Package in JukeBox status
@@ -302,10 +351,42 @@ pub struct VynilPackage {
     pub metadata: VynilPackageMeta,
     /// Requirements
     pub requirements: Vec<VynilPackageRequirement>,
+    /// Recommandations
+    pub recommandations: Option<Vec<VynilPackageRecommandation>>,
     /// Component options
     pub options: Option<BTreeMap<String, serde_json::Value>>,
     /// A rhai script that produce a map to be added in the package values
     pub value_script: Option<String>,
+}
+impl VynilPackage {
+    pub fn get_min_version(&self) -> Option<String> {
+        for rec in &self.requirements {
+            match rec {
+                VynilPackageRequirement::MinimumPreviousVersion(v) => return Some(v.clone()),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    pub fn is_min_version_ok(&self, current: String) -> bool {
+        let parse = Semver::parse(&current);
+        if parse.is_ok() {
+            let cur = parse.unwrap();
+            if let Some(target) = self.get_min_version() {
+                let target_parsed = Semver::parse(&target);
+                if target_parsed.is_ok() {
+                    cur >= target_parsed.unwrap()
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } else {
+            true
+        }
+    }
 }
 
 /// Image definitions
@@ -348,6 +429,8 @@ pub struct VynilPackageSource {
     pub metadata: VynilPackageMeta,
     /// Requirement
     pub requirements: Vec<VynilPackageRequirement>,
+    /// Recommandations
+    pub recommandations: Option<Vec<VynilPackageRecommandation>>,
     /// Component options
     pub options: Option<BTreeMap<String, serde_json::Value>>,
     /// Images definition
@@ -374,6 +457,18 @@ impl VynilPackageSource {
         serde_json::from_str(&v)
             .map_err(Error::JsonError)
             .map_err(rhai_err)
+    }
+    pub fn get_recommandations(&mut self) -> RhaiRes<Dynamic> {
+        if let Some(recos) = self.recommandations.clone() {
+            let v = serde_json::to_string(&recos)
+            .map_err(Error::JsonError)
+            .map_err(rhai_err)?;
+        serde_json::from_str(&v)
+            .map_err(Error::JsonError)
+            .map_err(rhai_err)
+        } else {
+            Ok(Dynamic::from(()))
+        }
     }
 
     pub fn get_options(&mut self) -> RhaiRes<Dynamic> {

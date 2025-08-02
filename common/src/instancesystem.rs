@@ -1,5 +1,5 @@
 use crate::{
-    Error, Result, RhaiRes,
+    Children, Error, Result, RhaiRes,
     context::{get_client_async, get_reporter, get_short_name},
     rhai_err,
     tools::{base64_gz_decode, encode_base64_gz},
@@ -247,18 +247,6 @@ pub struct ApplicationCondition {
     pub status: ConditionsStatus,
     /// Generation for that status
     pub generation: i64,
-}
-
-/// Children describe a k8s object
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Children {
-    /// kind of k8s object
-    pub kind: String,
-    /// Name of the object
-    pub name: String,
-    /// Namespace is only used for Cluster SystemInstance for namespaced object
-    pub namespace: Option<String>,
 }
 
 /// The status object of `SystemInstance`

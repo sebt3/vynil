@@ -218,12 +218,12 @@ fn run(instance, context, use_init_from) {
             }
             try {
                 let mariadb = k8s_resource("MariaDB", context.instance.namespace).get(v.name);
-                let sname = ndb.spec?.rootPasswordSecretKeyRef?.name;
-                let username = ndb.spec?.username;
-                let upass = ndb.spec?.passwordSecretKeyRef?.name;
-                let dbname = ndb.spec?.database;
+                let sname = mariadb.spec?.rootPasswordSecretKeyRef?.name;
+                let username = mariadb.spec?.username;
+                let upass = mariadb.spec?.passwordSecretKeyRef?.name;
+                let dbname = mariadb.spec?.database;
                 if sname != () {
-                    mysqls += name;
+                    mysqls += sname;
                     context["envs"] += #{
                         name: `${name}_username`,
                         value: "root"
@@ -233,7 +233,7 @@ fn run(instance, context, use_init_from) {
                         valueFrom: #{
                             secretKeyRef: #{
                                 name: sname,
-                                key: ndb.spec?.rootPasswordSecretKeyRef?.key ?? "password"
+                                key: mariadb.spec?.rootPasswordSecretKeyRef?.key ?? "password"
                             }
                         }
                     };
@@ -246,7 +246,7 @@ fn run(instance, context, use_init_from) {
                         value: dbname ?? "*"
                     };
                 } else if upass != () && username != () && dbname != () {
-                    mysqls += name;
+                    mysqls += sname;
                     context["envs"] += #{
                         name: `${name}_username`,
                         value: username
@@ -256,7 +256,7 @@ fn run(instance, context, use_init_from) {
                         valueFrom: #{
                             secretKeyRef: #{
                                 name: upass,
-                                key: ndb.spec?.passwordSecretKeyRef?.key ?? "password"
+                                key: mariadb.spec?.passwordSecretKeyRef?.key ?? "password"
                             }
                         }
                     };

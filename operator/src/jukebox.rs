@@ -186,7 +186,11 @@ impl Reconciler for JukeBox {
 
 #[must_use]
 pub fn error_policy(dist: Arc<JukeBox>, error: &Error, ctx: Arc<Context>) -> Action {
-    tracing::warn!("reconcile failed for JukeBox {:?}: {:?}", dist.metadata.name, error);
+    tracing::warn!(
+        "reconcile failed for JukeBox {:?}: {:?}",
+        dist.metadata.name,
+        error
+    );
     ctx.metrics.jukebox.reconcile_failure(&dist, error);
     Action::requeue(Duration::from_secs(5 * 60))
 }

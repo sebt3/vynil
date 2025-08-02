@@ -181,6 +181,30 @@ spec:
                       nullable: true
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
+                    recommandations:
+                      description: Recommandations
+                      items:
+                        description: Vynil Package Recommandation
+                        oneOf:
+                        - required:
+                          - custom_resource_definition
+                        - required:
+                          - system_service
+                        - required:
+                          - tenant_service
+                        properties:
+                          custom_resource_definition:
+                            description: Name of a crd that is required before installing this package
+                            type: string
+                          system_service:
+                            description: Name of a System Service that should be installed before current package
+                            type: string
+                          tenant_service:
+                            description: Name of a Tenant Service that should be installed before current package
+                            type: string
+                        type: object
+                      nullable: true
+                      type: array
                     registry:
                       description: Registry
                       type: string
@@ -191,6 +215,10 @@ spec:
                         oneOf:
                         - required:
                           - custom_resource_definition
+                        - required:
+                          - system_service
+                        - required:
+                          - tenant_service
                         - required:
                           - system_package
                         - required:
@@ -255,6 +283,9 @@ spec:
                             - category
                             - name
                             type: object
+                          system_service:
+                            description: Name of a System Service that should be installed before current package
+                            type: string
                           tenant_package:
                             description: TenantPackage that should be installed before current package in the current Tenant
                             properties:
@@ -266,6 +297,9 @@ spec:
                             - category
                             - name
                             type: object
+                          tenant_service:
+                            description: Name of a Tenant Service that should be installed before current package
+                            type: string
                           vynil_version:
                             description: Minimum vynil version
                             type: string
@@ -405,7 +439,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster TenantInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -477,7 +511,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster TenantInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -502,7 +536,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster TenantInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -527,7 +561,7 @@ spec:
                           description: Name of the object
                           type: string
                         namespace:
-                          description: Namespace is only used for Cluster TenantInstance for namespaced object
+                          description: Namespace is only used for namespaced object
                           nullable: true
                           type: string
                       required:
@@ -553,6 +587,10 @@ spec:
                       - fqdn
                       - port
                       type: object
+                    tenant:
+                      description: Tenant using this definition
+                      nullable: true
+                      type: string
                   required:
                   - key
                   type: object
@@ -578,7 +616,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster TenantInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -705,7 +743,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster ServiceInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -777,7 +815,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster ServiceInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -802,7 +840,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster ServiceInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -827,7 +865,7 @@ spec:
                           description: Name of the object
                           type: string
                         namespace:
-                          description: Namespace is only used for Cluster ServiceInstance for namespaced object
+                          description: Namespace is only used for namespaced object
                           nullable: true
                           type: string
                       required:
@@ -882,7 +920,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster ServiceInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:
@@ -1046,7 +1084,7 @@ spec:
                       description: Name of the object
                       type: string
                     namespace:
-                      description: Namespace is only used for Cluster SystemInstance for namespaced object
+                      description: Namespace is only used for namespaced object
                       nullable: true
                       type: string
                   required:

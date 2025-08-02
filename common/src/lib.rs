@@ -1,3 +1,5 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -106,3 +108,40 @@ mod tools;
 pub mod vynilpackage;
 pub use context::get_client_name;
 pub use semverhandler::Semver;
+
+
+/// Children describe a k8s object
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Children {
+    /// kind of k8s object
+    pub kind: String,
+    /// Name of the object
+    pub name: String,
+    /// Namespace is only used for namespaced object
+    pub namespace: Option<String>,
+}
+
+/// GlobalPublished describe a published service open to use
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalPublished {
+    /// FQDN of the service
+    pub fqdn: String,
+    /// Port of the service
+    pub port: u32,
+}
+
+/// Published describe a published service
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Published {
+    /// key of the service
+    pub key: String,
+    /// Tenant using this definition
+    pub tenant: Option<String>,
+    /// service as fqdn+port
+    pub service: Option<GlobalPublished>,
+    /// Definition of the service stored in a children object
+    pub definition: Option<Children>,
+}
