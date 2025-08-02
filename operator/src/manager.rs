@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.5.0";
+static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.5.1";
 
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,
@@ -58,7 +58,11 @@ impl Context {
             .unwrap_or(String::new());
         if !cache.is_empty() {
             let len = cache.len();
-            tracing::info!("Updating packages cache with {len} packages from {jukes}");
+            let mut count = 0;
+            for (_, items) in &cache {
+                count+=items.packages.len();
+            }
+            tracing::info!("Updating packages cache with {count} packages from {len} jukebox: {jukes}");
             *self.packages.write().await = cache;
         } else {
             tracing::warn!("No packages found from the jukebox list ({jukes}) to update the cache");
@@ -208,10 +212,11 @@ impl Manager {
     /// Metrics getter
     pub fn metrics(&self) -> String {
         let mut buffer = String::new();
-        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_box).unwrap();
-        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_sys).unwrap();
-        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_svc).unwrap();
-        prometheus_client::encoding::text::encode(&mut buffer, &self.metrics.reg_tnt).unwrap();
+        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_box).unwrap();
+        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_sys).unwrap();
+        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_svc).unwrap();
+        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_tnt).unwrap();
+        prometheus_client::encoding::text::encode_eof(&mut buffer).unwrap();
         buffer
     }
 

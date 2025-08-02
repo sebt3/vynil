@@ -184,7 +184,6 @@ impl Reconciler for TenantInstance {
                             rec_system_services.push(svc);
                         }
                     }
-                    _ => {}
                 }
             }
             rec_crds.sort();

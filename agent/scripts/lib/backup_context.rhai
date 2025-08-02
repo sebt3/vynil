@@ -223,7 +223,7 @@ fn run(instance, context, use_init_from) {
                 let upass = mariadb.spec?.passwordSecretKeyRef?.name;
                 let dbname = mariadb.spec?.database;
                 if sname != () {
-                    mysqls += sname;
+                    mysqls += name;
                     context["envs"] += #{
                         name: `${name}_username`,
                         value: "root"
@@ -246,7 +246,7 @@ fn run(instance, context, use_init_from) {
                         value: dbname ?? "*"
                     };
                 } else if upass != () && username != () && dbname != () {
-                    mysqls += sname;
+                    mysqls += name;
                     context["envs"] += #{
                         name: `${name}_username`,
                         value: username
