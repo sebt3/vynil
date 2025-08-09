@@ -83,11 +83,7 @@ impl Reconciler for TenantInstance {
             .unwrap()
             .insert("digest".to_string(), self.clone().get_options_digest().into());
         let current_version = if let Some(status) = self.status.clone() {
-            if let Some(v) = status.tag {
-                v
-            } else {
-                String::new()
-            }
+            status.tag.unwrap_or_default()
         } else {
             String::new()
         };
@@ -104,6 +100,7 @@ impl Reconciler for TenantInstance {
                     && p.metadata.category == self.spec.category
                     && p.metadata.usage == VynilPackageType::Tenant
                     && (p.is_min_version_ok(current_version.clone()))
+                    && (p.is_vynil_version_ok())
             })
         {
             self.clone()
@@ -135,6 +132,7 @@ impl Reconciler for TenantInstance {
                     && p.metadata.category == self.spec.category
                     && p.metadata.usage == VynilPackageType::Tenant
                     && (p.is_min_version_ok(current_version.clone()))
+                    && (p.is_vynil_version_ok())
             })
             .unwrap();
         context
@@ -340,6 +338,11 @@ impl Reconciler for TenantInstance {
             .as_object_mut()
             .unwrap()
             .insert("digest".to_string(), self.clone().get_options_digest().into());
+        let current_version = if let Some(status) = self.status.clone() {
+            status.tag.unwrap_or_default()
+        } else {
+            String::new()
+        };
         let packages = ctx.packages.read().await;
         if !packages.keys().any(|x| *x == self.spec.jukebox) {
             // JukeBox doesnt exist, cannot have been installed
@@ -352,6 +355,8 @@ impl Reconciler for TenantInstance {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
                     && p.metadata.usage == VynilPackageType::Tenant
+                    && (p.is_min_version_ok(current_version.clone()))
+                    && (p.is_vynil_version_ok())
             })
         {
             // Package doesnt exist
@@ -385,6 +390,8 @@ impl Reconciler for TenantInstance {
                 p.metadata.name == self.spec.package
                     && p.metadata.category == self.spec.category
                     && p.metadata.usage == VynilPackageType::Tenant
+                    && (p.is_min_version_ok(current_version.clone()))
+                    && (p.is_vynil_version_ok())
             })
             .unwrap();
         context
@@ -410,7 +417,7 @@ impl Reconciler for TenantInstance {
         context
             .as_object_mut()
             .unwrap()
-            .insert("rec_system_services".to_string(),"".into());
+            .insert("rec_system_services".to_string(), "".into());
         // Compute the controller values
         if pck.value_script.is_some() {
             let mut rhai = Script::new(vec![]);

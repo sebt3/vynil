@@ -16,6 +16,10 @@ use std::{
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub fn get_vynil_version() -> String {
+    VERSION.to_string()
+}
+
 /// Vynil package type
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -369,11 +373,40 @@ impl VynilPackage {
         None
     }
 
+    pub fn get_vynil_version(&self) -> Option<String> {
+        for rec in &self.requirements {
+            match rec {
+                VynilPackageRequirement::VynilVersion(v) => return Some(v.clone()),
+                _ => {}
+            }
+        }
+        None
+    }
+
     pub fn is_min_version_ok(&self, current: String) -> bool {
         let parse = Semver::parse(&current);
         if parse.is_ok() {
             let cur = parse.unwrap();
             if let Some(target) = self.get_min_version() {
+                let target_parsed = Semver::parse(&target);
+                if target_parsed.is_ok() {
+                    cur >= target_parsed.unwrap()
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } else {
+            true
+        }
+    }
+
+    pub fn is_vynil_version_ok(&self) -> bool {
+        let parse = Semver::parse(VERSION);
+        if parse.is_ok() {
+            let cur = parse.unwrap();
+            if let Some(target) = self.get_vynil_version() {
                 let target_parsed = Semver::parse(&target);
                 if target_parsed.is_ok() {
                     cur >= target_parsed.unwrap()
@@ -458,14 +491,15 @@ impl VynilPackageSource {
             .map_err(Error::JsonError)
             .map_err(rhai_err)
     }
+
     pub fn get_recommandations(&mut self) -> RhaiRes<Dynamic> {
         if let Some(recos) = self.recommandations.clone() {
             let v = serde_json::to_string(&recos)
-            .map_err(Error::JsonError)
-            .map_err(rhai_err)?;
-        serde_json::from_str(&v)
-            .map_err(Error::JsonError)
-            .map_err(rhai_err)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)?;
+            serde_json::from_str(&v)
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)
         } else {
             Ok(Dynamic::from(()))
         }

@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.5.1";
+static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.5.2";
 
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,
@@ -59,8 +59,8 @@ impl Context {
         if !cache.is_empty() {
             let len = cache.len();
             let mut count = 0;
-            for (_, items) in &cache {
-                count+=items.packages.len();
+            for items in cache.values() {
+                count += items.packages.len();
             }
             tracing::info!("Updating packages cache with {count} packages from {len} jukebox: {jukes}");
             *self.packages.write().await = cache;

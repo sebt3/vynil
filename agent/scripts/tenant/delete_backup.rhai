@@ -29,6 +29,13 @@ fn run(instance, context) {
                     deleted.push(o);
                 } catch(e) {}
             }
+            for job in api.list(`app.kubernetes.io/component=restore,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`).items {
+                try {
+                    let o = api.get_obj(job.metadata.name);
+                    o.delete();
+                    deleted.push(o);
+                } catch(e) {}
+            }
         }
         api = k8s_resource("RoleBinding", instance.metadata.namespace);
         if api.exist() {

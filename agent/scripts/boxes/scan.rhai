@@ -52,25 +52,48 @@ try {
         tags.sort(|a,b| if a==b {0} else if a<b {1} else {-1});
         let tags = tags.map(|v| v.to_string());
         // get the annotations from the highest version
-        let annotations = reg.get_manifest(image.repository, tags[0]).annotations;
-        if annotations.keys().contains("fr.solidite.vynil.metadata") && annotations.keys().contains("fr.solidite.vynil.requirements") {
-            let cur = #{
-                registry: image.registry,
-                image: image.repository,
-                tag: tags[0],
-                metadata: json_decode(annotations["fr.solidite.vynil.metadata"]),
-                requirements: json_decode(annotations["fr.solidite.vynil.requirements"]),
-            };
-            if annotations.keys().contains("fr.solidite.vynil.options") {
-                cur["options"] = json_decode(annotations["fr.solidite.vynil.options"]);
+        let iter_tags = tags.shift();
+        let last_min_version = ();
+        while iter_tags != () && type_of(iter_tags) == "string" && iter_tags != "" {
+            let current = iter_tags;
+            iter_tags = ();
+            let annotations = reg.get_manifest(image.repository, current).annotations;
+            if annotations.keys().contains("fr.solidite.vynil.metadata") && annotations.keys().contains("fr.solidite.vynil.requirements") {
+                let cur = #{
+                    registry: image.registry,
+                    image: image.repository,
+                    tag: current,
+                    metadata: json_decode(annotations["fr.solidite.vynil.metadata"]),
+                    requirements: json_decode(annotations["fr.solidite.vynil.requirements"]),
+                };
+                if annotations.keys().contains("fr.solidite.vynil.options") {
+                    cur["options"] = json_decode(annotations["fr.solidite.vynil.options"]);
+                }
+                if annotations.keys().contains("fr.solidite.vynil.recommandations") {
+                    cur["recommandations"] = json_decode(annotations["fr.solidite.vynil.recommandations"]);
+                }
+                if annotations.keys().contains("fr.solidite.vynil.value_script") {
+                    cur["value_script"] = annotations["fr.solidite.vynil.value_script"];
+                }
+                if (type_of(cur["requirements"]) == "array" && cur["requirements"].len() > 0) {
+                    if (cur["requirements"].some(|i| i.vynil_version != () && security_filter(i.vynil_version) && semver_from(i.vynil_version)>semver_from(vynil_version()))) {
+                        if tags.len() >= 1 {iter_tags = tags.shift();}
+                        print(`Ignoring ${image.repository} as it requiere a too new version, ${iter_tags}, ${current}, ${tags.len}`);
+                    } else if (last_min_version != () && cur["requirements"].some(|i| i.minimum_previous_version != () && security_filter(i.minimum_previous_version) && semver_from(i.minimum_previous_version)>=semver_from(last_min_version))) {
+                        if tags.len() >= 1 {iter_tags = tags.shift();}
+                    } else {
+                        if cur["requirements"].some(|i| i.minimum_previous_version != () && security_filter(i.minimum_previous_version)) {
+                            last_min_version = cur["requirements"].find(|i| i.minimum_previous_version != () && security_filter(i.minimum_previous_version)).minimum_previous_version;
+                            if tags.len() >= 1 {iter_tags = tags.shift();}
+                        } else {
+                            last_min_version = ();
+                        }
+                        found += cur;
+                    }
+                } else {
+                    found += cur;
+                }
             }
-            if annotations.keys().contains("fr.solidite.vynil.recommandations") {
-                cur["recommandations"] = json_decode(annotations["fr.solidite.vynil.recommandations"]);
-            }
-            if annotations.keys().contains("fr.solidite.vynil.value_script") {
-                cur["value_script"] = annotations["fr.solidite.vynil.value_script"];
-            }
-            found += cur;
         }
     }
     let tmp = box.set_status_updated(found);

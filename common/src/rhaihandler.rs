@@ -15,7 +15,7 @@ use crate::{
     ocihandler::Registry,
     passwordhandler::Passwords,
     rhai_err, shellhandler,
-    vynilpackage::{VynilPackageSource, rhai_read_package_yaml},
+    vynilpackage::{VynilPackageSource, get_vynil_version, rhai_read_package_yaml},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use kube::api::DynamicObject;
@@ -77,6 +77,7 @@ impl Script {
             .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
             .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))
             .register_fn("log_error", |s: ImmutableString| tracing::error!("{s}"))
+            .register_fn("vynil_version", get_vynil_version)
             .register_fn("url_encode", url_encode)
             .register_fn("bcrypt_hash", |s: ImmutableString| {
                 crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)

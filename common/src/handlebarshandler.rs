@@ -80,6 +80,16 @@ handlebars_helper!(labels: |ctx: Value, {comp:str=""}| {
 handlebars_helper!(have_crd: |ctx: Value, name: String| {
     ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().iter().any(|crd| *crd==name)
 });
+handlebars_helper!(have_system_service: |ctx: Value, name: String| {
+    if ctx.as_object().unwrap()["cluster"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].is_object() {
+        ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].as_object().unwrap().contains_key(&name)
+    } else {false}
+});
+handlebars_helper!(have_tenant_service: |ctx: Value, name: String| {
+    if ctx.as_object().unwrap().contains_key("tenant") && ctx.as_object().unwrap()["tenant"].is_object() && ctx.as_object().unwrap()["tenant"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].is_object() {
+        ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].as_object().unwrap().contains_key(&name)
+    } else {false}
+});
 handlebars_helper!(concat: |a: Value, b: Value| format!("{}{}", a.as_str().unwrap_or_else(|| {
     warn!("handlebars::concat received a non-string parameter: {:?}", a);
     ""
@@ -134,6 +144,8 @@ impl HandleBars<'_> {
         engine.register_helper("url_encode", Box::new(url_encode));
         engine.register_helper("gen_password", Box::new(gen_password));
         engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
+        engine.register_helper("have_system_service", Box::new(have_system_service));
+        engine.register_helper("have_tenant_service", Box::new(have_tenant_service));
         engine.register_helper("render_template", Box::new(render_template));
         engine.register_helper("render_file", Box::new(render_file));
         let _ = engine.register_script_helper("image_from_ctx",
