@@ -34,5 +34,9 @@ fn run(instance, args) {
     if type_of(ctx) == "map" {
         context = ctx;
     }
+    ctx = import_run("context_after", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
     context
 }

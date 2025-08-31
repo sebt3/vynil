@@ -47,10 +47,10 @@ fn run(instance, args) {
             for svc in svcs {
                 if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
                     for s in svc.status.services {
+                        context["tenant"]["services"][s.key] = s;
+                        context["tenant"]["services"][s.key].remove("key");
                         if "service" in s {
-                            context["tenant"]["services"][s.key] = s.service;
-                        } else {
-                            context["tenant"]["services"][s.key] = s.definition;
+                            context["tenant"]["services"][s.key] += s.service;
                         }
                     }
                 }
@@ -63,6 +63,10 @@ fn run(instance, args) {
     }
     context["extra"] = import_run("context_extra", instance, context);
     ctx = import_run("context_post", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    ctx = import_run("context_after", instance, context);
     if type_of(ctx) == "map" {
         context = ctx;
     }

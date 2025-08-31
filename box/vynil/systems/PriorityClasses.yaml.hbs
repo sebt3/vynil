@@ -1,0 +1,16 @@
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: vynil-backup
+value: 1005000000
+preemptionPolicy: PreemptLowerPriority
+description: This priority class should be used for backup pod only.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: vynil-vitals
+value: 1006000000
+preemptionPolicy: PreemptLowerPriority
+description: This priority class should be used for vital objects only.

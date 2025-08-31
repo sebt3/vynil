@@ -31,6 +31,7 @@ spec:
   volumes: {{json_to_str volumes}}
   serviceAccountName: {{service_account}}
   restartPolicy: Never
+  priorityClassName: vynil-backup
   securityContext:
     runAsGroup: 0
     runAsUser: 0

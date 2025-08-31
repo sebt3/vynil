@@ -323,17 +323,18 @@ fn run(instance, args) {
                     for s in svc.status.services {
                         if "tenant" in s {
                             if s.tenant == tenant {
+                                lst[s.key] = s;
+                                lst[s.key].remove("key");
+                                lst[s.key].remove("tenant");
                                 if "service" in s {
-                                    lst[s.key] = s.service;
-                                } else {
-                                    lst[s.key] = s.definition;
+                                    lst[s.key] += s.service;
                                 }
                             }
                         } else {
+                            lst[s.key] = s;
+                            lst[s.key].remove("key");
                             if "service" in s {
-                                lst[s.key] = s.service;
-                            } else {
-                                lst[s.key] = s.definition;
+                                lst[s.key] += s.service;
                             }
                         }
                     }
@@ -344,10 +345,12 @@ fn run(instance, args) {
                 if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
                     for s in svc.status.services {
                         if ! ("tenant" in s) {
+                            lst[s.key] = s;
+                            lst[s.key].remove("key");
                             if "service" in s {
-                                lst[s.key] = s.service;
-                            } else {
-                                lst[s.key] = s.definition;
+                                lst[s.key] += s.service;
+                            } else if "definition" in s {
+                                lst[s.key] += s.definition;
                             }
                         }
                     }
