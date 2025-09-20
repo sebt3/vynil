@@ -1,6 +1,5 @@
-ARG RUST_VERSION=1.87
-ARG DEBIAN_VERSION=bookworm
-ARG DEBIAN_NEXT=trixie
+ARG RUST_VERSION=1.90
+ARG DEBIAN_VERSION=trixie
 FROM --platform=${BUILDPLATFORM:-linux/amd64} docker.io/rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential g++"
 WORKDIR /usr/src/agent
@@ -26,7 +25,7 @@ RUN touch common/src/lib.rs agent/src/lib.rs agent/src/main.rs \
  && cargo build -r --bin agent \
  && strip target/release/agent
 # Then create the intermediary image with run-time dependencies installed
-FROM docker.io/debian:${DEBIAN_NEXT}-slim AS middle
+FROM docker.io/debian:${DEBIAN_VERSION}-slim AS middle
 ARG HELM_VERSION=v3.17.0
 ARG KUBECTL_VERSION=v1.30.3
 ARG TF_VERSION=1.9.0

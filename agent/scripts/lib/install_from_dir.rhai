@@ -1,4 +1,4 @@
-const FIRST = [
+fn get_first() { [
     "Tenant",
     "Namespace",
     "ServiceAccount",
@@ -11,8 +11,8 @@ const FIRST = [
     "PersistentVolume",
     "PersistentVolumeClaim",
     "NetworkPolicy"
-];
-const LAST = [
+] }
+fn get_last() { [
     "Pod",
     "Job",
     "CronJob",
@@ -27,7 +27,7 @@ const LAST = [
     "ValidatingAdmissionPolicy",
     "ValidatingAdmissionPolicyBinding",
     "ValidatingWebhookConfiguration",
-];
+] }
 
 fn get_objects(context, dir) {
     let hbs = new_hbs();
@@ -58,12 +58,14 @@ fn get_objects(context, dir) {
 
 fn install_obj(obj, allow_cluster, namespace, force_ns) {
     let applied = [];
+    log_debug(`Applying:`);
+    log_debug(yaml_encode(obj));
     let ns = if (force_ns) {
         namespace
     } else {
         if obj.metadata.namespace != () {obj.metadata.namespace} else {namespace}
     };
-    let api = k8s_resource(obj.kind, ns);
+    let api = k8s_resource(obj.apiVersion, obj.kind, ns);
     if api.exist() {
         if force_ns && api.scope != "cluster" {
             obj.metadata.namespace = ns;
@@ -73,6 +75,8 @@ fn install_obj(obj, allow_cluster, namespace, force_ns) {
                 log_info(`Applying ${obj.kind} ${obj.metadata.name}`);
                 api.apply(obj.metadata.name, obj);
                 applied.push(#{
+                    api_version: obj.apiVersion,
+                    apiVersion: obj.apiVersion,
                     kind: obj.kind,
                     name: obj.metadata.name
                 });
@@ -83,6 +87,8 @@ fn install_obj(obj, allow_cluster, namespace, force_ns) {
             log_info(`Applying ${obj.kind} ${ns}/${obj.metadata.name}`);
             api.apply(obj.metadata.name, obj);
             applied.push(#{
+                api_version: obj.apiVersion,
+                apiVersion: obj.apiVersion,
                 kind: obj.kind,
                 name: obj.metadata.name,
                 namespace: ns
@@ -97,15 +103,15 @@ fn install_obj(obj, allow_cluster, namespace, force_ns) {
 fn install(instance, context, dir, allow_cluster, force_ns) {
     let all = get_objects(context, dir);
     let applied_objs = [];
-    for k in global::FIRST {
+    for k in get_first() {
         for obj in all.filter(|o| o.kind==k) {
             applied_objs += install_obj(obj, allow_cluster, instance.metadata.namespace, force_ns);
         }
     }
-    for obj in all.filter(|o| !global::FIRST.contains(o.kind) && !global::LAST.contains(o.kind)) {
+    for obj in all.filter(|o| !get_first().contains(o.kind) && !get_last().contains(o.kind)) {
         applied_objs += install_obj(obj, allow_cluster, instance.metadata.namespace, force_ns);
     }
-    for k in global::LAST {
+    for k in get_last() {
         for obj in all.filter(|o| o.kind==k) {
             applied_objs += install_obj(obj, allow_cluster, instance.metadata.namespace, force_ns);
         }
@@ -115,18 +121,22 @@ fn install(instance, context, dir, allow_cluster, force_ns) {
 
 fn install_allowed_obj(obj, allowed, namespace) {
     let applied = [];
+    log_debug(`Applying:`);
+    log_debug(yaml_encode(obj));
     let ns = if (obj.metadata.namespace != () && obj.metadata.namespace in allowed) {
         obj.metadata.namespace
     } else {
         namespace
     };
-    let api = k8s_resource(obj.kind, ns);
+    let api = k8s_resource(obj.apiVersion, obj.kind, ns);
     if api.exist() {
         if api.scope != "cluster" {
             obj.metadata.namespace = ns;
             log_info(`Applying ${obj.kind} ${ns}/${obj.metadata.name}`);
             api.apply(obj.metadata.name, obj);
             applied.push(#{
+                api_version: obj.apiVersion,
+                apiVersion: obj.apiVersion,
                 kind: obj.kind,
                 name: obj.metadata.name,
                 namespace: ns
@@ -145,15 +155,15 @@ fn install_allowed(instance, context, dir, allowed) {
     // Just like template but output apply the objects
     let all = get_objects(context, dir);
     let applied_objs = [];
-    for k in global::FIRST {
+    for k in get_first() {
         for obj in all.filter(|o| o.kind==k) {
             applied_objs += install_allowed_obj(obj, allowed, instance.metadata.namespace);
         }
     }
-    for obj in all.filter(|o| !global::FIRST.contains(o.kind) && !global::LAST.contains(o.kind)) {
+    for obj in all.filter(|o| !get_first().contains(o.kind) && !get_last().contains(o.kind)) {
         applied_objs += install_allowed_obj(obj, allowed, instance.metadata.namespace);
     }
-    for k in global::LAST {
+    for k in get_last() {
         for obj in all.filter(|o| o.kind==k) {
             applied_objs += install_allowed_obj(obj, allowed, instance.metadata.namespace);
         }
@@ -166,7 +176,13 @@ fn remove(applied, previous, default_ns) {
     for old in previous {
         if ! applied.some(|n| n.kind == old.kind && n.namespace == old.namespace && n.name == old.name) {
             let ns = if old.namespace != () {old.namespace} else {default_ns};
-            let api = k8s_resource(old.kind, ns);
+            let api = if old.api_version != () {
+                k8s_resource(old.api_version, old.kind, ns)
+            } else if old.apiVersion != () {
+                k8s_resource(old.apiVersion, old.kind, ns)
+            } else {
+                k8s_resource(old.kind, ns)
+            };
             if api.exist() {
                 try {
                     let o = api.get_obj(old.name);
@@ -196,17 +212,17 @@ fn validate_add_item(item) {
 fn template(instance, context, dir) {
     // Just like install_allowed but output the objects
     let all = get_objects(context, dir);
-    for k in global::FIRST {
+    for k in get_first() {
         for obj in all.filter(|o| o.kind==k) {
             print("---");
             print(yaml_encode(obj));
         }
     }
-    for obj in all.filter(|o| !global::FIRST.contains(o.kind) && !global::LAST.contains(o.kind)) {
+    for obj in all.filter(|o| !get_first().contains(o.kind) && !get_last().contains(o.kind)) {
         print("---");
         print(yaml_encode(obj));
     }
-    for k in global::LAST {
+    for k in get_last() {
         for obj in all.filter(|o| o.kind==k) {
             print("---");
             print(yaml_encode(obj));

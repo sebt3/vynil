@@ -28,7 +28,7 @@ version = "0.96.0"
 
 
 [workspace.package]
-version = "0.5.3"
+version = "0.5.4"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2024"
 license = "BSD-3-Clause"
@@ -72,6 +72,9 @@ precommit = { cmd=[
 ]}
 agent = { cmd=[
     "podman build . -f agent/Dockerfile -t docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version) && podman push docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version)",
+]}
+debugagent = { cmd=[
+    "podman build . -f agent/Dockerfile -t docker.io/sebt3/vynil-agent:debug && podman push docker.io/sebt3/vynil-agent:debug",
 ]}
 operator = { cmd=[
     "podman build . -f operator/Dockerfile -t docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version) && podman push docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version)",

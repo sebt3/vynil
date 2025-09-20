@@ -367,6 +367,56 @@ impl K8sGeneric {
             .min_by_key(|(group, _res)| group.name())
             .map(|(_, res)| res)
         {
+            tracing::debug!("K8sGeneric::new Using {}/{}/{}", res.group, res.version, res.kind);
+            let api = if cap.scope == Scope::Cluster || ns.is_none() {
+                Api::all_with(CLIENT.clone(), &res)
+            } else if let Some(namespace) = ns.clone() {
+                Api::namespaced_with(CLIENT.clone(), &namespace, &res)
+            } else {
+                Api::default_namespaced_with(CLIENT.clone(), &res)
+            };
+            K8sGeneric {
+                api: Some(api),
+                ns,
+                scope: cap.scope,
+                kind: res.kind,
+            }
+        } else {
+            K8sGeneric {
+                api: None,
+                ns: None,
+                scope: Scope::Cluster,
+                kind: String::new(),
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn new_api_version(api_group: &str, version: &str, name: &str, ns: Option<String>) -> K8sGeneric {
+        if let Some((res, cap)) = CACHE
+            .lock()
+            .unwrap()
+            .groups()
+            .flat_map(|group| {
+                group
+                    .resources_by_stability()
+                    .into_iter()
+                    .map(move |res: (ApiResource, ApiCapabilities)| (group, res))
+            })
+            .filter(|(group, (res, _))| {
+                group.name() == api_group
+                    && res.version == version
+                    && (name.eq_ignore_ascii_case(&res.kind) || name.eq_ignore_ascii_case(&res.plural))
+            })
+            .min_by_key(|(group, _res)| group.name())
+            .map(|(_, res)| res)
+        {
+            tracing::debug!(
+                "K8sGeneric::new_api_version Using {}/{}/{}",
+                res.group,
+                res.version,
+                res.kind
+            );
             let api = if cap.scope == Scope::Cluster || ns.is_none() {
                 Api::all_with(CLIENT.clone(), &res)
             } else if let Some(namespace) = ns.clone() {
@@ -396,6 +446,15 @@ impl K8sGeneric {
 
     pub fn new_global(name: String) -> K8sGeneric {
         K8sGeneric::new(name.as_str(), None)
+    }
+
+    pub fn new_group_ns(api_version: String, name: String, ns: String) -> K8sGeneric {
+        let arr = api_version.split("/").collect::<Vec<&str>>();
+        if arr.len() > 1 {
+            K8sGeneric::new_api_version(arr[0], arr[1], name.as_str(), Some(ns))
+        } else {
+            K8sGeneric::new(name.as_str(), Some(ns))
+        }
     }
 
     pub fn rhai_get_scope(&mut self) -> String {

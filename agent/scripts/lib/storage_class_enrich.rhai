@@ -1,6 +1,6 @@
 // TODO: implement more from: https://storageclass.info/csidrivers/
 // https://github.com/storageclass/storageclass.github.io/blob/main/data/csidrivers.yaml
-const KNOWN_CLASS = [
+fn get_known_class() { [
     #{
         "driverClass": "cephfs.csi.ceph.com",
         "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
@@ -42,7 +42,7 @@ const KNOWN_CLASS = [
         "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
         "capabilities": #{"dynamic": true, "file": true},
     }
-];
+] }
 
 fn get_default_access_modes_from_all(all) {
     if all.contains("ReadWriteMany") {
@@ -60,7 +60,7 @@ fn classes_enrich(scs) {
     let enriched = [];
     for i in scs {
         i["volumeMode"] = "Filesystem";
-        let f = global::KNOWN_CLASS.find(|k| i.provisioner.contains(k.driverClass));
+        let f = get_known_class().find(|k| i.provisioner.contains(k.driverClass));
         if f != () {
             i["capabilities"] = f.capabilities;
             let keys = f.accessModes.keys();

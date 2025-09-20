@@ -1,15 +1,14 @@
 use clap::Args;
 use common::{Error, Result, ocihandler::Registry, rhaihandler::base64_decode};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-
+/*
 #[allow(non_snake_case)]
 #[derive(Deserialize, Serialize, Clone, Debug)]
 struct Layer {
     digest: String,
     mediaType: String,
     size: i64,
-}
+}*/
 
 #[derive(Args, Debug)]
 pub struct Parameters {

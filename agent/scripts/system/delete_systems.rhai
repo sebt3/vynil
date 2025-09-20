@@ -1,5 +1,5 @@
 // Do not delete these at first, and only in this order
-const LAST = [
+fn get_last() { [
     "Service",
     "Deployment",
     "ServiceAccount",
@@ -12,7 +12,7 @@ const LAST = [
     "PersistentVolume",
     "PersistentVolumeClaim",
     "Namespace",
-];
+] }
 
 fn run(instance, context) {
     let ctx = import_run("delete_systems_pre", instance, context);
@@ -21,9 +21,15 @@ fn run(instance, context) {
     }
     if instance.status != () && instance.status.systems != () {
         let deleted = [];
-        for old in instance.status.systems.filter(|o| !global::LAST.contains(o.kind)) {
+        for old in instance.status.systems.filter(|o| !get_last().contains(o.kind)) {
             let ns = if old.namespace != () {old.namespace} else {instance.metadata.namespace};
-            let api = k8s_resource(old.kind, ns);
+            let api = if old.api_version != () {
+                k8s_resource(old.api_version, old.kind, ns)
+            } else if old.apiVersion != () {
+                k8s_resource(old.apiVersion, old.kind, ns)
+            } else {
+                k8s_resource(old.kind, ns)
+            };
             if api.exist() {
                 try {
                     let o = api.get_obj(old.name);
@@ -37,10 +43,16 @@ fn run(instance, context) {
             d.wait_deleted(60*5);
         }
         deleted = [];
-        for k in global::LAST {
+        for k in get_last() {
             for old in instance.status.systems.filter(|o| o.kind==k) {
                 let ns = if old.namespace != () {old.namespace} else {instance.metadata.namespace};
-                let api = k8s_resource(old.kind, ns);
+                let api = if old.api_version != () {
+                    k8s_resource(old.api_version, old.kind, ns)
+                } else if old.apiVersion != () {
+                    k8s_resource(old.apiVersion, old.kind, ns)
+                } else {
+                    k8s_resource(old.kind, ns)
+                };
                 if api.exist() {
                     try {
                         let o = api.get_obj(old.name);

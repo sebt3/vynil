@@ -67,6 +67,13 @@ spec:
           mountPath: /etc/vynil
         - name: package
           mountPath: /package
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 50m
+            memory: 64Mi
       initContainers:
       - name: unpack
         args:
@@ -99,6 +106,13 @@ spec:
               fieldPath: metadata.name
         image: {{ agent_image }}
         imagePullPolicy: IfNotPresent
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 50m
+            memory: 64Mi
         volumeMounts:
         - name: package
           mountPath: /package

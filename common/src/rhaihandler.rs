@@ -3,6 +3,7 @@ use crate::{
     Result, RhaiRes, Semver,
     chronohandler::DateTimeHandler,
     context,
+    /*ed25519handler::Ed25519,*/
     handlebarshandler::HandleBars,
     hasheshandlers::Argon,
     httphandler::RestClient,
@@ -202,6 +203,12 @@ impl Script {
             .register_fn("register_helper_dir", HandleBars::rhai_register_helper_dir)
             .register_fn("render_from", HandleBars::rhai_render)
             .register_fn("render_named", HandleBars::rhai_render_named);
+        /*        script
+        .engine
+        .register_type_with_name::<Ed25519>("Ed25519")
+        .register_fn("new_ed25519", Ed25519::rhai_new)
+        .register_fn("public_key", Ed25519::rhai_public_key)
+        .register_fn("private_key", Ed25519::rhai_private_key);*/
         script
             .engine
             .register_type_with_name::<RestClient>("RestClient")
@@ -281,6 +288,7 @@ impl Script {
             .register_type_with_name::<K8sGeneric>("K8sGeneric")
             .register_fn("k8s_resource", K8sGeneric::new_global)
             .register_fn("k8s_resource", K8sGeneric::new_ns)
+            .register_fn("k8s_resource", K8sGeneric::new_group_ns)
             .register_fn("list", K8sGeneric::rhai_list)
             .register_fn("list", K8sGeneric::rhai_list_labels)
             .register_fn("update_k8s_crd_cache", update_cache)
