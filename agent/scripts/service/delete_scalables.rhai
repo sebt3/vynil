@@ -7,7 +7,11 @@ fn run(instance, context) {
         let deleted = [];
         for old in instance.status.scalables {
             let ns = if old.namespace != () {old.namespace} else {instance.metadata.namespace};
-            let api = k8s_resource(old.kind, ns);
+            let api = if old.api_version != () {
+                k8s_resource(old.api_version, old.kind, ns)
+            } else {
+                k8s_resource(old.kind, ns)
+            };
             if api.exist() {
                 try {
                     let o = api.get_obj(old.name);

@@ -1,6 +1,5 @@
-ARG RUST_VERSION=1.87
-ARG DEBIAN_VERSION=bookworm
-ARG DEBIAN_NEXT=trixie
+ARG RUST_VERSION=1.90
+ARG DEBIAN_VERSION=trixie
 FROM --platform=${BUILDPLATFORM:-linux/amd64} rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential g++"
 WORKDIR /usr/src/operator
@@ -26,7 +25,7 @@ RUN touch common/src/lib.rs operator/src/lib.rs operator/src/main.rs \
  && strip target/release/operator
 
 # Finally create the target image with run-time dependencies installed
-FROM debian:${DEBIAN_NEXT}-slim AS target
+FROM debian:${DEBIAN_VERSION}-slim AS target
 ARG DEB_PACKAGES="openssl"
 # hadolint ignore=DL3027,DL3008
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \

@@ -73,7 +73,17 @@ pub enum Error {
 
     #[error("Base64 decode error {0}")]
     Base64DecodeError(#[from] base64::DecodeError),
+    /*
+        #[error("Ed25519 encode public key error {0}")]
+        Ed25519EncodePublicError(#[from] ed25519_dalek::pkcs8::spki::Error),
 
+        #[error("Ed25519 encode private key error {0}")]
+        Ed25519EncodePrivateError(#[from] ed25519_dalek::pkcs8::Error),
+
+        #[error("Openssl error {0}")]
+        OpenSSL(#[from] openssl::error::ErrorStack),
+
+    */
     #[error("Error: {0}")]
     Other(String),
 }
@@ -109,11 +119,12 @@ pub mod vynilpackage;
 pub use context::get_client_name;
 pub use semverhandler::Semver;
 
-
 /// Children describe a k8s object
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Children {
+    /// apiVersion of k8s object
+    pub api_version: Option<String>,
     /// kind of k8s object
     pub kind: String,
     /// Name of the object
