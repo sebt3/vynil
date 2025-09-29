@@ -43,6 +43,7 @@ pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> 
 impl Reconciler for JukeBox {
     // Reconcile (for non-finalizer related changes)
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
+        tracing::debug!("Reconcilling JukeBox {}", self.name_any());
         ctx.diagnostics.write().await.last_event = Utc::now();
         let mut hbs = ctx.renderer.clone();
         let client = ctx.client.clone();
@@ -150,6 +151,7 @@ impl Reconciler for JukeBox {
             .await
             .map_err(Error::Elapsed)?
             .map_err(Error::KubeWaitError)?;
+        tracing::debug!("Reconcilling JukeBox {} Done", self.name_any());
         //tracing::info!("Updating packages cache");
         match JukeBox::list().await {
             Ok(lst) => ctx.set_package_cache(&lst).await,

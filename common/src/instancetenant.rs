@@ -546,8 +546,9 @@ impl TenantInstance {
     }
 
     async fn send_event(&mut self, client: Client, ev: Event) -> Result<()> {
-        let recorder = Recorder::new(client.clone(), get_reporter(), self.object_ref(&()));
-        match recorder.publish(ev).await {
+        let recorder = Recorder::new(client.clone(), get_reporter());
+        let oref = self.object_ref(&());
+        match recorder.publish(&ev, &oref).await {
             Ok(_) => Ok(()),
             Err(e) => match e {
                 kube::Error::Api(src) => {

@@ -226,6 +226,8 @@ spec:
                         - required:
                           - prefly
                         - required:
+                          - cluster_version
+                        - required:
                           - storage_capability
                         - required:
                           - minimum_previous_version
@@ -238,6 +240,20 @@ spec:
                         - required:
                           - disk
                         properties:
+                          cluster_version:
+                            properties:
+                              major:
+                                format: uint64
+                                minimum: 0.0
+                                type: integer
+                              minor:
+                                format: uint64
+                                minimum: 0.0
+                                type: integer
+                            required:
+                            - major
+                            - minor
+                            type: object
                           cpu:
                             description: Sum of all requests (Informative only)
                             format: double

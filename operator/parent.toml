@@ -9,7 +9,7 @@ default-members = [
 ]
 
 [workspace.dependencies]
-k8s-openapi = { version = "0.23.0", features = ["latest"], default-features = false }
+k8s-openapi = { version = "0.25.0", features = ["latest"], default-features = false }
 tracing = "0.1.37"
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.143"
@@ -22,11 +22,10 @@ base64 = "0.22.1"
 
 [workspace.dependencies.kube]
 features = ["runtime", "client", "derive" ]
-version = "0.96.0"
-
+version = "1.0.0"
 
 [workspace.package]
-version = "0.5.4"
+version = "0.5.5"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2024"
 license = "BSD-3-Clause"

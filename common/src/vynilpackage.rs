@@ -93,6 +93,11 @@ pub enum VynilPackageRequirement {
         script: String,
         name: String,
     },
+    // Check minimum cluster version
+    ClusterVersion {
+        major: u64,
+        minor: u64,
+    },
     StorageCapability(StorageCapability),
     /// Forbid migration that are not supported
     MinimumPreviousVersion(String),
@@ -115,6 +120,25 @@ impl VynilPackageRequirement {
                     current >= requested,
                     format!(
                         "Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"
+                    ),
+                    15 * 60,
+                ))
+            }
+            VynilPackageRequirement::ClusterVersion { major, minor } => {
+                let raw = crate::k8sraw::K8sRaw::new();
+                let ver = raw.get_api_version().await?;
+                let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
+                    .map_err(Error::SerializationError)?
+                    .parse()
+                    .map_err(Error::ParseInt)?;
+                let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
+                    .map_err(Error::SerializationError)?
+                    .parse()
+                    .map_err(Error::ParseInt)?;
+                Ok((
+                    maj > *major || (maj == *major && min >= *minor),
+                    format!(
+                        "Requested api-server version {major}.{minor} is over current version {maj}.{min}. Please upgrade your cluster first"
                     ),
                     15 * 60,
                 ))
@@ -187,6 +211,25 @@ impl VynilPackageRequirement {
                     current >= requested,
                     format!(
                         "Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"
+                    ),
+                    15 * 60,
+                ))
+            }
+            VynilPackageRequirement::ClusterVersion { major, minor } => {
+                let raw = crate::k8sraw::K8sRaw::new();
+                let ver = raw.get_api_version().await?;
+                let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
+                    .map_err(Error::SerializationError)?
+                    .parse()
+                    .map_err(Error::ParseInt)?;
+                let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
+                    .map_err(Error::SerializationError)?
+                    .parse()
+                    .map_err(Error::ParseInt)?;
+                Ok((
+                    maj > *major || (maj == *major && min >= *minor),
+                    format!(
+                        "Requested api-server version {major}.{minor} is over current version {maj}.{min}. Please upgrade your cluster first"
                     ),
                     15 * 60,
                 ))
@@ -273,6 +316,25 @@ impl VynilPackageRequirement {
                     current >= requested,
                     format!(
                         "Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first"
+                    ),
+                    15 * 60,
+                ))
+            }
+            VynilPackageRequirement::ClusterVersion { major, minor } => {
+                let raw = crate::k8sraw::K8sRaw::new();
+                let ver = raw.get_api_version().await?;
+                let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
+                    .map_err(Error::SerializationError)?
+                    .parse()
+                    .map_err(Error::ParseInt)?;
+                let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
+                    .map_err(Error::SerializationError)?
+                    .parse()
+                    .map_err(Error::ParseInt)?;
+                Ok((
+                    maj > *major || (maj == *major && min >= *minor),
+                    format!(
+                        "Requested api-server version {major}.{minor} is over current version {maj}.{min}. Please upgrade your cluster first"
                     ),
                     15 * 60,
                 ))
@@ -383,6 +445,16 @@ impl VynilPackage {
         None
     }
 
+    pub fn get_cluster_version(&self) -> Option<(u64, u64)> {
+        for rec in &self.requirements {
+            match rec {
+                VynilPackageRequirement::ClusterVersion { major, minor } => return Some((*major, *minor)),
+                _ => {}
+            }
+        }
+        None
+    }
+
     pub fn is_min_version_ok(&self, current: String) -> bool {
         let parse = Semver::parse(&current);
         if parse.is_ok() {
@@ -418,6 +490,26 @@ impl VynilPackage {
             }
         } else {
             true
+        }
+    }
+
+    pub fn is_cluster_version_ok(&self) -> Result<bool> {
+        let raw = crate::k8sraw::K8sRaw::new();
+        let ver = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move { raw.get_api_version().await })
+        })?;
+        let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
+            .map_err(Error::SerializationError)?
+            .parse()
+            .map_err(Error::ParseInt)?;
+        let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
+            .map_err(Error::SerializationError)?
+            .parse()
+            .map_err(Error::ParseInt)?;
+        if let Some((major, minor)) = self.get_cluster_version() {
+            Ok(maj > major || (maj == major && min >= minor))
+        } else {
+            Ok(true)
         }
     }
 }

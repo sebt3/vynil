@@ -50,6 +50,11 @@ pub async fn reconcile(inst: Arc<ServiceInstance>, ctx: Arc<Context>) -> Result<
 impl Reconciler for ServiceInstance {
     // Reconcile (for non-finalizer related changes)
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
+        tracing::debug!(
+            "Reconcilling ServiceInstance {}/{}",
+            self.namespace().unwrap(),
+            self.name_any()
+        );
         ctx.diagnostics.write().await.last_event = Utc::now();
         let mut hbs = ctx.renderer.clone();
         let client = ctx.client.clone();
@@ -288,6 +293,11 @@ impl Reconciler for ServiceInstance {
                     .map_err(Error::KubeError)?
             }
         };
+        tracing::debug!(
+            "Reconcilling ServiceInstance {}/{} Done",
+            self.namespace().unwrap(),
+            self.name_any()
+        );
         // Wait for the Job completion
         /*let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
         tokio::time::timeout(std::time::Duration::from_secs(10 * 60), cond)

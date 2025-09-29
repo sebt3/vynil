@@ -36,6 +36,7 @@ argon2 = { version = "0.5.3", features = ["std"] }
 bcrypt = "0.17.1"
 crc32fast = "1.5.0"
 url = "2.5.4"
+http = "1.1.0"
 #openssl = "0.10.73"
 #ed25519-dalek = { version = "2.2.0", features = ["rand_core", "pkcs8", "pem"] }
 #rnd8 = { package = "rand", version = "0.8.5" }

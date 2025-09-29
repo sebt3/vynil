@@ -1,7 +1,7 @@
 apiVersion: vinyl.solidite.fr/v1beta1
 kind: Package
 metadata:
-  app_version: 0.5.4
+  app_version: 0.5.5
   category: core
   description: Vynil controller to manage vynil packages installations
   features:

@@ -73,6 +73,13 @@ pub enum Error {
 
     #[error("Base64 decode error {0}")]
     Base64DecodeError(#[from] base64::DecodeError),
+
+    #[error("RAW api error {0}")]
+    RawHTTP(#[from] http::Error),
+
+    #[error("ParseIntError {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
+
     /*
         #[error("Ed25519 encode public key error {0}")]
         Ed25519EncodePublicError(#[from] ed25519_dalek::pkcs8::spki::Error),
@@ -108,6 +115,7 @@ pub mod instancesystem;
 pub mod instancetenant;
 pub mod jukebox;
 pub mod k8sgeneric;
+pub mod k8sraw;
 pub mod k8sworkload;
 pub mod ocihandler;
 pub mod passwordhandler;

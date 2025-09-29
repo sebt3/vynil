@@ -328,6 +328,7 @@ fn run(instance, args) {
                                 lst[s.key].remove("tenant");
                                 if "service" in s {
                                     lst[s.key] += s.service;
+                                    lst[s.key].remove("service");
                                 }
                             }
                         } else {
@@ -335,6 +336,7 @@ fn run(instance, args) {
                             lst[s.key].remove("key");
                             if "service" in s {
                                 lst[s.key] += s.service;
+                                lst[s.key].remove("service");
                             }
                         }
                     }
@@ -349,6 +351,7 @@ fn run(instance, args) {
                             lst[s.key].remove("key");
                             if "service" in s {
                                 lst[s.key] += s.service;
+                                lst[s.key].remove("service");
                             } else if "definition" in s {
                                 lst[s.key] += s.definition;
                             }

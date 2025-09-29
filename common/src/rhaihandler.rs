@@ -12,6 +12,7 @@ use crate::{
     instancetenant::TenantInstance,
     jukebox::JukeBox,
     k8sgeneric::{K8sGeneric, K8sObject, update_cache},
+    k8sraw::K8sRaw,
     k8sworkload::{K8sDaemonSet, K8sDeploy, K8sJob, K8sStatefulSet},
     ocihandler::Registry,
     passwordhandler::Passwords,
@@ -203,6 +204,12 @@ impl Script {
             .register_fn("register_helper_dir", HandleBars::rhai_register_helper_dir)
             .register_fn("render_from", HandleBars::rhai_render)
             .register_fn("render_named", HandleBars::rhai_render_named);
+        script
+            .engine
+            .register_type_with_name::<K8sRaw>("K8sRaw")
+            .register_fn("new_k8s_raw", K8sRaw::new)
+            .register_fn("get_url", K8sRaw::rhai_get_url)
+            .register_fn("get_cluster_version", K8sRaw::rhai_get_api_version);
         /*        script
         .engine
         .register_type_with_name::<Ed25519>("Ed25519")

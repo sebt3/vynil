@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use tokio::sync::RwLock;
 
 use crate::{
     Error, Result, RhaiRes,
@@ -20,6 +20,12 @@ use serde_json::json;
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
 }
+async fn async_populate_cache() -> Discovery {
+    Discovery::new(CLIENT.clone())
+        .run()
+        .await
+        .expect("create discovery")
+}
 fn populate_cache() -> Discovery {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
@@ -31,11 +37,15 @@ fn populate_cache() -> Discovery {
     })
 }
 lazy_static::lazy_static! {
-    pub static ref CACHE: Mutex<Discovery> = Mutex::new(populate_cache());
+    pub static ref CACHE: RwLock<Discovery> = RwLock::new(populate_cache());
 }
 
 pub fn update_cache() {
-    *CACHE.lock().unwrap() = populate_cache();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            *CACHE.write().await = async_populate_cache().await;
+        })
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -351,93 +361,102 @@ pub struct K8sGeneric {
 impl K8sGeneric {
     #[must_use]
     pub fn new(name: &str, ns: Option<String>) -> K8sGeneric {
-        if let Some((res, cap)) = CACHE
-            .lock()
-            .unwrap()
-            .groups()
-            .flat_map(|group| {
-                group
-                    .resources_by_stability()
-                    .into_iter()
-                    .map(move |res: (ApiResource, ApiCapabilities)| (group, res))
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                if let Some((res, cap)) = CACHE
+                    .read()
+                    .await
+                    .groups()
+                    .flat_map(|group| {
+                        group
+                            .resources_by_stability()
+                            .into_iter()
+                            .map(move |res: (ApiResource, ApiCapabilities)| (group, res))
+                    })
+                    .filter(|(_, (res, _))| {
+                        name.eq_ignore_ascii_case(&res.kind) || name.eq_ignore_ascii_case(&res.plural)
+                    })
+                    .min_by_key(|(group, _res)| group.name())
+                    .map(|(_, res)| res)
+                {
+                    tracing::debug!("K8sGeneric::new Using {}/{}/{}", res.group, res.version, res.kind);
+                    let api = if cap.scope == Scope::Cluster || ns.is_none() {
+                        Api::all_with(CLIENT.clone(), &res)
+                    } else if let Some(namespace) = ns.clone() {
+                        Api::namespaced_with(CLIENT.clone(), &namespace, &res)
+                    } else {
+                        Api::default_namespaced_with(CLIENT.clone(), &res)
+                    };
+                    K8sGeneric {
+                        api: Some(api),
+                        ns,
+                        scope: cap.scope,
+                        kind: res.kind,
+                    }
+                } else {
+                    K8sGeneric {
+                        api: None,
+                        ns: None,
+                        scope: Scope::Cluster,
+                        kind: String::new(),
+                    }
+                }
             })
-            .filter(|(_, (res, _))| {
-                name.eq_ignore_ascii_case(&res.kind) || name.eq_ignore_ascii_case(&res.plural)
-            })
-            .min_by_key(|(group, _res)| group.name())
-            .map(|(_, res)| res)
-        {
-            tracing::debug!("K8sGeneric::new Using {}/{}/{}", res.group, res.version, res.kind);
-            let api = if cap.scope == Scope::Cluster || ns.is_none() {
-                Api::all_with(CLIENT.clone(), &res)
-            } else if let Some(namespace) = ns.clone() {
-                Api::namespaced_with(CLIENT.clone(), &namespace, &res)
-            } else {
-                Api::default_namespaced_with(CLIENT.clone(), &res)
-            };
-            K8sGeneric {
-                api: Some(api),
-                ns,
-                scope: cap.scope,
-                kind: res.kind,
-            }
-        } else {
-            K8sGeneric {
-                api: None,
-                ns: None,
-                scope: Scope::Cluster,
-                kind: String::new(),
-            }
-        }
+        })
     }
 
     #[must_use]
     pub fn new_api_version(api_group: &str, version: &str, name: &str, ns: Option<String>) -> K8sGeneric {
-        if let Some((res, cap)) = CACHE
-            .lock()
-            .unwrap()
-            .groups()
-            .flat_map(|group| {
-                group
-                    .resources_by_stability()
-                    .into_iter()
-                    .map(move |res: (ApiResource, ApiCapabilities)| (group, res))
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                if let Some((res, cap)) = CACHE
+                    .read()
+                    .await
+                    .groups()
+                    .flat_map(|group| {
+                        group
+                            .resources_by_stability()
+                            .into_iter()
+                            .map(move |res: (ApiResource, ApiCapabilities)| (group, res))
+                    })
+                    .filter(|(group, (res, _))| {
+                        group.name() == api_group
+                            && res.version == version
+                            && (name.eq_ignore_ascii_case(&res.kind)
+                                || name.eq_ignore_ascii_case(&res.plural))
+                    })
+                    .min_by_key(|(group, _res)| group.name())
+                    .map(|(_, res)| res)
+                {
+                    tracing::debug!(
+                        "K8sGeneric::new_api_version Using {}/{}/{}",
+                        res.group,
+                        res.version,
+                        res.kind
+                    );
+                    let api = if cap.scope == Scope::Cluster || ns.is_none() {
+                        Api::all_with(CLIENT.clone(), &res)
+                    } else if let Some(namespace) = ns.clone() {
+                        Api::namespaced_with(CLIENT.clone(), &namespace, &res)
+                    } else {
+                        Api::default_namespaced_with(CLIENT.clone(), &res)
+                    };
+                    K8sGeneric {
+                        api: Some(api),
+                        ns,
+                        scope: cap.scope,
+                        kind: res.kind,
+                    }
+                } else {
+                    K8sGeneric {
+                        api: None,
+                        ns: None,
+                        scope: Scope::Cluster,
+                        kind: String::new(),
+                    }
+                }
             })
-            .filter(|(group, (res, _))| {
-                group.name() == api_group
-                    && res.version == version
-                    && (name.eq_ignore_ascii_case(&res.kind) || name.eq_ignore_ascii_case(&res.plural))
-            })
-            .min_by_key(|(group, _res)| group.name())
-            .map(|(_, res)| res)
-        {
-            tracing::debug!(
-                "K8sGeneric::new_api_version Using {}/{}/{}",
-                res.group,
-                res.version,
-                res.kind
-            );
-            let api = if cap.scope == Scope::Cluster || ns.is_none() {
-                Api::all_with(CLIENT.clone(), &res)
-            } else if let Some(namespace) = ns.clone() {
-                Api::namespaced_with(CLIENT.clone(), &namespace, &res)
-            } else {
-                Api::default_namespaced_with(CLIENT.clone(), &res)
-            };
-            K8sGeneric {
-                api: Some(api),
-                ns,
-                scope: cap.scope,
-                kind: res.kind,
-            }
-        } else {
-            K8sGeneric {
-                api: None,
-                ns: None,
-                scope: Scope::Cluster,
-                kind: String::new(),
-            }
-        }
+        })
     }
 
     pub fn new_ns(name: String, ns: String) -> K8sGeneric {
