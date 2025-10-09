@@ -157,6 +157,7 @@ spec:
                             - high_availability
                             - auto_config
                             - auto_scaling
+                            - deprecated
                             type: string
                           type: array
                         name:

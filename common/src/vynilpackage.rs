@@ -41,6 +41,7 @@ pub enum VynilPackageFeature {
     HighAvailability,
     AutoConfig,
     AutoScaling,
+    Deprecated,
 }
 
 /// Vynil Package Meta
@@ -528,19 +529,33 @@ pub struct Image {
 /// Resource item definitions
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 pub struct ResourceItem {
-    /// Current tag
+    /// Cpu ressource
     pub cpu: Option<String>,
-    /// Metadata for a package
+    /// Memory ressource
     pub memory: Option<String>,
+    /// Storage ressource
+    pub storage: Option<String>,
+}
+
+/// Resource scaler definitions
+#[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+pub struct ResourceScaler {
+    /// Maximum replicas count
+    pub max_replicas: u64,
+    /// average cpu utilization
+    pub average_utilization: u64,
 }
 
 /// Resource definition definitions
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
 pub struct Resource {
-    /// Current tag
+    /// Ressources requests
     pub requests: Option<ResourceItem>,
-    /// Metadata for a package
+    /// Ressources limits
     pub limits: Option<ResourceItem>,
+    /// Ressources scaler
+    pub scaler: Option<ResourceScaler>,
 }
 
 

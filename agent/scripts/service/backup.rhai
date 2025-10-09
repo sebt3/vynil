@@ -55,6 +55,6 @@ fn run(args) {
     import_run("backup_run", context);
     import_run("maintenance_stop", context);
     import_run("backup_check", context);
-    import_run("backup_prune", context);
+    //import_run("backup_prune", context);
     import_run("backup_post", context);
 }

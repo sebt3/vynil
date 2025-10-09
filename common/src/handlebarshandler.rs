@@ -81,13 +81,15 @@ handlebars_helper!(have_crd: |ctx: Value, name: String| {
     ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().iter().any(|crd| *crd==name)
 });
 handlebars_helper!(have_system_service: |ctx: Value, name: String| {
-    if ctx.as_object().unwrap()["cluster"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].is_object() {
-        ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].as_object().unwrap().contains_key(&name)
+    if ctx.as_object().unwrap()["cluster"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].is_array() {
+        let v: Vec<&Value> = ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].as_array().unwrap().iter().filter(|s| s.as_object().unwrap().get("key").unwrap_or_default()==&name).collect();
+        v.len()>0
     } else {false}
 });
 handlebars_helper!(have_tenant_service: |ctx: Value, name: String| {
-    if ctx.as_object().unwrap().contains_key("tenant") && ctx.as_object().unwrap()["tenant"].is_object() && ctx.as_object().unwrap()["tenant"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].is_object() {
-        ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].as_object().unwrap().contains_key(&name)
+    if ctx.as_object().unwrap().contains_key("tenant") && ctx.as_object().unwrap()["tenant"].is_object() && ctx.as_object().unwrap()["tenant"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].is_array() {
+        let v: Vec<&Value> = ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].as_array().unwrap().iter().filter(|s| s.as_object().unwrap().get("key").unwrap_or_default()==&name).collect();
+        v.len()>0
     } else {false}
 });
 handlebars_helper!(concat: |a: Value, b: Value| format!("{}{}", a.as_str().unwrap_or_else(|| {
@@ -155,8 +157,8 @@ impl HandleBars<'_> {
             `${im[\"registry\"]}/${im[\"repository\"]}:${tag}`");
         let _ = engine.register_script_helper(
             "resources_from_ctx",
-            "let root = params[0];let name = params[1];\n\
-            root[\"instance\"][\"resources\"][name]",
+            "let root = params[0]?[\"instance\"]?[\"resources\"];let name = params[1];\n\
+            #{requests: #{cpu: root?[name]?[\"requests\"]?[\"cpu\"], memory: root?[name]?[\"requests\"]?[\"memory\"]}, limits: #{cpu: root?[name]?[\"limits\"]?[\"cpu\"], memory: root?[name]?[\"limits\"]?[\"memory\"]}}",
         );
         // TODO helper pour load de fichier
         // TODO: add more helpers

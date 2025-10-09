@@ -37,7 +37,7 @@ fn run(instance, args) {
     context["tenant"] = #{
         name: name,
         namespaces: nss,
-        services: context["cluster"]["services"],
+        services: [],
         maintenance_start_hour: "1",
         maintenance_start_minut: "0",
     };
@@ -47,11 +47,19 @@ fn run(instance, args) {
             for svc in svcs {
                 if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
                     for s in svc.status.services {
-                        context["tenant"]["services"][s.key] = s;
-                        context["tenant"]["services"][s.key].remove("key");
+                        s.instance = #{
+                            name: svc.metadata.name,
+                            namespace: svc.metadata.namespace,
+                        };
+                        s["package"] = #{
+                            category: svc.spec.category,
+                            name: svc.spec["package"],
+                        };
                         if "service" in s {
-                            context["tenant"]["services"][s.key] += s.service;
+                            s += s.service;
+                            s.remove("service");
                         }
+                        context["tenant"]["services"].push(s);
                     }
                 }
             }

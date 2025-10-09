@@ -15,6 +15,13 @@ spec:
     env: {{json_to_str envs}}
     envFrom: {{json_to_str envs_from}}
     volumeMounts: {{json_to_str mounts}}
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 50m
+        memory: 64Mi
     securityContext:
       runAsUser: 0
       runAsGroup: 0

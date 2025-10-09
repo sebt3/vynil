@@ -1,7 +1,7 @@
 apiVersion: vinyl.solidite.fr/v1beta1
 kind: Package
 metadata:
-  app_version: 0.5.5
+  app_version: 0.5.6
   category: core
   description: Vynil controller to manage vynil packages installations
   features:
@@ -21,4 +21,7 @@ resources:
     requests:
       cpu: 50m
       memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
 requirements: []

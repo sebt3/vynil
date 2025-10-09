@@ -237,7 +237,7 @@ fn template(instance, args) {
     } else {#{}};
     cluster_config["storage_classes"] = scs;
     cluster_config["crds"] = defaults.crds;
-    cluster_config["services"] = #{};
+    cluster_config["services"] = [];
     if ! ("prefered_storage" in cluster_config) {
         cluster_config["prefered_storage"] = sce::get_prefered_sc(scs);
     }
@@ -312,32 +312,38 @@ fn run(instance, args) {
     }
     cluster_config["vynil_namespace"] = args.vynil_namespace;
     let defaults = get_default(pkg.options);
-    cluster_config["services"] = #{};
+    cluster_config["services"] = [];
     try {
         let svcs = k8s_resource("ServiceInstance").list().items;
-        let lst = #{};
+        let lst = [];
         if type_of(instance) == "TenantInstance" {
             let tenant = instance.get_tenant_name();
             for svc in svcs {
                 if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
                     for s in svc.status.services {
+                        s.instance = #{
+                            name: svc.metadata.name,
+                            namespace: svc.metadata.namespace,
+                        };
+                        s["package"] = #{
+                            category: svc.spec.category,
+                            name: svc.spec["package"],
+                        };
                         if "tenant" in s {
                             if s.tenant == tenant {
-                                lst[s.key] = s;
-                                lst[s.key].remove("key");
-                                lst[s.key].remove("tenant");
+                                s.remove("tenant");
                                 if "service" in s {
-                                    lst[s.key] += s.service;
-                                    lst[s.key].remove("service");
+                                    s += s.service;
+                                    s.remove("service");
                                 }
+                                lst.push(s);
                             }
                         } else {
-                            lst[s.key] = s;
-                            lst[s.key].remove("key");
                             if "service" in s {
-                                lst[s.key] += s.service;
-                                lst[s.key].remove("service");
+                                s += s.service;
+                                s.remove("service");
                             }
+                            lst.push(s);
                         }
                     }
                 }
@@ -346,15 +352,20 @@ fn run(instance, args) {
             for svc in svcs {
                 if type_of(svc.status) == "map" && type_of(svc.status.services) == "array" {
                     for s in svc.status.services {
+                        s.instance = #{
+                            name: svc.metadata.name,
+                            namespace: svc.metadata.namespace,
+                        };
+                        s["package"] = #{
+                            category: svc.spec.category,
+                            name: svc.spec["package"],
+                        };
                         if ! ("tenant" in s) {
-                            lst[s.key] = s;
-                            lst[s.key].remove("key");
                             if "service" in s {
-                                lst[s.key] += s.service;
-                                lst[s.key].remove("service");
-                            } else if "definition" in s {
-                                lst[s.key] += s.definition;
+                                s += s.service;
+                                s.remove("service");
                             }
+                            lst.push(s);
                         }
                     }
                 }

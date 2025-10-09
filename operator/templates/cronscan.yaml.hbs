@@ -38,6 +38,13 @@ spec:
             image: {{ agent_image }}
             imagePullPolicy: IfNotPresent
           restartPolicy: OnFailure
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 64Mi
           securityContext:
             fsGroup: 65534
             runAsGroup: 65534

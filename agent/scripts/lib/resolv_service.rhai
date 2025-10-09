@@ -9,27 +9,91 @@ fn resolv_cm(svc) {
     svc
 }
 
-fn get_from(svcs, names) {
+fn get_from_key(svcs, names) {
     if svcs == () {
         return ();
     }
     if type_of(names) == "string" {
-        return resolv_cm(svcs[names]);
+        let found = svcs.filter(|s| s.key == names);
+        if found.len() > 0 {
+            return resolv_cm(found[0]);
+        } else {
+            return ();
+        }
     }
     for n in names {
-        if svcs[n] != () {
-            return resolv_cm(svcs[n]);
+        let found = svcs.filter(|s| s.key == n);
+        if found.len() > 0 {
+            return resolv_cm(found[0]);
+        }
+    }
+    ()
+}
+
+fn get_from_package(svcs, names) {
+    if svcs == () {
+        return ();
+    }
+    if type_of(names) == "string" {
+        let found = svcs.filter(|s| s["package"].name == names);
+        if found.len() > 0 {
+            return resolv_cm(found[0]);
+        } else {
+            return ();
+        }
+    }
+    for n in names {
+        let found = svcs.filter(|s| s["package"].name == n);
+        if found.len() > 0 {
+            return resolv_cm(found[0]);
+        }
+    }
+    ()
+}
+
+fn get_from_package(svcs, key, names) {
+    if svcs == () {
+        return ();
+    }
+    if type_of(names) == "string" {
+        let found = svcs.filter(|s| s.key == key && s["package"].name == names);
+        if found.len() > 0 {
+            return resolv_cm(found[0]);
+        } else {
+            return ();
+        }
+    }
+    for n in names {
+        let found = svcs.filter(|s| s.key == key && s["package"].name == n);
+        if found.len() > 0 {
+            return resolv_cm(found[0]);
         }
     }
     ()
 }
 
 fn get_system(context, names) {
-    get_from(context?.cluster?.services, names)
+    get_from_key(context?.cluster?.services, names)
 }
 
 fn get_tenant(context, names) {
-    get_from(context?.tenant?.services, names)
+    get_from_key(context?.tenant?.services, names)
+}
+
+fn get_system_package(context, names) {
+    get_from_package(context?.cluster?.services, names)
+}
+
+fn get_tenant_package(context, names) {
+    get_from_package(context?.tenant?.services, names)
+}
+
+fn get_system_package(context, key, names) {
+    get_from_package(context?.cluster?.services, key, names)
+}
+
+fn get_tenant_package(context, key, names) {
+    get_from_package(context?.tenant?.services, key, names)
 }
 
 fn resolv_secret(svc) {
