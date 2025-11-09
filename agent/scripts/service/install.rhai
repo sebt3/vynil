@@ -3,6 +3,15 @@ fn run(instance, context) {
     if type_of(ctx) == "map" {
         context = ctx;
     }
+    if is_dir(`${context.package_dir}/crds`) {
+        log_info(`Installing CRDs from ${context.package_dir}/crds from ${instance.metadata.namespace} ${instance.metadata.name}`);
+        ctx = import_run("install_crds", instance, context);
+        if type_of(ctx) == "map" {
+            context = ctx;
+        }
+        update_k8s_crd_cache();
+        instance = get_system_instance(instance.metadata.namespace, instance.metadata.name);
+    }
     if is_dir(`${context.package_dir}/befores`) {
         ctx = import_run("install_befores", instance, context);
         if type_of(ctx) == "map" {

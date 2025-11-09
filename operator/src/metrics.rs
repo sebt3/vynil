@@ -73,7 +73,9 @@ impl Drop for ReconcileMeasurerBox {
         #[allow(clippy::cast_precision_loss)]
         let duration = self.start.elapsed().as_millis() as f64 / 1000.0;
         let trace = self.trace.take();
-        self.metric.get_or_create(&self.labels).observe(duration, trace, None);
+        self.metric
+            .get_or_create(&self.labels)
+            .observe(duration, trace, None);
     }
 }
 
@@ -108,7 +110,9 @@ impl Drop for ReconcileMeasurerInstance {
         #[allow(clippy::cast_precision_loss)]
         let duration = self.start.elapsed().as_millis() as f64 / 1000.0;
         let trace = self.trace.take();
-        self.metric.get_or_create(&self.labels).observe(duration, trace, None);
+        self.metric
+            .get_or_create(&self.labels)
+            .observe(duration, trace, None);
     }
 }
 

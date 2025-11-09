@@ -30,8 +30,25 @@ impl K8sRaw {
         Ok(resp)
     }
 
+    pub async fn get_url_as_disco(&self, url: String) -> Result<serde_json::Value> {
+        let req = http::Request::get(url)
+            .header("Accept", "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;g=apidiscovery.k8s.io;v=v2beta1;as=APIGroupDiscoveryList,application/json")
+            .body(Default::default())
+            .map_err(Error::RawHTTP)?;
+        let resp = self
+            .client
+            .request::<serde_json::Value>(req)
+            .await
+            .map_err(Error::KubeError)?;
+        Ok(resp)
+    }
+
     pub async fn get_api_version(&self) -> Result<serde_json::Value> {
         self.get_url("/version".to_string()).await
+    }
+
+    pub async fn get_api_resources(&self) -> Result<serde_json::Value> {
+        self.get_url_as_disco("/apis".to_string()).await
     }
 
     pub fn rhai_get_url(&mut self, url: String) -> RhaiRes<Dynamic> {
@@ -52,6 +69,20 @@ impl K8sRaw {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let ver = self.get_api_version().await.map_err(rhai_err)?;
+                let v = serde_json::to_string(&ver)
+                    .map_err(Error::SerializationError)
+                    .map_err(rhai_err)?;
+                serde_json::from_str(&v)
+                    .map_err(Error::SerializationError)
+                    .map_err(rhai_err)
+            })
+        })
+    }
+
+    pub fn rhai_get_api_resources(&mut self) -> RhaiRes<Dynamic> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                let ver = self.get_api_resources().await.map_err(rhai_err)?;
                 let v = serde_json::to_string(&ver)
                     .map_err(Error::SerializationError)
                     .map_err(rhai_err)?;

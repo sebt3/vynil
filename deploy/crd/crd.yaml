@@ -824,6 +824,7 @@ spec:
                       - Backuped
                       - Restored
                       - AgentStarted
+                      - CrdApplied
                       - TofuInstalled
                       - BeforeApplied
                       - VitalApplied
@@ -839,6 +840,12 @@ spec:
                   - status
                   - type
                   type: object
+                type: array
+              crds:
+                description: List of crds children
+                items:
+                  type: string
+                nullable: true
                 type: array
               digest:
                 description: Options digests

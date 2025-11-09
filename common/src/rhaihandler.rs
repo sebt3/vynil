@@ -209,6 +209,7 @@ impl Script {
             .register_type_with_name::<K8sRaw>("K8sRaw")
             .register_fn("new_k8s_raw", K8sRaw::new)
             .register_fn("get_url", K8sRaw::rhai_get_url)
+            .register_fn("get_api_resources", K8sRaw::rhai_get_api_resources)
             .register_fn("get_cluster_version", K8sRaw::rhai_get_api_version);
         /*        script
         .engine
@@ -430,6 +431,11 @@ impl Script {
                 ServiceInstance::rhai_set_missing_requirement,
             )
             .register_fn("set_status_ready", ServiceInstance::rhai_set_status_ready)
+            .register_fn("set_status_crds", SystemInstance::rhai_set_status_crds)
+            .register_fn(
+                "set_status_crd_failed",
+                SystemInstance::rhai_set_status_crd_failed,
+            )
             .register_fn("set_status_befores", ServiceInstance::rhai_set_status_befores)
             .register_fn(
                 "set_status_before_failed",
