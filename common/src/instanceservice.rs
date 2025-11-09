@@ -73,6 +73,7 @@ pub enum ConditionsType {
     Backuped,
     Restored,
     AgentStarted,
+    CrdApplied,
     TofuInstalled,
     BeforeApplied,
     VitalApplied,
@@ -191,6 +192,24 @@ impl ApplicationCondition {
             error,
             ConditionsStatus::False,
             ConditionsType::AgentStarted,
+            generation,
+        )
+    }
+
+    pub fn crd_ko(message: &str, generation: i64) -> ApplicationCondition {
+        ApplicationCondition::new(
+            message,
+            ConditionsStatus::False,
+            ConditionsType::CrdApplied,
+            generation,
+        )
+    }
+
+    pub fn crd_ok(generation: i64) -> ApplicationCondition {
+        ApplicationCondition::new(
+            "CRD(s) applied succesfully",
+            ConditionsStatus::True,
+            ConditionsType::CrdApplied,
             generation,
         )
     }
@@ -343,6 +362,8 @@ pub struct ServiceInstanceStatus {
     pub scalables: Option<Vec<Children>>,
     /// List of other children
     pub others: Option<Vec<Children>>,
+    /// List of crds children
+    pub crds: Option<Vec<String>>,
     /// List of the services
     pub services: Option<Vec<Published>>,
 }
@@ -411,6 +432,11 @@ impl ServiceInstance {
                 }
             }
             if let Some(child) = status.scalables.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
+            if let Some(child) = status.crds.clone() {
                 if child.len() > 0 {
                     return true;
                 }
@@ -568,6 +594,71 @@ impl ServiceInstance {
             reason: "InstallSucceed".to_string(),
             note: None,
             action: "Install".to_string(),
+            secondary: None,
+        })
+        .await?;
+        Ok(result)
+    }
+
+    pub async fn set_status_crds(&mut self, crds: Vec<String>) -> Result<Self> {
+        let count = crds.len();
+        let client = get_client_async().await;
+        let generation = self.metadata.generation.unwrap_or(1);
+        let mut conditions: Vec<ApplicationCondition> =
+            self.get_conditions_excluding(vec![ConditionsType::CrdApplied]);
+        conditions.push(ApplicationCondition::crd_ok(generation));
+        let result = self
+            .patch_status(
+                client.clone(),
+                json!({
+                    "conditions": conditions,
+                    "crds": crds
+                }),
+            )
+            .await?;
+        self.send_event(client, Event {
+            type_: EventType::Normal,
+            reason: "CRDApplySucceed".to_string(),
+            note: Some(format!("Applied {} CustomResourceDefinition", count)),
+            action: "CRDApply".to_string(),
+            secondary: None,
+        })
+        .await?;
+        Ok(result)
+    }
+
+    pub async fn set_status_crd_failed(&mut self, reason: String) -> Result<Self> {
+        let client = get_client_async().await;
+        let generation = self.metadata.generation.unwrap_or(1);
+        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+            ConditionsType::AgentStarted,
+            ConditionsType::CrdApplied,
+            ConditionsType::Installed,
+        ]);
+        conditions.push(ApplicationCondition::crd_ko(&reason, generation));
+        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
+        if !conditions
+            .clone()
+            .into_iter()
+            .any(|c| c.condition_type == ConditionsType::Ready)
+        {
+            conditions.push(ApplicationCondition::ready_ko(generation));
+        }
+        let result = self
+            .patch_status(
+                client.clone(),
+                json!({
+                            "conditions": conditions,
+                }),
+            )
+            .await?;
+        let mut note = reason;
+        note.truncate(1023);
+        self.send_event(client, Event {
+            type_: EventType::Warning,
+            reason: "CRDApplyFailed".to_string(),
+            note: Some(note),
+            action: "CRDApply".to_string(),
             secondary: None,
         })
         .await?;
@@ -1356,6 +1447,22 @@ impl ServiceInstance {
             Handle::current().block_on(async move { self.set_status_other_failed(reason).await })
         })
         .map_err(rhai_err)
+    }
+
+    pub fn rhai_set_status_crds(&mut self, list: Dynamic) -> RhaiRes<Self> {
+        block_in_place(|| {
+            Handle::current().block_on(async move {
+                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
+                self.set_status_crds(lst).await
+            })
+        })
+        .map_err(rhai_err)
+    }
+
+    pub fn rhai_set_status_crd_failed(&mut self, reason: String) -> RhaiRes<Self> {
+        block_in_place(|| Handle::current().block_on(async move { self.set_status_crd_failed(reason).await }))
+            .map_err(rhai_err)
     }
 
     pub fn rhai_set_agent_started(&mut self) -> RhaiRes<Self> {

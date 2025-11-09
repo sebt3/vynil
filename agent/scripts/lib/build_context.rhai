@@ -4,8 +4,9 @@ fn appslug(pkg, inst) {
     if pkg == inst {
         inst
     } else if `${inst}-${pkg}`.len() > 28 {
-        inst.truncate(28);
-        inst
+        let res = `${inst}-${pkg}`;
+        res.truncate(28);
+        res
     } else {
         `${inst}-${pkg}`
     }

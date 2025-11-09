@@ -16,6 +16,12 @@ spec:
         prometheus.io/scrape: 'true'
         prometheus.io/port: '9000'
     spec:
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels: {{json_to_str (selector_from_ctx this comp="controller")}}
+        maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
       serviceAccountName: {{instance.appslug}}-controller
       containers:
       - name: vynil-controller

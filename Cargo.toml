@@ -27,7 +27,7 @@ features = ["runtime", "client", "derive" ]
 version = "1.0.0"
 
 [workspace.package]
-version = "0.5.6"
+version = "0.5.7"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2024"
 license = "BSD-3-Clause"
