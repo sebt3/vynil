@@ -34,7 +34,7 @@ base64.workspace = true
 common = { path = "../common" }
 futures = "0.3.28"
 prometheus-client = "0.24.0"
-tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
+tracing-subscriber = { version = "0.3.22", features = ["json", "env-filter"] }
 tracing-opentelemetry = "0.32.0"
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.0", features = ["tokio"], optional = true }
