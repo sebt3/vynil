@@ -19,6 +19,7 @@ fn run(instance, context) {
         }
     }
     if is_dir(`${context.package_dir}/vitals`) {
+        import_run("delete_backup", instance, context);
         ctx = import_run("delete_vitals", instance, context);
         if type_of(ctx) == "map" {
             context = ctx;

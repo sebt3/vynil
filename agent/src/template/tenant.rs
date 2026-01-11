@@ -64,7 +64,7 @@ pub struct Parameters {
         long = "agent-image",
         env = "AGENT_IMAGE",
         value_name = "AGENT_IMAGE",
-        default_value = "docker.io/sebt3/vynil-agent:0.5.7"
+        default_value = "docker.io/sebt3/vynil-agent:0.5.8"
     )]
     agent_image: String,
     /// version

@@ -74,6 +74,11 @@ spec:
           requests:
             cpu: 50m
             memory: 64Mi
+{{#if (and use_secret oci_mount) }}
+      imagePullSecrets:
+      - name: {{ pull_secret }}
+{{/if}}
+{{#if (not oci_mount)}}
       initContainers:
       - name: unpack
         args:
@@ -122,6 +127,7 @@ spec:
         - name: pullsecret
           mountPath: /secret
 {{/if}}
+{{/if}}
       restartPolicy: Never
       securityContext:
         fsGroup: 65534
@@ -131,16 +137,22 @@ spec:
       serviceAccountName: vynil-agent
       volumes:
       - name: package
+{{#if oci_mount }}
+        image:
+          reference: {{ registry }}/{{ image }}:{{ tag }}
+          pullPolicy: IfNotPresent
+{{else}}
         emptyDir:
           sizeLimit: 500Mi
       - name: cache
         emptyDir:
           sizeLimit: 500Mi
+{{/if}}
       - name: config
         configMap:
           name: vynil
           optional: true
-{{#if use_secret }}
+{{#if (and use_secret (not oci_mount)) }}
       - name: pullsecret
         secret:
           secretName: {{ pull_secret }}

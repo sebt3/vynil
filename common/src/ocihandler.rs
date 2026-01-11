@@ -1,11 +1,7 @@
 use crate::{Error, Result, RhaiRes, rhai_err, rhaihandler::Map};
+use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use oci_client::{
-    Client, Reference,
-    client::{ClientConfig, Config, ImageLayer},
-    manifest,
-    secrets::RegistryAuth,
-};
+use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
 use rhai::Dynamic;
 use std::{collections::BTreeMap, path::PathBuf};
 use tar::{Archive, Builder};
@@ -36,7 +32,7 @@ impl Registry {
         tag: String,
         annotations: Map,
     ) -> RhaiRes<()> {
-        let client = Client::new(ClientConfig::default());
+        let client = Client::new(client::ClientConfig::default());
         let reference = Reference::with_tag(self.registry.clone(), repository, tag);
         let mut values: BTreeMap<String, String> = BTreeMap::new();
         for (key, val) in annotations {
@@ -47,17 +43,30 @@ impl Registry {
             .map_err(|e| rhai_err(Error::Stdio(e)))?;
         let encoded = tar.into_inner().map_err(|e| rhai_err(Error::Stdio(e)))?;
         let data = encoded.finish().map_err(|e| rhai_err(Error::Stdio(e)))?;
-        let layers = vec![ImageLayer::new(
-            data,
-            manifest::IMAGE_LAYER_GZIP_MEDIA_TYPE.to_string(),
-            None,
-        )];
-        let config = Config {
-            data: b"{}".to_vec(),
-            media_type: manifest::IMAGE_CONFIG_MEDIA_TYPE.to_string(),
-            annotations: None,
+        let layer = client::ImageLayer::oci_v1_gzip(data, None);
+        let cfg = config::ConfigFile {
+            created: Some(Utc::now()),
+            architecture: config::Architecture::None,
+            os: config::Os::Linux,
+            config: Some(config::Config {
+                working_dir: Some("/".into()),
+                ..Default::default()
+            }),
+            history: Some(vec![config::History {
+                author: None,
+                created: Some(Utc::now()),
+                created_by: Some("vynil".into()),
+                comment: Some("vynil.build".into()),
+                empty_layer: Some(false),
+            }]),
+            ..Default::default()
         };
-        let manifest = manifest::OciImageManifest::build(&layers, &config, Some(values));
+        let config = client::Config::oci_v1_from_config_file(cfg, None)
+            .map_err(Error::OCIDistrib)
+            .map_err(rhai_err)?;
+        let layers = vec![layer];
+        let mut manifest = manifest::OciImageManifest::build(&layers, &config, Some(values));
+        manifest.media_type = Some(manifest::OCI_IMAGE_MEDIA_TYPE.to_string());
         block_in_place(|| {
             Handle::current().block_on(async move {
                 client
@@ -70,7 +79,7 @@ impl Registry {
     }
 
     pub fn pull_image(&mut self, dest_dir: &PathBuf, repository: String, tag: String) -> Result<()> {
-        let client = Client::new(ClientConfig::default());
+        let client = Client::new(client::ClientConfig::default());
         let reference = Reference::with_tag(self.registry.clone(), repository, tag);
         let data = block_in_place(|| {
             Handle::current().block_on(async move {
@@ -91,7 +100,7 @@ impl Registry {
     }
 
     pub async fn list_tags(&mut self, repository: String) -> Result<Vec<String>> {
-        let client = Client::new(ClientConfig::default());
+        let client = Client::new(client::ClientConfig::default());
         let image: Reference = format!("{}/{}", self.registry.clone(), repository)
             .parse()
             .map_err(Error::OCIParseError)?;
@@ -109,7 +118,7 @@ impl Registry {
     }
 
     pub fn get_manifest(&mut self, repository: String, tag: String) -> RhaiRes<Dynamic> {
-        let client = Client::new(ClientConfig::default());
+        let client = Client::new(client::ClientConfig::default());
         let image = Reference::with_tag(self.registry.clone(), repository, tag);
         let (manifest, _) = block_in_place(|| {
             Handle::current().block_on(async move { client.pull_manifest(&image, &self.auth.clone()).await })

@@ -52,15 +52,18 @@ spec:
                 description: Actual cron-type expression that defines the interval of the updates.
                 type: string
               source:
+                anyOf:
+                - oneOf:
+                  - required:
+                    - list
+                  - required:
+                    - harbor
+                  - required:
+                    - script
+                - enum:
+                  - null
+                  nullable: true
                 description: Source type
-                nullable: true
-                oneOf:
-                - required:
-                  - list
-                - required:
-                  - harbor
-                - required:
-                  - script
                 properties:
                   harbor:
                     description: Harbor project to list image from
