@@ -391,6 +391,10 @@ spec:
       jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
       name: last_updated
       type: date
+    - description: Stage
+      jsonPath: .status.conditions[-1:].type
+      name: stage
+      type: string
     - description: Errors
       jsonPath: .status.conditions[?(@.status == 'False')].message
       name: errors
@@ -715,6 +719,10 @@ spec:
       jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
       name: last_updated
       type: date
+    - description: Stage
+      jsonPath: .status.conditions[-1:].type
+      name: stage
+      type: string
     - description: Errors
       jsonPath: .status.conditions[?(@.status == 'False')].message
       name: errors
@@ -1046,6 +1054,10 @@ spec:
       jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
       name: last_updated
       type: date
+    - description: Stage
+      jsonPath: .status.conditions[-1:].type
+      name: stage
+      type: string
     - description: Errors
       jsonPath: .status.conditions[?(@.status == 'False')].message
       name: errors

@@ -2,7 +2,7 @@ use crate::{Error, Reconciler, Result, SystemInstance, get_client_name, manager:
 use async_trait::async_trait;
 use chrono::Utc;
 use common::{
-    k8sraw::K8sRaw,
+    // k8sraw::K8sRaw,
     rhaihandler::Script,
     vynilpackage::{VynilPackageRecommandation, VynilPackageType},
 };
@@ -88,32 +88,32 @@ impl Reconciler for SystemInstance {
             .as_object_mut()
             .unwrap()
             .insert("digest".to_string(), self.clone().get_options_digest().into());
-        let ver = K8sRaw::new().get_api_version().await?;
-        if ver.is_object()
-            && ver.as_object().unwrap().contains_key("major")
-            && ver.as_object().unwrap().get("major").unwrap() == "1"
-            && ver.as_object().unwrap().contains_key("minor")
-            && ver
-                .as_object()
-                .unwrap()
-                .get("minor")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .parse::<i32>()
-                .unwrap()
-                < 35
-        {
-            context
-                .as_object_mut()
-                .unwrap()
-                .insert("oci_mount".to_string(), false.into());
-        } else {
-            context
-                .as_object_mut()
-                .unwrap()
-                .insert("oci_mount".to_string(), true.into());
-        }
+        // let ver = K8sRaw::new().get_api_version().await?;
+        // if ver.is_object()
+        //     && ver.as_object().unwrap().contains_key("major")
+        //     && ver.as_object().unwrap().get("major").unwrap() == "1"
+        //     && ver.as_object().unwrap().contains_key("minor")
+        //     && ver
+        //         .as_object()
+        //         .unwrap()
+        //         .get("minor")
+        //         .unwrap()
+        //         .as_str()
+        //         .unwrap()
+        //         .parse::<i32>()
+        //         .unwrap()
+        //         < 35
+        // {
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("oci_mount".to_string(), false.into());
+        // } else {
+        //     context
+        //         .as_object_mut()
+        //         .unwrap()
+        //         .insert("oci_mount".to_string(), true.into());
+        // }
         let current_version = if let Some(status) = self.status.clone() {
             status.tag.unwrap_or_default()
         } else {
@@ -367,32 +367,32 @@ impl Reconciler for SystemInstance {
             .as_object_mut()
             .unwrap()
             .insert("digest".to_string(), self.clone().get_options_digest().into());
-        let ver = K8sRaw::new().get_api_version().await?;
-        if ver.is_object()
-            && ver.as_object().unwrap().contains_key("major")
-            && ver.as_object().unwrap().get("major").unwrap() == "1"
-            && ver.as_object().unwrap().contains_key("minor")
-            && ver
-                .as_object()
-                .unwrap()
-                .get("minor")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .parse::<i32>()
-                .unwrap()
-                < 35
-        {
-            context
-                .as_object_mut()
-                .unwrap()
-                .insert("oci_mount".to_string(), false.into());
-        } else {
-            context
-                .as_object_mut()
-                .unwrap()
-                .insert("oci_mount".to_string(), true.into());
-        }
+        // let ver = K8sRaw::new().get_api_version().await?;
+        // if ver.is_object()
+        //     && ver.as_object().unwrap().contains_key("major")
+        //     && ver.as_object().unwrap().get("major").unwrap() == "1"
+        //     && ver.as_object().unwrap().contains_key("minor")
+        //     && ver
+        //         .as_object()
+        //         .unwrap()
+        //         .get("minor")
+        //         .unwrap()
+        //         .as_str()
+        //         .unwrap()
+        //         .parse::<i32>()
+        //         .unwrap()
+        //         < 35
+        // {
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("oci_mount".to_string(), false.into());
+        // } else {
+        //     context
+        //         .as_object_mut()
+        //         .unwrap()
+        //         .insert("oci_mount".to_string(), true.into());
+        // }
         let current_version = if let Some(status) = self.status.clone() {
             status.tag.unwrap_or_default()
         } else {

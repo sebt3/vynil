@@ -35,6 +35,7 @@ use tracing::field::debug;
     {"name":"pkg",    "type":"string", "description":"Package", "jsonPath":".spec.package"},
     {"name":"tag",    "type":"string", "description":"Version", "jsonPath":".status.tag"},
     {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
+    {"name":"stage",  "type":"string", "description":"Stage", "jsonPath":".status.conditions[-1:].type"},
     {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
 )]
 pub struct SystemInstanceSpec {
