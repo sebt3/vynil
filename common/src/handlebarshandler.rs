@@ -253,3 +253,118 @@ impl HandleBars<'_> {
             .map_err(|e| format!("{e}").into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── rhai_render: conversion rhai::Map → contexte Handlebars ──────────────
+
+    #[test]
+    fn test_rhai_render_scalar_values() {
+        let mut hbs = HandleBars::new();
+        let mut map = rhai::Map::new();
+        map.insert("num".into(), rhai::Dynamic::from(42_i64));
+        map.insert("msg".into(), rhai::Dynamic::from("hello"));
+        map.insert("flag".into(), rhai::Dynamic::from(true));
+        assert_eq!(hbs.rhai_render("{{num}}".into(), map.clone()).unwrap(), "42");
+        assert_eq!(hbs.rhai_render("{{msg}}".into(), map.clone()).unwrap(), "hello");
+        assert_eq!(hbs.rhai_render("{{flag}}".into(), map).unwrap(), "true");
+    }
+
+    #[test]
+    fn test_rhai_render_nested_map() {
+        let mut hbs = HandleBars::new();
+        let mut inner = rhai::Map::new();
+        inner.insert("port".into(), rhai::Dynamic::from(8080_i64));
+        inner.insert("host".into(), rhai::Dynamic::from("localhost"));
+        let mut outer = rhai::Map::new();
+        outer.insert("svc".into(), rhai::Dynamic::from_map(inner));
+        let result = hbs
+            .rhai_render("{{svc.host}}:{{svc.port}}".into(), outer)
+            .unwrap();
+        assert_eq!(result, "localhost:8080");
+    }
+
+    #[test]
+    fn test_rhai_render_named_basic() {
+        let mut hbs = HandleBars::new();
+        let mut map = rhai::Map::new();
+        map.insert("v".into(), rhai::Dynamic::from("ok"));
+        let result = hbs
+            .rhai_render_named("t".into(), "result: {{v}}".into(), map)
+            .unwrap();
+        assert_eq!(result, "result: ok");
+    }
+
+    // ── Built-in helpers ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_helper_base64_encode() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({"v": "hello"});
+        let result = hbs.render("{{base64_encode v}}", &data).unwrap();
+        assert_eq!(result, "aGVsbG8=");
+    }
+
+    #[test]
+    fn test_helper_base64_decode() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({"v": "aGVsbG8="});
+        let result = hbs.render("{{base64_decode v}}", &data).unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_helper_base64_roundtrip() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({"v": "secret-password-123"});
+        let encoded = hbs.render("{{base64_encode v}}", &data).unwrap();
+        let decoded_data = serde_json::json!({"v": encoded});
+        let decoded = hbs.render("{{base64_decode v}}", &decoded_data).unwrap();
+        assert_eq!(decoded, "secret-password-123");
+    }
+
+    #[test]
+    fn test_helper_url_encode() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({"v": "hello world&foo=bar"});
+        let result = hbs.render("{{url_encode v}}", &data).unwrap();
+        assert!(result.contains("%26") || result.contains("&amp;"));
+        assert!(!result.contains(' '));
+    }
+
+    #[test]
+    fn test_helper_to_decimal_octal() {
+        let mut hbs = HandleBars::new();
+        // 0755 octal = 493 decimal
+        let data = serde_json::json!({"v": "755"});
+        let result = hbs.render("{{to_decimal v}}", &data).unwrap();
+        assert_eq!(result, "493");
+    }
+
+    #[test]
+    fn test_helper_to_decimal_zero() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({"v": "0"});
+        let result = hbs.render("{{to_decimal v}}", &data).unwrap();
+        assert_eq!(result, "0");
+    }
+
+    #[test]
+    fn test_helper_concat() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({"a": "foo", "b": "bar"});
+        let result = hbs.render("{{concat a b}}", &data).unwrap();
+        assert_eq!(result, "foobar");
+    }
+
+    #[test]
+    fn test_helper_header_basic() {
+        let mut hbs = HandleBars::new();
+        // "user:pass" → base64 → "dXNlcjpwYXNz"
+        let data = serde_json::json!({"u": "user", "p": "pass"});
+        let result = hbs.render("{{header_basic u p}}", &data).unwrap();
+        assert_eq!(result, "Basic dXNlcjpwYXNz");
+    }
+}

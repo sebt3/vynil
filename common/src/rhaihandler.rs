@@ -729,3 +729,281 @@ impl Script {
         serde_json::to_string(&m).map_err(Error::SerializationError)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_script() -> Script {
+        Script::new(vec![])
+    }
+
+    // ── yaml_decode / yaml_encode ─────────────────────────────────────────────
+
+    #[test]
+    fn test_yaml_decode_string_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode("key: hello")["key"]"#).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_yaml_decode_integer_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode("count: 42")["count"]"#).unwrap();
+        assert_eq!(result.cast::<i64>(), 42);
+    }
+
+    #[test]
+    fn test_yaml_decode_boolean_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode("enabled: true")["enabled"]"#).unwrap();
+        assert_eq!(result.cast::<bool>(), true);
+    }
+
+    #[test]
+    fn test_yaml_decode_nested_access() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode("a:\n  b: nested")["a"]["b"]"#)
+            .unwrap();
+        assert_eq!(result.to_string(), "nested");
+    }
+
+    #[test]
+    fn test_yaml_decode_array_access() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode("items:\n  - first\n  - second")["items"][1]"#)
+            .unwrap();
+        assert_eq!(result.to_string(), "second");
+    }
+
+    #[test]
+    fn test_yaml_encode_produces_yaml() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_encode(#{"key": "value"})"#)
+            .unwrap();
+        let yaml_str = result.to_string();
+        assert!(yaml_str.contains("key:"));
+        assert!(yaml_str.contains("value"));
+    }
+
+    #[test]
+    fn test_yaml_encode_decode_roundtrip() {
+        // Encode a map, decode it back, access a key
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let m = #{"name": "test", "count": 3};
+            let encoded = yaml_encode(m);
+            let decoded = yaml_decode(encoded);
+            decoded["name"]
+        "#).unwrap();
+        assert_eq!(result.to_string(), "test");
+    }
+
+    // ── yaml_decode_multi ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_yaml_decode_multi_single_document() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode_multi("key: val\n").len()"#)
+            .unwrap();
+        assert_eq!(result.cast::<i64>(), 1);
+    }
+
+    #[test]
+    fn test_yaml_decode_multi_two_documents() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode_multi("key: a\n---\nkey: b\n").len()"#)
+            .unwrap();
+        assert_eq!(result.cast::<i64>(), 2);
+    }
+
+    #[test]
+    fn test_yaml_decode_multi_document_values() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let docs = yaml_decode_multi("key: first\n---\nkey: second\n");
+            docs[1]["key"]
+        "#).unwrap();
+        assert_eq!(result.to_string(), "second");
+    }
+
+    #[test]
+    fn test_yaml_decode_multi_short_string_returns_empty() {
+        // String shorter than 5 chars → empty result (guard in the code)
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode_multi("ab").len()"#).unwrap();
+        assert_eq!(result.cast::<i64>(), 0);
+    }
+
+    // ── json_encode / json_decode ─────────────────────────────────────────────
+
+    #[test]
+    fn test_json_encode_decode_roundtrip() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let encoded = json_encode(#{"a": "hello", "b": 42});
+            let decoded = json_decode(encoded);
+            decoded["a"]
+        "#).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_json_decode_invalid_returns_error() {
+        let mut s = make_script();
+        assert!(s.eval(r#"json_decode("not json")"#).is_err());
+    }
+
+    // ── base64_encode / base64_decode ─────────────────────────────────────────
+
+    #[test]
+    fn test_base64_encode_decode_roundtrip() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let encoded = base64_encode("hello world");
+            base64_decode(encoded)
+        "#).unwrap();
+        assert_eq!(result.to_string(), "hello world");
+    }
+
+    #[test]
+    fn test_base64_encode_known_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"base64_encode("hello")"#).unwrap();
+        assert_eq!(result.to_string(), "aGVsbG8=");
+    }
+
+    // ── Semver from Rhai ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_semver_parse_and_to_string() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"to_string(semver_from("1.2.3"))"#)
+            .unwrap();
+        assert_eq!(result.to_string(), "1.2.3");
+    }
+
+    #[test]
+    fn test_semver_comparison_operators() {
+        let mut s = make_script();
+        assert_eq!(
+            s.eval(r#"semver_from("1.0.0") < semver_from("2.0.0")"#)
+                .unwrap()
+                .cast::<bool>(),
+            true
+        );
+        assert_eq!(
+            s.eval(r#"semver_from("2.0.0") > semver_from("1.0.0")"#)
+                .unwrap()
+                .cast::<bool>(),
+            true
+        );
+        assert_eq!(
+            s.eval(r#"semver_from("1.0.0") == semver_from("1.0.0")"#)
+                .unwrap()
+                .cast::<bool>(),
+            true
+        );
+    }
+
+    #[test]
+    fn test_semver_inc_minor() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let v = semver_from("1.2.3");
+            inc_minor(v);
+            to_string(v)
+        "#).unwrap();
+        assert_eq!(result.to_string(), "1.3.0");
+    }
+
+    // ── Utility functions ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sha256_known_hash() {
+        let mut s = make_script();
+        let result = s.eval(r#"sha256("hello")"#).unwrap();
+        assert_eq!(
+            result.to_string(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn test_to_decimal_octal() {
+        let mut s = make_script();
+        let result = s.eval(r#"to_decimal("755")"#).unwrap();
+        assert_eq!(result.cast::<u32>(), 493);
+    }
+
+    #[test]
+    fn test_url_encode() {
+        let mut s = make_script();
+        let result = s.eval(r#"url_encode("hello world")"#).unwrap();
+        assert_eq!(result.to_string(), "hello+world");
+    }
+
+    // ── Régression : préservation de l'ordre des clés YAML ───────────────────
+    //
+    // Ce test est INTENTIONNELLEMENT PRÉVU POUR ÉCHOUER avec le code actuel
+    // (serde_yaml, qui utilise BTreeMap → trie alphabétiquement).
+    // Il devra passer après le remplacement par rust-yaml (YamlDoc, IndexMap).
+    //
+    // Scénario : lire un YAML avec des clés dans un ordre non-alphabétique,
+    // modifier une seule valeur, re-sérialiser → une seule ligne doit changer.
+    #[test]
+    fn test_yaml_decode_modify_single_key_preserves_order() {
+        let mut s = make_script();
+
+        // Clés dans l'ordre z → a → m (intentionnellement non-alphabétique)
+        let original = "z: first\na: second\nm: third\n";
+        s.ctx.set_or_push("input_yaml", Dynamic::from(original.to_string()));
+
+        let result = s.eval(r#"
+            let doc = yaml_decode(input_yaml);
+            doc["a"] = "MODIFIED";
+            yaml_encode(doc)
+        "#).unwrap();
+
+        let encoded = result.to_string();
+
+        // Comparer ligne par ligne (on ignore les lignes vides trailing)
+        let orig_lines: Vec<&str> = original.lines().filter(|l| !l.is_empty()).collect();
+        let enc_lines: Vec<&str> = encoded.lines().filter(|l| !l.is_empty()).collect();
+
+        assert_eq!(
+            orig_lines.len(), enc_lines.len(),
+            "Le nombre de lignes a changé — des clés ont été perdues ou ajoutées.\n\
+             Original:\n{}\nRésultat:\n{}",
+            original, encoded
+        );
+
+        let changed: Vec<usize> = orig_lines.iter()
+            .zip(enc_lines.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(
+            changed.len(), 1,
+            "Attendu exactement 1 ligne modifiée (la clé 'a'), mais {} lignes diffèrent.\n\
+             Cela indique que l'ordre des clés n'a PAS été préservé (bug serde_yaml/BTreeMap).\n\
+             Original:\n{}\nRésultat:\n{}",
+            changed.len(), original, encoded
+        );
+
+        assert!(
+            enc_lines[changed[0]].contains("MODIFIED"),
+            "La ligne modifiée ne contient pas 'MODIFIED' : {}",
+            enc_lines[changed[0]]
+        );
+    }
+}
