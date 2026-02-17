@@ -231,8 +231,10 @@ impl HandleBars<'_> {
     }
 
     pub fn rhai_render(&mut self, template: String, data: rhai::Map) -> RhaiRes<String> {
+        use crate::yamlhandler::{dynamic_to_value, yaml_value_to_serde_json};
+        let json_data = yaml_value_to_serde_json(dynamic_to_value(rhai::Dynamic::from_map(data)));
         self.engine
-            .render_template(template.as_str(), &data)
+            .render_template(template.as_str(), &json_data)
             .map_err(|e| format!("{e}").into())
     }
 
@@ -244,12 +246,14 @@ impl HandleBars<'_> {
     }
 
     pub fn rhai_render_named(&mut self, name: String, template: String, data: rhai::Map) -> RhaiRes<String> {
+        use crate::yamlhandler::{dynamic_to_value, yaml_value_to_serde_json};
+        let json_data = yaml_value_to_serde_json(dynamic_to_value(rhai::Dynamic::from_map(data)));
         self.engine
             .register_template_string(name.as_str(), template)
             .map_err(Error::HbsTemplateError)
             .map_err(rhai_err)?;
         self.engine
-            .render(name.as_str(), &data)
+            .render(name.as_str(), &json_data)
             .map_err(|e| format!("{e}").into())
     }
 }

@@ -200,9 +200,9 @@ dependencies = [
  "env_logger",
  "k8s-openapi",
  "kube",
+ "rust-yaml",
  "serde",
  "serde_json",
- "serde_yaml",
  "tokio",
  "tracing",
 ]
@@ -674,6 +674,7 @@ dependencies = [
  "handlebars",
  "handlebars_misc_helpers",
  "http 1.4.0",
+ "indexmap",
  "k8s-openapi",
  "kube",
  "lazy_static",
@@ -683,11 +684,11 @@ dependencies = [
  "regex",
  "reqwest",
  "rhai",
+ "rust-yaml",
  "schemars",
  "semver",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha256",
  "tar",
  "thiserror 2.0.18",
@@ -2215,6 +2216,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "memmap2"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2524,10 +2534,10 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "prometheus-client",
+ "rust-yaml",
  "schemars",
  "serde",
  "serde_json",
- "serde_yaml",
  "tokio",
  "tonic",
  "tracing",
@@ -3078,6 +3088,18 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rust-yaml"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22075c416a33b2fc18e6502b3836023436ca39b67cff4ae8300dffa12bc05dfc"
+dependencies = [
+ "base64 0.22.1",
+ "indexmap",
+ "memmap2",
+ "regex",
 ]
 
 [[package]]

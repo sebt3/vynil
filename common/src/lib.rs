@@ -9,7 +9,7 @@ pub enum Error {
     SerializationError(#[from] serde_json::Error),
 
     #[error("YamlError: {0}")]
-    YamlError(#[from] serde_yaml::Error),
+    YamlError(String),
 
     #[error("K8s error: {0}")]
     KubeError(#[from] kube::Error),
@@ -110,6 +110,8 @@ pub mod context;
 pub mod handlebarshandler;
 pub mod hasheshandlers;
 pub mod httphandler;
+#[macro_use]
+pub mod instance_macros;
 pub mod instanceservice;
 pub mod instancesystem;
 pub mod instancetenant;
@@ -124,6 +126,7 @@ mod semverhandler;
 pub mod shellhandler;
 mod tools;
 pub mod vynilpackage;
+pub mod yamlhandler;
 pub use context::get_client_name;
 pub use semverhandler::Semver;
 

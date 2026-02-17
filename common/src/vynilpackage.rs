@@ -672,9 +672,12 @@ impl VynilPackageSource {
 }
 
 pub fn read_package_yaml(file: &PathBuf) -> Result<VynilPackageSource> {
-    let f = fs::File::open(Path::new(&file)).map_err(Error::Stdio)?;
-    let deserializer = serde_yaml::Deserializer::from_reader(f);
-    serde_yaml::with::singleton_map_recursive::deserialize(deserializer).map_err(Error::YamlError)
+    let content = fs::read_to_string(Path::new(&file)).map_err(Error::Stdio)?;
+    let yaml_value = rust_yaml::Yaml::new()
+        .load_str(&content)
+        .map_err(|e| Error::YamlError(e.to_string()))?;
+    let json_value = crate::yamlhandler::yaml_value_to_serde_json(yaml_value);
+    serde_json::from_value(json_value).map_err(Error::SerializationError)
 }
 pub fn rhai_read_package_yaml(file: String) -> RhaiRes<VynilPackageSource> {
     read_package_yaml(&PathBuf::from(&file)).map_err(rhai_err)

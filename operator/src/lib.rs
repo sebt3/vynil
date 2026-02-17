@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use kube::runtime::controller::Action;
 use manager::Context;
 use std::sync::Arc;
+pub mod instance_common;
 pub mod instanceservice;
 pub mod instancesystem;
 pub mod instancetenant;

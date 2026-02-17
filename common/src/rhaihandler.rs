@@ -18,6 +18,7 @@ use crate::{
     passwordhandler::Passwords,
     rhai_err, shellhandler,
     vynilpackage::{VynilPackageSource, get_vynil_version, rhai_read_package_yaml},
+    yamlhandler::{YamlDoc, dynamic_to_value, value_to_rhai_dynamic},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use kube::api::DynamicObject;
@@ -33,7 +34,6 @@ pub use rhai::{
     module_resolvers::{FileModuleResolver, ModuleResolversCollection},
     serde::to_dynamic,
 };
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use url::form_urlencoded;
 
@@ -124,31 +124,37 @@ impl Script {
                 serde_json::from_str(val.as_ref()).map_err(|e| rhai_err(Error::SerializationError(e)))
             })
             .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                serde_yaml::to_string(&val)
-                    .map_err(|e| rhai_err(Error::YamlError(e)))
+                let yaml_val = dynamic_to_value(val);
+                rust_yaml::Yaml::new()
+                    .dump_str(&yaml_val)
+                    .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
                     .map(|v| v.into())
             })
             .register_fn("yaml_encode", |val: Map| -> RhaiRes<ImmutableString> {
-                serde_yaml::to_string(&val)
-                    .map_err(|e| rhai_err(Error::YamlError(e)))
+                let dyn_val = Dynamic::from_map(val);
+                let yaml_val = dynamic_to_value(dyn_val);
+                rust_yaml::Yaml::new()
+                    .dump_str(&yaml_val)
+                    .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
                     .map(|v| v.into())
             })
-            .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_yaml::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
+            // yaml_decode returns an order-preserving YamlDoc (backed by IndexMap).
+            // yaml_encode accepts YamlDoc or any Dynamic (Dynamic overload above handles both).
+            .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<YamlDoc> {
+                YamlDoc::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
             })
             .register_fn(
                 "yaml_decode_multi",
+                // Returns plain Rhai Map objects so they can be passed to k8s API calls
+                // (rhai::serde::from_dynamic) without extra conversion.
                 |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
-                    let mut res = Vec::new();
-                    if val.len() > 5 {
-                        // non-empty string only
-                        for document in serde_yaml::Deserializer::from_str(val.as_ref()) {
-                            let doc =
-                                Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
-                            res.push(doc);
-                        }
+                    if val.len() <= 5 {
+                        return Ok(vec![]);
                     }
-                    Ok(res)
+                    rust_yaml::Yaml::new()
+                        .load_all_str(val.as_ref())
+                        .map(|docs| docs.into_iter().map(value_to_rhai_dynamic).collect())
+                        .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
                 },
             );
         script
@@ -194,6 +200,20 @@ impl Script {
                     .to_str()
                     .unwrap_or_default()
                     .into()
+            });
+        // ── YamlDoc: order-preserving YAML value type ──────────────────────────
+        script
+            .engine
+            .register_type_with_name::<YamlDoc>("map")
+            .register_indexer_get(YamlDoc::idx_get)
+            .register_indexer_set(YamlDoc::idx_set)
+            .register_fn("keys", YamlDoc::keys)
+            .register_fn("values", YamlDoc::values)
+            .register_fn("len", YamlDoc::len)
+            .register_fn("is_empty", YamlDoc::is_empty)
+            .register_fn("contains", YamlDoc::contains_key)
+            .register_fn("to_string", |yd: &mut YamlDoc| -> String {
+                yd.to_yaml_string().unwrap_or_default()
             });
         script
             .engine
