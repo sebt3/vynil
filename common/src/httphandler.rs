@@ -2,7 +2,7 @@ use crate::{Error, Error::*, RhaiRes, get_client_name};
 use actix_web::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Certificate, Client, Response};
-use rhai::{Dynamic, Map};
+use rhai::{Engine, Dynamic, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -734,4 +734,24 @@ impl RestClient {
             Err(UnsupportedMethod)
         }
     }
+}
+
+pub fn http_rhai_register(engine: &mut Engine) {
+    engine
+            .register_type_with_name::<RestClient>("RestClient")
+            .register_fn("new_http_client", RestClient::new)
+            .register_fn("headers_reset", RestClient::headers_reset_rhai)
+            .register_fn("set_baseurl", RestClient::baseurl_rhai)
+            .register_fn("set_server_ca", RestClient::set_server_ca)
+            .register_fn("set_mtls_cert_key", RestClient::set_mtls)
+            .register_fn("add_header", RestClient::add_header_rhai)
+            .register_fn("add_header_json", RestClient::add_header_json)
+            .register_fn("add_header_bearer", RestClient::add_header_bearer)
+            .register_fn("add_header_basic", RestClient::add_header_basic)
+            .register_fn("head", RestClient::rhai_head)
+            .register_fn("get", RestClient::rhai_get)
+            .register_fn("delete", RestClient::rhai_delete)
+            .register_fn("patch", RestClient::rhai_patch)
+            .register_fn("post", RestClient::rhai_post)
+            .register_fn("put", RestClient::rhai_put);
 }

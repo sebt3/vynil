@@ -1,6 +1,6 @@
 use crate::{Error, Result, RhaiRes, context::get_client, rhai_err};
 use kube::Client;
-use rhai::Dynamic;
+use rhai::{Dynamic, Engine};
 
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
@@ -92,4 +92,13 @@ impl K8sRaw {
             })
         })
     }
+}
+
+pub fn k8sraw_rhai_register(engine: &mut Engine) {
+    engine
+            .register_type_with_name::<K8sRaw>("K8sRaw")
+            .register_fn("new_k8s_raw", K8sRaw::new)
+            .register_fn("get_url", K8sRaw::rhai_get_url)
+            .register_fn("get_api_resources", K8sRaw::rhai_get_api_resources)
+            .register_fn("get_cluster_version", K8sRaw::rhai_get_api_version);
 }

@@ -5,7 +5,7 @@ use crate::{
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{Api, Client, api::ListParams};
 pub use openapiv3::Schema;
-use rhai::Dynamic;
+use rhai::{Dynamic, Engine};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -681,6 +681,21 @@ pub fn read_package_yaml(file: &PathBuf) -> Result<VynilPackageSource> {
 }
 pub fn rhai_read_package_yaml(file: String) -> RhaiRes<VynilPackageSource> {
     read_package_yaml(&PathBuf::from(&file)).map_err(rhai_err)
+}
+
+pub fn package_rhai_register(engine: &mut Engine) {
+    engine
+        .register_fn("vynil_version", get_vynil_version)
+        .register_type_with_name::<VynilPackageSource>("VynilPackage")
+        .register_fn("read_package_yaml", rhai_read_package_yaml)
+        .register_fn("validate_options", VynilPackageSource::validate_options)
+        .register_get("metadata", VynilPackageSource::get_metadata)
+        .register_get("requirements", VynilPackageSource::get_requirements)
+        .register_get("recommandations", VynilPackageSource::get_recommandations)
+        .register_get("options", VynilPackageSource::get_options)
+        .register_get("value_script", VynilPackageSource::get_value_script)
+        .register_get("images", VynilPackageSource::get_images)
+        .register_get("resources", VynilPackageSource::get_resources);
 }
 
 #[cfg(test)]

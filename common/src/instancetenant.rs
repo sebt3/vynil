@@ -11,6 +11,7 @@ use kube::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use rhai::Engine;
 
 /// InitFrom contains the informations for the backup to use to initialize the installation
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -270,3 +271,78 @@ impl TenantInstance {
 
 impl_instance_common!(TenantInstance, "TenantInstance");
 impl_instance_befores!(TenantInstance);
+
+pub fn tenant_rhai_register(engine: &mut Engine) {
+    engine
+            .register_type_with_name::<TenantInstance>("TenantInstance")
+            .register_fn("get_tenant_instance", TenantInstance::rhai_get)
+            .register_fn("get_tenant_name", TenantInstance::rhai_get_tenant_name)
+            .register_fn(
+                "get_tenant_namespaces",
+                TenantInstance::rhai_get_tenant_namespaces,
+            )
+            .register_fn(
+                "get_tenant_services_names",
+                TenantInstance::rhai_get_tenant_services_names,
+            )
+            .register_fn("list_tenant_instance", TenantInstance::rhai_list)
+            .register_fn("options_digest", TenantInstance::get_options_digest)
+            .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)
+            .register_fn("get_rhaistate", TenantInstance::rhai_get_rhaistate)
+            .register_fn("set_agent_started", TenantInstance::rhai_set_agent_started)
+            .register_fn("set_missing_box", TenantInstance::rhai_set_missing_box)
+            .register_fn("set_missing_package", TenantInstance::rhai_set_missing_package)
+            .register_fn(
+                "set_missing_requirement",
+                TenantInstance::rhai_set_missing_requirement,
+            )
+            .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
+            .register_fn("set_status_befores", TenantInstance::rhai_set_status_befores)
+            .register_fn(
+                "set_status_before_failed",
+                TenantInstance::rhai_set_status_before_failed,
+            )
+            .register_fn("set_status_vitals", TenantInstance::rhai_set_status_vitals)
+            .register_fn(
+                "set_status_vital_failed",
+                TenantInstance::rhai_set_status_vital_failed,
+            )
+            .register_fn("set_status_scalables", TenantInstance::rhai_set_status_scalables)
+            .register_fn(
+                "set_status_scalable_failed",
+                TenantInstance::rhai_set_status_scalable_failed,
+            )
+            .register_fn("set_status_others", TenantInstance::rhai_set_status_others)
+            .register_fn(
+                "set_status_other_failed",
+                TenantInstance::rhai_set_status_other_failed,
+            )
+            .register_fn("set_status_posts", TenantInstance::rhai_set_status_posts)
+            .register_fn(
+                "set_status_post_failed",
+                TenantInstance::rhai_set_status_post_failed,
+            )
+            .register_fn("set_tfstate", TenantInstance::rhai_set_tfstate)
+            .register_fn(
+                "set_status_tofu_failed",
+                TenantInstance::rhai_set_status_tofu_failed,
+            )
+            .register_fn("set_rhaistate", TenantInstance::rhai_set_rhaistate)
+            .register_fn("set_services", TenantInstance::rhai_set_services)
+            .register_fn("get_services", TenantInstance::rhai_get_services)
+            .register_fn(
+                "set_status_rhai_failed",
+                TenantInstance::rhai_set_status_rhai_failed,
+            )
+            .register_fn(
+                "set_status_schedule_backup_failed",
+                TenantInstance::rhai_set_status_schedule_backup_failed,
+            )
+            .register_fn(
+                "set_status_init_failed",
+                TenantInstance::rhai_set_status_init_failed,
+            )
+            .register_get("metadata", TenantInstance::get_metadata)
+            .register_get("spec", TenantInstance::get_spec)
+            .register_get("status", TenantInstance::get_status);
+}

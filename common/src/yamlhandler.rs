@@ -1,6 +1,6 @@
-use crate::Error;
+use crate::{Error, RhaiRes, rhai_err};
 use indexmap::IndexMap;
-use rhai::{Dynamic, ImmutableString};
+use rhai::{Dynamic, ImmutableString, Engine, Map};
 use rust_yaml::{Value, Yaml};
 
 // ── Public order-preserving YAML document type ────────────────────────────────
@@ -281,4 +281,55 @@ pub fn yaml_serialize_to_string<T: serde::Serialize>(val: &T) -> crate::Result<S
     Yaml::new()
         .dump_str(&yaml_val)
         .map_err(|e| Error::YamlError(e.to_string()))
+}
+
+
+pub fn yaml_rhai_register(engine: &mut Engine) {
+    engine
+        .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
+            let yaml_val = dynamic_to_value(val);
+            rust_yaml::Yaml::new()
+                .dump_str(&yaml_val)
+                .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
+                .map(|v| v.into())
+        })
+        .register_fn("yaml_encode", |val: Map| -> RhaiRes<ImmutableString> {
+            let dyn_val = Dynamic::from_map(val);
+            let yaml_val = dynamic_to_value(dyn_val);
+            rust_yaml::Yaml::new()
+                .dump_str(&yaml_val)
+                .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
+                .map(|v| v.into())
+        })
+        // yaml_decode returns an order-preserving YamlDoc (backed by IndexMap).
+        // yaml_encode accepts YamlDoc or any Dynamic (Dynamic overload above handles both).
+        .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<YamlDoc> {
+            YamlDoc::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
+        })
+        .register_fn(
+            "yaml_decode_multi",
+            // Returns plain Rhai Map objects so they can be passed to k8s API calls
+            // (rhai::serde::from_dynamic) without extra conversion.
+            |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
+                if val.len() <= 5 {
+                    return Ok(vec![]);
+                }
+                rust_yaml::Yaml::new()
+                    .load_all_str(val.as_ref())
+                    .map(|docs| docs.into_iter().map(value_to_rhai_dynamic).collect())
+                    .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
+            },
+        );
+    engine
+        .register_type_with_name::<YamlDoc>("map")
+        .register_indexer_get(YamlDoc::idx_get)
+        .register_indexer_set(YamlDoc::idx_set)
+        .register_fn("keys", YamlDoc::keys)
+        .register_fn("values", YamlDoc::values)
+        .register_fn("len", YamlDoc::len)
+        .register_fn("is_empty", YamlDoc::is_empty)
+        .register_fn("contains", YamlDoc::contains_key)
+        .register_fn("to_string", |yd: &mut YamlDoc| -> String {
+            yd.to_yaml_string().unwrap_or_default()
+        });
 }

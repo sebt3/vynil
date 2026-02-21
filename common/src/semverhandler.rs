@@ -1,5 +1,6 @@
 use crate::{Error, Result, RhaiRes, rhai_err};
 use semver::{Prerelease, Version};
+use rhai::Engine;
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Semver {
@@ -99,6 +100,24 @@ impl std::fmt::Display for Semver {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         self.version.fmt(formatter)
     }
+}
+
+pub fn semver_rhai_register(engine: &mut Engine) {
+    engine
+            .register_type_with_name::<Semver>("Semver")
+            .register_fn("semver_from", Semver::rhai_parse)
+            .register_fn("inc_major", Semver::inc_major)
+            .register_fn("inc_minor", Semver::inc_minor)
+            .register_fn("inc_patch", Semver::inc_patch)
+            .register_fn("inc_beta", Semver::rhai_inc_beta)
+            .register_fn("inc_alpha", Semver::rhai_inc_alpha)
+            .register_fn("==", |a: Semver, b: Semver| a == b)
+            .register_fn("!=", |a: Semver, b: Semver| a != b)
+            .register_fn("<", |a: Semver, b: Semver| a < b)
+            .register_fn(">", |a: Semver, b: Semver| a > b)
+            .register_fn("<=", |a: Semver, b: Semver| a <= b)
+            .register_fn(">=", |a: Semver, b: Semver| a >= b)
+            .register_fn("to_string", Semver::to_string);
 }
 
 #[cfg(test)]

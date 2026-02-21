@@ -3,6 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use handlebars::{Handlebars, handlebars_helper};
 use handlebars_misc_helpers::new_hbs;
 use regex::Regex;
+use rhai::Engine;
 pub use serde_json::Value;
 use std::{
     fs,
@@ -256,6 +257,17 @@ impl HandleBars<'_> {
             .render(name.as_str(), &json_data)
             .map_err(|e| format!("{e}").into())
     }
+}
+
+pub fn handlebars_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<HandleBars>("HandleBars")
+        .register_fn("new_hbs", HandleBars::new)
+        .register_fn("register_template", HandleBars::rhai_register_template)
+        .register_fn("register_partial_dir", HandleBars::rhai_register_partial_dir)
+        .register_fn("register_helper_dir", HandleBars::rhai_register_helper_dir)
+        .register_fn("render_from", HandleBars::rhai_render)
+        .register_fn("render_named", HandleBars::rhai_render_named);
 }
 
 #[cfg(test)]

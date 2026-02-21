@@ -1,4 +1,5 @@
 use crate::{Error, Result, RhaiRes, rhai_err};
+use rhai::{ImmutableString, Engine};
 use argon2::{
     Argon2,
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
@@ -43,4 +44,17 @@ pub fn bcrypt_hash(password: String) -> Result<String> {
 }
 pub fn crc32_hash(text: String) -> u32 {
     crc32fast::hash(text.as_bytes())
+}
+
+pub fn hashes_rhai_register(engine: &mut Engine) {
+    engine
+            .register_fn("crc32_hash", |s: ImmutableString| {
+                crate::hasheshandlers::crc32_hash(s.to_string())
+            })
+            .register_fn("bcrypt_hash", |s: ImmutableString| {
+                crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
+            })
+            .register_type_with_name::<Argon>("Argon")
+            .register_fn("new_argon", Argon::new)
+            .register_fn("hash", Argon::rhai_hash);
 }
