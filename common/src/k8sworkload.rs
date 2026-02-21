@@ -263,31 +263,31 @@ impl K8sJob {
 
 pub fn k8sworkload_rhai_register(engine: &mut Engine) {
     engine
-            .register_type_with_name::<K8sDeploy>("K8sDeploy")
-            .register_fn("get_deployment", K8sDeploy::get_deployment)
-            .register_get("metadata", K8sDeploy::get_metadata)
-            .register_get("spec", K8sDeploy::get_spec)
-            .register_get("status", K8sDeploy::get_status)
-            .register_fn("wait_available", K8sDeploy::wait_available);
+        .register_type_with_name::<K8sDeploy>("K8sDeploy")
+        .register_fn("get_deployment", K8sDeploy::get_deployment)
+        .register_get("metadata", K8sDeploy::get_metadata)
+        .register_get("spec", K8sDeploy::get_spec)
+        .register_get("status", K8sDeploy::get_status)
+        .register_fn("wait_available", K8sDeploy::wait_available);
     engine
-            .register_type_with_name::<K8sDaemonSet>("K8sDaemonSet")
-            .register_fn("get_deamonset", K8sDaemonSet::get_deamonset)
-            .register_get("metadata", K8sDaemonSet::get_metadata)
-            .register_get("spec", K8sDaemonSet::get_spec)
-            .register_get("status", K8sDaemonSet::get_status)
-            .register_fn("wait_available", K8sDaemonSet::wait_available);
+        .register_type_with_name::<K8sDaemonSet>("K8sDaemonSet")
+        .register_fn("get_deamonset", K8sDaemonSet::get_deamonset)
+        .register_get("metadata", K8sDaemonSet::get_metadata)
+        .register_get("spec", K8sDaemonSet::get_spec)
+        .register_get("status", K8sDaemonSet::get_status)
+        .register_fn("wait_available", K8sDaemonSet::wait_available);
     engine
-            .register_type_with_name::<K8sStatefulSet>("K8sStatefulSet")
-            .register_fn("get_statefulset", K8sStatefulSet::get_sts)
-            .register_get("metadata", K8sStatefulSet::get_metadata)
-            .register_get("spec", K8sStatefulSet::get_spec)
-            .register_get("status", K8sStatefulSet::get_status)
-            .register_fn("wait_available", K8sStatefulSet::wait_available);
+        .register_type_with_name::<K8sStatefulSet>("K8sStatefulSet")
+        .register_fn("get_statefulset", K8sStatefulSet::get_sts)
+        .register_get("metadata", K8sStatefulSet::get_metadata)
+        .register_get("spec", K8sStatefulSet::get_spec)
+        .register_get("status", K8sStatefulSet::get_status)
+        .register_fn("wait_available", K8sStatefulSet::wait_available);
     engine
-            .register_type_with_name::<K8sJob>("K8sJob")
-            .register_fn("get_job", K8sJob::get_job)
-            .register_get("metadata", K8sJob::get_metadata)
-            .register_get("spec", K8sJob::get_spec)
-            .register_get("status", K8sJob::get_status)
-            .register_fn("wait_done", K8sJob::wait_done);
+        .register_type_with_name::<K8sJob>("K8sJob")
+        .register_fn("get_job", K8sJob::get_job)
+        .register_get("metadata", K8sJob::get_metadata)
+        .register_get("spec", K8sJob::get_spec)
+        .register_get("status", K8sJob::get_status)
+        .register_fn("wait_done", K8sJob::wait_done);
 }

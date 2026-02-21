@@ -131,9 +131,9 @@ impl Registry {
 
 pub fn oci_rhai_register(engine: &mut Engine) {
     engine
-            .register_type_with_name::<Registry>("Registry")
-            .register_fn("new_registry", Registry::new)
-            .register_fn("push_image", Registry::push_image)
-            .register_fn("list_tags", Registry::rhai_list_tags)
-            .register_fn("get_manifest", Registry::get_manifest);
+        .register_type_with_name::<Registry>("Registry")
+        .register_fn("new_registry", Registry::new)
+        .register_fn("push_image", Registry::push_image)
+        .register_fn("list_tags", Registry::rhai_list_tags)
+        .register_fn("get_manifest", Registry::get_manifest);
 }

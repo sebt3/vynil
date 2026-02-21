@@ -61,10 +61,10 @@ impl Passwords {
 
 pub fn password_rhai_register(engine: &mut Engine) {
     engine
-            .register_fn("gen_password", |len: i64| -> String {
-                Passwords::new().generate(len, 6, 2, 2)
-            })
-            .register_fn("gen_password_alphanum", |len: i64| -> String {
-                Passwords::new().generate(len, 8, 2, 0)
-            });
+        .register_fn("gen_password", |len: i64| -> String {
+            Passwords::new().generate(len, 6, 2, 2)
+        })
+        .register_fn("gen_password_alphanum", |len: i64| -> String {
+            Passwords::new().generate(len, 8, 2, 0)
+        });
 }

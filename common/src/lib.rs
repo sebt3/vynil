@@ -105,11 +105,16 @@ pub type RhaiRes<T> = std::result::Result<T, Box<rhai::EvalAltResult>>;
 pub fn rhai_err(e: Error) -> Box<rhai::EvalAltResult> {
     format!("{e}").into()
 }
+pub fn rhai_err_str(e: String) -> Box<rhai::EvalAltResult> {
+    format!("{e}").into()
+}
 pub mod chronohandler;
 pub mod context;
 pub mod handlebarshandler;
 pub mod hasheshandlers;
 pub mod httphandler;
+pub mod httpmock;
+pub mod k8smock;
 #[macro_use]
 pub mod instance_macros;
 pub mod instanceservice;

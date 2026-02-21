@@ -336,12 +336,12 @@ impl JukeBox {
 
 pub fn jukebox_rhai_register(engine: &mut Engine) {
     engine
-            .register_type_with_name::<JukeBox>("JukeBox")
-            .register_fn("get_jukebox", JukeBox::rhai_get)
-            .register_fn("list_jukebox", JukeBox::rhai_list)
-            .register_fn("set_status_updated", JukeBox::rhai_set_status_updated)
-            .register_fn("set_status_failed", JukeBox::rhai_set_status_failed)
-            .register_get("metadata", JukeBox::get_metadata)
-            .register_get("spec", JukeBox::get_spec)
-            .register_get("status", JukeBox::get_status);
+        .register_type_with_name::<JukeBox>("JukeBox")
+        .register_fn("get_jukebox", JukeBox::rhai_get)
+        .register_fn("list_jukebox", JukeBox::rhai_list)
+        .register_fn("set_status_updated", JukeBox::rhai_set_status_updated)
+        .register_fn("set_status_failed", JukeBox::rhai_set_status_failed)
+        .register_get("metadata", JukeBox::get_metadata)
+        .register_get("spec", JukeBox::get_spec)
+        .register_get("status", JukeBox::get_status);
 }

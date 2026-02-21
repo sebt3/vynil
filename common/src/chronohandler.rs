@@ -22,7 +22,7 @@ impl DateTimeHandler {
 
 pub fn chrono_rhai_register(engine: &mut Engine) {
     engine
-            .register_type_with_name::<DateTimeHandler>("DateTimeHandler")
-            .register_fn("date_now", DateTimeHandler::now)
-            .register_fn("format", DateTimeHandler::rhai_format);
+        .register_type_with_name::<DateTimeHandler>("DateTimeHandler")
+        .register_fn("date_now", DateTimeHandler::now)
+        .register_fn("format", DateTimeHandler::rhai_format);
 }

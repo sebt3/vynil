@@ -225,72 +225,72 @@ impl_instance_befores!(ServiceInstance);
 
 pub fn service_rhai_register(engine: &mut Engine) {
     engine
-            .register_type_with_name::<ServiceInstance>("ServiceInstance")
-            .register_fn("get_service_instance", ServiceInstance::rhai_get)
-            .register_fn("list_service_instance", ServiceInstance::rhai_list)
-            .register_fn("list_services_names", ServiceInstance::rhai_list_services_names)
-            .register_fn("options_digest", ServiceInstance::get_options_digest)
-            .register_fn("get_tfstate", ServiceInstance::rhai_get_tfstate)
-            .register_fn("get_rhaistate", ServiceInstance::rhai_get_rhaistate)
-            .register_fn("set_services", ServiceInstance::rhai_set_services)
-            .register_fn("get_services", ServiceInstance::rhai_get_services)
-            .register_fn("set_agent_started", ServiceInstance::rhai_set_agent_started)
-            .register_fn("set_missing_box", ServiceInstance::rhai_set_missing_box)
-            .register_fn("set_missing_package", ServiceInstance::rhai_set_missing_package)
-            .register_fn(
-                "set_missing_requirement",
-                ServiceInstance::rhai_set_missing_requirement,
-            )
-            .register_fn("set_status_ready", ServiceInstance::rhai_set_status_ready)
-            .register_fn("set_status_crds", ServiceInstance::rhai_set_status_crds)
-            .register_fn(
-                "set_status_crd_failed",
-                ServiceInstance::rhai_set_status_crd_failed,
-            )
-            .register_fn("set_status_befores", ServiceInstance::rhai_set_status_befores)
-            .register_fn(
-                "set_status_before_failed",
-                ServiceInstance::rhai_set_status_before_failed,
-            )
-            .register_fn("set_status_vitals", ServiceInstance::rhai_set_status_vitals)
-            .register_fn(
-                "set_status_vital_failed",
-                ServiceInstance::rhai_set_status_vital_failed,
-            )
-            .register_fn("set_status_scalables", ServiceInstance::rhai_set_status_scalables)
-            .register_fn(
-                "set_status_scalable_failed",
-                ServiceInstance::rhai_set_status_scalable_failed,
-            )
-            .register_fn("set_status_others", ServiceInstance::rhai_set_status_others)
-            .register_fn(
-                "set_status_other_failed",
-                ServiceInstance::rhai_set_status_other_failed,
-            )
-            .register_fn("set_status_posts", ServiceInstance::rhai_set_status_posts)
-            .register_fn(
-                "set_status_post_failed",
-                ServiceInstance::rhai_set_status_post_failed,
-            )
-            .register_fn("set_tfstate", ServiceInstance::rhai_set_tfstate)
-            .register_fn(
-                "set_status_tofu_failed",
-                ServiceInstance::rhai_set_status_tofu_failed,
-            )
-            .register_fn("set_rhaistate", ServiceInstance::rhai_set_rhaistate)
-            .register_fn(
-                "set_status_rhai_failed",
-                ServiceInstance::rhai_set_status_rhai_failed,
-            )
-            .register_fn(
-                "set_status_schedule_backup_failed",
-                ServiceInstance::rhai_set_status_schedule_backup_failed,
-            )
-            .register_fn(
-                "set_status_init_failed",
-                ServiceInstance::rhai_set_status_init_failed,
-            )
-            .register_get("metadata", ServiceInstance::get_metadata)
-            .register_get("spec", ServiceInstance::get_spec)
-            .register_get("status", ServiceInstance::get_status);
+        .register_type_with_name::<ServiceInstance>("ServiceInstance")
+        .register_fn("get_service_instance", ServiceInstance::rhai_get)
+        .register_fn("list_service_instance", ServiceInstance::rhai_list)
+        .register_fn("list_services_names", ServiceInstance::rhai_list_services_names)
+        .register_fn("options_digest", ServiceInstance::get_options_digest)
+        .register_fn("get_tfstate", ServiceInstance::rhai_get_tfstate)
+        .register_fn("get_rhaistate", ServiceInstance::rhai_get_rhaistate)
+        .register_fn("set_services", ServiceInstance::rhai_set_services)
+        .register_fn("get_services", ServiceInstance::rhai_get_services)
+        .register_fn("set_agent_started", ServiceInstance::rhai_set_agent_started)
+        .register_fn("set_missing_box", ServiceInstance::rhai_set_missing_box)
+        .register_fn("set_missing_package", ServiceInstance::rhai_set_missing_package)
+        .register_fn(
+            "set_missing_requirement",
+            ServiceInstance::rhai_set_missing_requirement,
+        )
+        .register_fn("set_status_ready", ServiceInstance::rhai_set_status_ready)
+        .register_fn("set_status_crds", ServiceInstance::rhai_set_status_crds)
+        .register_fn(
+            "set_status_crd_failed",
+            ServiceInstance::rhai_set_status_crd_failed,
+        )
+        .register_fn("set_status_befores", ServiceInstance::rhai_set_status_befores)
+        .register_fn(
+            "set_status_before_failed",
+            ServiceInstance::rhai_set_status_before_failed,
+        )
+        .register_fn("set_status_vitals", ServiceInstance::rhai_set_status_vitals)
+        .register_fn(
+            "set_status_vital_failed",
+            ServiceInstance::rhai_set_status_vital_failed,
+        )
+        .register_fn("set_status_scalables", ServiceInstance::rhai_set_status_scalables)
+        .register_fn(
+            "set_status_scalable_failed",
+            ServiceInstance::rhai_set_status_scalable_failed,
+        )
+        .register_fn("set_status_others", ServiceInstance::rhai_set_status_others)
+        .register_fn(
+            "set_status_other_failed",
+            ServiceInstance::rhai_set_status_other_failed,
+        )
+        .register_fn("set_status_posts", ServiceInstance::rhai_set_status_posts)
+        .register_fn(
+            "set_status_post_failed",
+            ServiceInstance::rhai_set_status_post_failed,
+        )
+        .register_fn("set_tfstate", ServiceInstance::rhai_set_tfstate)
+        .register_fn(
+            "set_status_tofu_failed",
+            ServiceInstance::rhai_set_status_tofu_failed,
+        )
+        .register_fn("set_rhaistate", ServiceInstance::rhai_set_rhaistate)
+        .register_fn(
+            "set_status_rhai_failed",
+            ServiceInstance::rhai_set_status_rhai_failed,
+        )
+        .register_fn(
+            "set_status_schedule_backup_failed",
+            ServiceInstance::rhai_set_status_schedule_backup_failed,
+        )
+        .register_fn(
+            "set_status_init_failed",
+            ServiceInstance::rhai_set_status_init_failed,
+        )
+        .register_get("metadata", ServiceInstance::get_metadata)
+        .register_get("spec", ServiceInstance::get_spec)
+        .register_get("status", ServiceInstance::get_status);
 }

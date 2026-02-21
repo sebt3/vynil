@@ -104,20 +104,20 @@ impl std::fmt::Display for Semver {
 
 pub fn semver_rhai_register(engine: &mut Engine) {
     engine
-            .register_type_with_name::<Semver>("Semver")
-            .register_fn("semver_from", Semver::rhai_parse)
-            .register_fn("inc_major", Semver::inc_major)
-            .register_fn("inc_minor", Semver::inc_minor)
-            .register_fn("inc_patch", Semver::inc_patch)
-            .register_fn("inc_beta", Semver::rhai_inc_beta)
-            .register_fn("inc_alpha", Semver::rhai_inc_alpha)
-            .register_fn("==", |a: Semver, b: Semver| a == b)
-            .register_fn("!=", |a: Semver, b: Semver| a != b)
-            .register_fn("<", |a: Semver, b: Semver| a < b)
-            .register_fn(">", |a: Semver, b: Semver| a > b)
-            .register_fn("<=", |a: Semver, b: Semver| a <= b)
-            .register_fn(">=", |a: Semver, b: Semver| a >= b)
-            .register_fn("to_string", Semver::to_string);
+        .register_type_with_name::<Semver>("Semver")
+        .register_fn("semver_from", Semver::rhai_parse)
+        .register_fn("inc_major", Semver::inc_major)
+        .register_fn("inc_minor", Semver::inc_minor)
+        .register_fn("inc_patch", Semver::inc_patch)
+        .register_fn("inc_beta", Semver::rhai_inc_beta)
+        .register_fn("inc_alpha", Semver::rhai_inc_alpha)
+        .register_fn("==", |a: Semver, b: Semver| a == b)
+        .register_fn("!=", |a: Semver, b: Semver| a != b)
+        .register_fn("<", |a: Semver, b: Semver| a < b)
+        .register_fn(">", |a: Semver, b: Semver| a > b)
+        .register_fn("<=", |a: Semver, b: Semver| a <= b)
+        .register_fn(">=", |a: Semver, b: Semver| a >= b)
+        .register_fn("to_string", Semver::to_string);
 }
 
 #[cfg(test)]

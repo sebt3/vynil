@@ -262,41 +262,41 @@ impl_instance_crds!(SystemInstance);
 
 pub fn system_rhai_register(engine: &mut Engine) {
     engine
-            .register_type_with_name::<SystemInstance>("SystemInstance")
-            .register_fn("get_system_instance", SystemInstance::rhai_get)
-            .register_fn("list_system_instance", SystemInstance::rhai_list)
-            .register_fn("options_digest", SystemInstance::get_options_digest)
-            .register_fn("get_tfstate", SystemInstance::rhai_get_tfstate)
-            .register_fn("get_rhaistate", SystemInstance::rhai_get_rhaistate)
-            .register_fn("set_agent_started", SystemInstance::rhai_set_agent_started)
-            .register_fn("set_missing_box", SystemInstance::rhai_set_missing_box)
-            .register_fn("set_missing_package", SystemInstance::rhai_set_missing_package)
-            .register_fn(
-                "set_missing_requirement",
-                SystemInstance::rhai_set_missing_requirement,
-            )
-            .register_fn("set_status_ready", SystemInstance::rhai_set_status_ready)
-            .register_fn("set_status_crds", SystemInstance::rhai_set_status_crds)
-            .register_fn(
-                "set_status_crd_failed",
-                SystemInstance::rhai_set_status_crd_failed,
-            )
-            .register_fn("set_status_systems", SystemInstance::rhai_set_status_systems)
-            .register_fn(
-                "set_status_system_failed",
-                SystemInstance::rhai_set_status_system_failed,
-            )
-            .register_fn("set_tfstate", SystemInstance::rhai_set_tfstate)
-            .register_fn(
-                "set_status_tofu_failed",
-                SystemInstance::rhai_set_status_tofu_failed,
-            )
-            .register_fn("set_rhaistate", SystemInstance::rhai_set_rhaistate)
-            .register_fn(
-                "set_status_rhai_failed",
-                SystemInstance::rhai_set_status_rhai_failed,
-            )
-            .register_get("metadata", SystemInstance::get_metadata)
-            .register_get("spec", SystemInstance::get_spec)
-            .register_get("status", SystemInstance::get_status);
+        .register_type_with_name::<SystemInstance>("SystemInstance")
+        .register_fn("get_system_instance", SystemInstance::rhai_get)
+        .register_fn("list_system_instance", SystemInstance::rhai_list)
+        .register_fn("options_digest", SystemInstance::get_options_digest)
+        .register_fn("get_tfstate", SystemInstance::rhai_get_tfstate)
+        .register_fn("get_rhaistate", SystemInstance::rhai_get_rhaistate)
+        .register_fn("set_agent_started", SystemInstance::rhai_set_agent_started)
+        .register_fn("set_missing_box", SystemInstance::rhai_set_missing_box)
+        .register_fn("set_missing_package", SystemInstance::rhai_set_missing_package)
+        .register_fn(
+            "set_missing_requirement",
+            SystemInstance::rhai_set_missing_requirement,
+        )
+        .register_fn("set_status_ready", SystemInstance::rhai_set_status_ready)
+        .register_fn("set_status_crds", SystemInstance::rhai_set_status_crds)
+        .register_fn(
+            "set_status_crd_failed",
+            SystemInstance::rhai_set_status_crd_failed,
+        )
+        .register_fn("set_status_systems", SystemInstance::rhai_set_status_systems)
+        .register_fn(
+            "set_status_system_failed",
+            SystemInstance::rhai_set_status_system_failed,
+        )
+        .register_fn("set_tfstate", SystemInstance::rhai_set_tfstate)
+        .register_fn(
+            "set_status_tofu_failed",
+            SystemInstance::rhai_set_status_tofu_failed,
+        )
+        .register_fn("set_rhaistate", SystemInstance::rhai_set_rhaistate)
+        .register_fn(
+            "set_status_rhai_failed",
+            SystemInstance::rhai_set_status_rhai_failed,
+        )
+        .register_get("metadata", SystemInstance::get_metadata)
+        .register_get("spec", SystemInstance::get_spec)
+        .register_get("status", SystemInstance::get_status);
 }
