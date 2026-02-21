@@ -77,6 +77,7 @@ pub enum ConditionsType {
     ScheduleBackup,
     OtherApplied,
     RhaiApplied,
+    PostApplied,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
@@ -127,6 +128,8 @@ pub struct TenantInstanceStatus {
     pub scalables: Option<Vec<crate::Children>>,
     /// List of other children
     pub others: Option<Vec<crate::Children>>,
+    /// List of post children
+    pub posts: Option<Vec<crate::Children>>,
     /// List of the services
     pub services: Option<Vec<Published>>,
 }
@@ -156,6 +159,11 @@ impl TenantInstance {
                 }
             }
             if let Some(child) = status.scalables.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
+            if let Some(child) = status.posts.clone() {
                 if child.len() > 0 {
                     return true;
                 }

@@ -194,6 +194,24 @@ macro_rules! impl_condition_children {
                 )
             }
 
+            pub fn post_ko(message: &str, generation: i64) -> ApplicationCondition {
+                ApplicationCondition::new(
+                    message,
+                    ConditionsStatus::False,
+                    ConditionsType::PostApplied,
+                    generation,
+                )
+            }
+
+            pub fn post_ok(generation: i64) -> ApplicationCondition {
+                ApplicationCondition::new(
+                    "Templates applied succesfully",
+                    ConditionsStatus::True,
+                    ConditionsType::PostApplied,
+                    generation,
+                )
+            }
+
             pub fn other_ko(message: &str, generation: i64) -> ApplicationCondition {
                 ApplicationCondition::new(
                     message,
@@ -1151,6 +1169,72 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            pub async fn set_status_posts(
+                &mut self,
+                posts: Vec<$crate::Children>,
+            ) -> $crate::Result<Self> {
+                let count = posts.len();
+                let client = $crate::context::get_client_async().await;
+                let generation = self.metadata.generation.unwrap_or(1);
+                let mut conditions: Vec<ApplicationCondition> =
+                    self.get_conditions_excluding(vec![ConditionsType::OtherApplied]);
+                conditions.push(ApplicationCondition::other_ok(generation));
+                let result = self
+                    .patch_status(
+                        client.clone(),
+                        serde_json::json!({ "conditions": conditions, "posts": posts }),
+                    )
+                    .await?;
+                self.send_event(client, ::kube::runtime::events::Event {
+                    type_: ::kube::runtime::events::EventType::Normal,
+                    reason: "PostApplySucceed".to_string(),
+                    note: Some(format!("Applied {} Objects", count)),
+                    action: "PostApply".to_string(),
+                    secondary: None,
+                })
+                .await?;
+                Ok(result)
+            }
+
+            pub async fn set_status_post_failed(
+                &mut self,
+                reason: String,
+            ) -> $crate::Result<Self> {
+                let client = $crate::context::get_client_async().await;
+                let generation = self.metadata.generation.unwrap_or(1);
+                let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
+                    ConditionsType::AgentStarted,
+                    ConditionsType::OtherApplied,
+                    ConditionsType::Installed,
+                ]);
+                conditions.push(ApplicationCondition::post_ko(&reason, generation));
+                conditions.push(ApplicationCondition::installed_ko(&reason, generation));
+                if !conditions
+                    .clone()
+                    .into_iter()
+                    .any(|c| c.condition_type == ConditionsType::Ready)
+                {
+                    conditions.push(ApplicationCondition::ready_ko(generation));
+                }
+                let result = self
+                    .patch_status(
+                        client.clone(),
+                        serde_json::json!({ "conditions": conditions }),
+                    )
+                    .await?;
+                let mut note = reason;
+                note.truncate(1023);
+                self.send_event(client, ::kube::runtime::events::Event {
+                    type_: ::kube::runtime::events::EventType::Warning,
+                    reason: "OtherApplyFailed".to_string(),
+                    note: Some(note),
+                    action: "OtherApply".to_string(),
+                    secondary: None,
+                })
+                .await?;
+                Ok(result)
+            }
+
             pub async fn set_status_init_failed(&mut self, reason: String) -> $crate::Result<Self> {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
@@ -1334,6 +1418,27 @@ macro_rules! impl_instance_befores {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
                         .block_on(async move { self.set_status_other_failed(reason).await })
+                })
+                .map_err($crate::rhai_err)
+            }
+
+            pub fn rhai_set_status_posts(&mut self, list: ::rhai::Dynamic) -> $crate::RhaiRes<Self> {
+                ::tokio::task::block_in_place(|| {
+                    ::tokio::runtime::Handle::current().block_on(async move {
+                        let v = serde_json::to_string(&list)
+                            .map_err($crate::Error::SerializationError)?;
+                        let lst =
+                            serde_json::from_str(&v).map_err($crate::Error::SerializationError)?;
+                        self.set_status_posts(lst).await
+                    })
+                })
+                .map_err($crate::rhai_err)
+            }
+
+            pub fn rhai_set_status_post_failed(&mut self, reason: String) -> $crate::RhaiRes<Self> {
+                ::tokio::task::block_in_place(|| {
+                    ::tokio::runtime::Handle::current()
+                        .block_on(async move { self.set_status_post_failed(reason).await })
                 })
                 .map_err($crate::rhai_err)
             }

@@ -1,0 +1,35 @@
+fn run(instance, context) {
+    let ctx = import_run("delete_posts_pre", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    if instance.status != () && instance.status.posts != () {
+        let deleted = [];
+        for old in instance.status.posts {
+            let ns = if old.namespace != () {old.namespace} else {instance.metadata.namespace};
+            let api = if old.api_version != () {
+                k8s_resource(old.api_version, old.kind, ns)
+            } else if old.apiVersion != () {
+                k8s_resource(old.apiVersion, old.kind, ns)
+            } else {
+                k8s_resource(old.kind, ns)
+            };
+            if api.exist() {
+                try {
+                    let o = api.get_obj(old.name);
+                    o.delete();
+                    deleted.push(o);
+                } catch(e) {}
+            }
+        }
+        for d in deleted {
+            log_info(`Waiting for ${d.metadata.name} to be deleted`);
+            d.wait_deleted(60*5);
+        }
+    }
+    ctx = import_run("delete_posts_post", instance, context);
+    if type_of(ctx) == "map" {
+        context = ctx;
+    }
+    context
+}

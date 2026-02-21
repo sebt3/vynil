@@ -885,6 +885,35 @@ requirements:
         std::fs::remove_file(p).ok();
     }
 
+    // ── Diagnostic test (temporary) ──────────────────────────────────────────
+
+    #[test]
+    fn debug_yaml_to_json_conversion() {
+        // Test 1: nested block mapping alone
+        let y1 = "images:\n  main:\n    registry: docker.io\n";
+        let v1 = rust_yaml::Yaml::new().load_str(y1).unwrap();
+        let j1 = crate::yamlhandler::yaml_value_to_serde_json(v1);
+        eprintln!("Test1 (nested block alone): {}", serde_json::to_string_pretty(&j1).unwrap());
+
+        // Test 2: nested block mapping after simple key
+        let y2 = "kind: Package\nimages:\n  main:\n    registry: docker.io\n";
+        let v2 = rust_yaml::Yaml::new().load_str(y2).unwrap();
+        let j2 = crate::yamlhandler::yaml_value_to_serde_json(v2);
+        eprintln!("Test2 (after simple key): {}", serde_json::to_string_pretty(&j2).unwrap());
+
+        // Test 3: nested block mapping after flow value
+        let y3 = "requirements: []\nimages:\n  main:\n    registry: docker.io\n";
+        let v3 = rust_yaml::Yaml::new().load_str(y3).unwrap();
+        let j3 = crate::yamlhandler::yaml_value_to_serde_json(v3);
+        eprintln!("Test3 (after flow value): {}", serde_json::to_string_pretty(&j3).unwrap());
+
+        // Test 4: flow images
+        let y4 = "requirements: []\nimages: {main: {registry: docker.io, repository: lib/nginx, tag: '1.25'}}\n";
+        let v4 = rust_yaml::Yaml::new().load_str(y4).unwrap();
+        let j4 = crate::yamlhandler::yaml_value_to_serde_json(v4);
+        eprintln!("Test4 (all flow): {}", serde_json::to_string_pretty(&j4).unwrap());
+    }
+
     // ── Images & resources ────────────────────────────────────────────────────
 
     #[test]
