@@ -1,21 +1,23 @@
 use rhai::{Engine, Map, Dynamic};
+use serde::{Deserialize, Serialize};
 use crate::RhaiRes;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub enum HttpMethod {
-    Head,
+    #[default]
     Get,
+    Head,
     Delete,
     Patch,
     Post,
     Put,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct HttpMockItem {
-    path: String,
-    method: HttpMethod,
-    return_obj: Map,
+    pub path: String,
+    pub method: HttpMethod,
+    pub return_obj: Map,
 }
 
 #[derive(Clone, Debug)]
@@ -98,8 +100,8 @@ impl RestClientMock {
     }
 }
 
-
 pub fn httpmock_rhai_register(engine: &mut Engine, mocks: Vec<HttpMockItem>) {
+    let mocks = mocks.clone();
     let new = move |base: &str| -> RestClientMock {
         RestClientMock::new(base, mocks.clone())
     };

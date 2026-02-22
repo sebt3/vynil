@@ -1,7 +1,21 @@
 use crate::{Error, RhaiRes, rhai_err};
 use indexmap::IndexMap;
 use rhai::{Dynamic, ImmutableString, Engine, Map};
-use rust_yaml::{Value, Yaml};
+use rust_yaml::{Value, Yaml, YamlConfig, yaml::IndentConfig};
+
+fn new_yaml() -> Yaml {
+    Yaml::with_config(YamlConfig {
+        preserve_comments: true,
+        loader_type: rust_yaml::LoaderType::RoundTrip,
+        emit_anchors: false,
+        indent: IndentConfig {
+            indent: 2,
+            sequence_indent: Some(0),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
 
 // ── Public order-preserving YAML document type ────────────────────────────────
 
@@ -13,21 +27,21 @@ pub struct YamlDoc(pub Value);
 
 impl YamlDoc {
     pub fn from_str(s: &str) -> Result<Self, String> {
-        Yaml::new()
+        new_yaml()
             .load_str(s)
             .map(YamlDoc)
             .map_err(|e| e.to_string())
     }
 
     pub fn from_str_multi(s: &str) -> Result<Vec<Self>, String> {
-        Yaml::new()
+        new_yaml()
             .load_all_str(s)
             .map(|docs| docs.into_iter().map(YamlDoc).collect())
             .map_err(|e| e.to_string())
     }
 
     pub fn to_yaml_string(&self) -> Result<String, String> {
-        Yaml::new().dump_str(&self.0).map_err(|e| e.to_string())
+        new_yaml().dump_str(&self.0).map_err(|e| e.to_string())
     }
 
     // ── Rhai indexer get ──────────────────────────────────────────────────
@@ -267,7 +281,7 @@ pub fn serde_json_to_yaml_value(v: serde_json::Value) -> Value {
 /// Parses a YAML string and returns the first document as a `serde_json::Value`.
 /// Used to replace `serde_yaml::from_str::<serde_json::Value>`.
 pub fn yaml_str_to_json(s: &str) -> crate::Result<serde_json::Value> {
-    Yaml::new()
+    new_yaml()
         .load_str(s)
         .map(yaml_value_to_serde_json)
         .map_err(|e| Error::YamlError(e.to_string()))
@@ -278,17 +292,16 @@ pub fn yaml_str_to_json(s: &str) -> crate::Result<serde_json::Value> {
 pub fn yaml_serialize_to_string<T: serde::Serialize>(val: &T) -> crate::Result<String> {
     let json_val = serde_json::to_value(val).map_err(Error::SerializationError)?;
     let yaml_val = serde_json_to_yaml_value(json_val);
-    Yaml::new()
+    new_yaml()
         .dump_str(&yaml_val)
         .map_err(|e| Error::YamlError(e.to_string()))
 }
-
 
 pub fn yaml_rhai_register(engine: &mut Engine) {
     engine
         .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
             let yaml_val = dynamic_to_value(val);
-            rust_yaml::Yaml::new()
+            new_yaml()
                 .dump_str(&yaml_val)
                 .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
                 .map(|v| v.into())
@@ -296,7 +309,7 @@ pub fn yaml_rhai_register(engine: &mut Engine) {
         .register_fn("yaml_encode", |val: Map| -> RhaiRes<ImmutableString> {
             let dyn_val = Dynamic::from_map(val);
             let yaml_val = dynamic_to_value(dyn_val);
-            rust_yaml::Yaml::new()
+            new_yaml()
                 .dump_str(&yaml_val)
                 .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
                 .map(|v| v.into())
@@ -314,7 +327,7 @@ pub fn yaml_rhai_register(engine: &mut Engine) {
                 if val.len() <= 5 {
                     return Ok(vec![]);
                 }
-                rust_yaml::Yaml::new()
+                new_yaml()
                     .load_all_str(val.as_ref())
                     .map(|docs| docs.into_iter().map(value_to_rhai_dynamic).collect())
                     .map_err(|e| rhai_err(Error::YamlError(e.to_string())))

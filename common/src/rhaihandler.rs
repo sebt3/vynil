@@ -4,6 +4,7 @@ use crate::{
     chronohandler::chrono_rhai_register,
     context,
     httpmock::{HttpMockItem, httpmock_rhai_register},
+    k8smock::k8smock_rhai_register,
     /*ed25519handler::Ed25519,*/
     handlebarshandler::handlebars_rhai_register,
     hasheshandlers::hashes_rhai_register,
@@ -179,9 +180,10 @@ impl Script {
         k8sworkload_rhai_register(&mut script.engine);
         script
     }
-    pub fn new_mock(resolver_path: Vec<String>, http_mocks: Vec<HttpMockItem>) -> Script {
+    pub fn new_mock(resolver_path: Vec<String>, http_mocks: Vec<HttpMockItem>, k8s_mocks: Vec<Dynamic>) -> Script {
         let mut script = Self::new_core(resolver_path);
         httpmock_rhai_register(&mut script.engine, http_mocks);
+        k8smock_rhai_register(&mut script.engine, k8s_mocks);
         script
     }
     pub fn add_common(&mut self) {
