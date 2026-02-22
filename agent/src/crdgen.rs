@@ -35,7 +35,7 @@ pub async fn run(_args: &Parameters) -> std::result::Result<(), Error> {
                     }
                 });
     }
-    print!("{}", serde_yaml::to_string(&crd).unwrap());
+    print!("{}", common::yamlhandler::yaml_serialize_to_string(&crd).unwrap());
     println!("---");
     let mut crd = TenantInstance::crd();
     if let Some(ref mut schema) = crd.spec.versions[0].schema
@@ -52,7 +52,7 @@ pub async fn run(_args: &Parameters) -> std::result::Result<(), Error> {
             }
         });
     }
-    print!("{}", serde_yaml::to_string(&crd).unwrap());
+    print!("{}", common::yamlhandler::yaml_serialize_to_string(&crd).unwrap());
     println!("---");
     let mut crd = ServiceInstance::crd();
     if let Some(ref mut schema) = crd.spec.versions[0].schema
@@ -69,7 +69,7 @@ pub async fn run(_args: &Parameters) -> std::result::Result<(), Error> {
             }
         });
     }
-    print!("{}", serde_yaml::to_string(&crd).unwrap());
+    print!("{}", common::yamlhandler::yaml_serialize_to_string(&crd).unwrap());
     println!("---");
     let mut crd = SystemInstance::crd();
     if let Some(ref mut schema) = crd.spec.versions[0].schema
@@ -86,6 +86,6 @@ pub async fn run(_args: &Parameters) -> std::result::Result<(), Error> {
             }
         });
     }
-    print!("{}", serde_yaml::to_string(&crd).unwrap());
+    print!("{}", common::yamlhandler::yaml_serialize_to_string(&crd).unwrap());
     Ok(())
 }

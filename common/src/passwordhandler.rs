@@ -3,6 +3,7 @@ use rand::{
     distr::{Distribution, uniform::Uniform, weighted::WeightedIndex},
     rng,
 };
+use rhai::Engine;
 
 //const LOWER: &[char] = &['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
 //const UPPER: &[char] = &['A', 'B', 'C', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
@@ -56,4 +57,14 @@ impl Passwords {
         }
         password
     }
+}
+
+pub fn password_rhai_register(engine: &mut Engine) {
+    engine
+        .register_fn("gen_password", |len: i64| -> String {
+            Passwords::new().generate(len, 6, 2, 2)
+        })
+        .register_fn("gen_password_alphanum", |len: i64| -> String {
+            Passwords::new().generate(len, 8, 2, 0)
+        });
 }

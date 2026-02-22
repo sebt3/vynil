@@ -14,7 +14,7 @@ use kube::{
     discovery::{ApiCapabilities, ApiResource, Discovery, Scope},
     runtime::wait::{Condition, await_condition, conditions},
 };
-use rhai::{Dynamic, serde::to_dynamic};
+use rhai::{Dynamic, serde::to_dynamic, Engine};
 use serde_json::json;
 
 lazy_static::lazy_static! {
@@ -934,4 +934,48 @@ impl K8sGeneric {
         let v = serde_json::to_value(res).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         to_dynamic(v)
     }
+}
+
+pub fn k8sgeneric_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<DynamicObject>("DynamicObject")
+        .register_get("data", |obj: &mut DynamicObject| -> Dynamic {
+            Dynamic::from(obj.data.clone())
+        });
+    engine
+        .register_type_with_name::<K8sObject>("K8sObject")
+        .register_get("kind", K8sObject::get_kind)
+        .register_get("metadata", K8sObject::get_metadata)
+        .register_fn("delete", K8sObject::rhai_delete)
+        .register_fn("wait_condition", K8sObject::wait_condition)
+        .register_fn("wait_status", K8sObject::wait_status)
+        .register_fn("wait_status_prop", K8sObject::wait_status_prop)
+        .register_fn("wait_status_string", K8sObject::wait_status_string)
+        .register_fn("wait_deleted", K8sObject::rhai_wait_deleted)
+        /*.register_fn("wait_for", |context: NativeCallContext, k8sobj: &mut K8sObject, fnp: FnPtr, timeout: i64| {
+            let condition = Box::new(move |obj: &DynamicObject| -> RhaiRes<bool> {
+                fnp.call_within_context(&context, (obj.clone(),))
+            });
+            tracing::warn!("wait_for");
+            k8sobj.wait_for(condition, timeout)
+        })*/;
+    engine
+        .register_type_with_name::<K8sGeneric>("K8sGeneric")
+        .register_fn("k8s_resource", K8sGeneric::new_global)
+        .register_fn("k8s_resource", K8sGeneric::new_ns)
+        .register_fn("k8s_resource", K8sGeneric::new_group_ns)
+        .register_fn("list", K8sGeneric::rhai_list)
+        .register_fn("list", K8sGeneric::rhai_list_labels)
+        .register_fn("update_k8s_crd_cache", update_cache)
+        .register_fn("list_meta", K8sGeneric::rhai_list_meta)
+        .register_fn("get", K8sGeneric::rhai_get)
+        .register_fn("get_meta", K8sGeneric::rhai_get_meta)
+        .register_fn("get_obj", K8sGeneric::rhai_get_obj)
+        .register_fn("delete", K8sGeneric::rhai_delete)
+        .register_fn("create", K8sGeneric::rhai_create)
+        .register_fn("replace", K8sGeneric::rhai_replace)
+        .register_fn("patch", K8sGeneric::rhai_patch)
+        .register_fn("apply", K8sGeneric::rhai_apply)
+        .register_fn("exist", K8sGeneric::rhai_exist)
+        .register_get("scope", K8sGeneric::rhai_get_scope);
 }

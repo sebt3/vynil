@@ -140,7 +140,7 @@ spec:
 {{#if oci_mount }}
         image:
           reference: {{ registry }}/{{ image }}:{{ tag }}
-          pullPolicy: IfNotPresent
+          pullPolicy: Always
 {{else}}
         emptyDir:
           sizeLimit: 500Mi

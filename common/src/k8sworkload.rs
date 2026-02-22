@@ -8,7 +8,7 @@ use kube::{
     api::Api,
     runtime::wait::{Condition, await_condition, conditions},
 };
-use rhai::Dynamic;
+use rhai::{Dynamic, Engine};
 
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
@@ -259,4 +259,35 @@ impl K8sJob {
         .map_err(|e| rhai_err(Error::KubeWaitError(e)))?;
         Ok(())
     }
+}
+
+pub fn k8sworkload_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<K8sDeploy>("K8sDeploy")
+        .register_fn("get_deployment", K8sDeploy::get_deployment)
+        .register_get("metadata", K8sDeploy::get_metadata)
+        .register_get("spec", K8sDeploy::get_spec)
+        .register_get("status", K8sDeploy::get_status)
+        .register_fn("wait_available", K8sDeploy::wait_available);
+    engine
+        .register_type_with_name::<K8sDaemonSet>("K8sDaemonSet")
+        .register_fn("get_deamonset", K8sDaemonSet::get_deamonset)
+        .register_get("metadata", K8sDaemonSet::get_metadata)
+        .register_get("spec", K8sDaemonSet::get_spec)
+        .register_get("status", K8sDaemonSet::get_status)
+        .register_fn("wait_available", K8sDaemonSet::wait_available);
+    engine
+        .register_type_with_name::<K8sStatefulSet>("K8sStatefulSet")
+        .register_fn("get_statefulset", K8sStatefulSet::get_sts)
+        .register_get("metadata", K8sStatefulSet::get_metadata)
+        .register_get("spec", K8sStatefulSet::get_spec)
+        .register_get("status", K8sStatefulSet::get_status)
+        .register_fn("wait_available", K8sStatefulSet::wait_available);
+    engine
+        .register_type_with_name::<K8sJob>("K8sJob")
+        .register_fn("get_job", K8sJob::get_job)
+        .register_get("metadata", K8sJob::get_metadata)
+        .register_get("spec", K8sJob::get_spec)
+        .register_get("status", K8sJob::get_status)
+        .register_fn("wait_done", K8sJob::wait_done);
 }

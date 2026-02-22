@@ -1,5 +1,5 @@
 ---
-apiVersion: apiextensions.k8s.io/v1
+apiVersion: "apiextensions.k8s.io/v1"
 kind: CustomResourceDefinition
 metadata:
   name: jukeboxes.vynil.solidite.fr
@@ -20,12 +20,12 @@ spec:
       name: schedule
       type: string
     - description: Last update date
-      format: date-time
-      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      format: "date-time"
+      jsonPath: ".status.conditions[?(@.type == 'Ready')].lastTransitionTime"
       name: last_updated
       type: date
     - description: Message
-      jsonPath: .status.conditions[?(@.type == 'Updated')].message
+      jsonPath: ".status.conditions[?(@.type == 'Updated')].message"
       name: message
       type: string
     name: v1
@@ -42,14 +42,15 @@ spec:
                 - stable
                 - beta
                 - alpha
+                - null
                 nullable: true
                 type: string
               pull_secret:
-                description: ImagePullSecret name in the vynil-system namespace
+                description: "ImagePullSecret name in the vynil-system namespace"
                 nullable: true
                 type: string
               schedule:
-                description: Actual cron-type expression that defines the interval of the updates.
+                description: "Actual cron-type expression that defines the interval of the updates."
                 type: string
               source:
                 anyOf:
@@ -103,17 +104,17 @@ spec:
                       type: integer
                     lastTransitionTime:
                       description: LastTransitionTime is the time the condition was last observed
-                      format: date-time
+                      format: "date-time"
                       nullable: true
                       type: string
                     message:
-                      description: Message contains human-readable message indicating details about condition
+                      description: "Message contains human-readable message indicating details about condition"
                       type: string
                     status:
-                      description: Status ("True" or "False") describe if the condition is enbled
+                      description: "Status (\"True\" or \"False\") describe if the condition is enbled"
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       type: string
                     type:
                       description: Type is an application condition type
@@ -184,7 +185,7 @@ spec:
                       description: Component options
                       nullable: true
                       type: object
-                      x-kubernetes-preserve-unknown-fields: true
+                      "x-kubernetes-preserve-unknown-fields": true
                     recommandations:
                       description: Recommandations
                       items:
@@ -353,7 +354,7 @@ spec:
     subresources:
       status: {}
 ---
-apiVersion: apiextensions.k8s.io/v1
+apiVersion: "apiextensions.k8s.io/v1"
 kind: CustomResourceDefinition
 metadata:
   name: tenantinstances.vynil.solidite.fr
@@ -386,12 +387,16 @@ spec:
       name: tag
       type: string
     - description: Last update date
-      format: date-time
-      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      format: "date-time"
+      jsonPath: ".status.conditions[?(@.type == 'Ready')].lastTransitionTime"
       name: last_updated
       type: date
+    - description: Stage
+      jsonPath: ".status.conditions[-1:].type"
+      name: stage
+      type: string
     - description: Errors
-      jsonPath: .status.conditions[?(@.status == 'False')].message
+      jsonPath: ".status.conditions[?(@.status == 'False')].message"
       name: errors
       type: string
     name: v1
@@ -410,14 +415,14 @@ spec:
                 nullable: true
                 properties:
                   secretName:
-                    description: 'Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"'
+                    description: "Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to \"backup-settings\""
                     nullable: true
                     type: string
                   snapshot:
                     description: Snapshot id for restoration
                     type: string
                   subPath:
-                    description: Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
+                    description: "Path within the bucket containing the backup to use for recovery. Default to \"<namespace-name>/<app-slug>\""
                     nullable: true
                     type: string
                 required:
@@ -430,7 +435,7 @@ spec:
                 description: Parameters
                 nullable: true
                 type: object
-                x-kubernetes-preserve-unknown-fields: true
+                "x-kubernetes-preserve-unknown-fields": true
               package:
                 description: The package name
                 type: string
@@ -483,17 +488,17 @@ spec:
                       type: integer
                     lastTransitionTime:
                       description: LastTransitionTime is the time the condition was last observed
-                      format: date-time
+                      format: "date-time"
                       nullable: true
                       type: string
                     message:
-                      description: Message contains human-readable message indicating details about condition
+                      description: "Message contains human-readable message indicating details about condition"
                       type: string
                     status:
-                      description: Status ("True" or "False") describe if the condition is enbled
+                      description: "Status (\"True\" or \"False\") describe if the condition is enbled"
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       type: string
                     type:
                       description: Type is an application condition type
@@ -511,6 +516,7 @@ spec:
                       - ScheduleBackup
                       - OtherApplied
                       - RhaiApplied
+                      - PostApplied
                       type: string
                   required:
                   - generation
@@ -525,6 +531,31 @@ spec:
                 type: string
               others:
                 description: List of other children
+                items:
+                  description: Children describe a k8s object
+                  properties:
+                    apiVersion:
+                      description: apiVersion of k8s object
+                      nullable: true
+                      type: string
+                    kind:
+                      description: kind of k8s object
+                      type: string
+                    name:
+                      description: Name of the object
+                      type: string
+                    namespace:
+                      description: Namespace is only used for namespaced object
+                      nullable: true
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                nullable: true
+                type: array
+              posts:
+                description: List of post children
                 items:
                   description: Children describe a k8s object
                   properties:
@@ -677,7 +708,7 @@ spec:
     subresources:
       status: {}
 ---
-apiVersion: apiextensions.k8s.io/v1
+apiVersion: "apiextensions.k8s.io/v1"
 kind: CustomResourceDefinition
 metadata:
   name: serviceinstances.vynil.solidite.fr
@@ -710,12 +741,16 @@ spec:
       name: tag
       type: string
     - description: Last update date
-      format: date-time
-      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      format: "date-time"
+      jsonPath: ".status.conditions[?(@.type == 'Ready')].lastTransitionTime"
       name: last_updated
       type: date
+    - description: Stage
+      jsonPath: ".status.conditions[-1:].type"
+      name: stage
+      type: string
     - description: Errors
-      jsonPath: .status.conditions[?(@.status == 'False')].message
+      jsonPath: ".status.conditions[?(@.status == 'False')].message"
       name: errors
       type: string
     name: v1
@@ -734,14 +769,14 @@ spec:
                 nullable: true
                 properties:
                   secretName:
-                    description: 'Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"'
+                    description: "Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to \"backup-settings\""
                     nullable: true
                     type: string
                   snapshot:
                     description: Snapshot id for restoration
                     type: string
                   subPath:
-                    description: Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
+                    description: "Path within the bucket containing the backup to use for recovery. Default to \"<namespace-name>/<app-slug>\""
                     nullable: true
                     type: string
                 required:
@@ -754,7 +789,7 @@ spec:
                 description: Parameters
                 nullable: true
                 type: object
-                x-kubernetes-preserve-unknown-fields: true
+                "x-kubernetes-preserve-unknown-fields": true
               package:
                 description: The package name
                 type: string
@@ -807,17 +842,17 @@ spec:
                       type: integer
                     lastTransitionTime:
                       description: LastTransitionTime is the time the condition was last observed
-                      format: date-time
+                      format: "date-time"
                       nullable: true
                       type: string
                     message:
-                      description: Message contains human-readable message indicating details about condition
+                      description: "Message contains human-readable message indicating details about condition"
                       type: string
                     status:
-                      description: Status ("True" or "False") describe if the condition is enbled
+                      description: "Status (\"True\" or \"False\") describe if the condition is enbled"
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       type: string
                     type:
                       description: Type is an application condition type
@@ -836,6 +871,7 @@ spec:
                       - ScheduleBackup
                       - OtherApplied
                       - RhaiApplied
+                      - PostApplied
                       type: string
                   required:
                   - generation
@@ -856,6 +892,31 @@ spec:
                 type: string
               others:
                 description: List of other children
+                items:
+                  description: Children describe a k8s object
+                  properties:
+                    apiVersion:
+                      description: apiVersion of k8s object
+                      nullable: true
+                      type: string
+                    kind:
+                      description: kind of k8s object
+                      type: string
+                    name:
+                      description: Name of the object
+                      type: string
+                    namespace:
+                      description: Namespace is only used for namespaced object
+                      nullable: true
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                nullable: true
+                type: array
+              posts:
+                description: List of post children
                 items:
                   description: Children describe a k8s object
                   properties:
@@ -1008,7 +1069,7 @@ spec:
     subresources:
       status: {}
 ---
-apiVersion: apiextensions.k8s.io/v1
+apiVersion: "apiextensions.k8s.io/v1"
 kind: CustomResourceDefinition
 metadata:
   name: systeminstances.vynil.solidite.fr
@@ -1041,12 +1102,16 @@ spec:
       name: tag
       type: string
     - description: Last update date
-      format: date-time
-      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      format: "date-time"
+      jsonPath: ".status.conditions[?(@.type == 'Ready')].lastTransitionTime"
       name: last_updated
       type: date
+    - description: Stage
+      jsonPath: ".status.conditions[-1:].type"
+      name: stage
+      type: string
     - description: Errors
-      jsonPath: .status.conditions[?(@.status == 'False')].message
+      jsonPath: ".status.conditions[?(@.status == 'False')].message"
       name: errors
       type: string
     name: v1
@@ -1067,7 +1132,7 @@ spec:
                 description: Parameters
                 nullable: true
                 type: object
-                x-kubernetes-preserve-unknown-fields: true
+                "x-kubernetes-preserve-unknown-fields": true
               package:
                 description: The package name
                 type: string
@@ -1095,17 +1160,17 @@ spec:
                       type: integer
                     lastTransitionTime:
                       description: LastTransitionTime is the time the condition was last observed
-                      format: date-time
+                      format: "date-time"
                       nullable: true
                       type: string
                     message:
-                      description: Message contains human-readable message indicating details about condition
+                      description: "Message contains human-readable message indicating details about condition"
                       type: string
                     status:
-                      description: Status ("True" or "False") describe if the condition is enbled
+                      description: "Status (\"True\" or \"False\") describe if the condition is enbled"
                       enum:
-                      - 'True'
-                      - 'False'
+                      - "True"
+                      - "False"
                       type: string
                     type:
                       description: Type is an application condition type

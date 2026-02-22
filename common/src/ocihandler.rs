@@ -2,7 +2,7 @@ use crate::{Error, Result, RhaiRes, rhai_err, rhaihandler::Map};
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
-use rhai::Dynamic;
+use rhai::{Dynamic, Engine};
 use std::{collections::BTreeMap, path::PathBuf};
 use tar::{Archive, Builder};
 use tokio::{runtime::Handle, task::block_in_place};
@@ -127,4 +127,13 @@ impl Registry {
         let v = serde_json::to_string(&manifest).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
     }
+}
+
+pub fn oci_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<Registry>("Registry")
+        .register_fn("new_registry", Registry::new)
+        .register_fn("push_image", Registry::push_image)
+        .register_fn("list_tags", Registry::rhai_list_tags)
+        .register_fn("get_manifest", Registry::get_manifest);
 }

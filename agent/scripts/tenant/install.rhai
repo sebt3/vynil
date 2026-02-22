@@ -42,6 +42,13 @@ fn run(instance, context) {
         }
         instance = get_tenant_instance(instance.metadata.namespace, instance.metadata.name);
     }
+    if is_dir(`${context.package_dir}/posts`) {
+        ctx = import_run("install_posts", instance, context);
+        if type_of(ctx) == "map" {
+            context = ctx;
+        }
+        instance = get_tenant_instance(instance.metadata.namespace, instance.metadata.name);
+    }
     // there is some vitals to backup and backup flag is set
     if instance.status != () && instance.status.vitals != () && context.namespace.use_backup {
         let found = false;

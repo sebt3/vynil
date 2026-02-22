@@ -1,26 +1,28 @@
 use crate::{
     Error::{self, *},
-    Result, RhaiRes, Semver,
-    chronohandler::DateTimeHandler,
+    Result, RhaiRes, semverhandler::semver_rhai_register,
+    chronohandler::chrono_rhai_register,
     context,
+    httpmock::{HttpMockItem, httpmock_rhai_register},
+    k8smock::k8smock_rhai_register,
     /*ed25519handler::Ed25519,*/
-    handlebarshandler::HandleBars,
-    hasheshandlers::Argon,
-    httphandler::RestClient,
-    instanceservice::ServiceInstance,
-    instancesystem::SystemInstance,
-    instancetenant::TenantInstance,
-    jukebox::JukeBox,
-    k8sgeneric::{K8sGeneric, K8sObject, update_cache},
-    k8sraw::K8sRaw,
-    k8sworkload::{K8sDaemonSet, K8sDeploy, K8sJob, K8sStatefulSet},
-    ocihandler::Registry,
-    passwordhandler::Passwords,
-    rhai_err, shellhandler,
-    vynilpackage::{VynilPackageSource, get_vynil_version, rhai_read_package_yaml},
+    handlebarshandler::handlebars_rhai_register,
+    hasheshandlers::hashes_rhai_register,
+    httphandler::http_rhai_register,
+    instanceservice::service_rhai_register,
+    instancesystem::system_rhai_register,
+    instancetenant::tenant_rhai_register,
+    jukebox::jukebox_rhai_register,
+    k8sgeneric::k8sgeneric_rhai_register,
+    k8sraw::k8sraw_rhai_register,
+    k8sworkload::k8sworkload_rhai_register,
+    ocihandler::oci_rhai_register,
+    passwordhandler::password_rhai_register,
+    rhai_err, shellhandler::shell_rhai_register,
+    vynilpackage::package_rhai_register,
+    yamlhandler::yaml_rhai_register,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use kube::api::DynamicObject;
 pub use rhai::{
     Array,
     Dynamic,
@@ -33,7 +35,6 @@ pub use rhai::{
     module_resolvers::{FileModuleResolver, ModuleResolversCollection},
     serde::to_dynamic,
 };
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use url::form_urlencoded;
 
@@ -45,6 +46,96 @@ pub fn url_encode(arg: String) -> String {
     form_urlencoded::byte_serialize(arg.as_bytes()).collect::<String>()
 }
 
+fn common_rhai_register(engine: &mut Engine) {
+    engine
+        .register_fn("vynil_owner", || -> Dynamic {
+            match context::get_owner() {
+                Some(o) => serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap(),
+                None => serde_json::from_str("{}").unwrap(),
+            }
+        })
+        .register_fn("sha256", |v: String| sha256::digest(v))
+        .register_fn("log_debug", |s: ImmutableString| tracing::debug!("{s}"))
+        .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
+        .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))
+        .register_fn("log_error", |s: ImmutableString| tracing::error!("{s}"))
+        .register_fn("url_encode", url_encode)
+        .register_fn("get_env", |var: ImmutableString| -> String {
+            std::env::var(var.to_string()).unwrap_or("".into())
+        })
+        .register_fn("to_decimal", |val: ImmutableString| -> RhaiRes<u32> {
+            Ok(u32::from_str_radix(val.as_str(), 8).unwrap_or_else(|_| {
+                tracing::warn!("to_decimal received a non-valid parameter: {:?}", val);
+                0
+            }))
+        })
+        .register_fn(
+            "base64_decode",
+            |val: ImmutableString| -> RhaiRes<ImmutableString> {
+                base64_decode(val.to_string()).map_err(rhai_err).map(|v| v.into())
+            },
+        )
+        .register_fn("base64_encode", |val: ImmutableString| -> ImmutableString {
+            STANDARD.encode(val.to_string()).into()
+        })
+        .register_fn("json_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
+            serde_json::to_string(&val)
+                .map_err(|e| rhai_err(Error::SerializationError(e)))
+                .map(|v| v.into())
+        })
+        .register_fn("json_encode_escape", |val: Dynamic| -> RhaiRes<ImmutableString> {
+            let str = serde_json::to_string(&val).map_err(|e| rhai_err(Error::SerializationError(e)))?;
+            Ok(format!("{:?}", str).into())
+        })
+        .register_fn("json_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
+            serde_json::from_str(val.as_ref()).map_err(|e| rhai_err(Error::SerializationError(e)))
+        });
+    engine
+        .register_fn("file_read", |name: String| -> RhaiRes<ImmutableString> {
+            std::fs::read_to_string(name)
+                .map_err(|e| rhai_err(Error::Stdio(e)))
+                .map(|v| v.into())
+        })
+        .register_fn("file_write", |name: String, content: String| -> RhaiRes<()> {
+            std::fs::write(name, content).map_err(|e| rhai_err(Error::Stdio(e)))
+        })
+        .register_fn("file_copy", |source: String, dest: String| -> RhaiRes<()> {
+            std::fs::copy(source, dest)
+                .map_err(|e| rhai_err(Error::Stdio(e)))
+                .map(|_| ())
+        })
+        .register_fn("create_dir", |name: String| -> RhaiRes<()> {
+            std::fs::create_dir_all(name).map_err(|e| rhai_err(Error::Stdio(e)))
+        })
+        .register_fn("read_dir", |name: String| -> RhaiRes<rhai::Array> {
+            let mut res = rhai::Array::new();
+            for entry in std::fs::read_dir(name).map_err(|e| rhai_err(Error::Stdio(e)))? {
+                let entry = entry.map_err(|e| rhai_err(Error::Stdio(e)))?;
+                res.push(entry.path().to_str().unwrap_or_default().into());
+            }
+            Ok(res)
+        })
+        .register_fn("is_file", |name: String| -> bool { Path::new(&name).is_file() })
+        .register_fn("is_dir", |name: String| -> bool { Path::new(&name).is_dir() })
+        .register_fn("basename", |name: String| -> ImmutableString {
+            Path::new(&name)
+                .file_name()
+                .unwrap_or_default()
+                .to_str()
+                .unwrap_or_default()
+                .into()
+        })
+        .register_fn("dirname", |name: String| -> ImmutableString {
+            Path::new(&name)
+                .parent()
+                .unwrap()
+                .to_str()
+                .unwrap_or_default()
+                .into()
+        });
+
+}
+
 #[derive(Debug)]
 pub struct Script {
     pub engine: Engine,
@@ -52,7 +143,7 @@ pub struct Script {
 }
 impl Script {
     #[must_use]
-    pub fn new(resolver_path: Vec<String>) -> Script {
+    pub fn new_core(resolver_path: Vec<String>) -> Script {
         let mut script = Script {
             engine: Engine::new(),
             ctx: Scope::new(),
@@ -64,482 +155,40 @@ impl Script {
         }
         script.engine.set_module_resolver(resolver);
         script.engine.set_max_expr_depths(128, 64);
+        common_rhai_register(&mut script.engine);
+        chrono_rhai_register(&mut script.engine);
+        hashes_rhai_register(&mut script.engine);
+        password_rhai_register(&mut script.engine);
+        semver_rhai_register(&mut script.engine);
+        package_rhai_register(&mut script.engine);
+        yaml_rhai_register(&mut script.engine);
+        handlebars_rhai_register(&mut script.engine);
+        oci_rhai_register(&mut script.engine);
+        shell_rhai_register(&mut script.engine);
+        script.add_common();
         script
-            .engine
-            .register_fn("vynil_owner", || -> Dynamic {
-                match context::get_owner() {
-                    Some(o) => serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap(),
-                    None => serde_json::from_str("{}").unwrap(),
-                }
-            })
-            .register_fn("shell_run", shellhandler::rhai_run)
-            .register_fn("shell_output", shellhandler::rhai_get_stdout)
-            .register_fn("sha256", |v: String| sha256::digest(v))
-            .register_fn("log_debug", |s: ImmutableString| tracing::debug!("{s}"))
-            .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
-            .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))
-            .register_fn("log_error", |s: ImmutableString| tracing::error!("{s}"))
-            .register_fn("vynil_version", get_vynil_version)
-            .register_fn("url_encode", url_encode)
-            .register_fn("bcrypt_hash", |s: ImmutableString| {
-                crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
-            })
-            .register_fn("crc32_hash", |s: ImmutableString| {
-                crate::hasheshandlers::crc32_hash(s.to_string())
-            })
-            .register_fn("gen_password", |len: i64| -> String {
-                Passwords::new().generate(len, 6, 2, 2)
-            })
-            .register_fn("gen_password_alphanum", |len: i64| -> String {
-                Passwords::new().generate(len, 8, 2, 0)
-            })
-            .register_fn("get_env", |var: ImmutableString| -> String {
-                std::env::var(var.to_string()).unwrap_or("".into())
-            })
-            .register_fn("to_decimal", |val: ImmutableString| -> RhaiRes<u32> {
-                Ok(u32::from_str_radix(val.as_str(), 8).unwrap_or_else(|_| {
-                    tracing::warn!("to_decimal received a non-valid parameter: {:?}", val);
-                    0
-                }))
-            })
-            .register_fn(
-                "base64_decode",
-                |val: ImmutableString| -> RhaiRes<ImmutableString> {
-                    base64_decode(val.to_string()).map_err(rhai_err).map(|v| v.into())
-                },
-            )
-            .register_fn("base64_encode", |val: ImmutableString| -> ImmutableString {
-                STANDARD.encode(val.to_string()).into()
-            })
-            .register_fn("json_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                serde_json::to_string(&val)
-                    .map_err(|e| rhai_err(Error::SerializationError(e)))
-                    .map(|v| v.into())
-            })
-            .register_fn("json_encode_escape", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                let str = serde_json::to_string(&val).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-                Ok(format!("{:?}", str).into())
-            })
-            .register_fn("json_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_json::from_str(val.as_ref()).map_err(|e| rhai_err(Error::SerializationError(e)))
-            })
-            .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                serde_yaml::to_string(&val)
-                    .map_err(|e| rhai_err(Error::YamlError(e)))
-                    .map(|v| v.into())
-            })
-            .register_fn("yaml_encode", |val: Map| -> RhaiRes<ImmutableString> {
-                serde_yaml::to_string(&val)
-                    .map_err(|e| rhai_err(Error::YamlError(e)))
-                    .map(|v| v.into())
-            })
-            .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_yaml::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
-            })
-            .register_fn(
-                "yaml_decode_multi",
-                |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
-                    let mut res = Vec::new();
-                    if val.len() > 5 {
-                        // non-empty string only
-                        for document in serde_yaml::Deserializer::from_str(val.as_ref()) {
-                            let doc =
-                                Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
-                            res.push(doc);
-                        }
-                    }
-                    Ok(res)
-                },
-            );
+    }
+    pub fn new(resolver_path: Vec<String>) -> Script {
+        let mut script = Self::new_core(resolver_path);
+        http_rhai_register(&mut script.engine);
+        service_rhai_register(&mut script.engine);
+        system_rhai_register(&mut script.engine);
+        tenant_rhai_register(&mut script.engine);
+        jukebox_rhai_register(&mut script.engine);
+        k8sgeneric_rhai_register(&mut script.engine);
+        k8sraw_rhai_register(&mut script.engine);
+        k8sworkload_rhai_register(&mut script.engine);
         script
-            .engine
-            .register_fn("file_read", |name: String| -> RhaiRes<ImmutableString> {
-                std::fs::read_to_string(name)
-                    .map_err(|e| rhai_err(Error::Stdio(e)))
-                    .map(|v| v.into())
-            })
-            .register_fn("file_write", |name: String, content: String| -> RhaiRes<()> {
-                std::fs::write(name, content).map_err(|e| rhai_err(Error::Stdio(e)))
-            })
-            .register_fn("file_copy", |source: String, dest: String| -> RhaiRes<()> {
-                std::fs::copy(source, dest)
-                    .map_err(|e| rhai_err(Error::Stdio(e)))
-                    .map(|_| ())
-            })
-            .register_fn("create_dir", |name: String| -> RhaiRes<()> {
-                std::fs::create_dir_all(name).map_err(|e| rhai_err(Error::Stdio(e)))
-            })
-            .register_fn("read_dir", |name: String| -> RhaiRes<rhai::Array> {
-                let mut res = rhai::Array::new();
-                for entry in std::fs::read_dir(name).map_err(|e| rhai_err(Error::Stdio(e)))? {
-                    let entry = entry.map_err(|e| rhai_err(Error::Stdio(e)))?;
-                    res.push(entry.path().to_str().unwrap_or_default().into());
-                }
-                Ok(res)
-            })
-            .register_fn("is_file", |name: String| -> bool { Path::new(&name).is_file() })
-            .register_fn("is_dir", |name: String| -> bool { Path::new(&name).is_dir() })
-            .register_fn("basename", |name: String| -> ImmutableString {
-                Path::new(&name)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default()
-                    .into()
-            })
-            .register_fn("dirname", |name: String| -> ImmutableString {
-                Path::new(&name)
-                    .parent()
-                    .unwrap()
-                    .to_str()
-                    .unwrap_or_default()
-                    .into()
-            });
+    }
+    pub fn new_mock(resolver_path: Vec<String>, http_mocks: Vec<HttpMockItem>, k8s_mocks: Vec<Dynamic>) -> Script {
+        let mut script = Self::new_core(resolver_path);
+        httpmock_rhai_register(&mut script.engine, http_mocks);
+        k8smock_rhai_register(&mut script.engine, k8s_mocks);
         script
-            .engine
-            .register_type_with_name::<HandleBars>("HandleBars")
-            .register_fn("new_hbs", HandleBars::new)
-            .register_fn("register_template", HandleBars::rhai_register_template)
-            .register_fn("register_partial_dir", HandleBars::rhai_register_partial_dir)
-            .register_fn("register_helper_dir", HandleBars::rhai_register_helper_dir)
-            .register_fn("render_from", HandleBars::rhai_render)
-            .register_fn("render_named", HandleBars::rhai_render_named);
-        script
-            .engine
-            .register_type_with_name::<K8sRaw>("K8sRaw")
-            .register_fn("new_k8s_raw", K8sRaw::new)
-            .register_fn("get_url", K8sRaw::rhai_get_url)
-            .register_fn("get_api_resources", K8sRaw::rhai_get_api_resources)
-            .register_fn("get_cluster_version", K8sRaw::rhai_get_api_version);
-        /*        script
-        .engine
-        .register_type_with_name::<Ed25519>("Ed25519")
-        .register_fn("new_ed25519", Ed25519::rhai_new)
-        .register_fn("public_key", Ed25519::rhai_public_key)
-        .register_fn("private_key", Ed25519::rhai_private_key);*/
-        script
-            .engine
-            .register_type_with_name::<RestClient>("RestClient")
-            .register_fn("new_http_client", RestClient::new)
-            .register_fn("headers_reset", RestClient::headers_reset_rhai)
-            .register_fn("set_baseurl", RestClient::baseurl_rhai)
-            .register_fn("set_server_ca", RestClient::set_server_ca)
-            .register_fn("set_mtls_cert_key", RestClient::set_mtls)
-            .register_fn("add_header", RestClient::add_header_rhai)
-            .register_fn("add_header_json", RestClient::add_header_json)
-            .register_fn("add_header_bearer", RestClient::add_header_bearer)
-            .register_fn("add_header_basic", RestClient::add_header_basic)
-            .register_fn("head", RestClient::rhai_head)
-            .register_fn("get", RestClient::rhai_get)
-            .register_fn("delete", RestClient::rhai_delete)
-            .register_fn("patch", RestClient::rhai_patch)
-            .register_fn("post", RestClient::rhai_post)
-            .register_fn("put", RestClient::rhai_put);
-        script
-            .engine
-            .register_type_with_name::<K8sDeploy>("K8sDeploy")
-            .register_fn("get_deployment", K8sDeploy::get_deployment)
-            .register_get("metadata", K8sDeploy::get_metadata)
-            .register_get("spec", K8sDeploy::get_spec)
-            .register_get("status", K8sDeploy::get_status)
-            .register_fn("wait_available", K8sDeploy::wait_available);
-        script
-            .engine
-            .register_type_with_name::<K8sDaemonSet>("K8sDaemonSet")
-            .register_fn("get_deamonset", K8sDaemonSet::get_deamonset)
-            .register_get("metadata", K8sDaemonSet::get_metadata)
-            .register_get("spec", K8sDaemonSet::get_spec)
-            .register_get("status", K8sDaemonSet::get_status)
-            .register_fn("wait_available", K8sDaemonSet::wait_available);
-        script
-            .engine
-            .register_type_with_name::<K8sStatefulSet>("K8sStatefulSet")
-            .register_fn("get_statefulset", K8sStatefulSet::get_sts)
-            .register_get("metadata", K8sStatefulSet::get_metadata)
-            .register_get("spec", K8sStatefulSet::get_spec)
-            .register_get("status", K8sStatefulSet::get_status)
-            .register_fn("wait_available", K8sStatefulSet::wait_available);
-        script
-            .engine
-            .register_type_with_name::<K8sJob>("K8sJob")
-            .register_fn("get_job", K8sJob::get_job)
-            .register_get("metadata", K8sJob::get_metadata)
-            .register_get("spec", K8sJob::get_spec)
-            .register_get("status", K8sJob::get_status)
-            .register_fn("wait_done", K8sJob::wait_done);
-        script
-            .engine
-            .register_type_with_name::<DynamicObject>("DynamicObject")
-            .register_get("data", |obj: &mut DynamicObject| -> Dynamic {
-                Dynamic::from(obj.data.clone())
-            });
-        script
-            .engine
-            .register_type_with_name::<K8sObject>("K8sObject")
-            .register_get("kind", K8sObject::get_kind)
-            .register_get("metadata", K8sObject::get_metadata)
-            .register_fn("delete", K8sObject::rhai_delete)
-            .register_fn("wait_condition", K8sObject::wait_condition)
-            .register_fn("wait_status", K8sObject::wait_status)
-            .register_fn("wait_status_prop", K8sObject::wait_status_prop)
-            .register_fn("wait_status_string", K8sObject::wait_status_string)
-            .register_fn("wait_deleted", K8sObject::rhai_wait_deleted)
-            /*.register_fn("wait_for", |context: NativeCallContext, k8sobj: &mut K8sObject, fnp: FnPtr, timeout: i64| {
-                let condition = Box::new(move |obj: &DynamicObject| -> RhaiRes<bool> {
-                    fnp.call_within_context(&context, (obj.clone(),))
-                });
-                tracing::warn!("wait_for");
-                k8sobj.wait_for(condition, timeout)
-            })*/;
-        script
-            .engine
-            .register_type_with_name::<K8sGeneric>("K8sGeneric")
-            .register_fn("k8s_resource", K8sGeneric::new_global)
-            .register_fn("k8s_resource", K8sGeneric::new_ns)
-            .register_fn("k8s_resource", K8sGeneric::new_group_ns)
-            .register_fn("list", K8sGeneric::rhai_list)
-            .register_fn("list", K8sGeneric::rhai_list_labels)
-            .register_fn("update_k8s_crd_cache", update_cache)
-            .register_fn("list_meta", K8sGeneric::rhai_list_meta)
-            .register_fn("get", K8sGeneric::rhai_get)
-            .register_fn("get_meta", K8sGeneric::rhai_get_meta)
-            .register_fn("get_obj", K8sGeneric::rhai_get_obj)
-            .register_fn("delete", K8sGeneric::rhai_delete)
-            .register_fn("create", K8sGeneric::rhai_create)
-            .register_fn("replace", K8sGeneric::rhai_replace)
-            .register_fn("patch", K8sGeneric::rhai_patch)
-            .register_fn("apply", K8sGeneric::rhai_apply)
-            .register_fn("exist", K8sGeneric::rhai_exist)
-            .register_get("scope", K8sGeneric::rhai_get_scope);
-        script
-            .engine
-            .register_type_with_name::<Argon>("Argon")
-            .register_fn("new_argon", Argon::new)
-            .register_fn("hash", Argon::rhai_hash);
-        script
-            .engine
-            .register_type_with_name::<Semver>("Semver")
-            .register_fn("semver_from", Semver::rhai_parse)
-            .register_fn("inc_major", Semver::inc_major)
-            .register_fn("inc_minor", Semver::inc_minor)
-            .register_fn("inc_patch", Semver::inc_patch)
-            .register_fn("inc_beta", Semver::rhai_inc_beta)
-            .register_fn("inc_alpha", Semver::rhai_inc_alpha)
-            .register_fn("==", |a: Semver, b: Semver| a == b)
-            .register_fn("!=", |a: Semver, b: Semver| a != b)
-            .register_fn("<", |a: Semver, b: Semver| a < b)
-            .register_fn(">", |a: Semver, b: Semver| a > b)
-            .register_fn("<=", |a: Semver, b: Semver| a <= b)
-            .register_fn(">=", |a: Semver, b: Semver| a >= b)
-            .register_fn("to_string", Semver::to_string);
-        script
-            .engine
-            .register_type_with_name::<DateTimeHandler>("DateTimeHandler")
-            .register_fn("date_now", DateTimeHandler::now)
-            .register_fn("format", DateTimeHandler::rhai_format);
-        script
-            .engine
-            .register_type_with_name::<Registry>("Registry")
-            .register_fn("new_registry", Registry::new)
-            .register_fn("push_image", Registry::push_image)
-            .register_fn("list_tags", Registry::rhai_list_tags)
-            .register_fn("get_manifest", Registry::get_manifest);
-        script
-            .engine
-            .register_type_with_name::<TenantInstance>("TenantInstance")
-            .register_fn("get_tenant_instance", TenantInstance::rhai_get)
-            .register_fn("get_tenant_name", TenantInstance::rhai_get_tenant_name)
-            .register_fn(
-                "get_tenant_namespaces",
-                TenantInstance::rhai_get_tenant_namespaces,
-            )
-            .register_fn(
-                "get_tenant_services_names",
-                TenantInstance::rhai_get_tenant_services_names,
-            )
-            .register_fn("list_tenant_instance", TenantInstance::rhai_list)
-            .register_fn("options_digest", TenantInstance::get_options_digest)
-            .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)
-            .register_fn("get_rhaistate", TenantInstance::rhai_get_rhaistate)
-            .register_fn("set_agent_started", TenantInstance::rhai_set_agent_started)
-            .register_fn("set_missing_box", TenantInstance::rhai_set_missing_box)
-            .register_fn("set_missing_package", TenantInstance::rhai_set_missing_package)
-            .register_fn(
-                "set_missing_requirement",
-                TenantInstance::rhai_set_missing_requirement,
-            )
-            .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
-            .register_fn("set_status_befores", TenantInstance::rhai_set_status_befores)
-            .register_fn(
-                "set_status_before_failed",
-                TenantInstance::rhai_set_status_before_failed,
-            )
-            .register_fn("set_status_vitals", TenantInstance::rhai_set_status_vitals)
-            .register_fn(
-                "set_status_vital_failed",
-                TenantInstance::rhai_set_status_vital_failed,
-            )
-            .register_fn("set_status_scalables", TenantInstance::rhai_set_status_scalables)
-            .register_fn(
-                "set_status_scalable_failed",
-                TenantInstance::rhai_set_status_scalable_failed,
-            )
-            .register_fn("set_status_others", TenantInstance::rhai_set_status_others)
-            .register_fn(
-                "set_status_other_failed",
-                TenantInstance::rhai_set_status_other_failed,
-            )
-            .register_fn("set_tfstate", TenantInstance::rhai_set_tfstate)
-            .register_fn(
-                "set_status_tofu_failed",
-                TenantInstance::rhai_set_status_tofu_failed,
-            )
-            .register_fn("set_rhaistate", TenantInstance::rhai_set_rhaistate)
-            .register_fn("set_services", TenantInstance::rhai_set_services)
-            .register_fn("get_services", TenantInstance::rhai_get_services)
-            .register_fn(
-                "set_status_rhai_failed",
-                TenantInstance::rhai_set_status_rhai_failed,
-            )
-            .register_fn(
-                "set_status_schedule_backup_failed",
-                TenantInstance::rhai_set_status_schedule_backup_failed,
-            )
-            .register_fn(
-                "set_status_init_failed",
-                TenantInstance::rhai_set_status_init_failed,
-            )
-            .register_get("metadata", TenantInstance::get_metadata)
-            .register_get("spec", TenantInstance::get_spec)
-            .register_get("status", TenantInstance::get_status);
-        script
-            .engine
-            .register_type_with_name::<ServiceInstance>("ServiceInstance")
-            .register_fn("get_service_instance", ServiceInstance::rhai_get)
-            .register_fn("list_service_instance", ServiceInstance::rhai_list)
-            .register_fn("list_services_names", ServiceInstance::rhai_list_services_names)
-            .register_fn("options_digest", ServiceInstance::get_options_digest)
-            .register_fn("get_tfstate", ServiceInstance::rhai_get_tfstate)
-            .register_fn("get_rhaistate", ServiceInstance::rhai_get_rhaistate)
-            .register_fn("set_services", ServiceInstance::rhai_set_services)
-            .register_fn("get_services", TenantInstance::rhai_get_services)
-            .register_fn("set_agent_started", ServiceInstance::rhai_set_agent_started)
-            .register_fn("set_missing_box", ServiceInstance::rhai_set_missing_box)
-            .register_fn("set_missing_package", ServiceInstance::rhai_set_missing_package)
-            .register_fn(
-                "set_missing_requirement",
-                ServiceInstance::rhai_set_missing_requirement,
-            )
-            .register_fn("set_status_ready", ServiceInstance::rhai_set_status_ready)
-            .register_fn("set_status_crds", ServiceInstance::rhai_set_status_crds)
-            .register_fn(
-                "set_status_crd_failed",
-                ServiceInstance::rhai_set_status_crd_failed,
-            )
-            .register_fn("set_status_befores", ServiceInstance::rhai_set_status_befores)
-            .register_fn(
-                "set_status_before_failed",
-                ServiceInstance::rhai_set_status_before_failed,
-            )
-            .register_fn("set_status_vitals", ServiceInstance::rhai_set_status_vitals)
-            .register_fn(
-                "set_status_vital_failed",
-                ServiceInstance::rhai_set_status_vital_failed,
-            )
-            .register_fn("set_status_scalables", ServiceInstance::rhai_set_status_scalables)
-            .register_fn(
-                "set_status_scalable_failed",
-                ServiceInstance::rhai_set_status_scalable_failed,
-            )
-            .register_fn("set_status_others", ServiceInstance::rhai_set_status_others)
-            .register_fn(
-                "set_status_other_failed",
-                ServiceInstance::rhai_set_status_other_failed,
-            )
-            .register_fn("set_tfstate", ServiceInstance::rhai_set_tfstate)
-            .register_fn(
-                "set_status_tofu_failed",
-                ServiceInstance::rhai_set_status_tofu_failed,
-            )
-            .register_fn("set_rhaistate", ServiceInstance::rhai_set_rhaistate)
-            .register_fn(
-                "set_status_rhai_failed",
-                ServiceInstance::rhai_set_status_rhai_failed,
-            )
-            .register_fn(
-                "set_status_schedule_backup_failed",
-                ServiceInstance::rhai_set_status_schedule_backup_failed,
-            )
-            .register_fn(
-                "set_status_init_failed",
-                ServiceInstance::rhai_set_status_init_failed,
-            )
-            .register_get("metadata", ServiceInstance::get_metadata)
-            .register_get("spec", ServiceInstance::get_spec)
-            .register_get("status", ServiceInstance::get_status);
-        script
-            .engine
-            .register_type_with_name::<SystemInstance>("SystemInstance")
-            .register_fn("get_system_instance", SystemInstance::rhai_get)
-            .register_fn("list_system_instance", SystemInstance::rhai_list)
-            .register_fn("options_digest", SystemInstance::get_options_digest)
-            .register_fn("get_tfstate", SystemInstance::rhai_get_tfstate)
-            .register_fn("get_rhaistate", SystemInstance::rhai_get_rhaistate)
-            .register_fn("set_agent_started", SystemInstance::rhai_set_agent_started)
-            .register_fn("set_missing_box", SystemInstance::rhai_set_missing_box)
-            .register_fn("set_missing_package", SystemInstance::rhai_set_missing_package)
-            .register_fn(
-                "set_missing_requirement",
-                SystemInstance::rhai_set_missing_requirement,
-            )
-            .register_fn("set_status_ready", SystemInstance::rhai_set_status_ready)
-            .register_fn("set_status_crds", SystemInstance::rhai_set_status_crds)
-            .register_fn(
-                "set_status_crd_failed",
-                SystemInstance::rhai_set_status_crd_failed,
-            )
-            .register_fn("set_status_systems", SystemInstance::rhai_set_status_systems)
-            .register_fn(
-                "set_status_system_failed",
-                SystemInstance::rhai_set_status_system_failed,
-            )
-            .register_fn("set_tfstate", SystemInstance::rhai_set_tfstate)
-            .register_fn(
-                "set_status_tofu_failed",
-                SystemInstance::rhai_set_status_tofu_failed,
-            )
-            .register_fn("set_rhaistate", SystemInstance::rhai_set_rhaistate)
-            .register_fn(
-                "set_status_rhai_failed",
-                SystemInstance::rhai_set_status_rhai_failed,
-            )
-            .register_get("metadata", SystemInstance::get_metadata)
-            .register_get("spec", SystemInstance::get_spec)
-            .register_get("status", SystemInstance::get_status);
-        script
-            .engine
-            .register_type_with_name::<JukeBox>("JukeBox")
-            .register_fn("get_jukebox", JukeBox::rhai_get)
-            .register_fn("list_jukebox", JukeBox::rhai_list)
-            .register_fn("set_status_updated", JukeBox::rhai_set_status_updated)
-            .register_fn("set_status_failed", JukeBox::rhai_set_status_failed)
-            .register_get("metadata", JukeBox::get_metadata)
-            .register_get("spec", JukeBox::get_spec)
-            .register_get("status", JukeBox::get_status);
-        script
-            .engine
-            .register_type_with_name::<VynilPackageSource>("VynilPackage")
-            .register_fn("read_package_yaml", rhai_read_package_yaml)
-            .register_fn("validate_options", VynilPackageSource::validate_options)
-            .register_get("metadata", VynilPackageSource::get_metadata)
-            .register_get("requirements", VynilPackageSource::get_requirements)
-            .register_get("recommandations", VynilPackageSource::get_recommandations)
-            .register_get("options", VynilPackageSource::get_options)
-            .register_get("value_script", VynilPackageSource::get_value_script)
-            .register_get("images", VynilPackageSource::get_images)
-            .register_get("resources", VynilPackageSource::get_resources);
-        script.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
-        script.add_code(
+    }
+    pub fn add_common(&mut self) {
+        self.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
+        self.add_code(
             "fn import_run(name, instance, context, args) {\n\
             try {\n\
                 import name as imp;\n\
@@ -555,7 +204,7 @@ impl Script {
             }\n\
         }",
         );
-        script.add_code(
+        self.add_code(
             "fn import_template(name, instance, context, args) {\n\
             try {\n\
                 import name as imp;\n\
@@ -580,7 +229,7 @@ impl Script {
             }\n\
         }",
         );
-        script.add_code(
+        self.add_code(
             "fn import_run(name, instance, context) {\n\
             try {\n\
                 import name as imp;\n\
@@ -596,7 +245,7 @@ impl Script {
             }\n\
         }",
         );
-        script.add_code(
+        self.add_code(
             "fn import_template(name, instance, context) {\n\
             try {\n\
                 import name as imp;\n\
@@ -621,7 +270,7 @@ impl Script {
             }\n\
         }",
         );
-        script.add_code(
+        self.add_code(
             "fn import_run(name, args) {\n\
             try {\n\
                 import name as imp;\n\
@@ -637,7 +286,7 @@ impl Script {
             }\n\
         }",
         );
-        script.add_code(
+        self.add_code(
             "fn import_template(name, args) {\n\
             try {\n\
                 import name as imp;\n\
@@ -662,7 +311,6 @@ impl Script {
             }\n\
         }",
         );
-        script
     }
 
     pub fn add_code(&mut self, code: &str) {
@@ -727,5 +375,283 @@ impl Script {
             .map_err(RhaiError)?;
         tracing::debug!("END: eval_map_string({})", script);
         serde_json::to_string(&m).map_err(Error::SerializationError)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_script() -> Script {
+        Script::new(vec![])
+    }
+
+    // ── yaml_decode / yaml_encode ─────────────────────────────────────────────
+
+    #[test]
+    fn test_yaml_decode_string_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode("key: hello")["key"]"#).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_yaml_decode_integer_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode("count: 42")["count"]"#).unwrap();
+        assert_eq!(result.cast::<i64>(), 42);
+    }
+
+    #[test]
+    fn test_yaml_decode_boolean_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode("enabled: true")["enabled"]"#).unwrap();
+        assert_eq!(result.cast::<bool>(), true);
+    }
+
+    #[test]
+    fn test_yaml_decode_nested_access() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode("a:\n  b: nested")["a"]["b"]"#)
+            .unwrap();
+        assert_eq!(result.to_string(), "nested");
+    }
+
+    #[test]
+    fn test_yaml_decode_array_access() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode("items:\n  - first\n  - second")["items"][1]"#)
+            .unwrap();
+        assert_eq!(result.to_string(), "second");
+    }
+
+    #[test]
+    fn test_yaml_encode_produces_yaml() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_encode(#{"key": "value"})"#)
+            .unwrap();
+        let yaml_str = result.to_string();
+        assert!(yaml_str.contains("key:"));
+        assert!(yaml_str.contains("value"));
+    }
+
+    #[test]
+    fn test_yaml_encode_decode_roundtrip() {
+        // Encode a map, decode it back, access a key
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let m = #{"name": "test", "count": 3};
+            let encoded = yaml_encode(m);
+            let decoded = yaml_decode(encoded);
+            decoded["name"]
+        "#).unwrap();
+        assert_eq!(result.to_string(), "test");
+    }
+
+    // ── yaml_decode_multi ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_yaml_decode_multi_single_document() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode_multi("key: val\n").len()"#)
+            .unwrap();
+        assert_eq!(result.cast::<i64>(), 1);
+    }
+
+    #[test]
+    fn test_yaml_decode_multi_two_documents() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"yaml_decode_multi("key: a\n---\nkey: b\n").len()"#)
+            .unwrap();
+        assert_eq!(result.cast::<i64>(), 2);
+    }
+
+    #[test]
+    fn test_yaml_decode_multi_document_values() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let docs = yaml_decode_multi("key: first\n---\nkey: second\n");
+            docs[1]["key"]
+        "#).unwrap();
+        assert_eq!(result.to_string(), "second");
+    }
+
+    #[test]
+    fn test_yaml_decode_multi_short_string_returns_empty() {
+        // String shorter than 5 chars → empty result (guard in the code)
+        let mut s = make_script();
+        let result = s.eval(r#"yaml_decode_multi("ab").len()"#).unwrap();
+        assert_eq!(result.cast::<i64>(), 0);
+    }
+
+    // ── json_encode / json_decode ─────────────────────────────────────────────
+
+    #[test]
+    fn test_json_encode_decode_roundtrip() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let encoded = json_encode(#{"a": "hello", "b": 42});
+            let decoded = json_decode(encoded);
+            decoded["a"]
+        "#).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_json_decode_invalid_returns_error() {
+        let mut s = make_script();
+        assert!(s.eval(r#"json_decode("not json")"#).is_err());
+    }
+
+    // ── base64_encode / base64_decode ─────────────────────────────────────────
+
+    #[test]
+    fn test_base64_encode_decode_roundtrip() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let encoded = base64_encode("hello world");
+            base64_decode(encoded)
+        "#).unwrap();
+        assert_eq!(result.to_string(), "hello world");
+    }
+
+    #[test]
+    fn test_base64_encode_known_value() {
+        let mut s = make_script();
+        let result = s.eval(r#"base64_encode("hello")"#).unwrap();
+        assert_eq!(result.to_string(), "aGVsbG8=");
+    }
+
+    // ── Semver from Rhai ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_semver_parse_and_to_string() {
+        let mut s = make_script();
+        let result = s
+            .eval(r#"to_string(semver_from("1.2.3"))"#)
+            .unwrap();
+        assert_eq!(result.to_string(), "1.2.3");
+    }
+
+    #[test]
+    fn test_semver_comparison_operators() {
+        let mut s = make_script();
+        assert_eq!(
+            s.eval(r#"semver_from("1.0.0") < semver_from("2.0.0")"#)
+                .unwrap()
+                .cast::<bool>(),
+            true
+        );
+        assert_eq!(
+            s.eval(r#"semver_from("2.0.0") > semver_from("1.0.0")"#)
+                .unwrap()
+                .cast::<bool>(),
+            true
+        );
+        assert_eq!(
+            s.eval(r#"semver_from("1.0.0") == semver_from("1.0.0")"#)
+                .unwrap()
+                .cast::<bool>(),
+            true
+        );
+    }
+
+    #[test]
+    fn test_semver_inc_minor() {
+        let mut s = make_script();
+        let result = s.eval(r#"
+            let v = semver_from("1.2.3");
+            inc_minor(v);
+            to_string(v)
+        "#).unwrap();
+        assert_eq!(result.to_string(), "1.3.0");
+    }
+
+    // ── Utility functions ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sha256_known_hash() {
+        let mut s = make_script();
+        let result = s.eval(r#"sha256("hello")"#).unwrap();
+        assert_eq!(
+            result.to_string(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn test_to_decimal_octal() {
+        let mut s = make_script();
+        let result = s.eval(r#"to_decimal("755")"#).unwrap();
+        assert_eq!(result.cast::<u32>(), 493);
+    }
+
+    #[test]
+    fn test_url_encode() {
+        let mut s = make_script();
+        let result = s.eval(r#"url_encode("hello world")"#).unwrap();
+        assert_eq!(result.to_string(), "hello+world");
+    }
+
+    // ── Régression : préservation de l'ordre des clés YAML ───────────────────
+    //
+    // Ce test est INTENTIONNELLEMENT PRÉVU POUR ÉCHOUER avec le code actuel
+    // (serde_yaml, qui utilise BTreeMap → trie alphabétiquement).
+    // Il devra passer après le remplacement par rust-yaml (YamlDoc, IndexMap).
+    //
+    // Scénario : lire un YAML avec des clés dans un ordre non-alphabétique,
+    // modifier une seule valeur, re-sérialiser → une seule ligne doit changer.
+    #[test]
+    fn test_yaml_decode_modify_single_key_preserves_order() {
+        let mut s = make_script();
+
+        // Clés dans l'ordre z → a → m (intentionnellement non-alphabétique)
+        let original = "z: first\na: second\nm: third\n";
+        s.ctx.set_or_push("input_yaml", Dynamic::from(original.to_string()));
+
+        let result = s.eval(r#"
+            let doc = yaml_decode(input_yaml);
+            doc["a"] = "MODIFIED";
+            yaml_encode(doc)
+        "#).unwrap();
+
+        let encoded = result.to_string();
+
+        // Comparer ligne par ligne (on ignore les lignes vides trailing)
+        let orig_lines: Vec<&str> = original.lines().filter(|l| !l.is_empty()).collect();
+        let enc_lines: Vec<&str> = encoded.lines().filter(|l| !l.is_empty()).collect();
+
+        assert_eq!(
+            orig_lines.len(), enc_lines.len(),
+            "Le nombre de lignes a changé — des clés ont été perdues ou ajoutées.\n\
+             Original:\n{}\nRésultat:\n{}",
+            original, encoded
+        );
+
+        let changed: Vec<usize> = orig_lines.iter()
+            .zip(enc_lines.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(
+            changed.len(), 1,
+            "Attendu exactement 1 ligne modifiée (la clé 'a'), mais {} lignes diffèrent.\n\
+             Cela indique que l'ordre des clés n'a PAS été préservé (bug serde_yaml/BTreeMap).\n\
+             Original:\n{}\nRésultat:\n{}",
+            changed.len(), original, encoded
+        );
+
+        assert!(
+            enc_lines[changed[0]].contains("MODIFIED"),
+            "La ligne modifiée ne contient pas 'MODIFIED' : {}",
+            enc_lines[changed[0]]
+        );
     }
 }

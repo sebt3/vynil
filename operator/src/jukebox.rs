@@ -64,7 +64,7 @@ impl Reconciler for JukeBox {
             .insert("schedule".to_string(), self.spec.schedule.clone().into());
         // Create the CronJob
         let cj_def_str = hbs.render("{{> cronscan.yaml }}", &context)?;
-        let cj_def: Value = serde_yaml::from_str(&cj_def_str).map_err(Error::YamlError)?;
+        let cj_def: Value = common::yamlhandler::yaml_str_to_json(&cj_def_str)?;
         let cron_api: Api<CronJob> = Api::namespaced(client.clone(), ns);
         cron_api
             .patch(
@@ -113,7 +113,7 @@ impl Reconciler for JukeBox {
 
         // Create the Job
         let job_def_str = hbs.render("{{> scan.yaml }}", &context)?;
-        let job_def: Value = serde_yaml::from_str(&job_def_str).map_err(Error::YamlError)?;
+        let job_def: Value = common::yamlhandler::yaml_str_to_json(&job_def_str)?;
         let _job = match job_api
             .patch(
                 &job_name,

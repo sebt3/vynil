@@ -1,5 +1,6 @@
 use crate::{Error, Result, RhaiRes, rhai_err};
 use std::process::{Command, Output, Stdio};
+use rhai::Engine;
 
 pub fn run(command: String) -> Result<Output> {
     Command::new("sh")
@@ -44,3 +45,9 @@ pub fn rhai_get_stdout(command: String) -> RhaiRes<String> {
 }
 // Pour quelque choses de plus complet :
 // https://stackoverflow.com/a/72831067
+
+pub fn shell_rhai_register(engine: &mut Engine) {
+    engine
+        .register_fn("shell_run", rhai_run)
+        .register_fn("shell_output", rhai_get_stdout);
+}

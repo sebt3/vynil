@@ -18,3 +18,38 @@ pub fn base64_gz_decode(data: String) -> Result<String> {
     gz.read_to_string(&mut s).map_err(Error::Stdio)?;
     Ok(s)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_decode_roundtrip() {
+        let original = "hello world\nsome yaml:\n  key: value\n";
+        let encoded = encode_base64_gz(original.to_string()).unwrap();
+        let decoded = base64_gz_decode(encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_encode_decode_empty_string() {
+        let encoded = encode_base64_gz("".to_string()).unwrap();
+        let decoded = base64_gz_decode(encoded).unwrap();
+        assert_eq!(decoded, "");
+    }
+
+    #[test]
+    fn test_encode_decode_large_content() {
+        let original = "x".repeat(10_000);
+        let encoded = encode_base64_gz(original.clone()).unwrap();
+        // Compression should reduce size for repetitive content
+        assert!(encoded.len() < original.len());
+        let decoded = base64_gz_decode(encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_decode_invalid_base64() {
+        assert!(base64_gz_decode("not-valid-base64!!!".to_string()).is_err());
+    }
+}

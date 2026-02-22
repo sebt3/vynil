@@ -1,21 +1,17 @@
 use crate::{
-    Children, Error, Published, Result, RhaiRes,
-    context::{get_client_async, get_reporter, get_short_name},
+    Error, Published, Result, RhaiRes,
+    context::get_client_async,
     rhai_err,
-    tools::{base64_gz_decode, encode_base64_gz},
 };
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::core::v1::Namespace;
 use kube::{
-    Client, CustomResource, Resource, ResourceExt,
-    api::{Api, ListParams, ObjectList, Patch, PatchParams},
-    runtime::events::{Event, EventType, Recorder},
+    CustomResource, Resource, ResourceExt,
+    api::{Api, ListParams},
 };
-use rhai::Dynamic;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tokio::{runtime::Handle, task::block_in_place};
+use rhai::Engine;
 
 /// InitFrom contains the informations for the backup to use to initialize the installation
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -47,6 +43,7 @@ pub struct InitFrom {
     {"name":"pkg",    "type":"string", "description":"Package", "jsonPath":".spec.package"},
     {"name":"tag",    "type":"string", "description":"Version", "jsonPath":".status.tag"},
     {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
+    {"name":"stage",  "type":"string", "description":"Stage", "jsonPath":".status.conditions[-1:].type"},
     {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
 )]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +78,7 @@ pub enum ConditionsType {
     ScheduleBackup,
     OtherApplied,
     RhaiApplied,
+    PostApplied,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
@@ -106,221 +104,9 @@ pub struct ApplicationCondition {
     /// Generation for that status
     pub generation: i64,
 }
-impl ApplicationCondition {
-    #[must_use]
-    pub fn new(
-        message: &str,
-        status: ConditionsStatus,
-        condition_type: ConditionsType,
-        generation: i64,
-    ) -> ApplicationCondition {
-        ApplicationCondition {
-            last_transition_time: Some(chrono::offset::Utc::now()),
-            status,
-            condition_type,
-            message: message.to_string(),
-            generation,
-        }
-    }
 
-    pub fn ready_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "Installed succesfully",
-            ConditionsStatus::True,
-            ConditionsType::Ready,
-            generation,
-        )
-    }
-
-    pub fn ready_ko(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "No successful install",
-            ConditionsStatus::False,
-            ConditionsType::Ready,
-            generation,
-        )
-    }
-
-    pub fn installed_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::Installed,
-            generation,
-        )
-    }
-
-    pub fn installed_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "Installed succesfully",
-            ConditionsStatus::True,
-            ConditionsType::Installed,
-            generation,
-        )
-    }
-
-    pub fn agent_started(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "Agent started",
-            ConditionsStatus::True,
-            ConditionsType::AgentStarted,
-            generation,
-        )
-    }
-
-    pub fn missing_package(cat: &str, name: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            &format!("Package {cat}/{name} is missing"),
-            ConditionsStatus::False,
-            ConditionsType::AgentStarted,
-            generation,
-        )
-    }
-
-    pub fn missing_box(name: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            &format!("JukeBox {name} is missing"),
-            ConditionsStatus::False,
-            ConditionsType::AgentStarted,
-            generation,
-        )
-    }
-
-    pub fn missing_requirement(error: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            error,
-            ConditionsStatus::False,
-            ConditionsType::AgentStarted,
-            generation,
-        )
-    }
-
-    pub fn tofu_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::TofuInstalled,
-            generation,
-        )
-    }
-
-    pub fn tofu_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "Tofu layer applied succesfully",
-            ConditionsStatus::True,
-            ConditionsType::TofuInstalled,
-            generation,
-        )
-    }
-
-    pub fn vital_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::VitalApplied,
-            generation,
-        )
-    }
-
-    pub fn vital_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "vitals templates applied succesfully",
-            ConditionsStatus::True,
-            ConditionsType::VitalApplied,
-            generation,
-        )
-    }
-
-    pub fn before_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::BeforeApplied,
-            generation,
-        )
-    }
-
-    pub fn before_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "befores templates applied succesfully",
-            ConditionsStatus::True,
-            ConditionsType::BeforeApplied,
-            generation,
-        )
-    }
-
-    pub fn scalable_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::ScalableApplied,
-            generation,
-        )
-    }
-
-    pub fn scalable_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "Scalables templates applied succesfully",
-            ConditionsStatus::True,
-            ConditionsType::ScalableApplied,
-            generation,
-        )
-    }
-
-    pub fn other_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::OtherApplied,
-            generation,
-        )
-    }
-
-    pub fn other_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "Templates applied succesfully",
-            ConditionsStatus::True,
-            ConditionsType::OtherApplied,
-            generation,
-        )
-    }
-
-    pub fn rhai_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::RhaiApplied,
-            generation,
-        )
-    }
-
-    pub fn rhai_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            "Custom rhai script succeed",
-            ConditionsStatus::True,
-            ConditionsType::RhaiApplied,
-            generation,
-        )
-    }
-
-    pub fn init_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::InitFrom,
-            generation,
-        )
-    }
-
-    pub fn schedule_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::False,
-            ConditionsType::ScheduleBackup,
-            generation,
-        )
-    }
-}
+impl_condition_common!();
+impl_condition_children!();
 
 /// The status object of `TenantInstance`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -336,29 +122,20 @@ pub struct TenantInstanceStatus {
     /// Current rhai status (gzip+base64) (for custom package information)
     pub rhaistate: Option<String>,
     /// List of before children
-    pub befores: Option<Vec<Children>>,
+    pub befores: Option<Vec<crate::Children>>,
     /// List of vital children
-    pub vitals: Option<Vec<Children>>,
+    pub vitals: Option<Vec<crate::Children>>,
     /// List of scalable children
-    pub scalables: Option<Vec<Children>>,
+    pub scalables: Option<Vec<crate::Children>>,
     /// List of other children
-    pub others: Option<Vec<Children>>,
+    pub others: Option<Vec<crate::Children>>,
+    /// List of post children
+    pub posts: Option<Vec<crate::Children>>,
     /// List of the services
     pub services: Option<Vec<Published>>,
 }
 
 impl TenantInstance {
-    pub async fn get(namespace: String, name: String) -> Result<Self> {
-        let api = Api::<Self>::namespaced(get_client_async().await, &namespace);
-        api.get(&name).await.map_err(Error::KubeError)
-    }
-
-    pub async fn list(namespace: String) -> Result<ObjectList<Self>> {
-        let api = Api::<Self>::namespaced(get_client_async().await, &namespace);
-        let lp = ListParams::default();
-        api.list(&lp).await.map_err(Error::KubeError)
-    }
-
     pub fn have_child(&self) -> bool {
         if let Some(status) = self.status.clone() {
             if status.rhaistate.is_some() {
@@ -387,68 +164,13 @@ impl TenantInstance {
                     return true;
                 }
             }
+            if let Some(child) = status.posts.clone() {
+                if child.len() > 0 {
+                    return true;
+                }
+            }
         }
         false
-    }
-
-    pub fn get_options_digest(&mut self) -> String {
-        if let Some(ref opt) = self.spec.options {
-            sha256::digest(serde_json::to_string(opt).unwrap())
-        } else {
-            sha256::digest("")
-        }
-    }
-
-    pub fn get_tfstate(&self) -> Result<Option<String>> {
-        if let Some(status) = self.status.clone() {
-            if let Some(tf) = status.tfstate {
-                let decoded = base64_gz_decode(tf)?;
-                Ok(Some(decoded))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn get_rhaistate(&self) -> Result<Option<String>> {
-        if let Some(status) = self.status.clone() {
-            if let Some(tf) = status.rhaistate {
-                let decoded = base64_gz_decode(tf)?;
-                Ok(Some(decoded))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn get_services(&self) -> Vec<Published> {
-        if let Some(status) = self.status.clone() {
-            if let Some(svcs) = status.services {
-                svcs
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub fn get_services_string(&self) -> String {
-        if let Some(status) = self.status.clone() {
-            if let Some(svcs) = status.services {
-                let mut tmp: Vec<String> = svcs.iter().to_owned().map(|s| s.key.clone()).collect();
-                tmp.sort();
-                tmp.join(",")
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        }
     }
 
     pub async fn get_tenant_name(&self) -> Result<String> {
@@ -506,938 +228,121 @@ impl TenantInstance {
         Ok(res)
     }
 
-    fn have_condition(&self, cond: &ApplicationCondition) -> bool {
-        if let Some(status) = self.status.clone() {
-            status.conditions.clone().into_iter().any(|c| {
-                c.condition_type == cond.condition_type
-                    && c.generation == cond.generation
-                    && c.status == cond.status
-                    && c.message == cond.message
-            })
-        } else {
-            false
-        }
-    }
-
-    fn get_conditions_excluding(&self, exclude: Vec<ConditionsType>) -> Vec<ApplicationCondition> {
-        let mut ret = Vec::new();
-        if let Some(status) = self.status.clone() {
-            for c in status.conditions {
-                if !exclude.clone().into_iter().any(|exc| c.condition_type == exc) {
-                    ret.push(c);
-                }
-            }
-        }
-        ret
-    }
-
-    async fn patch_status(&mut self, client: Client, patch: serde_json::Value) -> Result<Self> {
-        let api = Api::<Self>::namespaced(client.clone(), &self.namespace().unwrap());
-        let name = self.metadata.name.clone().unwrap();
-        let new_status: Patch<serde_json::Value> = Patch::Merge(json!({
-            "apiVersion": "vynil.solidite.fr/v1",
-            "kind": "TenantInstance",
-            "status": patch
-        }));
-        let ps = PatchParams::apply(get_short_name().as_str());
-        api.patch_status(&name, &ps, &new_status)
-            .await
-            .map_err(Error::KubeError)
-    }
-
-    async fn send_event(&mut self, client: Client, ev: Event) -> Result<()> {
-        let recorder = Recorder::new(client.clone(), get_reporter());
-        let oref = self.object_ref(&());
-        match recorder.publish(&ev, &oref).await {
-            Ok(_) => Ok(()),
-            Err(e) => match e {
-                kube::Error::Api(src) => {
-                    if !src
-                        .message
-                        .as_str()
-                        .contains("unable to create new content in namespace")
-                        || !src.message.as_str().contains("being terminated")
-                    {
-                        tracing::warn!("Ignoring {:?} while sending an event", src);
-                    }
-                    Ok(())
-                }
-                _ => Err(Error::KubeError(e)),
-            },
-        }
-    }
-
-    pub async fn set_status_ready(&mut self, tag: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::BeforeApplied,
-            ConditionsType::Ready,
-            ConditionsType::Installed,
-            ConditionsType::InitFrom,
-            ConditionsType::ScheduleBackup,
-        ]);
-        conditions.push(ApplicationCondition::ready_ok(generation));
-        conditions.push(ApplicationCondition::installed_ok(generation));
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "tag": tag,
-                    "digest": self.clone().get_options_digest()
-                }),
-            )
-            .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "InstallSucceed".to_string(),
-            note: None,
-            action: "Install".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_tfstate(&mut self, tfstate: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let encoded = encode_base64_gz(tfstate)?;
-        let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::TofuInstalled]);
-        conditions.push(ApplicationCondition::tofu_ok(generation));
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "tfstate": encoded
-                }),
-            )
-            .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "TofuApplySucceed".to_string(),
-            note: None,
-            action: "TofuApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_tofu_failed(&mut self, tfstate: String, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let encoded = encode_base64_gz(tfstate)?;
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::TofuInstalled,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::tofu_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "tfstate": encoded
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "TofuApplyFailed".to_string(),
-            note: Some(note),
-            action: "TofuApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_services(&mut self, services: Vec<Published>) -> Result<Self> {
-        let client = get_client_async().await;
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "services": services
-                }),
-            )
-            .await?;
-        Ok(result)
-    }
-
-    pub async fn set_rhaistate(&mut self, rhaistate: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let encoded = encode_base64_gz(rhaistate)?;
-        let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::RhaiApplied]);
-        conditions.push(ApplicationCondition::rhai_ok(generation));
-        let result = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "rhaistate": encoded
-                }),
-            )
-            .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "RhaiApplySucceed".to_string(),
-            note: None,
-            action: "RhaiApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_rhai_failed(&mut self, rhaistate: String, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let encoded = encode_base64_gz(rhaistate)?;
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::RhaiApplied,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::rhai_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "rhaistate": encoded
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "RhaiApplyFailed".to_string(),
-            note: Some(note),
-            action: "RhaiApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_init_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::InitFrom,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::init_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "InitFromFail".to_string(),
-            note: Some(note),
-            action: "InitFrom".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_schedule_backup_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::ScheduleBackup,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::schedule_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "ScheduleBackupFailed".to_string(),
-            note: Some(note),
-            action: "ScheduleBackup".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_befores(&mut self, befores: Vec<Children>) -> Result<Self> {
-        let count = befores.len();
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::BeforeApplied]);
-        conditions.push(ApplicationCondition::before_ok(generation));
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "befores": befores
-                }),
-            )
-            .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "BeforeApplySucceed".to_string(),
-            note: Some(format!("Applied {} Objects", count)),
-            action: "BeforeApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_before_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::BeforeApplied,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::before_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "BeforeApplyFailed".to_string(),
-            note: Some(note),
-            action: "BeforeApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_vitals(&mut self, vitals: Vec<Children>) -> Result<Self> {
-        let count = vitals.len();
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::VitalApplied]);
-        conditions.push(ApplicationCondition::vital_ok(generation));
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "vitals": vitals
-                }),
-            )
-            .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "VitalApplySucceed".to_string(),
-            note: Some(format!("Applied {} Objects", count)),
-            action: "VitalApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_vital_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::VitalApplied,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::vital_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "VitalApplyFailed".to_string(),
-            note: Some(note),
-            action: "VitalApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_scalables(&mut self, scalables: Vec<Children>) -> Result<Self> {
-        let count = scalables.len();
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::ScalableApplied]);
-        conditions.push(ApplicationCondition::scalable_ok(generation));
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "scalables": scalables
-                }),
-            )
-            .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "ScalableApplySucceed".to_string(),
-            note: Some(format!("Applied {} Objects", count)),
-            action: "ScalableApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_scalable_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::ScalableApplied,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::scalable_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "ScalableApplyFailed".to_string(),
-            note: Some(note),
-            action: "ScalableApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_others(&mut self, others: Vec<Children>) -> Result<Self> {
-        let count = others.len();
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::OtherApplied]);
-        conditions.push(ApplicationCondition::other_ok(generation));
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                    "others": others
-                }),
-            )
-            .await?;
-        self.send_event(client, Event {
-            type_: EventType::Normal,
-            reason: "OtherApplySucceed".to_string(),
-            note: Some(format!("Applied {} Objects", count)),
-            action: "OtherApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_status_other_failed(&mut self, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
-            ConditionsType::AgentStarted,
-            ConditionsType::OtherApplied,
-            ConditionsType::Installed,
-        ]);
-        conditions.push(ApplicationCondition::other_ko(&reason, generation));
-        conditions.push(ApplicationCondition::installed_ko(&reason, generation));
-        if !conditions
-            .clone()
-            .into_iter()
-            .any(|c| c.condition_type == ConditionsType::Ready)
-        {
-            conditions.push(ApplicationCondition::ready_ko(generation));
-        }
-        let result: TenantInstance = self
-            .patch_status(
-                client.clone(),
-                json!({
-                    "conditions": conditions,
-                }),
-            )
-            .await?;
-        let mut note = reason;
-        note.truncate(1023);
-        self.send_event(client, Event {
-            type_: EventType::Warning,
-            reason: "OtherApplyFailed".to_string(),
-            note: Some(note),
-            action: "OtherApply".to_string(),
-            secondary: None,
-        })
-        .await?;
-        Ok(result)
-    }
-
-    pub async fn set_agent_started(&mut self) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let cond = ApplicationCondition::agent_started(generation);
-        if !self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> =
-                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
-            conditions.push(cond);
-            let result = self
-                .patch_status(
-                    client.clone(),
-                    json!({
-                        "conditions": conditions,
-                    }),
-                )
-                .await?;
-            self.send_event(client, Event {
-                type_: EventType::Normal,
-                reason: "AgentStarted".to_string(),
-                note: None,
-                action: "AgentStart".to_string(),
-                secondary: None,
-            })
-            .await?;
-            Ok(result)
-        } else {
-            Ok(self.clone())
-        }
-    }
-
-    pub async fn set_missing_box(&mut self, jukebox: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let cond = ApplicationCondition::missing_box(&jukebox, generation);
-        if !self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> =
-                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
-            conditions.push(cond);
-            let result = self
-                .patch_status(
-                    client.clone(),
-                    json!({
-                        "conditions": conditions,
-                    }),
-                )
-                .await?;
-            self.send_event(client, Event {
-                type_: EventType::Warning,
-                reason: "MissingJukebox".to_string(),
-                note: Some(format!("JukeBox {jukebox} doesnt exist")),
-                action: "AgentStart".to_string(),
-                secondary: None,
-            })
-            .await?;
-            Ok(result)
-        } else {
-            Ok(self.clone())
-        }
-    }
-
-    pub async fn set_missing_package(&mut self, category: String, package: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let cond = ApplicationCondition::missing_package(&category, &package, generation);
-        if !self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> =
-                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
-            conditions.push(cond);
-            let result = self
-                .patch_status(
-                    client.clone(),
-                    json!({
-                        "conditions": conditions,
-                    }),
-                )
-                .await?;
-            self.send_event(client, Event {
-                type_: EventType::Warning,
-                reason: "MissingPackage".to_string(),
-                note: Some(format!("Package {category}/{package} doesnt exist")),
-                action: "AgentStart".to_string(),
-                secondary: None,
-            })
-            .await?;
-            Ok(result)
-        } else {
-            Ok(self.clone())
-        }
-    }
-
-    pub async fn set_missing_requirement(&mut self, reason: String) -> Result<Self> {
-        let client = get_client_async().await;
-        let generation = self.metadata.generation.unwrap_or(1);
-        let cond = ApplicationCondition::missing_requirement(&reason, generation);
-        if !self.have_condition(&cond) {
-            let mut conditions: Vec<ApplicationCondition> =
-                self.get_conditions_excluding(vec![ConditionsType::AgentStarted]);
-            conditions.push(cond);
-            let result = self
-                .patch_status(
-                    client.clone(),
-                    json!({
-                        "conditions": conditions,
-                    }),
-                )
-                .await?;
-            let mut note = reason;
-            note.truncate(1023);
-            self.send_event(client, Event {
-                type_: EventType::Warning,
-                reason: "MissingRequirement".to_string(),
-                note: Some(note),
-                action: "AgentStart".to_string(),
-                secondary: None,
-            })
-            .await?;
-            Ok(result)
-        } else {
-            Ok(self.clone())
-        }
-    }
-
-    pub fn rhai_get(namespace: String, name: String) -> RhaiRes<Self> {
-        block_in_place(|| Handle::current().block_on(async move { Self::get(namespace, name).await }))
-            .map_err(rhai_err)
-    }
-
-    pub fn rhai_list(namespace: String) -> RhaiRes<Vec<Self>> {
-        block_in_place(|| Handle::current().block_on(async move { Self::list(namespace).await }))
-            .map_err(rhai_err)
-            .map(|lst| lst.into_iter().collect())
-    }
-
-    pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
-        let v = serde_json::to_string(&self.metadata).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-        serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
-    }
-
-    pub fn get_spec(&mut self) -> RhaiRes<Dynamic> {
-        let v = serde_json::to_string(&self.spec).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-        serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
-    }
-
-    pub fn get_status(&mut self) -> RhaiRes<Dynamic> {
-        let v = serde_json::to_string(&self.status).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-        serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
-    }
-
-    pub fn rhai_get_tfstate(&mut self) -> RhaiRes<String> {
-        let res = self.get_tfstate().map_err(rhai_err)?;
-        if res.is_some() {
-            Ok(res.unwrap())
-        } else {
-            Ok("".to_string())
-        }
-    }
-
-    pub fn rhai_set_services(&mut self, services: Dynamic) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move {
-                let v = serde_json::to_string(&services).map_err(Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
-                self.set_services(lst).await
-            })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_get_services(&mut self) -> String {
-        block_in_place(|| Handle::current().block_on(async move { self.get_services_string() }))
-    }
-
-    pub fn rhai_get_rhaistate(&mut self) -> RhaiRes<String> {
-        let res = self.get_rhaistate().map_err(rhai_err)?;
-        if res.is_some() {
-            Ok(res.unwrap())
-        } else {
-            Ok("".to_string())
-        }
-    }
-
-    pub fn rhai_set_status_ready(&mut self, tag: String) -> RhaiRes<Self> {
-        block_in_place(|| Handle::current().block_on(async move { self.set_status_ready(tag).await }))
-            .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_tfstate(&mut self, tfstate: String) -> RhaiRes<Self> {
-        block_in_place(|| Handle::current().block_on(async move { self.set_tfstate(tfstate).await }))
-            .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_tofu_failed(&mut self, tfstate: String, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_tofu_failed(tfstate, reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_schedule_backup_failed(&mut self, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_schedule_backup_failed(reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_init_failed(&mut self, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_init_failed(reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_rhaistate(&mut self, rhaistate: String) -> RhaiRes<Self> {
-        block_in_place(|| Handle::current().block_on(async move { self.set_rhaistate(rhaistate).await }))
-            .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_rhai_failed(&mut self, rhaistate: String, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_rhai_failed(rhaistate, reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_befores(&mut self, list: Dynamic) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
-                self.set_status_befores(lst).await
-            })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_before_failed(&mut self, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_before_failed(reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_vitals(&mut self, list: Dynamic) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
-                self.set_status_vitals(lst).await
-            })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_vital_failed(&mut self, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_vital_failed(reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_scalables(&mut self, list: Dynamic) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
-                self.set_status_scalables(lst).await
-            })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_scalable_failed(&mut self, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_scalable_failed(reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_others(&mut self, list: Dynamic) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
-                self.set_status_others(lst).await
-            })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_status_other_failed(&mut self, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_status_other_failed(reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_agent_started(&mut self) -> RhaiRes<Self> {
-        block_in_place(|| Handle::current().block_on(async move { self.set_agent_started().await }))
-            .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_missing_box(&mut self, jukebox: String) -> RhaiRes<Self> {
-        block_in_place(|| Handle::current().block_on(async move { self.set_missing_box(jukebox).await }))
-            .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_missing_package(&mut self, category: String, package: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_missing_package(category, package).await })
-        })
-        .map_err(rhai_err)
-    }
-
-    pub fn rhai_set_missing_requirement(&mut self, reason: String) -> RhaiRes<Self> {
-        block_in_place(|| {
-            Handle::current().block_on(async move { self.set_missing_requirement(reason).await })
-        })
-        .map_err(rhai_err)
-    }
-
     pub fn rhai_get_tenant_name(&mut self) -> RhaiRes<String> {
-        block_in_place(|| Handle::current().block_on(async move { self.get_tenant_name().await }))
-            .map_err(rhai_err)
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { self.get_tenant_name().await })
+        })
+        .map_err(rhai_err)
     }
 
-    pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<Dynamic> {
-        block_in_place(|| {
-            Handle::current().block_on(async move {
+    pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<rhai::Dynamic> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
                 let arr = self.get_tenant_namespaces().await;
                 if arr.is_ok() {
                     let arr = arr.unwrap();
                     let v = serde_json::to_string(&arr).map_err(Error::SerializationError)?;
-                    serde_json::from_str::<Dynamic>(&v).map_err(Error::SerializationError)
+                    serde_json::from_str::<rhai::Dynamic>(&v).map_err(Error::SerializationError)
                 } else {
-                    arr.map(|_| Dynamic::from(""))
+                    arr.map(|_| rhai::Dynamic::from(""))
                 }
             })
         })
         .map_err(rhai_err)
     }
 
-    pub fn rhai_get_tenant_services_names(&mut self) -> RhaiRes<Dynamic> {
-        block_in_place(|| {
-            Handle::current().block_on(async move {
+    pub fn rhai_get_tenant_services_names(&mut self) -> RhaiRes<rhai::Dynamic> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
                 let arr = self.get_tenant_services_names().await;
                 if arr.is_ok() {
                     let arr = arr.unwrap();
                     let v = serde_json::to_string(&arr).map_err(Error::SerializationError)?;
-                    serde_json::from_str::<Dynamic>(&v).map_err(Error::SerializationError)
+                    serde_json::from_str::<rhai::Dynamic>(&v).map_err(Error::SerializationError)
                 } else {
-                    arr.map(|_| Dynamic::from(""))
+                    arr.map(|_| rhai::Dynamic::from(""))
                 }
             })
         })
         .map_err(rhai_err)
     }
+}
+
+impl_instance_common!(TenantInstance, "TenantInstance");
+impl_instance_befores!(TenantInstance);
+
+pub fn tenant_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<TenantInstance>("TenantInstance")
+        .register_fn("get_tenant_instance", TenantInstance::rhai_get)
+        .register_fn("get_tenant_name", TenantInstance::rhai_get_tenant_name)
+        .register_fn(
+            "get_tenant_namespaces",
+            TenantInstance::rhai_get_tenant_namespaces,
+        )
+        .register_fn(
+            "get_tenant_services_names",
+            TenantInstance::rhai_get_tenant_services_names,
+        )
+        .register_fn("list_tenant_instance", TenantInstance::rhai_list)
+        .register_fn("options_digest", TenantInstance::get_options_digest)
+        .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)
+        .register_fn("get_rhaistate", TenantInstance::rhai_get_rhaistate)
+        .register_fn("set_agent_started", TenantInstance::rhai_set_agent_started)
+        .register_fn("set_missing_box", TenantInstance::rhai_set_missing_box)
+        .register_fn("set_missing_package", TenantInstance::rhai_set_missing_package)
+        .register_fn(
+            "set_missing_requirement",
+            TenantInstance::rhai_set_missing_requirement,
+        )
+        .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
+        .register_fn("set_status_befores", TenantInstance::rhai_set_status_befores)
+        .register_fn(
+            "set_status_before_failed",
+            TenantInstance::rhai_set_status_before_failed,
+        )
+        .register_fn("set_status_vitals", TenantInstance::rhai_set_status_vitals)
+        .register_fn(
+            "set_status_vital_failed",
+            TenantInstance::rhai_set_status_vital_failed,
+        )
+        .register_fn("set_status_scalables", TenantInstance::rhai_set_status_scalables)
+        .register_fn(
+            "set_status_scalable_failed",
+            TenantInstance::rhai_set_status_scalable_failed,
+        )
+        .register_fn("set_status_others", TenantInstance::rhai_set_status_others)
+        .register_fn(
+            "set_status_other_failed",
+            TenantInstance::rhai_set_status_other_failed,
+        )
+        .register_fn("set_status_posts", TenantInstance::rhai_set_status_posts)
+        .register_fn(
+            "set_status_post_failed",
+            TenantInstance::rhai_set_status_post_failed,
+        )
+        .register_fn("set_tfstate", TenantInstance::rhai_set_tfstate)
+        .register_fn(
+            "set_status_tofu_failed",
+            TenantInstance::rhai_set_status_tofu_failed,
+        )
+        .register_fn("set_rhaistate", TenantInstance::rhai_set_rhaistate)
+        .register_fn("set_services", TenantInstance::rhai_set_services)
+        .register_fn("get_services", TenantInstance::rhai_get_services)
+        .register_fn(
+            "set_status_rhai_failed",
+            TenantInstance::rhai_set_status_rhai_failed,
+        )
+        .register_fn(
+            "set_status_schedule_backup_failed",
+            TenantInstance::rhai_set_status_schedule_backup_failed,
+        )
+        .register_fn(
+            "set_status_init_failed",
+            TenantInstance::rhai_set_status_init_failed,
+        )
+        .register_get("metadata", TenantInstance::get_metadata)
+        .register_get("spec", TenantInstance::get_spec)
+        .register_get("status", TenantInstance::get_status);
 }

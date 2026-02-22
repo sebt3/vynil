@@ -5,7 +5,7 @@ use crate::{
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{Api, Client, api::ListParams};
 pub use openapiv3::Schema;
-use rhai::Dynamic;
+use rhai::{Dynamic, Engine};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -672,10 +672,422 @@ impl VynilPackageSource {
 }
 
 pub fn read_package_yaml(file: &PathBuf) -> Result<VynilPackageSource> {
-    let f = fs::File::open(Path::new(&file)).map_err(Error::Stdio)?;
-    let deserializer = serde_yaml::Deserializer::from_reader(f);
-    serde_yaml::with::singleton_map_recursive::deserialize(deserializer).map_err(Error::YamlError)
+    let content = fs::read_to_string(Path::new(&file)).map_err(Error::Stdio)?;
+    let yaml_value = rust_yaml::Yaml::new()
+        .load_str(&content)
+        .map_err(|e| Error::YamlError(e.to_string()))?;
+    let json_value = crate::yamlhandler::yaml_value_to_serde_json(yaml_value);
+    serde_json::from_value(json_value).map_err(Error::SerializationError)
 }
 pub fn rhai_read_package_yaml(file: String) -> RhaiRes<VynilPackageSource> {
     read_package_yaml(&PathBuf::from(&file)).map_err(rhai_err)
+}
+
+pub fn package_rhai_register(engine: &mut Engine) {
+    engine
+        .register_fn("vynil_version", get_vynil_version)
+        .register_type_with_name::<VynilPackageSource>("VynilPackage")
+        .register_fn("read_package_yaml", rhai_read_package_yaml)
+        .register_fn("validate_options", VynilPackageSource::validate_options)
+        .register_get("metadata", VynilPackageSource::get_metadata)
+        .register_get("requirements", VynilPackageSource::get_requirements)
+        .register_get("recommandations", VynilPackageSource::get_recommandations)
+        .register_get("options", VynilPackageSource::get_options)
+        .register_get("value_script", VynilPackageSource::get_value_script)
+        .register_get("images", VynilPackageSource::get_images)
+        .register_get("resources", VynilPackageSource::get_resources);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Write YAML content to a unique temp file and return its path.
+    fn write_temp_yaml(content: &str, tag: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "vynil_test_{}_{}.yaml",
+            std::process::id(),
+            tag
+        ));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    // ── Minimal package ───────────────────────────────────────────────────────
+
+    const MINIMAL_YAML: &str = "\
+apiVersion: vynil.solidite.fr/v1
+kind: Package
+metadata:
+  name: test-pkg
+  category: apps
+  description: A minimal test package
+  type: tenant
+  features:
+    - upgrade
+requirements: []
+";
+
+    #[test]
+    fn test_read_package_yaml_minimal_fields() {
+        let p = write_temp_yaml(MINIMAL_YAML, "minimal");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert_eq!(pkg.metadata.name, "test-pkg");
+        assert_eq!(pkg.metadata.category, "apps");
+        assert_eq!(pkg.metadata.description, "A minimal test package");
+        assert!(matches!(pkg.metadata.usage, VynilPackageType::Tenant));
+        assert!(pkg.requirements.is_empty());
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_read_package_yaml_system_type() {
+        let yaml = MINIMAL_YAML.replace("type: tenant", "type: system");
+        let p = write_temp_yaml(&yaml, "systype");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(pkg.metadata.usage, VynilPackageType::System));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_read_package_yaml_service_type() {
+        let yaml = MINIMAL_YAML.replace("type: tenant", "type: service");
+        let p = write_temp_yaml(&yaml, "svctype");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(pkg.metadata.usage, VynilPackageType::Service));
+        std::fs::remove_file(p).ok();
+    }
+
+    // ── Requirement enum variants ─────────────────────────────────────────────
+
+    const REQUIREMENTS_YAML: &str = "\
+apiVersion: vynil.solidite.fr/v1
+kind: Package
+metadata:
+  name: full-pkg
+  category: apps
+  description: Full requirements test
+  type: tenant
+  features:
+    - upgrade
+requirements:
+  - custom_resource_definition: some.crd.io
+  - system_service: monitoring
+  - tenant_service: auth
+  - system_package:
+      category: storage
+      name: longhorn
+  - tenant_package:
+      category: infra
+      name: postgres
+  - vynil_version: \"0.5.0\"
+  - minimum_previous_version: \"0.4.0\"
+  - cluster_version:
+      major: 1
+      minor: 25
+  - cpu: 2.0
+  - memory: 512
+  - disk: 1024
+";
+
+    #[test]
+    fn test_requirement_custom_resource_definition() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_crd");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[0],
+            VynilPackageRequirement::CustomResourceDefinition(s) if s == "some.crd.io"
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_system_service() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_svc");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[1],
+            VynilPackageRequirement::SystemService(s) if s == "monitoring"
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_tenant_service() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_tsvc");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[2],
+            VynilPackageRequirement::TenantService(s) if s == "auth"
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_system_package() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_spkg");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[3],
+            VynilPackageRequirement::SystemPackage { category, name }
+            if category == "storage" && name == "longhorn"
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_tenant_package() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_tpkg");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[4],
+            VynilPackageRequirement::TenantPackage { category, name }
+            if category == "infra" && name == "postgres"
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_vynil_version() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_vynil");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[5],
+            VynilPackageRequirement::VynilVersion(v) if v == "0.5.0"
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_minimum_previous_version() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_minprev");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[6],
+            VynilPackageRequirement::MinimumPreviousVersion(v) if v == "0.4.0"
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_cluster_version() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_clver");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[7],
+            VynilPackageRequirement::ClusterVersion { major: 1, minor: 25 }
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_cpu() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_cpu");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(
+            &pkg.requirements[8],
+            VynilPackageRequirement::Cpu(c) if (*c - 2.0_f64).abs() < f64::EPSILON
+        ));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_requirement_memory_and_disk() {
+        let p = write_temp_yaml(REQUIREMENTS_YAML, "req_mem");
+        let pkg = read_package_yaml(&p).unwrap();
+        assert!(matches!(&pkg.requirements[9], VynilPackageRequirement::Memory(512)));
+        assert!(matches!(&pkg.requirements[10], VynilPackageRequirement::Disk(1024)));
+        std::fs::remove_file(p).ok();
+    }
+
+    // ── Diagnostic test (temporary) ──────────────────────────────────────────
+
+    #[test]
+    fn debug_yaml_to_json_conversion() {
+        // Test 1: nested block mapping alone
+        let y1 = "images:\n  main:\n    registry: docker.io\n";
+        let v1 = rust_yaml::Yaml::new().load_str(y1).unwrap();
+        let j1 = crate::yamlhandler::yaml_value_to_serde_json(v1);
+        eprintln!("Test1 (nested block alone): {}", serde_json::to_string_pretty(&j1).unwrap());
+
+        // Test 2: nested block mapping after simple key
+        let y2 = "kind: Package\nimages:\n  main:\n    registry: docker.io\n";
+        let v2 = rust_yaml::Yaml::new().load_str(y2).unwrap();
+        let j2 = crate::yamlhandler::yaml_value_to_serde_json(v2);
+        eprintln!("Test2 (after simple key): {}", serde_json::to_string_pretty(&j2).unwrap());
+
+        // Test 3: nested block mapping after flow value
+        let y3 = "requirements: []\nimages:\n  main:\n    registry: docker.io\n";
+        let v3 = rust_yaml::Yaml::new().load_str(y3).unwrap();
+        let j3 = crate::yamlhandler::yaml_value_to_serde_json(v3);
+        eprintln!("Test3 (after flow value): {}", serde_json::to_string_pretty(&j3).unwrap());
+
+        // Test 4: flow images
+        let y4 = "requirements: []\nimages: {main: {registry: docker.io, repository: lib/nginx, tag: '1.25'}}\n";
+        let v4 = rust_yaml::Yaml::new().load_str(y4).unwrap();
+        let j4 = crate::yamlhandler::yaml_value_to_serde_json(v4);
+        eprintln!("Test4 (all flow): {}", serde_json::to_string_pretty(&j4).unwrap());
+    }
+
+    // ── Images & resources ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_read_package_yaml_with_images() {
+        let yaml = "\
+apiVersion: vynil.solidite.fr/v1
+kind: Package
+metadata:
+  name: img-pkg
+  category: apps
+  description: Package with images
+  type: tenant
+  features: []
+requirements: []
+images:
+  main:
+    registry: docker.io
+    repository: library/nginx
+    tag: \"1.25\"
+  sidecar:
+    registry: gcr.io
+    repository: distroless/base
+";
+        let p = write_temp_yaml(yaml, "images");
+        let pkg = read_package_yaml(&p).unwrap();
+        let images = pkg.images.unwrap();
+        assert!(images.contains_key("main"));
+        assert_eq!(images["main"].registry, "docker.io");
+        assert_eq!(images["main"].repository, "library/nginx");
+        assert_eq!(images["main"].tag, Some("1.25".to_string()));
+        assert!(images.contains_key("sidecar"));
+        assert_eq!(images["sidecar"].tag, None);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn test_read_package_yaml_with_resources() {
+        let yaml = "\
+apiVersion: vynil.solidite.fr/v1
+kind: Package
+metadata:
+  name: res-pkg
+  category: apps
+  description: Package with resources
+  type: tenant
+  features: []
+requirements: []
+resources:
+  app:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+";
+        let p = write_temp_yaml(yaml, "resources");
+        let pkg = read_package_yaml(&p).unwrap();
+        let resources = pkg.resources.unwrap();
+        assert!(resources.contains_key("app"));
+        let req = resources["app"].requests.as_ref().unwrap();
+        assert_eq!(req.cpu, Some("100m".to_string()));
+        assert_eq!(req.memory, Some("128Mi".to_string()));
+        std::fs::remove_file(p).ok();
+    }
+
+    // ── VynilPackage methods ──────────────────────────────────────────────────
+
+    fn make_package(requirements: Vec<VynilPackageRequirement>) -> VynilPackage {
+        VynilPackage {
+            registry: "docker.io".into(),
+            image: "test/image".into(),
+            tag: "1.0.0".into(),
+            metadata: VynilPackageMeta {
+                name: "test".into(),
+                category: "test".into(),
+                description: "test package".into(),
+                app_version: None,
+                usage: VynilPackageType::Tenant,
+                features: vec![],
+            },
+            requirements,
+            recommandations: None,
+            options: None,
+            value_script: None,
+        }
+    }
+
+    #[test]
+    fn test_is_min_version_ok_above_minimum() {
+        let pkg = make_package(vec![VynilPackageRequirement::MinimumPreviousVersion(
+            "1.0.0".into(),
+        )]);
+        assert!(pkg.is_min_version_ok("1.0.1".into()));
+        assert!(pkg.is_min_version_ok("2.0.0".into()));
+    }
+
+    #[test]
+    fn test_is_min_version_ok_at_minimum() {
+        let pkg = make_package(vec![VynilPackageRequirement::MinimumPreviousVersion(
+            "1.0.0".into(),
+        )]);
+        assert!(pkg.is_min_version_ok("1.0.0".into()));
+    }
+
+    #[test]
+    fn test_is_min_version_ok_below_minimum() {
+        let pkg = make_package(vec![VynilPackageRequirement::MinimumPreviousVersion(
+            "1.0.0".into(),
+        )]);
+        assert!(!pkg.is_min_version_ok("0.9.9".into()));
+    }
+
+    #[test]
+    fn test_is_min_version_ok_no_requirement() {
+        let pkg = make_package(vec![]);
+        // No MinimumPreviousVersion → always OK
+        assert!(pkg.is_min_version_ok("0.1.0".into()));
+    }
+
+    #[test]
+    fn test_get_min_version_present() {
+        let pkg = make_package(vec![
+            VynilPackageRequirement::VynilVersion("0.5.0".into()),
+            VynilPackageRequirement::MinimumPreviousVersion("1.2.0".into()),
+        ]);
+        assert_eq!(pkg.get_min_version(), Some("1.2.0".into()));
+    }
+
+    #[test]
+    fn test_get_min_version_absent() {
+        let pkg = make_package(vec![VynilPackageRequirement::VynilVersion("0.5.0".into())]);
+        assert_eq!(pkg.get_min_version(), None);
+    }
+
+    #[test]
+    fn test_get_vynil_version_present() {
+        let pkg = make_package(vec![VynilPackageRequirement::VynilVersion("0.5.0".into())]);
+        assert_eq!(pkg.get_vynil_version(), Some("0.5.0".into()));
+    }
+
+    #[test]
+    fn test_get_vynil_version_absent() {
+        let pkg = make_package(vec![]);
+        assert_eq!(pkg.get_vynil_version(), None);
+    }
+
+    #[test]
+    fn test_get_cluster_version_present() {
+        let pkg = make_package(vec![VynilPackageRequirement::ClusterVersion {
+            major: 1,
+            minor: 28,
+        }]);
+        assert_eq!(pkg.get_cluster_version(), Some((1, 28)));
+    }
+
+    #[test]
+    fn test_read_package_yaml_missing_file() {
+        let result = read_package_yaml(&PathBuf::from("/nonexistent/path/pkg.yaml"));
+        assert!(result.is_err());
+    }
 }

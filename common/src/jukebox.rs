@@ -10,7 +10,7 @@ use kube::{
     api::{Api, ListParams, ObjectList, Patch, PatchParams},
     runtime::events::{Event, EventType, Recorder},
 };
-use rhai::Dynamic;
+use rhai::{Engine, Dynamic};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -332,4 +332,16 @@ impl JukeBox {
         block_in_place(|| Handle::current().block_on(async move { self.set_status_failed(reason).await }))
             .map_err(rhai_err)
     }
+}
+
+pub fn jukebox_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<JukeBox>("JukeBox")
+        .register_fn("get_jukebox", JukeBox::rhai_get)
+        .register_fn("list_jukebox", JukeBox::rhai_list)
+        .register_fn("set_status_updated", JukeBox::rhai_set_status_updated)
+        .register_fn("set_status_failed", JukeBox::rhai_set_status_failed)
+        .register_get("metadata", JukeBox::get_metadata)
+        .register_get("spec", JukeBox::get_spec)
+        .register_get("status", JukeBox::get_status);
 }

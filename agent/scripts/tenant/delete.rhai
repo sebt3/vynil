@@ -3,6 +3,12 @@ fn run(instance, context) {
     if type_of(ctx) == "map" {
         context = ctx;
     }
+    if is_dir(`${context.package_dir}/posts`) {
+        ctx = import_run("delete_posts", instance, context);
+        if type_of(ctx) == "map" {
+            context = ctx;
+        }
+    }
     if is_dir(`${context.package_dir}/scalables`) {
         ctx = import_run("delete_scalables", instance, context);
         if type_of(ctx) == "map" {
