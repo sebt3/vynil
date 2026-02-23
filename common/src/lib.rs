@@ -129,6 +129,8 @@ pub mod passwordhandler;
 pub mod rhaihandler;
 mod semverhandler;
 pub mod shellhandler;
+pub mod vyniltest;
+pub mod vyniltestset;
 mod tools;
 pub mod vynilpackage;
 pub mod yamlhandler;
