@@ -10,7 +10,7 @@ use kube::{
     api::{Api, ListParams, ObjectList, Patch, PatchParams},
     runtime::events::{Event, EventType, Recorder},
 };
-use rhai::{Engine, Dynamic};
+use rhai::{Dynamic, Engine};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

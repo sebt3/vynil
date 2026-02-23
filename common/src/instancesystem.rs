@@ -3,9 +3,9 @@ use kube::{
     CustomResource, Resource, ResourceExt,
     runtime::events::{Event, EventType},
 };
+use rhai::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use rhai::Engine;
 
 /// Describe a source of vynil packages jukebox
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -173,10 +173,7 @@ impl SystemInstance {
         Ok(result)
     }
 
-    pub async fn set_status_systems(
-        &mut self,
-        systems: Vec<crate::Children>,
-    ) -> crate::Result<Self> {
+    pub async fn set_status_systems(&mut self, systems: Vec<crate::Children>) -> crate::Result<Self> {
         let count = systems.len();
         let client = crate::context::get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
@@ -218,10 +215,7 @@ impl SystemInstance {
             conditions.push(ApplicationCondition::ready_ko(generation));
         }
         let result = self
-            .patch_status(
-                client.clone(),
-                serde_json::json!({ "conditions": conditions }),
-            )
+            .patch_status(client.clone(), serde_json::json!({ "conditions": conditions }))
             .await?;
         let mut note = reason;
         note.truncate(1023);
@@ -239,8 +233,7 @@ impl SystemInstance {
     pub fn rhai_set_status_systems(&mut self, list: rhai::Dynamic) -> crate::RhaiRes<Self> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                let v = serde_json::to_string(&list)
-                    .map_err(crate::Error::SerializationError)?;
+                let v = serde_json::to_string(&list).map_err(crate::Error::SerializationError)?;
                 let lst = serde_json::from_str(&v).map_err(crate::Error::SerializationError)?;
                 self.set_status_systems(lst).await
             })

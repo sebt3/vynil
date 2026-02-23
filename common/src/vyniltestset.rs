@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
-use serde::{Deserialize, Serialize};
-use rhai::Dynamic;
 use crate::httpmock::HttpMockItem;
+use rhai::Dynamic;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Vynil TestSet
 #[allow(non_snake_case)]
@@ -64,12 +64,24 @@ pub struct VynilAssertSelector {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct VynilAssert {
+    /// Assert name
+    pub name: String,
+    /// Assert description
+    pub description: Option<String>,
     /// Select the returned objects to assert
     pub selector: VynilAssertSelector,
     /// Match definition
     pub matcher: VynilAssertMatch,
     /// The expected kubernetes object values to validate
     pub value: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct VynilAssertResult {
+    pub name: String,
+    pub description: Option<String>,
+    pub passed: bool,
+    pub message: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]

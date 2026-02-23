@@ -2,7 +2,7 @@ use crate::{Error, Error::*, RhaiRes, get_client_name};
 use actix_web::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Certificate, Client, Response};
-use rhai::{Engine, Dynamic, Map};
+use rhai::{Dynamic, Engine, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

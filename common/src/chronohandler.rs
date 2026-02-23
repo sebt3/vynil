@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use rhai::{ImmutableString, Engine};
+use rhai::{Engine, ImmutableString};
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct DateTimeHandler {

@@ -1,4 +1,7 @@
-use crate::{Error, Reconciler, Result, get_client_name, manager::Context, metrics::ReconcileMeasurerInstance, telemetry};
+use crate::{
+    Error, Reconciler, Result, get_client_name, manager::Context, metrics::ReconcileMeasurerInstance,
+    telemetry,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use common::{
@@ -6,8 +9,7 @@ use common::{
     vynilpackage::{VynilPackageRecommandation, VynilPackageRequirement, VynilPackageType},
 };
 use k8s_openapi::{
-    NamespaceResourceScope,
-    api::batch::v1::Job,
+    NamespaceResourceScope, api::batch::v1::Job,
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
 };
 use kube::{
@@ -124,7 +126,12 @@ pub async fn build_base_recommendations(
             match reco {
                 VynilPackageRecommandation::CustomResourceDefinition(crd) => {
                     let api: Api<CustomResourceDefinition> = Api::all(client.clone());
-                    if api.get_metadata_opt(&crd).await.map_err(Error::KubeError)?.is_some() {
+                    if api
+                        .get_metadata_opt(&crd)
+                        .await
+                        .map_err(Error::KubeError)?
+                        .is_some()
+                    {
                         rec_crds.push(crd);
                     }
                 }
@@ -262,16 +269,22 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
         let jukebox = inst.spec_jukebox();
         if !packages.keys().any(|x| x == jukebox) {
             drop(packages);
-            inst.clone().set_missing_box(inst.spec_jukebox().to_string()).await?;
+            inst.clone()
+                .set_missing_box(inst.spec_jukebox().to_string())
+                .await?;
             return Ok(Action::requeue(Duration::from_secs(15 * 60)));
         }
-        let pck = packages[jukebox].packages.iter().find(|p| {
-            p.metadata.name == inst.spec_package()
-                && p.metadata.category == inst.spec_category()
-                && p.metadata.usage == T::package_type()
-                && p.is_min_version_ok(current_version.clone())
-                && p.is_vynil_version_ok()
-        }).cloned();
+        let pck = packages[jukebox]
+            .packages
+            .iter()
+            .find(|p| {
+                p.metadata.name == inst.spec_package()
+                    && p.metadata.category == inst.spec_category()
+                    && p.metadata.usage == T::package_type()
+                    && p.is_min_version_ok(current_version.clone())
+                    && p.is_vynil_version_ok()
+            })
+            .cloned();
         let pull_secret = packages[jukebox].pull_secret.clone();
         (pck, pull_secret)
         // packages lock released here
@@ -293,7 +306,10 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
         obj.insert("use_secret".to_string(), true.into());
         obj.insert("pull_secret".to_string(), ps.into());
     } else {
-        context.as_object_mut().unwrap().insert("use_secret".to_string(), false.into());
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("use_secret".to_string(), false.into());
     }
 
     {
@@ -309,12 +325,20 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     }
 
     // ── Recommendations ───────────────────────────────────────────────────
-    let recos = inst.build_recommendations(pck.recommandations, client.clone()).await?;
+    let recos = inst
+        .build_recommendations(pck.recommandations, client.clone())
+        .await?;
     {
         let obj = context.as_object_mut().unwrap();
         obj.insert("rec_crds".to_string(), recos.crds.join(",").into());
-        obj.insert("rec_system_services".to_string(), recos.system_services.join(",").into());
-        obj.insert("rec_tenant_services".to_string(), recos.tenant_services.join(",").into());
+        obj.insert(
+            "rec_system_services".to_string(),
+            recos.system_services.join(",").into(),
+        );
+        obj.insert(
+            "rec_tenant_services".to_string(),
+            recos.tenant_services.join(",").into(),
+        );
     }
 
     // ── Value script ──────────────────────────────────────────────────────
@@ -336,7 +360,10 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
 
     // ── Force-reinstall annotation ────────────────────────────────────────
     let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
-    if inst.annotations().contains_key("vynil.solidite.fr/force-reinstall") {
+    if inst
+        .annotations()
+        .contains_key("vynil.solidite.fr/force-reinstall")
+    {
         let api = Api::<T>::namespaced(client.clone(), &inst.namespace().unwrap());
         let patch = Patch::Json::<()>(
             serde_json::from_value(serde_json::json!([
@@ -397,13 +424,17 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
         if !packages.keys().any(|x| x == jukebox) {
             return Ok(Action::await_change());
         }
-        let pck = packages[jukebox].packages.iter().find(|p| {
-            p.metadata.name == inst.spec_package()
-                && p.metadata.category == inst.spec_category()
-                && p.metadata.usage == T::package_type()
-                && p.is_min_version_ok(current_version.clone())
-                && p.is_vynil_version_ok()
-        }).cloned();
+        let pck = packages[jukebox]
+            .packages
+            .iter()
+            .find(|p| {
+                p.metadata.name == inst.spec_package()
+                    && p.metadata.category == inst.spec_category()
+                    && p.metadata.usage == T::package_type()
+                    && p.is_min_version_ok(current_version.clone())
+                    && p.is_vynil_version_ok()
+            })
+            .cloned();
         let pull_secret = packages[jukebox].pull_secret.clone();
         (pck, pull_secret)
         // packages lock released here
@@ -427,7 +458,10 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
         obj.insert("use_secret".to_string(), true.into());
         obj.insert("pull_secret".to_string(), ps.into());
     } else {
-        context.as_object_mut().unwrap().insert("use_secret".to_string(), false.into());
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("use_secret".to_string(), false.into());
     }
 
     {

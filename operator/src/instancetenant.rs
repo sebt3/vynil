@@ -1,6 +1,8 @@
 use crate::{
     Error, Reconciler, Result, TenantInstance,
-    instance_common::{InstanceKind, RecoContext, build_base_recommendations, do_cleanup, do_reconcile, run_with_finalizer},
+    instance_common::{
+        InstanceKind, RecoContext, build_base_recommendations, do_cleanup, do_reconcile, run_with_finalizer,
+    },
     manager::Context,
     metrics::ReconcileMeasurerInstance,
 };
@@ -19,27 +21,53 @@ use tracing::instrument;
 
 #[async_trait]
 impl InstanceKind for TenantInstance {
-    fn type_name() -> &'static str { "tenant" }
-    fn finalizer_name() -> &'static str { "tenantinstances.vynil.solidite.fr" }
-    fn package_type() -> VynilPackageType { VynilPackageType::Tenant }
-
-    fn spec_jukebox(&self) -> &str { &self.spec.jukebox }
-    fn spec_category(&self) -> &str { &self.spec.category }
-    fn spec_package(&self) -> &str { &self.spec.package }
-
-    fn current_tag(&self) -> String {
-        self.status.as_ref().and_then(|s| s.tag.clone()).unwrap_or_default()
+    fn type_name() -> &'static str {
+        "tenant"
     }
 
-    fn have_child(&self) -> bool { self.have_child() }
-    fn get_options_digest(&mut self) -> String { self.get_options_digest() }
+    fn finalizer_name() -> &'static str {
+        "tenantinstances.vynil.solidite.fr"
+    }
+
+    fn package_type() -> VynilPackageType {
+        VynilPackageType::Tenant
+    }
+
+    fn spec_jukebox(&self) -> &str {
+        &self.spec.jukebox
+    }
+
+    fn spec_category(&self) -> &str {
+        &self.spec.category
+    }
+
+    fn spec_package(&self) -> &str {
+        &self.spec.package
+    }
+
+    fn current_tag(&self) -> String {
+        self.status
+            .as_ref()
+            .and_then(|s| s.tag.clone())
+            .unwrap_or_default()
+    }
+
+    fn have_child(&self) -> bool {
+        self.have_child()
+    }
+
+    fn get_options_digest(&mut self) -> String {
+        self.get_options_digest()
+    }
 
     async fn set_missing_box(mut self, jukebox: String) -> Result<Self> {
         self.set_missing_box(jukebox).await
     }
+
     async fn set_missing_package(mut self, category: String, package: String) -> Result<Self> {
         self.set_missing_package(category, package).await
     }
+
     async fn set_missing_requirement(mut self, reason: String) -> Result<Self> {
         self.set_missing_requirement(reason).await
     }
@@ -77,17 +105,20 @@ impl InstanceKind for TenantInstance {
             .partition(|r| matches!(r, VynilPackageRecommandation::TenantService(_)));
 
         for reco in tenant_recos {
-            if let VynilPackageRecommandation::TenantService(svc) = reco {
-                if current_tenant_services.contains(&svc) {
-                    rec_tenant_services.push(svc);
-                }
+            if let VynilPackageRecommandation::TenantService(svc) = reco
+                && current_tenant_services.contains(&svc)
+            {
+                rec_tenant_services.push(svc);
             }
         }
         rec_tenant_services.sort();
 
-        let (crds, system_services) =
-            build_base_recommendations(Some(base_recos), client).await?;
-        Ok(RecoContext { crds, system_services, tenant_services: rec_tenant_services })
+        let (crds, system_services) = build_base_recommendations(Some(base_recos), client).await?;
+        Ok(RecoContext {
+            crds,
+            system_services,
+            tenant_services: rec_tenant_services,
+        })
     }
 
     fn set_rhai_instance(&self, rhai: &mut Script) {
@@ -110,6 +141,7 @@ impl Reconciler for TenantInstance {
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
         do_reconcile(self, ctx).await
     }
+
     async fn cleanup(&self, ctx: Arc<Context>) -> Result<Action> {
         do_cleanup(self, ctx).await
     }

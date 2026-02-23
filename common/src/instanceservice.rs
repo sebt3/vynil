@@ -1,17 +1,13 @@
-use crate::{
-    Error, Published, Result, RhaiRes,
-    context::get_client_async,
-    rhai_err,
-};
+use crate::{Error, Published, Result, RhaiRes, context::get_client_async, rhai_err};
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::core::v1::Namespace;
 use kube::{
     CustomResource, Resource, ResourceExt,
     api::{Api, ListParams},
 };
+use rhai::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use rhai::Engine;
 
 /// InitFrom contains the informations for the backup to use to initialize the installation
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -212,8 +208,7 @@ impl ServiceInstance {
 
     pub fn rhai_list_services_names() -> RhaiRes<Vec<String>> {
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async move { Self::get_all_services_names().await })
+            tokio::runtime::Handle::current().block_on(async move { Self::get_all_services_names().await })
         })
         .map_err(rhai_err)
     }

@@ -1,6 +1,6 @@
 use crate::{Error, Result, RhaiRes, rhai_err};
-use std::process::{Command, Output, Stdio};
 use rhai::Engine;
+use std::process::{Command, Output, Stdio};
 
 pub fn run(command: String) -> Result<Output> {
     Command::new("sh")

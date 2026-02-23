@@ -1,16 +1,19 @@
-use std::collections::BTreeMap;
-use std::path::Path;
-use serde::{Deserialize, Serialize};
+use crate::{
+    handlebarshandler::HandleBars,
+    httpmock::HttpMockItem,
+    vynilpackage::VynilPackageSource,
+    vyniltestset::{
+        VynilAssert, VynilAssertMatch, VynilAssertResult, VynilAssertSelector, VynilTestSet,
+        VynilTestSetMocks,
+    },
+    yamlhandler::{
+        YamlDoc, dynamic_to_value, serde_json_to_yaml_value, value_to_rhai_dynamic, yaml_value_to_serde_json,
+    },
+};
 use rhai::{Dynamic, Map};
 use rust_yaml::Value;
-use crate::handlebarshandler::HandleBars;
-use crate::httpmock::HttpMockItem;
-use crate::vynilpackage::VynilPackageSource;
-use crate::vyniltestset::{VynilAssert, VynilAssertSelector, VynilTestSet, VynilTestSetMocks};
-use crate::yamlhandler::{
-    YamlDoc, dynamic_to_value, serde_json_to_yaml_value, value_to_rhai_dynamic,
-    yaml_value_to_serde_json,
-};
+use serde::{Deserialize, Serialize};
+use std::{collections::BTreeMap, path::Path};
 
 const API_VERSION: &str = "vinyl.solidite.fr/v1beta1";
 
@@ -92,22 +95,14 @@ fn template_json(
 }
 
 /// Templates all strings inside a rhai::Dynamic (via JSON round-trip).
-fn template_dynamic(
-    hbs: &mut HandleBars,
-    ctx: &serde_json::Value,
-    d: &Dynamic,
-) -> crate::Result<Dynamic> {
+fn template_dynamic(hbs: &mut HandleBars, ctx: &serde_json::Value, d: &Dynamic) -> crate::Result<Dynamic> {
     let json = yaml_value_to_serde_json(dynamic_to_value(d.clone()));
     let templated = template_json(hbs, ctx, json)?;
     Ok(value_to_rhai_dynamic(serde_json_to_yaml_value(templated)))
 }
 
 /// Templates all string keys and values inside a rhai::Map.
-fn template_rhai_map(
-    hbs: &mut HandleBars,
-    ctx: &serde_json::Value,
-    map: &Map,
-) -> crate::Result<Map> {
+fn template_rhai_map(hbs: &mut HandleBars, ctx: &serde_json::Value, map: &Map) -> crate::Result<Map> {
     let d = template_dynamic(hbs, ctx, &Dynamic::from_map(map.clone()))?;
     d.try_cast::<Map>()
         .ok_or_else(|| crate::Error::Other("expected map after templating".into()))
@@ -131,10 +126,17 @@ fn template_assert(
     a: &VynilAssert,
 ) -> crate::Result<VynilAssert> {
     Ok(VynilAssert {
+        name: a.name.clone(),
+        description: a.description.clone(),
         selector: VynilAssertSelector {
             kind: a.selector.kind.as_ref().map(|s| hbs.render(s, ctx)).transpose()?,
             name: a.selector.name.as_ref().map(|s| hbs.render(s, ctx)).transpose()?,
-            namespace: a.selector.namespace.as_ref().map(|s| hbs.render(s, ctx)).transpose()?,
+            namespace: a
+                .selector
+                .namespace
+                .as_ref()
+                .map(|s| hbs.render(s, ctx))
+                .transpose()?,
         },
         matcher: a.matcher.clone(),
         value: template_json(hbs, ctx, a.value.clone())?,
@@ -198,6 +200,149 @@ fn collect_templated(
     Ok(())
 }
 
+// ── Assert helpers (private) ────────────────────────────────────────────────
+
+/// Checks whether `expected` is a subset of `actual`:
+/// every key/value in expected must exist and match in actual.
+/// Arrays are compared element-by-element (same length required).
+fn json_subset_match(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
+    match (expected, actual) {
+        (serde_json::Value::Object(exp), serde_json::Value::Object(act)) => exp
+            .iter()
+            .all(|(k, v)| act.get(k).map_or(false, |av| json_subset_match(v, av))),
+        (serde_json::Value::Array(exp), serde_json::Value::Array(act)) => {
+            exp.len() == act.len() && exp.iter().zip(act.iter()).all(|(e, a)| json_subset_match(e, a))
+        }
+        _ => expected == actual,
+    }
+}
+
+/// Returns true if a generated Dynamic object matches the selector criteria.
+fn matches_selector(d: &Dynamic, selector: &VynilAssertSelector) -> bool {
+    let map = match d.as_map_ref() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if let Some(kind) = &selector.kind {
+        let actual = map.get("kind").and_then(|v| v.clone().into_string().ok());
+        if actual.as_deref() != Some(kind) {
+            return false;
+        }
+    }
+    if selector.name.is_none() && selector.namespace.is_none() {
+        return true;
+    }
+    let meta_dyn = match map.get("metadata") {
+        Some(m) => m,
+        None => return false,
+    };
+    let meta = match meta_dyn.as_map_ref() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    if let Some(name) = &selector.name {
+        let actual = meta.get("name").and_then(|v| v.clone().into_string().ok());
+        if actual.as_deref() != Some(name) {
+            return false;
+        }
+    }
+    if let Some(ns) = &selector.namespace {
+        let actual = meta.get("namespace").and_then(|v| v.clone().into_string().ok());
+        if actual.as_deref() != Some(ns) {
+            return false;
+        }
+    }
+    true
+}
+
+impl VynilTest {
+    /// Runs all asserts against the generated objects and returns results.
+    pub fn run_asserts(&self, generated: &[Dynamic]) -> Vec<VynilAssertResult> {
+        let asserts = match &self.asserts {
+            Some(a) => a,
+            None => return vec![],
+        };
+        asserts
+            .iter()
+            .map(|a| {
+                let selected: Vec<&Dynamic> = generated
+                    .iter()
+                    .filter(|d| matches_selector(d, &a.selector))
+                    .collect();
+                let total = selected.len();
+                if total == 0 && !matches!(a.matcher, VynilAssertMatch::None | VynilAssertMatch::AtMost(_)) {
+                    return VynilAssertResult {
+                        name: a.name.clone(),
+                        description: a.description.clone(),
+                        passed: false,
+                        message: "no objects matched selector".into(),
+                    };
+                }
+                let matching = selected
+                    .iter()
+                    .filter(|d| {
+                        let json = yaml_value_to_serde_json(dynamic_to_value(Dynamic::clone(d)));
+                        json_subset_match(&a.value, &json)
+                    })
+                    .count();
+                let (passed, message) = match &a.matcher {
+                    VynilAssertMatch::All => {
+                        if matching == total {
+                            (true, format!("{matching}/{total} match"))
+                        } else {
+                            (false, format!("{matching}/{total} match, expected all"))
+                        }
+                    }
+                    VynilAssertMatch::Any => {
+                        if matching > 0 {
+                            (true, format!("{matching}/{total} match"))
+                        } else {
+                            (false, format!("0/{total} match, expected at least one"))
+                        }
+                    }
+                    VynilAssertMatch::Exact(n) => {
+                        let n = *n as usize;
+                        if matching == n {
+                            (true, format!("{matching}/{total} match"))
+                        } else {
+                            (false, format!("{matching}/{total} match, expected exactly {n}"))
+                        }
+                    }
+                    VynilAssertMatch::AtLeast(n) => {
+                        let n = *n as usize;
+                        if matching >= n {
+                            (true, format!("{matching}/{total} match"))
+                        } else {
+                            (false, format!("{matching}/{total} match, expected at least {n}"))
+                        }
+                    }
+                    VynilAssertMatch::AtMost(n) => {
+                        let n = *n as usize;
+                        if matching <= n {
+                            (true, format!("{matching}/{total} match"))
+                        } else {
+                            (false, format!("{matching}/{total} match, expected at most {n}"))
+                        }
+                    }
+                    VynilAssertMatch::None => {
+                        if matching == 0 {
+                            (true, format!("0/{total} match as expected"))
+                        } else {
+                            (false, format!("{matching}/{total} match, expected none"))
+                        }
+                    }
+                };
+                VynilAssertResult {
+                    name: a.name.clone(),
+                    description: a.description.clone(),
+                    passed,
+                    message,
+                }
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TestHandler {
     pub tests: BTreeMap<String, VynilTest>,
@@ -221,8 +366,9 @@ impl TestHandler {
                         .map_err(|e| crate::Error::YamlError(format!("{}: {e}", file)))?;
                     let name = test.metadata.name.clone();
                     if self.tests.contains_key(&name) {
-                        return Err(crate::Error::YamlError(
-                            format!("{file}: duplicate Test '{name}'")));
+                        return Err(crate::Error::YamlError(format!(
+                            "{file}: duplicate Test '{name}'"
+                        )));
                     }
                     self.tests.insert(name, test);
                 }
@@ -231,8 +377,9 @@ impl TestHandler {
                         .map_err(|e| crate::Error::YamlError(format!("{}: {e}", file)))?;
                     let name = ts.metadata.name.clone();
                     if self.test_sets.contains_key(&name) {
-                        return Err(crate::Error::YamlError(
-                            format!("{file}: duplicate TestSet '{name}'")));
+                        return Err(crate::Error::YamlError(format!(
+                            "{file}: duplicate TestSet '{name}'"
+                        )));
                     }
                     self.test_sets.insert(name, ts);
                 }
@@ -253,8 +400,9 @@ impl TestHandler {
                 .map_err(|e| crate::Error::YamlError(format!("{}: {e}", file)))?;
             let name = ts.metadata.name.clone();
             if self.test_sets.contains_key(&name) {
-                return Err(crate::Error::YamlError(
-                    format!("{file}: duplicate TestSet '{name}'")));
+                return Err(crate::Error::YamlError(format!(
+                    "{file}: duplicate TestSet '{name}'"
+                )));
             }
             self.test_sets.insert(name, ts);
         }
@@ -275,14 +423,11 @@ impl TestHandler {
 
     /// Returns a fully resolved VynilTest: handlebars templates in mocks and
     /// asserts are evaluated, and all referenced testSets are merged in.
-    pub fn get_templated_test(
-        &self,
-        name: &str,
-        package: &VynilPackageSource,
-    ) -> crate::Result<VynilTest> {
-        let test = self.tests.get(name).ok_or_else(|| {
-            crate::Error::Other(format!("Test '{name}' not found"))
-        })?;
+    pub fn get_templated_test(&self, name: &str, package: &VynilPackageSource) -> crate::Result<VynilTest> {
+        let test = self
+            .tests
+            .get(name)
+            .ok_or_else(|| crate::Error::Other(format!("Test '{name}' not found")))?;
 
         let mut hbs = HandleBars::new();
 
@@ -316,12 +461,10 @@ impl TestHandler {
         // Merge each referenced testSet
         if let Some(refs) = &test.testSets {
             for ts_ref in refs {
-                let ts = self.test_sets.get(&ts_ref.testSet).ok_or_else(|| {
-                    crate::Error::Other(format!(
-                        "TestSet '{}' not found",
-                        ts_ref.testSet
-                    ))
-                })?;
+                let ts = self
+                    .test_sets
+                    .get(&ts_ref.testSet)
+                    .ok_or_else(|| crate::Error::Other(format!("TestSet '{}' not found", ts_ref.testSet)))?;
                 let mut ctx = base_ctx.clone();
                 ctx.as_object_mut()
                     .unwrap()
@@ -349,8 +492,16 @@ impl TestHandler {
                 None
             } else {
                 Some(VynilTestSetMocks {
-                    kubernetes: if k8s_mocks.is_empty() { None } else { Some(k8s_mocks) },
-                    http: if http_mocks.is_empty() { None } else { Some(http_mocks) },
+                    kubernetes: if k8s_mocks.is_empty() {
+                        None
+                    } else {
+                        Some(k8s_mocks)
+                    },
+                    http: if http_mocks.is_empty() {
+                        None
+                    } else {
+                        Some(http_mocks)
+                    },
                 })
             },
             asserts: if asserts.is_empty() { None } else { Some(asserts) },
@@ -363,8 +514,10 @@ impl TestHandler {
             if let Some(refs) = &test.testSets {
                 for ts_ref in refs {
                     if !self.test_sets.contains_key(&ts_ref.testSet) {
-                        return Err(crate::Error::Other(
-                            format!("Test '{test_name}' references unknown TestSet '{}'", ts_ref.testSet)));
+                        return Err(crate::Error::Other(format!(
+                            "Test '{test_name}' references unknown TestSet '{}'",
+                            ts_ref.testSet
+                        )));
                     }
                 }
             }
@@ -394,10 +547,14 @@ impl TestHandler {
             for doc in docs {
                 let (api_version, kind) = match &doc.0 {
                     Value::Mapping(m) => {
-                        let av = m.get(&Value::String("apiVersion".into()))
-                            .and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None });
-                        let k = m.get(&Value::String("kind".into()))
-                            .and_then(|v| match v { Value::String(s) => Some(s.clone()), _ => None });
+                        let av = m.get(&Value::String("apiVersion".into())).and_then(|v| match v {
+                            Value::String(s) => Some(s.clone()),
+                            _ => None,
+                        });
+                        let k = m.get(&Value::String("kind".into())).and_then(|v| match v {
+                            Value::String(s) => Some(s.clone()),
+                            _ => None,
+                        });
                         (av, k)
                     }
                     _ => continue,

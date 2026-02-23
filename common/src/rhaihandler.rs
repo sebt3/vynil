@@ -1,24 +1,26 @@
 use crate::{
     Error::{self, *},
-    Result, RhaiRes, semverhandler::semver_rhai_register,
+    Result, RhaiRes,
     chronohandler::chrono_rhai_register,
     context,
-    httpmock::{HttpMockItem, httpmock_rhai_register},
-    k8smock::k8smock_rhai_register,
     /*ed25519handler::Ed25519,*/
     handlebarshandler::handlebars_rhai_register,
     hasheshandlers::hashes_rhai_register,
     httphandler::http_rhai_register,
+    httpmock::{HttpMockItem, httpmock_rhai_register},
     instanceservice::service_rhai_register,
     instancesystem::system_rhai_register,
     instancetenant::tenant_rhai_register,
     jukebox::jukebox_rhai_register,
     k8sgeneric::k8sgeneric_rhai_register,
+    k8smock::k8smock_rhai_register,
     k8sraw::k8sraw_rhai_register,
     k8sworkload::k8sworkload_rhai_register,
     ocihandler::oci_rhai_register,
     passwordhandler::password_rhai_register,
-    rhai_err, shellhandler::shell_rhai_register,
+    rhai_err,
+    semverhandler::semver_rhai_register,
+    shellhandler::shell_rhai_register,
     vynilpackage::package_rhai_register,
     yamlhandler::yaml_rhai_register,
 };
@@ -133,7 +135,6 @@ fn common_rhai_register(engine: &mut Engine) {
                 .unwrap_or_default()
                 .into()
         });
-
 }
 
 #[derive(Debug)]
@@ -168,6 +169,7 @@ impl Script {
         script.add_common();
         script
     }
+
     pub fn new(resolver_path: Vec<String>) -> Script {
         let mut script = Self::new_core(resolver_path);
         http_rhai_register(&mut script.engine);
@@ -180,12 +182,19 @@ impl Script {
         k8sworkload_rhai_register(&mut script.engine);
         script
     }
-    pub fn new_mock(resolver_path: Vec<String>, http_mocks: Vec<HttpMockItem>, k8s_mocks: Vec<Dynamic>) -> Script {
+
+    pub fn new_mock(
+        resolver_path: Vec<String>,
+        http_mocks: Vec<HttpMockItem>,
+        k8s_mocks: Vec<Dynamic>,
+        created_objects: std::sync::Arc<std::sync::Mutex<Vec<Dynamic>>>,
+    ) -> Script {
         let mut script = Self::new_core(resolver_path);
         httpmock_rhai_register(&mut script.engine, http_mocks);
-        k8smock_rhai_register(&mut script.engine, k8s_mocks);
+        k8smock_rhai_register(&mut script.engine, k8s_mocks, created_objects);
         script
     }
+
     pub fn add_common(&mut self) {
         self.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
         self.add_code(
@@ -412,9 +421,7 @@ mod tests {
     #[test]
     fn test_yaml_decode_nested_access() {
         let mut s = make_script();
-        let result = s
-            .eval(r#"yaml_decode("a:\n  b: nested")["a"]["b"]"#)
-            .unwrap();
+        let result = s.eval(r#"yaml_decode("a:\n  b: nested")["a"]["b"]"#).unwrap();
         assert_eq!(result.to_string(), "nested");
     }
 
@@ -430,9 +437,7 @@ mod tests {
     #[test]
     fn test_yaml_encode_produces_yaml() {
         let mut s = make_script();
-        let result = s
-            .eval(r#"yaml_encode(#{"key": "value"})"#)
-            .unwrap();
+        let result = s.eval(r#"yaml_encode(#{"key": "value"})"#).unwrap();
         let yaml_str = result.to_string();
         assert!(yaml_str.contains("key:"));
         assert!(yaml_str.contains("value"));
@@ -442,12 +447,16 @@ mod tests {
     fn test_yaml_encode_decode_roundtrip() {
         // Encode a map, decode it back, access a key
         let mut s = make_script();
-        let result = s.eval(r#"
+        let result = s
+            .eval(
+                r#"
             let m = #{"name": "test", "count": 3};
             let encoded = yaml_encode(m);
             let decoded = yaml_decode(encoded);
             decoded["name"]
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
         assert_eq!(result.to_string(), "test");
     }
 
@@ -456,9 +465,7 @@ mod tests {
     #[test]
     fn test_yaml_decode_multi_single_document() {
         let mut s = make_script();
-        let result = s
-            .eval(r#"yaml_decode_multi("key: val\n").len()"#)
-            .unwrap();
+        let result = s.eval(r#"yaml_decode_multi("key: val\n").len()"#).unwrap();
         assert_eq!(result.cast::<i64>(), 1);
     }
 
@@ -474,10 +481,14 @@ mod tests {
     #[test]
     fn test_yaml_decode_multi_document_values() {
         let mut s = make_script();
-        let result = s.eval(r#"
+        let result = s
+            .eval(
+                r#"
             let docs = yaml_decode_multi("key: first\n---\nkey: second\n");
             docs[1]["key"]
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
         assert_eq!(result.to_string(), "second");
     }
 
@@ -494,11 +505,15 @@ mod tests {
     #[test]
     fn test_json_encode_decode_roundtrip() {
         let mut s = make_script();
-        let result = s.eval(r#"
+        let result = s
+            .eval(
+                r#"
             let encoded = json_encode(#{"a": "hello", "b": 42});
             let decoded = json_decode(encoded);
             decoded["a"]
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
         assert_eq!(result.to_string(), "hello");
     }
 
@@ -513,10 +528,14 @@ mod tests {
     #[test]
     fn test_base64_encode_decode_roundtrip() {
         let mut s = make_script();
-        let result = s.eval(r#"
+        let result = s
+            .eval(
+                r#"
             let encoded = base64_encode("hello world");
             base64_decode(encoded)
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
         assert_eq!(result.to_string(), "hello world");
     }
 
@@ -532,9 +551,7 @@ mod tests {
     #[test]
     fn test_semver_parse_and_to_string() {
         let mut s = make_script();
-        let result = s
-            .eval(r#"to_string(semver_from("1.2.3"))"#)
-            .unwrap();
+        let result = s.eval(r#"to_string(semver_from("1.2.3"))"#).unwrap();
         assert_eq!(result.to_string(), "1.2.3");
     }
 
@@ -564,11 +581,15 @@ mod tests {
     #[test]
     fn test_semver_inc_minor() {
         let mut s = make_script();
-        let result = s.eval(r#"
+        let result = s
+            .eval(
+                r#"
             let v = semver_from("1.2.3");
             inc_minor(v);
             to_string(v)
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
         assert_eq!(result.to_string(), "1.3.0");
     }
 
@@ -612,13 +633,18 @@ mod tests {
 
         // Clés dans l'ordre z → a → m (intentionnellement non-alphabétique)
         let original = "z: first\na: second\nm: third\n";
-        s.ctx.set_or_push("input_yaml", Dynamic::from(original.to_string()));
+        s.ctx
+            .set_or_push("input_yaml", Dynamic::from(original.to_string()));
 
-        let result = s.eval(r#"
+        let result = s
+            .eval(
+                r#"
             let doc = yaml_decode(input_yaml);
             doc["a"] = "MODIFIED";
             yaml_encode(doc)
-        "#).unwrap();
+        "#,
+            )
+            .unwrap();
 
         let encoded = result.to_string();
 
@@ -627,13 +653,16 @@ mod tests {
         let enc_lines: Vec<&str> = encoded.lines().filter(|l| !l.is_empty()).collect();
 
         assert_eq!(
-            orig_lines.len(), enc_lines.len(),
+            orig_lines.len(),
+            enc_lines.len(),
             "Le nombre de lignes a changé — des clés ont été perdues ou ajoutées.\n\
              Original:\n{}\nRésultat:\n{}",
-            original, encoded
+            original,
+            encoded
         );
 
-        let changed: Vec<usize> = orig_lines.iter()
+        let changed: Vec<usize> = orig_lines
+            .iter()
             .zip(enc_lines.iter())
             .enumerate()
             .filter(|(_, (a, b))| a != b)
@@ -641,11 +670,14 @@ mod tests {
             .collect();
 
         assert_eq!(
-            changed.len(), 1,
+            changed.len(),
+            1,
             "Attendu exactement 1 ligne modifiée (la clé 'a'), mais {} lignes diffèrent.\n\
              Cela indique que l'ordre des clés n'a PAS été préservé (bug serde_yaml/BTreeMap).\n\
              Original:\n{}\nRésultat:\n{}",
-            changed.len(), original, encoded
+            changed.len(),
+            original,
+            encoded
         );
 
         assert!(

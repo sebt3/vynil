@@ -1,10 +1,10 @@
 use crate::{Error, Result, RhaiRes, rhai_err};
-use rhai::{ImmutableString, Engine};
 use argon2::{
     Argon2,
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
 use bcrypt::{DEFAULT_COST, hash};
+use rhai::{Engine, ImmutableString};
 
 #[derive(Clone, Debug)]
 pub struct Argon {

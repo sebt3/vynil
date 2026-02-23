@@ -1,6 +1,6 @@
 use crate::{Error, Result, RhaiRes, rhai_err};
-use semver::{Prerelease, Version};
 use rhai::Engine;
+use semver::{Prerelease, Version};
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Semver {

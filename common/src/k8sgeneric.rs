@@ -14,7 +14,7 @@ use kube::{
     discovery::{ApiCapabilities, ApiResource, Discovery, Scope},
     runtime::wait::{Condition, await_condition, conditions},
 };
-use rhai::{Dynamic, serde::to_dynamic, Engine};
+use rhai::{Dynamic, Engine, serde::to_dynamic};
 use serde_json::json;
 
 lazy_static::lazy_static! {

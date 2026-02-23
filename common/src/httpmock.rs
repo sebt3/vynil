@@ -1,6 +1,6 @@
-use rhai::{Engine, Map, Dynamic};
-use serde::{Deserialize, Serialize};
 use crate::RhaiRes;
+use rhai::{Dynamic, Engine, Map};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub enum HttpMethod {
@@ -35,18 +35,30 @@ impl RestClientMock {
     }
 
     pub fn set_server_ca(&mut self, _ca: &str) {}
+
     pub fn set_mtls(&mut self, _cert: &str, _key: &str) {}
+
     pub fn headers_reset(&mut self) {}
+
     pub fn add_header(&mut self, _key: String, _value: String) {}
+
     pub fn add_header_json(&mut self) {}
+
     pub fn add_header_bearer(&mut self, _token: &str) {}
+
     pub fn add_header_basic(&mut self, _username: &str, _password: &str) {}
+
     pub fn baseurl(&mut self, base: String) {
         self.baseurl = base.to_string();
     }
 
     pub fn get(&mut self, path: String) -> RhaiRes<Map> {
-        let found: Vec<HttpMockItem> = self.mocks.clone().into_iter().filter(|m| m.method==HttpMethod::Get && m.path==path).collect();
+        let found: Vec<HttpMockItem> = self
+            .mocks
+            .clone()
+            .into_iter()
+            .filter(|m| m.method == HttpMethod::Get && m.path == path)
+            .collect();
         if found.len() > 0 {
             Ok(found[0].clone().return_obj)
         } else {
@@ -55,7 +67,12 @@ impl RestClientMock {
     }
 
     pub fn head(&mut self, path: String) -> RhaiRes<Map> {
-        let found: Vec<HttpMockItem> = self.mocks.clone().into_iter().filter(|m| m.method==HttpMethod::Head && m.path==path).collect();
+        let found: Vec<HttpMockItem> = self
+            .mocks
+            .clone()
+            .into_iter()
+            .filter(|m| m.method == HttpMethod::Head && m.path == path)
+            .collect();
         if found.len() > 0 {
             Ok(found[0].clone().return_obj)
         } else {
@@ -64,7 +81,12 @@ impl RestClientMock {
     }
 
     pub fn patch(&mut self, path: String, _val: Dynamic) -> RhaiRes<Map> {
-        let found: Vec<HttpMockItem> = self.mocks.clone().into_iter().filter(|m| m.method==HttpMethod::Patch && m.path==path).collect();
+        let found: Vec<HttpMockItem> = self
+            .mocks
+            .clone()
+            .into_iter()
+            .filter(|m| m.method == HttpMethod::Patch && m.path == path)
+            .collect();
         if found.len() > 0 {
             Ok(found[0].clone().return_obj)
         } else {
@@ -73,7 +95,12 @@ impl RestClientMock {
     }
 
     pub fn put(&mut self, path: String, _val: Dynamic) -> RhaiRes<Map> {
-        let found: Vec<HttpMockItem> = self.mocks.clone().into_iter().filter(|m| m.method==HttpMethod::Put && m.path==path).collect();
+        let found: Vec<HttpMockItem> = self
+            .mocks
+            .clone()
+            .into_iter()
+            .filter(|m| m.method == HttpMethod::Put && m.path == path)
+            .collect();
         if found.len() > 0 {
             Ok(found[0].clone().return_obj)
         } else {
@@ -82,7 +109,12 @@ impl RestClientMock {
     }
 
     pub fn post(&mut self, path: String, _val: Dynamic) -> RhaiRes<Map> {
-        let found: Vec<HttpMockItem> = self.mocks.clone().into_iter().filter(|m| m.method==HttpMethod::Post && m.path==path).collect();
+        let found: Vec<HttpMockItem> = self
+            .mocks
+            .clone()
+            .into_iter()
+            .filter(|m| m.method == HttpMethod::Post && m.path == path)
+            .collect();
         if found.len() > 0 {
             Ok(found[0].clone().return_obj)
         } else {
@@ -91,7 +123,12 @@ impl RestClientMock {
     }
 
     pub fn delete(&mut self, path: String) -> RhaiRes<Map> {
-                let found: Vec<HttpMockItem> = self.mocks.clone().into_iter().filter(|m| m.method==HttpMethod::Delete && m.path==path).collect();
+        let found: Vec<HttpMockItem> = self
+            .mocks
+            .clone()
+            .into_iter()
+            .filter(|m| m.method == HttpMethod::Delete && m.path == path)
+            .collect();
         if found.len() > 0 {
             Ok(found[0].clone().return_obj)
         } else {
@@ -102,9 +139,7 @@ impl RestClientMock {
 
 pub fn httpmock_rhai_register(engine: &mut Engine, mocks: Vec<HttpMockItem>) {
     let mocks = mocks.clone();
-    let new = move |base: &str| -> RestClientMock {
-        RestClientMock::new(base, mocks.clone())
-    };
+    let new = move |base: &str| -> RestClientMock { RestClientMock::new(base, mocks.clone()) };
     engine
         .register_type_with_name::<RestClientMock>("RestClient")
         .register_fn("new_http_client", new)

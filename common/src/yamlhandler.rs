@@ -1,6 +1,6 @@
 use crate::{Error, RhaiRes, rhai_err};
 use indexmap::IndexMap;
-use rhai::{Dynamic, ImmutableString, Engine, Map};
+use rhai::{Dynamic, Engine, ImmutableString, Map};
 use rust_yaml::{Value, Yaml, YamlConfig, yaml::IndentConfig};
 
 fn new_yaml() -> Yaml {
@@ -27,10 +27,7 @@ pub struct YamlDoc(pub Value);
 
 impl YamlDoc {
     pub fn from_str(s: &str) -> Result<Self, String> {
-        new_yaml()
-            .load_str(s)
-            .map(YamlDoc)
-            .map_err(|e| e.to_string())
+        new_yaml().load_str(s).map(YamlDoc).map_err(|e| e.to_string())
     }
 
     pub fn from_str_multi(s: &str) -> Result<Vec<Self>, String> {
@@ -57,7 +54,9 @@ impl YamlDoc {
         match &self.0 {
             Value::Mapping(m) => {
                 let k = Value::String(key.to_string());
-                m.get(&k).map(|v| value_to_dynamic(v.clone())).unwrap_or(Dynamic::UNIT)
+                m.get(&k)
+                    .map(|v| value_to_dynamic(v.clone()))
+                    .unwrap_or(Dynamic::UNIT)
             }
             Value::Sequence(s) => key
                 .parse::<usize>()
@@ -141,9 +140,7 @@ pub fn value_to_dynamic(v: Value) -> Dynamic {
         Value::Int(i) => Dynamic::from(i),
         Value::Float(f) => Dynamic::from(f),
         Value::String(s) => Dynamic::from(ImmutableString::from(s.as_str())),
-        Value::Sequence(a) => {
-            Dynamic::from_array(a.into_iter().map(value_to_dynamic).collect())
-        }
+        Value::Sequence(a) => Dynamic::from_array(a.into_iter().map(value_to_dynamic).collect()),
         Value::Mapping(_) => Dynamic::from(YamlDoc(v)),
     }
 }
@@ -159,9 +156,7 @@ pub fn value_to_rhai_dynamic(v: Value) -> Dynamic {
         Value::Int(i) => Dynamic::from(i),
         Value::Float(f) => Dynamic::from(f),
         Value::String(s) => Dynamic::from(ImmutableString::from(s.as_str())),
-        Value::Sequence(a) => {
-            Dynamic::from_array(a.into_iter().map(value_to_rhai_dynamic).collect())
-        }
+        Value::Sequence(a) => Dynamic::from_array(a.into_iter().map(value_to_rhai_dynamic).collect()),
         Value::Mapping(m) => {
             let rhai_map: rhai::Map = m
                 .into_iter()
@@ -228,9 +223,7 @@ pub fn yaml_value_to_serde_json(v: Value) -> serde_json::Value {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Value::String(s) => serde_json::Value::String(s),
-        Value::Sequence(a) => {
-            serde_json::Value::Array(a.into_iter().map(yaml_value_to_serde_json).collect())
-        }
+        Value::Sequence(a) => serde_json::Value::Array(a.into_iter().map(yaml_value_to_serde_json).collect()),
         Value::Mapping(m) => {
             let map: serde_json::Map<String, serde_json::Value> = m
                 .into_iter()
@@ -263,9 +256,7 @@ pub fn serde_json_to_yaml_value(v: serde_json::Value) -> Value {
             }
         }
         serde_json::Value::String(s) => Value::String(s),
-        serde_json::Value::Array(a) => {
-            Value::Sequence(a.into_iter().map(serde_json_to_yaml_value).collect())
-        }
+        serde_json::Value::Array(a) => Value::Sequence(a.into_iter().map(serde_json_to_yaml_value).collect()),
         serde_json::Value::Object(m) => {
             let indexmap: IndexMap<Value, Value> = m
                 .into_iter()
