@@ -1,0 +1,41 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: TestSet
+metadata:
+  name: "core"
+  description: "Core vynil tests"
+variables:
+  name:
+    type: string
+    default: vynil-agent
+asserts:
+- name: vynil-agent ServiceAccount
+  description: "The agent need its ServiceAccount"
+  selector:
+    kind: ServiceAccount
+    name: "{{var.name}}"
+    namespace: "{{instance.namespace}}"
+  matcher:
+    exact: 1
+- name: controller ServiceAccount
+  description: "The controller need its ServiceAccount too"
+  selector:
+    kind: ServiceAccount
+    name: "{{instance.appslug}}-controller"
+    namespace: "{{instance.namespace}}"
+  matcher:
+    exact: 1
+- name: PriorityClass
+  description: "Vynill define 2 PriorityClass"
+  selector:
+    kind: PriorityClass
+  matcher:
+    exact: 2
+- name: SingleReplicas
+  description: "All deployment should have a replicas=1"
+  selector:
+    kind: Deployment
+  matcher: all
+  value:
+    spec:
+      replicas: 1

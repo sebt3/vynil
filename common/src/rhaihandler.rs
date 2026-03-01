@@ -621,12 +621,9 @@ mod tests {
 
     // ── Régression : préservation de l'ordre des clés YAML ───────────────────
     //
-    // Ce test est INTENTIONNELLEMENT PRÉVU POUR ÉCHOUER avec le code actuel
-    // (serde_yaml, qui utilise BTreeMap → trie alphabétiquement).
-    // Il devra passer après le remplacement par rust-yaml (YamlDoc, IndexMap).
-    //
-    // Scénario : lire un YAML avec des clés dans un ordre non-alphabétique,
-    // modifier une seule valeur, re-sérialiser → une seule ligne doit changer.
+    // Scénario : lire un YAML avec des clés dans un ordre non-alphabétique via
+    // yaml_decode_ordered, modifier une seule valeur, re-sérialiser via
+    // yaml_encode_ordered → une seule ligne doit changer.
     #[test]
     fn test_yaml_decode_modify_single_key_preserves_order() {
         let mut s = make_script();
@@ -639,9 +636,9 @@ mod tests {
         let result = s
             .eval(
                 r#"
-            let doc = yaml_decode(input_yaml);
+            let doc = yaml_decode_ordered(input_yaml);
             doc["a"] = "MODIFIED";
-            yaml_encode(doc)
+            yaml_encode_ordered(doc)
         "#,
             )
             .unwrap();

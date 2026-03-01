@@ -1,6 +1,7 @@
 use clap::Args;
 use common::{Result, context::set_tenant, instancetenant::TenantInstance, rhaihandler::Script};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Args, Debug, Serialize, Deserialize)]
 pub struct Parameters {
@@ -26,7 +27,7 @@ pub struct Parameters {
         value_name = "PACKAGE_DIRECTORY",
         default_value = "/tmp/package"
     )]
-    package_dir: String,
+    package_dir: PathBuf,
     /// Agent script directory
     #[arg(
         short = 's',
@@ -35,7 +36,7 @@ pub struct Parameters {
         value_name = "SCRIPT_DIRECTORY",
         default_value = "./agent/scripts"
     )]
-    script_dir: String,
+    script_dir: PathBuf,
     /// Agent template directory
     #[arg(
         short = 't',
@@ -44,13 +45,13 @@ pub struct Parameters {
         value_name = "TEMPLATE_DIRECTORY",
         default_value = "./agent/templates"
     )]
-    template_dir: String,
+    template_dir: PathBuf,
     /// Agent image
     #[arg(
         long = "agent-image",
         env = "AGENT_IMAGE",
         value_name = "AGENT_IMAGE",
-        default_value = "docker.io/sebt3/vynil-agent:0.5.8"
+        default_value = common::DEFAULT_AGENT_IMAGE
     )]
     agent_image: String,
     /// Configuration directory
@@ -61,7 +62,7 @@ pub struct Parameters {
         value_name = "CONFIG_DIR",
         default_value = "."
     )]
-    config_dir: String,
+    config_dir: PathBuf,
     /// Controller computed values
     #[arg(
         long = "controller-values",
@@ -74,10 +75,10 @@ pub struct Parameters {
 
 pub async fn run(args: &Parameters) -> Result<()> {
     let mut rhai = Script::new(vec![
-        format!("{}/scripts", args.package_dir),
-        format!("{}", args.config_dir),
-        format!("{}/tenant", args.script_dir),
-        format!("{}/lib", args.script_dir),
+        format!("{}/scripts", args.package_dir.display()),
+        format!("{}", args.config_dir.display()),
+        format!("{}/tenant", args.script_dir.display()),
+        format!("{}/lib", args.script_dir.display()),
     ]);
     let context = TenantInstance::get(args.namespace.clone(), args.instance.clone()).await?;
     set_tenant(context.clone());

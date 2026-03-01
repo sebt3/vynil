@@ -42,6 +42,7 @@ fn get_json_type(val) {
 }
 fn properties_improve(values) {
     let valid_type = ["string", "object", "array", "boolean", "integer", "number"];
+    // TODO: Faire en sorte que les valeurs par défault déscendent des feuilles en plus de remonter du tron.
     // TODO: Support options auto_improvements
     if type_of(values) == "map" {
         for prop in values.keys() {

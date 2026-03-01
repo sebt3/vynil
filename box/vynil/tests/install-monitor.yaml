@@ -1,0 +1,12 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Test
+metadata:
+  name: "Monitored install"
+  description: "Verify that ServiceMonitor is installed if the CRD is present"
+instance:
+  name: toto
+  namespace: vynil-test
+testSets:
+- testSet: core
+- testSet: monitoring

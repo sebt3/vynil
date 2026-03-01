@@ -1,6 +1,7 @@
 use clap::Args;
 use common::{Result, context::set_system, instancesystem::SystemInstance, rhaihandler::Script};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Args, Debug, Serialize, Deserialize)]
 pub struct Parameters {
@@ -26,7 +27,7 @@ pub struct Parameters {
         value_name = "PACKAGE_DIRECTORY",
         default_value = "/tmp/package"
     )]
-    package_dir: String,
+    package_dir: PathBuf,
     /// Agent script directory
     #[arg(
         short = 's',
@@ -35,7 +36,7 @@ pub struct Parameters {
         value_name = "SCRIPT_DIRECTORY",
         default_value = "./agent/scripts"
     )]
-    script_dir: String,
+    script_dir: PathBuf,
     /// Configuration directory
     #[arg(
         short = 'c',
@@ -44,7 +45,7 @@ pub struct Parameters {
         value_name = "CONFIG_DIR",
         default_value = "."
     )]
-    config_dir: String,
+    config_dir: PathBuf,
     /// Controller computed values
     #[arg(
         long = "controller-values",
@@ -57,10 +58,10 @@ pub struct Parameters {
 
 pub async fn run(args: &Parameters) -> Result<()> {
     let mut rhai = Script::new(vec![
-        format!("{}/scripts", args.package_dir),
-        format!("{}", args.config_dir),
-        format!("{}/system", args.script_dir),
-        format!("{}/lib", args.script_dir),
+        format!("{}/scripts", args.package_dir.display()),
+        format!("{}", args.config_dir.display()),
+        format!("{}/system", args.script_dir.display()),
+        format!("{}/lib", args.script_dir.display()),
     ]);
     let context = SystemInstance::get(args.namespace.clone(), args.instance.clone()).await?;
     set_system(context.clone());

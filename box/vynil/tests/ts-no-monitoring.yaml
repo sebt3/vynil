@@ -1,0 +1,12 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: TestSet
+metadata:
+  name: "no-monitoring"
+  description: "Disable monitoring"
+asserts:
+- name: No ServiceMonitor
+  description: "There should be no ServiceMonitor"
+  selector:
+    kind: ServiceMonitor
+  matcher: none

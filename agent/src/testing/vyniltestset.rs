@@ -1,4 +1,4 @@
-use crate::httpmock::HttpMockItem;
+use common::httpmock::HttpMockItem;
 use rhai::Dynamic;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -35,19 +35,20 @@ pub struct VynilTestSetVariable {
     pub default: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum VynilAssertMatch {
-    /// All selected objects should match the value
-    #[default]
-    All,
-    /// One of the selected objects should match the value
-    Any,
     /// Exactly <count> of the selected objects should match the value
     Exact(u64),
     /// At least <count> of the selected objects should match the value
     AtLeast(u64),
     /// At most <count> of the selected objects match the value
     AtMost(u64),
+    /// All selected objects should match the value
+    #[default]
+    All,
+    /// One of the selected objects should match the value
+    Any,
     /// None of the selected objects should match the value
     None,
 }
@@ -73,7 +74,7 @@ pub struct VynilAssert {
     /// Match definition
     pub matcher: VynilAssertMatch,
     /// The expected kubernetes object values to validate
-    pub value: serde_json::Value,
+    pub value: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug)]

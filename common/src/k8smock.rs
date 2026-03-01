@@ -1,6 +1,7 @@
 use crate::RhaiRes;
 use kube::{api::DynamicObject, runtime::wait::Condition};
 use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
+use serde::{Serialize,Deserialize};
 use std::sync::{Arc, Mutex};
 
 pub fn update_cache() {}
@@ -144,8 +145,13 @@ impl K8sWorkloadMock {
     }
 }
 
-fn find_workload_mock(mocks: &[Dynamic], kind: &str, namespace: &str, name: &str) -> RhaiRes<K8sWorkloadMock> {
-    for m in mocks {
+fn find_workload_mock(
+    mocks: Arc<Mutex<Vec<Dynamic>>>,
+    kind: &str,
+    namespace: &str,
+    name: &str,
+) -> RhaiRes<K8sWorkloadMock> {
+    for m in mocks.lock().unwrap().clone() {
         if !m.is_map() {
             continue;
         }
@@ -181,19 +187,20 @@ fn find_workload_mock(mocks: &[Dynamic], kind: &str, namespace: &str, name: &str
 pub struct K8sGenericMock {
     pub kind: String,
     pub ns: Option<String>,
-    pub mocks: Vec<Dynamic>,
+    pub my_mocks: Vec<Dynamic>,
+    pub mocks: Arc<Mutex<Vec<Dynamic>>>,
     pub created: Arc<Mutex<Vec<Dynamic>>>,
 }
 
 impl K8sGenericMock {
     #[must_use]
     pub fn new(
-        mocks: Vec<Dynamic>,
+        mocks: Arc<Mutex<Vec<Dynamic>>>,
         name: &str,
         ns: Option<String>,
         created: Arc<Mutex<Vec<Dynamic>>>,
     ) -> Self {
-        let mocks: Vec<Dynamic> = mocks
+        let my_mocks: Vec<Dynamic> = mocks.lock().unwrap().clone()
             .into_iter()
             .filter(|m| {
                 m.is_map()
@@ -206,7 +213,8 @@ impl K8sGenericMock {
             Self {
                 kind: name.into(),
                 ns: ns.clone(),
-                mocks: mocks
+                mocks: mocks.clone(),
+                my_mocks: my_mocks
                     .into_iter()
                     .filter(|m| {
                         m.is_map()
@@ -232,6 +240,7 @@ impl K8sGenericMock {
                 kind: name.into(),
                 ns,
                 mocks,
+                my_mocks,
                 created,
             }
         }
@@ -239,7 +248,7 @@ impl K8sGenericMock {
 
     #[must_use]
     pub fn new_api_version(
-        mocks: Vec<Dynamic>,
+        mocks: Arc<Mutex<Vec<Dynamic>>>,
         _api_group: &str,
         _version: &str,
         name: &str,
@@ -249,16 +258,16 @@ impl K8sGenericMock {
         Self::new(mocks, name, ns, created)
     }
 
-    pub fn new_ns(mocks: Vec<Dynamic>, name: String, ns: String, created: Arc<Mutex<Vec<Dynamic>>>) -> Self {
+    pub fn new_ns(mocks: Arc<Mutex<Vec<Dynamic>>>, name: String, ns: String, created: Arc<Mutex<Vec<Dynamic>>>) -> Self {
         Self::new(mocks, name.as_str(), Some(ns), created)
     }
 
-    pub fn new_global(mocks: Vec<Dynamic>, name: String, created: Arc<Mutex<Vec<Dynamic>>>) -> Self {
+    pub fn new_global(mocks: Arc<Mutex<Vec<Dynamic>>>, name: String, created: Arc<Mutex<Vec<Dynamic>>>) -> Self {
         Self::new(mocks, name.as_str(), None, created)
     }
 
     pub fn new_group_ns(
-        mocks: Vec<Dynamic>,
+        mocks: Arc<Mutex<Vec<Dynamic>>>,
         api_version: String,
         name: String,
         ns: String,
@@ -281,12 +290,12 @@ impl K8sGenericMock {
     }
 
     pub fn rhai_list(&mut self) -> RhaiRes<Dynamic> {
-        to_dynamic(self.mocks.clone())
+        to_dynamic(serde_json::json!({"items": self.my_mocks.clone()}))
     }
 
     pub fn rhai_list_labels(&mut self, _labels: String) -> RhaiRes<Dynamic> {
         //TODO : to the label filtering
-        to_dynamic(self.mocks.clone())
+        to_dynamic(serde_json::json!({"items": self.my_mocks.clone()}))
     }
 
     pub fn rhai_list_meta(&mut self) -> RhaiRes<Dynamic> {
@@ -295,7 +304,7 @@ impl K8sGenericMock {
 
     pub fn rhai_get(&mut self, name: String) -> RhaiRes<Dynamic> {
         let found: Vec<Dynamic> = self
-            .mocks
+            .my_mocks
             .clone()
             .into_iter()
             .filter(|m| {
@@ -327,7 +336,7 @@ impl K8sGenericMock {
 
     pub fn rhai_get_obj(&mut self, name: String) -> RhaiRes<K8sObjectMock> {
         let found: Vec<Dynamic> = self
-            .mocks
+            .my_mocks
             .clone()
             .into_iter()
             .filter(|m| {
@@ -360,29 +369,46 @@ impl K8sGenericMock {
         Ok(())
     }
 
+    pub fn rhai_apply(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
+        //TODO : Look if the object exist already. Merge if so
+        let mut obj = data;
+        if let Some(ns) = self.ns.clone() &&
+            obj.is_map() &&
+            obj.as_map_ref().unwrap().contains_key("metadata") &&
+            obj.as_map_ref().unwrap()["metadata"].is_map() &&
+            ! obj.as_map_ref().unwrap()["metadata"].as_map_ref().unwrap().contains_key("namespace") {
+            obj.as_map_mut().unwrap().entry("metadata".into()).and_modify(|meta| {
+                meta.as_map_mut().unwrap().insert("namespace".into(), ns.into());
+            });
+        }
+        self.created.lock().unwrap().push(obj.clone());
+        self.mocks.lock().unwrap().push(obj.clone());
+        Ok(obj)
+    }
+
     pub fn rhai_replace(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
+        self.created.lock().unwrap().push(data.clone());
+        //TODO : replace the objet in the mocks DB for real
         Ok(data)
     }
 
     pub fn rhai_patch(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
+        //TODO : update the objet in the mocks DB for real
         Ok(data)
     }
 
     // Collected for asserts
     pub fn rhai_create(&mut self, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
         self.created.lock().unwrap().push(data.clone());
+        self.mocks.lock().unwrap().push(data.clone());
         Ok(data)
     }
 
-    pub fn rhai_apply(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
-        self.created.lock().unwrap().push(data.clone());
-        Ok(data)
-    }
 }
 
 // ── K8sInstance mock (ServiceInstance, SystemInstance, TenantInstance) ────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct K8sInstanceMock {
     pub obj: Dynamic,
 }
@@ -625,12 +651,12 @@ impl K8sInstanceMock {
 }
 
 fn find_instance_mock(
-    mocks: &[Dynamic],
+    mocks: Arc<Mutex<Vec<Dynamic>>>,
     kind: &str,
     namespace: &str,
     name: &str,
 ) -> RhaiRes<K8sInstanceMock> {
-    for m in mocks {
+    for m in mocks.lock().unwrap().clone() {
         if !m.is_map() {
             continue;
         }
@@ -658,12 +684,8 @@ fn find_instance_mock(
     Err(format!("Failed to find {kind} {name} in namespace {namespace} in the Mock database").into())
 }
 
-fn list_instance_mocks(
-    mocks: &[Dynamic],
-    kind: &str,
-    namespace: &str,
-) -> RhaiRes<Vec<K8sInstanceMock>> {
-    Ok(mocks
+fn list_instance_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>, kind: &str, namespace: &str) -> RhaiRes<Dynamic> {
+    let items: Vec<K8sInstanceMock> = mocks.lock().unwrap().clone()
         .iter()
         .filter(|m| {
             if !m.is_map() {
@@ -685,12 +707,13 @@ fn list_instance_mocks(
                 && meta["namespace"].clone().into_string().unwrap() == namespace
         })
         .map(|m| K8sInstanceMock { obj: m.clone() })
-        .collect())
+        .collect();
+    to_dynamic(serde_json::json!({"items": items}))
 }
 
 // ── JukeBox mock ────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct K8sJukeBoxMock {
     pub obj: Dynamic,
 }
@@ -744,8 +767,8 @@ impl K8sJukeBoxMock {
     }
 }
 
-fn find_jukebox_mock(mocks: &[Dynamic], name: &str) -> RhaiRes<K8sJukeBoxMock> {
-    for m in mocks {
+fn find_jukebox_mock(mocks: Arc<Mutex<Vec<Dynamic>>>, name: &str) -> RhaiRes<K8sJukeBoxMock> {
+    for m in mocks.lock().unwrap().clone() {
         if !m.is_map() {
             continue;
         }
@@ -770,8 +793,8 @@ fn find_jukebox_mock(mocks: &[Dynamic], name: &str) -> RhaiRes<K8sJukeBoxMock> {
     Err(format!("Failed to find JukeBox {name} in the Mock database").into())
 }
 
-fn list_jukebox_mocks(mocks: &[Dynamic]) -> RhaiRes<Vec<K8sJukeBoxMock>> {
-    Ok(mocks
+fn list_jukebox_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>) -> RhaiRes<Dynamic> {
+    let items: Vec<K8sJukeBoxMock> = mocks.lock().unwrap().clone()
         .iter()
         .filter(|m| {
             if !m.is_map() {
@@ -784,7 +807,8 @@ fn list_jukebox_mocks(mocks: &[Dynamic]) -> RhaiRes<Vec<K8sJukeBoxMock>> {
             map["kind"].clone().into_string().unwrap() == "JukeBox"
         })
         .map(|m| K8sJukeBoxMock { obj: m.clone() })
-        .collect())
+        .collect();
+    to_dynamic(serde_json::json!({"items": items}))
 }
 
 fn register_instance_common(engine: &mut Engine) {
@@ -795,7 +819,10 @@ fn register_instance_common(engine: &mut Engine) {
         .register_fn("set_agent_started", K8sInstanceMock::set_agent_started)
         .register_fn("set_missing_box", K8sInstanceMock::set_missing_box)
         .register_fn("set_missing_package", K8sInstanceMock::set_missing_package)
-        .register_fn("set_missing_requirement", K8sInstanceMock::set_missing_requirement)
+        .register_fn(
+            "set_missing_requirement",
+            K8sInstanceMock::set_missing_requirement,
+        )
         .register_fn("set_status_ready", K8sInstanceMock::set_status_ready)
         .register_fn("set_tfstate", K8sInstanceMock::set_tfstate)
         .register_fn("set_status_tofu_failed", K8sInstanceMock::set_status_tofu_failed)
@@ -811,13 +838,25 @@ fn register_instance_children(engine: &mut Engine) {
         .register_fn("set_services", K8sInstanceMock::set_services)
         .register_fn("get_services", K8sInstanceMock::get_services_string)
         .register_fn("set_status_befores", K8sInstanceMock::set_status_befores)
-        .register_fn("set_status_before_failed", K8sInstanceMock::set_status_before_failed)
+        .register_fn(
+            "set_status_before_failed",
+            K8sInstanceMock::set_status_before_failed,
+        )
         .register_fn("set_status_vitals", K8sInstanceMock::set_status_vitals)
-        .register_fn("set_status_vital_failed", K8sInstanceMock::set_status_vital_failed)
+        .register_fn(
+            "set_status_vital_failed",
+            K8sInstanceMock::set_status_vital_failed,
+        )
         .register_fn("set_status_scalables", K8sInstanceMock::set_status_scalables)
-        .register_fn("set_status_scalable_failed", K8sInstanceMock::set_status_scalable_failed)
+        .register_fn(
+            "set_status_scalable_failed",
+            K8sInstanceMock::set_status_scalable_failed,
+        )
         .register_fn("set_status_others", K8sInstanceMock::set_status_others)
-        .register_fn("set_status_other_failed", K8sInstanceMock::set_status_other_failed)
+        .register_fn(
+            "set_status_other_failed",
+            K8sInstanceMock::set_status_other_failed,
+        )
         .register_fn("set_status_posts", K8sInstanceMock::set_status_posts)
         .register_fn("set_status_post_failed", K8sInstanceMock::set_status_post_failed)
         .register_fn("set_status_init_failed", K8sInstanceMock::set_status_init_failed)
@@ -828,19 +867,20 @@ fn register_instance_children(engine: &mut Engine) {
 }
 
 pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: Arc<Mutex<Vec<Dynamic>>>) {
-    let lmocks = mocks.clone();
+    let arced_mocks = Arc::new(Mutex::new(mocks));
+    let lmocks = arced_mocks.clone();
     let lcreated = created.clone();
     let new_global = move |name: String| -> K8sGenericMock {
         let mock = lmocks.clone();
         K8sGenericMock::new_global(mock.clone(), name, lcreated.clone())
     };
-    let lmocks = mocks.clone();
+    let lmocks = arced_mocks.clone();
     let lcreated = created.clone();
     let new_ns = move |name: String, ns: String| -> K8sGenericMock {
         let mock = lmocks.clone();
         K8sGenericMock::new_ns(mock, name, ns, lcreated.clone())
     };
-    let lmocks = mocks.clone();
+    let lmocks = arced_mocks.clone();
     let lcreated = created.clone();
     let new_group_ns = move |apiv: String, name: String, ns: String| -> K8sGenericMock {
         let mock = lmocks.clone();
@@ -894,48 +934,64 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
     // metadata/spec/status from the Dynamic mock object.
 
     // K8sDeploy
-    let wl_mocks = mocks.clone();
+    let wl_mocks = arced_mocks.clone();
     engine
         .register_type_with_name::<K8sWorkloadMock>("K8sDeploy")
-        .register_fn("get_deployment", move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
-            find_workload_mock(&wl_mocks, "Deployment", &ns, &name)
-        })
+        .register_fn(
+            "get_deployment",
+            move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
+                let mock = wl_mocks.clone();
+                find_workload_mock(mock, "Deployment", &ns, &name)
+            },
+        )
         .register_get("metadata", K8sWorkloadMock::get_metadata)
         .register_get("spec", K8sWorkloadMock::get_spec)
         .register_get("status", K8sWorkloadMock::get_status)
         .register_fn("wait_available", K8sWorkloadMock::wait_available);
 
     // K8sDaemonSet
-    let wl_mocks = mocks.clone();
+    let wl_mocks = arced_mocks.clone();
     engine
         .register_type_with_name::<K8sWorkloadMock>("K8sDaemonSet")
-        .register_fn("get_deamonset", move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
-            find_workload_mock(&wl_mocks, "DaemonSet", &ns, &name)
-        })
+        .register_fn(
+            "get_deamonset",
+            move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
+                let mock = wl_mocks.clone();
+                find_workload_mock(mock, "DaemonSet", &ns, &name)
+            },
+        )
         .register_get("metadata", K8sWorkloadMock::get_metadata)
         .register_get("spec", K8sWorkloadMock::get_spec)
         .register_get("status", K8sWorkloadMock::get_status)
         .register_fn("wait_available", K8sWorkloadMock::wait_available);
 
     // K8sStatefulSet
-    let wl_mocks = mocks.clone();
+    let wl_mocks = arced_mocks.clone();
     engine
         .register_type_with_name::<K8sWorkloadMock>("K8sStatefulSet")
-        .register_fn("get_statefulset", move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
-            find_workload_mock(&wl_mocks, "StatefulSet", &ns, &name)
-        })
+        .register_fn(
+            "get_statefulset",
+            move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
+                let mock = wl_mocks.clone();
+                find_workload_mock(mock, "StatefulSet", &ns, &name)
+            },
+        )
         .register_get("metadata", K8sWorkloadMock::get_metadata)
         .register_get("spec", K8sWorkloadMock::get_spec)
         .register_get("status", K8sWorkloadMock::get_status)
         .register_fn("wait_available", K8sWorkloadMock::wait_available);
 
     // K8sJob
-    let wl_mocks = mocks.clone();
+    let wl_mocks = arced_mocks.clone();
     engine
         .register_type_with_name::<K8sWorkloadMock>("K8sJob")
-        .register_fn("get_job", move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
-            find_workload_mock(&wl_mocks, "Job", &ns, &name)
-        })
+        .register_fn(
+            "get_job",
+            move |ns: String, name: String| -> RhaiRes<K8sWorkloadMock> {
+                let mock = wl_mocks.clone();
+                find_workload_mock(mock, "Job", &ns, &name)
+            },
+        )
         .register_get("metadata", K8sWorkloadMock::get_metadata)
         .register_get("spec", K8sWorkloadMock::get_spec)
         .register_get("status", K8sWorkloadMock::get_status)
@@ -944,13 +1000,15 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
     // ── Instance mocks ──────────────────────────────────────────────────
 
     // ServiceInstance
-    let inst_mocks = mocks.clone();
+    let inst_mocks = arced_mocks.clone();
     let get_svc = move |ns: String, name: String| -> RhaiRes<K8sInstanceMock> {
-        find_instance_mock(&inst_mocks, "ServiceInstance", &ns, &name)
+        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
+        find_instance_mock(mock, "ServiceInstance", &ns, &name)
     };
-    let inst_mocks = mocks.clone();
-    let list_svc = move |ns: String| -> RhaiRes<Vec<K8sInstanceMock>> {
-        list_instance_mocks(&inst_mocks, "ServiceInstance", &ns)
+    let inst_mocks = arced_mocks.clone();
+    let list_svc = move |ns: String| -> RhaiRes<Dynamic> {
+        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
+        list_instance_mocks(mock, "ServiceInstance", &ns)
     };
     engine
         .register_type_with_name::<K8sInstanceMock>("ServiceInstance")
@@ -963,13 +1021,15 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
     register_instance_children(engine);
 
     // SystemInstance
-    let inst_mocks = mocks.clone();
+    let inst_mocks = arced_mocks.clone();
     let get_sys = move |ns: String, name: String| -> RhaiRes<K8sInstanceMock> {
-        find_instance_mock(&inst_mocks, "SystemInstance", &ns, &name)
+        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
+        find_instance_mock(mock, "SystemInstance", &ns, &name)
     };
-    let inst_mocks = mocks.clone();
-    let list_sys = move |ns: String| -> RhaiRes<Vec<K8sInstanceMock>> {
-        list_instance_mocks(&inst_mocks, "SystemInstance", &ns)
+    let inst_mocks = arced_mocks.clone();
+    let list_sys = move |ns: String| -> RhaiRes<Dynamic> {
+        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
+        list_instance_mocks(mock, "SystemInstance", &ns)
     };
     engine
         .register_type_with_name::<K8sInstanceMock>("SystemInstance")
@@ -978,17 +1038,22 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
         .register_fn("set_status_crds", K8sInstanceMock::set_status_crds)
         .register_fn("set_status_crd_failed", K8sInstanceMock::set_status_crd_failed)
         .register_fn("set_status_systems", K8sInstanceMock::set_status_systems)
-        .register_fn("set_status_system_failed", K8sInstanceMock::set_status_system_failed);
+        .register_fn(
+            "set_status_system_failed",
+            K8sInstanceMock::set_status_system_failed,
+        );
     register_instance_common(engine);
 
     // TenantInstance
-    let inst_mocks = mocks.clone();
+    let inst_mocks = arced_mocks.clone();
     let get_tnt = move |ns: String, name: String| -> RhaiRes<K8sInstanceMock> {
-        find_instance_mock(&inst_mocks, "TenantInstance", &ns, &name)
+        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
+        find_instance_mock(mock, "TenantInstance", &ns, &name)
     };
-    let inst_mocks = mocks.clone();
-    let list_tnt = move |ns: String| -> RhaiRes<Vec<K8sInstanceMock>> {
-        list_instance_mocks(&inst_mocks, "TenantInstance", &ns)
+    let inst_mocks = arced_mocks.clone();
+    let list_tnt = move |ns: String| -> RhaiRes<Dynamic> {
+        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
+        list_instance_mocks(mock, "TenantInstance", &ns)
     };
     engine
         .register_type_with_name::<K8sInstanceMock>("TenantInstance")
@@ -996,18 +1061,23 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
         .register_fn("list_tenant_instance", list_tnt)
         .register_fn("get_tenant_name", K8sInstanceMock::get_tenant_name)
         .register_fn("get_tenant_namespaces", K8sInstanceMock::get_tenant_namespaces)
-        .register_fn("get_tenant_services_names", K8sInstanceMock::get_tenant_services_names);
+        .register_fn(
+            "get_tenant_services_names",
+            K8sInstanceMock::get_tenant_services_names,
+        );
     register_instance_common(engine);
     register_instance_children(engine);
 
     // JukeBox (cluster-scoped)
-    let jb_mocks = mocks.clone();
+    let jb_mocks = arced_mocks.clone();
     let get_jb = move |name: String| -> RhaiRes<K8sJukeBoxMock> {
-        find_jukebox_mock(&jb_mocks, &name)
+        let mock: Arc<Mutex<Vec<Dynamic>>> = jb_mocks.clone();
+        find_jukebox_mock(mock, &name)
     };
-    let jb_mocks = mocks;
-    let list_jb = move || -> RhaiRes<Vec<K8sJukeBoxMock>> {
-        list_jukebox_mocks(&jb_mocks)
+    let jb_mocks = arced_mocks;
+    let list_jb = move || -> RhaiRes<Dynamic> {
+        let mock: Arc<Mutex<Vec<Dynamic>>> = jb_mocks.clone();
+        list_jukebox_mocks(mock)
     };
     engine
         .register_type_with_name::<K8sJukeBoxMock>("JukeBox")

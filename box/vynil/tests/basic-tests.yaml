@@ -1,0 +1,14 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Test
+metadata:
+  name: Bare install
+  description: "Verify all the basics"
+instance:
+  name: toto
+  namespace: vynil-test
+testSets:
+- testSet: core
+  variables:
+    name: vynil-agent
+- testSet: no-monitoring

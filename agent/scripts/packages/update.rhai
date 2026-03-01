@@ -1,9 +1,10 @@
+import "package_yaml" as pck;
 fn run(args) {
     import_run("update_pre", args);
 
     // scan all the images from the package.yaml for new tags
     // if new tags are found, update the package.yaml accordingly
-    let yaml = yaml_decode(file_read(args.source+"/package.yaml"));
+    let yaml = yaml_decode_ordered(file_read(args.source+"/package.yaml"));
     let app_version = if type_of(yaml["metadata"]) == "map" {yaml["metadata"]["app_version"]} else {()};
     let new_version = ();
     let changed = false;
@@ -40,15 +41,17 @@ fn run(args) {
                 let old_v = semver_from(app_version);
                 if new_version > old_v {
                     yaml["metadata"]["app_version"] = new_version.to_string();
-                    file_write(args.source+"/package.yaml", yaml_encode(yaml));
+                    file_write(args.source+"/package.yaml", yaml_encode_ordered(yaml));
                 }
             } catch (e) {
                 if changed {
-                    file_write(args.source+"/package.yaml", yaml_encode(yaml));
+                    yaml = pck::validate(yaml);
+                    file_write(args.source+"/package.yaml", yaml_encode_ordered(yaml));
                 }
             }
         } else if changed {
-            file_write(args.source+"/package.yaml", yaml_encode(yaml));
+            yaml = pck::validate(yaml);
+            file_write(args.source+"/package.yaml", yaml_encode_ordered(yaml));
         }
     }
 

@@ -24,18 +24,21 @@ pub struct Parameters {
         value_name = "SCRIPT_DIRECTORY",
         default_value = "./agent/scripts"
     )]
-    script_dir: String,
+    script_dir: PathBuf,
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {
     let mut rhai = Script::new(vec![
-        format!("{}/boxes", args.script_dir),
-        format!("{}/lib", args.script_dir),
+        format!("{}/boxes", args.script_dir.display()),
+        format!("{}/lib", args.script_dir.display()),
     ]);
     let context = JukeBox::get(args.jukebox.clone()).await?;
     set_box(context.clone());
     rhai.ctx.set_value("box", context);
     rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
-    let _ = rhai.run_file(&PathBuf::from(format!("{}/boxes/scan.rhai", args.script_dir)))?;
+    let _ = rhai.run_file(&PathBuf::from(format!(
+        "{}/boxes/scan.rhai",
+        args.script_dir.display()
+    )))?;
     Ok(())
 }

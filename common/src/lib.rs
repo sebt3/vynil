@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 
+pub static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.5.8";
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("SerializationError: {0}")]
@@ -48,8 +50,11 @@ pub enum Error {
     #[error("Missing script {0}")]
     MissingScript(PathBuf),
 
-    #[error("Missing destination directory {0}")]
+    #[error("Missing destination directory for {0}")]
     MissingDestination(PathBuf),
+
+    #[error("Missing tests directory {0}")]
+    MissingTestDirectory(PathBuf),
 
     #[error("UTF8 error {0}")]
     UTF8(#[from] std::string::FromUtf8Error),
@@ -131,8 +136,6 @@ mod semverhandler;
 pub mod shellhandler;
 mod tools;
 pub mod vynilpackage;
-pub mod vyniltest;
-pub mod vyniltestset;
 pub mod yamlhandler;
 pub use context::get_client_name;
 pub use semverhandler::Semver;

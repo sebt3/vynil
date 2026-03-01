@@ -95,14 +95,14 @@ pub struct Parameters {
         value_name = "SCRIPT_DIRECTORY",
         default_value = "./agent/scripts"
     )]
-    script_dir: String,
+    script_dir: PathBuf,
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {
     let mut rhai = Script::new(vec![
         format!("{}/scripts", args.source.to_string_lossy()),
-        format!("{}/packages", args.script_dir),
-        format!("{}/lib", args.script_dir),
+        format!("{}/packages", args.script_dir.display()),
+        format!("{}/lib", args.script_dir.display()),
     ]);
     rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
     let _ = rhai.eval(

@@ -15,7 +15,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
-static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.5.8";
 
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,
@@ -140,7 +139,7 @@ impl Manager {
             renderer: hbs,
             base_context: json!({
                 "vynil_namespace": std::env::var("VYNIL_NAMESPACE").unwrap_or_else(|_| "vynil-system".to_string()),
-                "agent_image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| DEFAULT_AGENT_IMAGE.to_string()),
+                "agent_image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| common::DEFAULT_AGENT_IMAGE.to_string()),
                 "service_account": std::env::var("AGENT_ACCOUNT").unwrap_or_else(|_| "vynil-agent".to_string()),
                 "log_level": std::env::var("AGENT_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
                 "label_key": std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string()),

@@ -15,7 +15,7 @@ pub struct Parameters {
         value_name = "SCRIPT_DIRECTORY",
         default_value = "./agent/scripts"
     )]
-    script_dir: String,
+    script_dir: PathBuf,
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {
@@ -27,7 +27,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
         let p = args.script.as_path().parent().unwrap();
         let mut rhai = Script::new(vec![
             p.to_string_lossy().to_string(),
-            format!("{}/lib", args.script_dir),
+            format!("{}/lib", args.script_dir.display()),
         ]);
         let _ = rhai.run_file(&args.script)?;
         Ok(())

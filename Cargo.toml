@@ -18,6 +18,7 @@ tracing = "0.1.37"
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.143"
 rust-yaml = { git = "https://github.com/sebt3/rust-yaml", branch = "main" }
+serde_yaml = "0.9"
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 chrono = { version = "0.4.38", features = ["serde"] }
 schemars = { version = "1.0", features = ["chrono04"] }
