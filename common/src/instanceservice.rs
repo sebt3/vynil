@@ -1,6 +1,5 @@
 use crate::{Error, Published, Result, RhaiRes, context::get_client_async, rhai_err};
 use chrono::{DateTime, Utc};
-use k8s_openapi::api::core::v1::Namespace;
 use kube::{
     CustomResource, Resource, ResourceExt,
     api::{Api, ListParams},
@@ -180,28 +179,19 @@ impl ServiceInstance {
 
     pub async fn get_all_services_names() -> Result<Vec<String>> {
         let client = get_client_async().await;
-        let mut list: Vec<String> = Vec::new();
         let lp = ListParams::default();
-        for ns in Api::<Namespace>::all(client.clone())
-            .list(&lp)
-            .await
-            .map_err(Error::KubeError)?
+        let all_instances = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            Api::<Self>::all(client).list(&lp),
+        )
+        .await
+        .map_err(|_| Error::Other("E_LIST_SERVICES_TIMEOUT: get_all_services_names exceeded 30s".into()))?
+        .map_err(Error::KubeError)?;
+
+        let mut list: Vec<String> = all_instances
             .iter()
-            .map(|ns| ns.name_any())
-        {
-            let api = Api::<Self>::namespaced(client.clone(), &ns);
-            api.list(&lp)
-                .await
-                .map_err(Error::KubeError)?
-                .iter()
-                .map(|i| {
-                    let res: Vec<String> = i.get_services().iter().map(|s| s.key.clone()).collect();
-                    res
-                })
-                .for_each(|mut l| {
-                    list.append(&mut l);
-                });
-        }
+            .flat_map(|i| i.get_services().iter().map(|s| s.key.clone()).collect::<Vec<_>>())
+            .collect();
         list.sort();
         Ok(list)
     }
