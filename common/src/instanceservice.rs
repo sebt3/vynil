@@ -226,6 +226,10 @@ pub fn service_rhai_register(engine: &mut Engine) {
             "set_missing_requirement",
             ServiceInstance::rhai_set_missing_requirement,
         )
+        .register_fn(
+            "set_missing_init_version",
+            ServiceInstance::rhai_set_missing_init_version,
+        )
         .register_fn("set_status_ready", ServiceInstance::rhai_set_status_ready)
         .register_fn("set_status_crds", ServiceInstance::rhai_set_status_crds)
         .register_fn(

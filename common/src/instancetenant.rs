@@ -302,6 +302,61 @@ version: "1.0.0"
         assert_eq!(spec.jukebox, "my-juke");
         assert_eq!(spec.init_from, None);
     }
+
+    #[test]
+    fn test_init_version_ko_message_contains_error_id_and_version() {
+        let cond = ApplicationCondition::init_version_ko("1.5.0", 3);
+        assert_eq!(cond.condition_type, ConditionsType::InitFrom);
+        assert_eq!(cond.status, ConditionsStatus::False);
+        assert!(
+            cond.message.contains("E_INIT_VERSION_NOT_FOUND"),
+            "message should contain error id: {}",
+            cond.message
+        );
+        assert!(
+            cond.message.contains("1.5.0"),
+            "message should contain version: {}",
+            cond.message
+        );
+        assert_eq!(cond.generation, 3);
+    }
+
+    #[test]
+    fn test_have_condition_detects_init_version_ko() {
+        let cond = ApplicationCondition::init_version_ko("1.5.0", 1);
+        let instance = TenantInstance {
+            metadata: kube::api::ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                generation: Some(1),
+                ..Default::default()
+            },
+            spec: TenantInstanceSpec {
+                jukebox: "jb".to_string(),
+                category: "cat".to_string(),
+                package: "pkg".to_string(),
+                init_from: None,
+                options: None,
+            },
+            status: Some(TenantInstanceStatus {
+                conditions: vec![cond.clone()],
+                tag: None,
+                digest: None,
+                tfstate: None,
+                rhaistate: None,
+                befores: None,
+                vitals: None,
+                scalables: None,
+                others: None,
+                posts: None,
+                services: None,
+            }),
+        };
+        assert!(
+            instance.have_condition(&cond),
+            "should detect init_version_ko condition already present"
+        );
+    }
 }
 
 pub fn tenant_rhai_register(engine: &mut Engine) {
@@ -327,6 +382,10 @@ pub fn tenant_rhai_register(engine: &mut Engine) {
         .register_fn(
             "set_missing_requirement",
             TenantInstance::rhai_set_missing_requirement,
+        )
+        .register_fn(
+            "set_missing_init_version",
+            TenantInstance::rhai_set_missing_init_version,
         )
         .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
         .register_fn("set_status_befores", TenantInstance::rhai_set_status_befores)

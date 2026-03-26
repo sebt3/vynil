@@ -505,6 +505,10 @@ impl K8sInstanceMock {
         Ok(self.clone())
     }
 
+    pub fn set_missing_init_version(&mut self, _version: String) -> RhaiRes<Self> {
+        Ok(self.clone())
+    }
+
     pub fn set_tfstate(&mut self, tfstate: String) -> RhaiRes<Self> {
         self.set_status_field("tfstate", Dynamic::from(tfstate));
         Ok(self.clone())
@@ -822,6 +826,10 @@ fn register_instance_common(engine: &mut Engine) {
         .register_fn(
             "set_missing_requirement",
             K8sInstanceMock::set_missing_requirement,
+        )
+        .register_fn(
+            "set_missing_init_version",
+            K8sInstanceMock::set_missing_init_version,
         )
         .register_fn("set_status_ready", K8sInstanceMock::set_status_ready)
         .register_fn("set_tfstate", K8sInstanceMock::set_tfstate)

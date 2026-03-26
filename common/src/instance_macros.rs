@@ -239,6 +239,17 @@ macro_rules! impl_condition_children {
                 )
             }
 
+            pub fn init_version_ko(version: &str, generation: i64) -> ApplicationCondition {
+                ApplicationCondition::new(
+                    &format!(
+                        "[E_INIT_VERSION_NOT_FOUND] Version {version} introuvable dans le registre OCI"
+                    ),
+                    ConditionsStatus::False,
+                    ConditionsType::InitFrom,
+                    generation,
+                )
+            }
+
             pub fn schedule_ko(message: &str, generation: i64) -> ApplicationCondition {
                 ApplicationCondition::new(
                     message,
@@ -1459,6 +1470,50 @@ macro_rules! impl_instance_befores {
                     ::tokio::runtime::Handle::current().block_on(async move {
                         self.set_status_schedule_backup_failed(reason).await
                     })
+                })
+                .map_err($crate::rhai_err)
+            }
+
+            pub async fn set_missing_init_version(
+                &mut self,
+                version: String,
+            ) -> $crate::Result<Self> {
+                let client = $crate::context::get_client_async().await;
+                let generation = self.metadata.generation.unwrap_or(1);
+                let cond = ApplicationCondition::init_version_ko(&version, generation);
+                if !self.have_condition(&cond) {
+                    let mut conditions: Vec<ApplicationCondition> =
+                        self.get_conditions_excluding(vec![ConditionsType::InitFrom]);
+                    conditions.push(cond);
+                    let result = self
+                        .patch_status(
+                            client.clone(),
+                            serde_json::json!({ "conditions": conditions }),
+                        )
+                        .await?;
+                    self.send_event(client, ::kube::runtime::events::Event {
+                        type_: ::kube::runtime::events::EventType::Warning,
+                        reason: "InitVersionNotFound".to_string(),
+                        note: Some(format!(
+                            "[E_INIT_VERSION_NOT_FOUND] Version {version} introuvable dans le registre OCI"
+                        )),
+                        action: "InitFrom".to_string(),
+                        secondary: None,
+                    })
+                    .await?;
+                    Ok(result)
+                } else {
+                    Ok(self.clone())
+                }
+            }
+
+            pub fn rhai_set_missing_init_version(
+                &mut self,
+                version: String,
+            ) -> $crate::RhaiRes<Self> {
+                ::tokio::task::block_in_place(|| {
+                    ::tokio::runtime::Handle::current()
+                        .block_on(async move { self.set_missing_init_version(version).await })
                 })
                 .map_err($crate::rhai_err)
             }
