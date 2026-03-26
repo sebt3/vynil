@@ -568,6 +568,7 @@ pub struct VynilPackageSource {
     /// Metadata for a package
     pub metadata: VynilPackageMeta,
     /// Requirement
+    #[serde(with = "serde_yaml::with::singleton_map_recursive")]
     pub requirements: Vec<VynilPackageRequirement>,
     /// Recommandations
     pub recommandations: Option<Vec<VynilPackageRecommandation>>,
