@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 
-pub static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.5.8";
+pub static DEFAULT_AGENT_IMAGE: &str = "docker.io/sebt3/vynil-agent:0.6.0";
 
 #[derive(Error, Debug)]
 pub enum Error {
