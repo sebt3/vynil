@@ -43,7 +43,21 @@ lazy_static::lazy_static! {
 pub fn update_cache() {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            *CACHE.write().await = async_populate_cache().await;
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                async_populate_cache(),
+            )
+            .await
+            {
+                Ok(discovery) => {
+                    *CACHE.write().await = discovery;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "E_DISCOVERY_TIMEOUT: update_k8s_crd_cache exceeded 30s, keeping old cache"
+                    );
+                }
+            }
         })
     })
 }
