@@ -350,7 +350,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     }
 
     // ── Package lookup ────────────────────────────────────────────────────
-    let (pck, pull_secret) = {
+    let (pck, pull_secret, cached_packages) = {
         let packages = ctx.packages.read().await;
         let jukebox = inst.spec_jukebox();
         if !packages.keys().any(|x| x == jukebox) {
@@ -372,7 +372,8 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
             })
             .cloned();
         let pull_secret = packages[jukebox].pull_secret.clone();
-        (pck, pull_secret)
+        let cached_packages = packages[jukebox].packages.clone();
+        (pck, pull_secret, cached_packages)
         // packages lock released here
     };
 
@@ -387,10 +388,10 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     };
 
     // ── Pull secret ───────────────────────────────────────────────────────
-    if let Some(ps) = pull_secret {
+    if let Some(ref ps) = pull_secret {
         let obj = context.as_object_mut().unwrap();
         obj.insert("use_secret".to_string(), true.into());
-        obj.insert("pull_secret".to_string(), ps.into());
+        obj.insert("pull_secret".to_string(), ps.clone().into());
     } else {
         context
             .as_object_mut()
@@ -398,9 +399,17 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
             .insert("use_secret".to_string(), false.into());
     }
 
+    // ── initFrom version resolution ───────────────────────────────────────
+    let effective_tag = match resolve_init_version(
+        inst, &pck, &cached_packages, &pull_secret, client.clone(), my_ns,
+    ).await {
+        Ok(Some(v)) => v,
+        Ok(None)    => pck.tag.clone(),
+        Err(e)      => return Err(e),
+    };
     {
         let obj = context.as_object_mut().unwrap();
-        obj.insert("tag".to_string(), pck.tag.clone().into());
+        obj.insert("tag".to_string(), effective_tag.into());
         obj.insert("image".to_string(), pck.image.clone().into());
         obj.insert("registry".to_string(), pck.registry.clone().into());
     }
@@ -745,5 +754,49 @@ mod tests {
     #[ignore = "requires a real OCI registry"]
     async fn test_resolve_init_version_missing_in_registry() {
         // Covered by integration tests — requires a running OCI registry.
+    }
+
+    // ── Tests do_reconcile effective_tag selection ────────────────────────
+    // These tests document the integration behavior: resolve_init_version()
+    // return value determines the tag inserted into the Handlebars context.
+
+    /// do_reconcile scenario 1: no initFrom → resolve returns None → use pck.tag
+    #[tokio::test]
+    async fn test_do_reconcile_tag_no_init_from() {
+        let inst = make_tenant(None, None);
+        let pck = make_package("pkg", "cat", "2.0.0", VynilPackageType::Tenant);
+        let result = resolve_init_version(&inst, &pck, &[], &None, fake_client(), "default").await;
+        assert!(matches!(result, Ok(None)));
+        // Ok(None) → do_reconcile uses pck.tag ("2.0.0")
+    }
+
+    /// do_reconcile scenario 2: first install with valid version in cache → tag overridden
+    #[tokio::test]
+    async fn test_do_reconcile_tag_init_from_version_in_cache() {
+        let inst = make_tenant(Some("1.5.0"), None);
+        let pck = make_package("pkg", "cat", "2.0.0", VynilPackageType::Tenant);
+        let cached = make_package("pkg", "cat", "1.5.0", VynilPackageType::Tenant);
+        let result =
+            resolve_init_version(&inst, &pck, &[cached], &None, fake_client(), "default").await;
+        // Ok(Some("1.5.0")) → do_reconcile uses "1.5.0" instead of "2.0.0"
+        assert!(matches!(result, Ok(Some(ref v)) if v == "1.5.0"));
+    }
+
+    /// do_reconcile scenario 3: version not in cache → OCI check required (ignored, needs registry)
+    #[tokio::test]
+    #[ignore = "requires a real OCI registry"]
+    async fn test_do_reconcile_tag_init_from_version_missing() {
+        // Instance with initFrom.version = "0.0.1", tag not in cache, not in registry.
+        // Expected: Err(MissingInitVersion), no job created.
+    }
+
+    /// do_reconcile scenario 4: already installed (status.tag non-empty) → resolve returns None → upgrade path
+    #[tokio::test]
+    async fn test_do_reconcile_tag_already_installed_ignores_init_from() {
+        let inst = make_tenant(Some("1.5.0"), Some("1.5.0"));
+        let pck = make_package("pkg", "cat", "2.0.0", VynilPackageType::Tenant);
+        let result = resolve_init_version(&inst, &pck, &[], &None, fake_client(), "default").await;
+        // Ok(None) → do_reconcile uses pck.tag ("2.0.0") for normal upgrade
+        assert!(matches!(result, Ok(None)));
     }
 }
