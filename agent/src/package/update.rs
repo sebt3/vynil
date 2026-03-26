@@ -23,11 +23,21 @@ pub struct Parameters {
         default_value = "./agent/scripts"
     )]
     script_dir: PathBuf,
+    /// Configuration directory
+    #[arg(
+        short = 'c',
+        long = "config-dir",
+        env = "CONFIG_DIR",
+        value_name = "CONFIG_DIR",
+        default_value = "."
+    )]
+    config_dir: PathBuf,
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {
     let mut rhai = Script::new(vec![
         format!("{}/scripts", args.source.to_string_lossy()),
+        format!("{}", args.config_dir.display()),
         format!("{}/packages", args.script_dir.display()),
         format!("{}/lib", args.script_dir.display()),
     ]);
