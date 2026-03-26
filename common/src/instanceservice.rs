@@ -18,6 +18,8 @@ pub struct InitFrom {
     pub sub_path: Option<String>,
     /// Snapshot id for restoration
     pub snapshot: String,
+    /// Version du package à utiliser pour la restauration
+    pub version: Option<String>,
 }
 
 /// Describe a source of vynil packages jukebox
@@ -49,8 +51,6 @@ pub struct ServiceInstanceSpec {
     pub category: String,
     /// The package name
     pub package: String,
-    /// The package version
-    pub version: Option<String>,
     /// Init from a previous backup
     pub init_from: Option<InitFrom>,
     /// Parameters

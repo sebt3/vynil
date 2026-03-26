@@ -19,6 +19,8 @@ pub struct InitFrom {
     pub sub_path: Option<String>,
     /// Snapshot id for restoration
     pub snapshot: String,
+    /// Version du package à utiliser pour la restauration
+    pub version: Option<String>,
 }
 
 /// Describe a source of vynil packages jukebox
@@ -50,8 +52,6 @@ pub struct TenantInstanceSpec {
     pub category: String,
     /// The package name
     pub package: String,
-    /// The package version
-    pub version: Option<String>,
     /// Init from a previous backup
     pub init_from: Option<InitFrom>,
     /// Parameters
@@ -266,6 +266,43 @@ impl TenantInstance {
 
 impl_instance_common!(TenantInstance, "TenantInstance");
 impl_instance_befores!(TenantInstance);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_init_from_with_version() {
+        let yaml = r#"
+snapshot: "abc123"
+version: "1.5.0"
+"#;
+        let init_from: InitFrom = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(init_from.version, Some("1.5.0".to_string()));
+    }
+
+    #[test]
+    fn test_init_from_without_version() {
+        let yaml = r#"
+snapshot: "abc123"
+"#;
+        let init_from: InitFrom = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(init_from.version, None);
+    }
+
+    #[test]
+    fn test_spec_version_top_level_ignored() {
+        let yaml = r#"
+jukebox: "my-juke"
+category: "apps"
+package: "nginx"
+version: "1.0.0"
+"#;
+        let spec: TenantInstanceSpec = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(spec.jukebox, "my-juke");
+        assert_eq!(spec.init_from, None);
+    }
+}
 
 pub fn tenant_rhai_register(engine: &mut Engine) {
     engine

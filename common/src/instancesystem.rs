@@ -35,8 +35,6 @@ pub struct SystemInstanceSpec {
     pub category: String,
     /// The package name
     pub package: String,
-    /// The package version
-    pub version: Option<String>,
     /// Parameters
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
 }
