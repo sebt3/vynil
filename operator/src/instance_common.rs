@@ -244,6 +244,18 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
         inst.name_any()
     );
     ctx.diagnostics.write().await.last_event = Utc::now();
+
+    // ── Suspend annotation ────────────────────────────────────────────────
+    if inst.annotations().get("vynil.solidite.fr/suspend").map(|v| v == "true").unwrap_or(false) {
+        tracing::info!(
+            "{}Instance {}/{} is suspended, skipping reconciliation",
+            T::type_name(),
+            inst.namespace().unwrap(),
+            inst.name_any()
+        );
+        return Ok(Action::requeue(Duration::from_secs(15 * 60)));
+    }
+
     let mut hbs = ctx.renderer.clone();
     let client = ctx.client.clone();
     let my_ns = ctx.client.default_namespace();
