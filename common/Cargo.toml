@@ -43,6 +43,9 @@ http = "1.1.0"
 #ed25519-dalek = { version = "2.2.0", features = ["rand_core", "pkcs8", "pem"] }
 #rnd8 = { package = "rand", version = "0.8.5" }
 
+[dev-dependencies]
+tower-test = "0.4.0"
+
 [lib]
 name = "common"
 path = "src/lib.rs"

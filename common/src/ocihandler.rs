@@ -1,6 +1,9 @@
+use base64::Engine as _;
 use crate::{Error, Result, RhaiRes, rhai_err, rhaihandler::Map};
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use k8s_openapi::api::core::v1::Secret;
+use kube::{Client as KubeClient, api::Api};
 use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
 use rhai::{Dynamic, Engine};
 use std::{collections::BTreeMap, path::PathBuf};
@@ -129,6 +132,76 @@ impl Registry {
     }
 }
 
+/// Lit un secret k8s de type dockerconfigjson et retourne les credentials OCI
+/// pour le registre demandé. Retourne Anonymous si le secret est absent ou ne
+/// contient pas d'entrée pour ce registre.
+pub async fn resolve_registry_auth(
+    secret_name: &str,
+    registry: &str,
+    client: KubeClient,
+    ns: &str,
+) -> Result<RegistryAuth> {
+    let api: Api<Secret> = Api::namespaced(client, ns);
+    let secret = match api.get_opt(secret_name).await? {
+        Some(s) => s,
+        None => return Ok(RegistryAuth::Anonymous),
+    };
+    let data = match secret.data {
+        Some(d) => d,
+        None => return Ok(RegistryAuth::Anonymous),
+    };
+    let raw = match data.get(".dockerconfigjson") {
+        Some(b) => b.0.clone(),
+        None => return Ok(RegistryAuth::Anonymous),
+    };
+    let config: serde_json::Value = serde_json::from_slice(&raw)?;
+    let auth_b64 = config["auths"][registry]["auth"].as_str().unwrap_or("");
+    if auth_b64.is_empty() {
+        return Ok(RegistryAuth::Anonymous);
+    }
+    let decoded = String::from_utf8(
+        base64::engine::general_purpose::STANDARD.decode(auth_b64)?,
+    )?;
+    let parts: Vec<&str> = decoded.splitn(2, ':').collect();
+    if parts.len() == 2 {
+        Ok(RegistryAuth::Basic(parts[0].to_string(), parts[1].to_string()))
+    } else {
+        Ok(RegistryAuth::Anonymous)
+    }
+}
+
+/// Vérifie qu'un tag existe dans un registre OCI via une requête de manifest
+/// (sans télécharger le contenu). Retourne false si le tag est absent (404),
+/// true s'il est accessible, et propage les autres erreurs réseau.
+pub async fn verify_tag_in_registry(
+    registry: &str,
+    image: &str,
+    tag: &str,
+    auth: RegistryAuth,
+) -> Result<bool> {
+    let oci = Client::new(client::ClientConfig::default());
+    let reference = Reference::with_tag(registry.to_string(), image.to_string(), tag.to_string());
+    match oci.pull_manifest_raw(&reference, &auth, &[]).await {
+        Ok(_) => Ok(true),
+        Err(oci_client::errors::OciDistributionError::RegistryError { envelope, .. })
+            if envelope
+                .errors
+                .iter()
+                .any(|e| {
+                    matches!(
+                        e.code,
+                        oci_client::errors::OciErrorCode::ManifestUnknown
+                            | oci_client::errors::OciErrorCode::NotFound
+                    )
+                }) =>
+        {
+            Ok(false)
+        }
+        Err(oci_client::errors::OciDistributionError::ServerError { code: 404, .. }) => Ok(false),
+        Err(e) => Err(Error::OCIDistrib(e)),
+    }
+}
+
 pub fn oci_rhai_register(engine: &mut Engine) {
     engine
         .register_type_with_name::<Registry>("Registry")
@@ -136,4 +209,128 @@ pub fn oci_rhai_register(engine: &mut Engine) {
         .register_fn("push_image", Registry::push_image)
         .register_fn("list_tags", Registry::rhai_list_tags)
         .register_fn("get_manifest", Registry::get_manifest);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::{Request, Response, StatusCode};
+    use kube::client::Body;
+    use std::pin::pin;
+    use tower_test::mock;
+
+    fn make_secret_json(registry: &str, auth_b64: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": { "name": "my-secret", "namespace": "vynil-system" },
+            "type": "kubernetes.io/dockerconfigjson",
+            "data": {
+                ".dockerconfigjson": base64::engine::general_purpose::STANDARD.encode(
+                    serde_json::json!({
+                        "auths": {
+                            registry: { "auth": auth_b64 }
+                        }
+                    }).to_string()
+                )
+            }
+        }))
+        .unwrap()
+    }
+
+    fn make_404_json() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "kind": "Status",
+            "apiVersion": "v1",
+            "status": "Failure",
+            "reason": "NotFound",
+            "code": 404
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_resolve_registry_auth_valid_secret() {
+        // "user:pass" en base64
+        let auth_b64 = "dXNlcjpwYXNz";
+        let body = make_secret_json("registry.example.com", auth_b64);
+
+        let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
+        let spawned = tokio::spawn(async move {
+            let mut handle = pin!(handle);
+            let (_req, send) = handle.next_request().await.expect("service not called");
+            send.send_response(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            );
+        });
+
+        let client = kube::Client::new(mock_service, "vynil-system");
+        let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(auth, RegistryAuth::Basic(ref u, ref p) if u == "user" && p == "pass"),
+            "expected Basic(user, pass), got {auth:?}"
+        );
+        spawned.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_resolve_registry_auth_secret_absent() {
+        let body = make_404_json();
+
+        let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
+        let spawned = tokio::spawn(async move {
+            let mut handle = pin!(handle);
+            let (_req, send) = handle.next_request().await.expect("service not called");
+            send.send_response(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            );
+        });
+
+        let client = kube::Client::new(mock_service, "vynil-system");
+        let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
+            .await
+            .unwrap();
+
+        assert!(matches!(auth, RegistryAuth::Anonymous));
+        spawned.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_resolve_registry_auth_registry_absent() {
+        // Secret valide mais pour un autre registre
+        let auth_b64 = "dXNlcjpwYXNz";
+        let body = make_secret_json("other.registry.com", auth_b64);
+
+        let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
+        let spawned = tokio::spawn(async move {
+            let mut handle = pin!(handle);
+            let (_req, send) = handle.next_request().await.expect("service not called");
+            send.send_response(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            );
+        });
+
+        let client = kube::Client::new(mock_service, "vynil-system");
+        let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
+            .await
+            .unwrap();
+
+        assert!(matches!(auth, RegistryAuth::Anonymous));
+        spawned.await.unwrap();
+    }
 }
