@@ -96,6 +96,9 @@ pub enum Error {
         OpenSSL(#[from] openssl::error::ErrorStack),
 
     */
+    #[error("INIT-VERSION-001 Init version {0} not found in registry")]
+    MissingInitVersion(String),
+
     #[error("Error: {0}")]
     Other(String),
 }

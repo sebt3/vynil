@@ -5,6 +5,7 @@ use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use k8s_openapi::api::core::v1::Secret;
 use kube::{Client as KubeClient, api::Api};
 use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
+pub use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use rhai::{Dynamic, Engine};
 use std::{collections::BTreeMap, path::PathBuf};
 use tar::{Archive, Builder};

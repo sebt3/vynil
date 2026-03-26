@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use common::{
     rhaihandler::Script,
-    vynilpackage::{VynilPackageRecommandation, VynilPackageRequirement, VynilPackageType},
+    vynilpackage::{VynilPackage, VynilPackageRecommandation, VynilPackageRequirement, VynilPackageType},
 };
 use k8s_openapi::{
     NamespaceResourceScope, api::batch::v1::Job,
@@ -72,6 +72,11 @@ pub trait InstanceKind:
     fn spec_package(&self) -> &str;
     /// Returns the currently installed tag from the status, or an empty string.
     fn current_tag(&self) -> String;
+    /// Returns the version requested for initial restore, or None if absent.
+    /// Default implementation returns None (SystemInstance, or no initFrom.version).
+    fn init_from_version(&self) -> Option<&str> {
+        None
+    }
     fn have_child(&self) -> bool;
     fn get_options_digest(&mut self) -> String;
 
@@ -79,6 +84,14 @@ pub trait InstanceKind:
     async fn set_missing_box(self, jukebox: String) -> Result<Self>;
     async fn set_missing_package(self, category: String, package: String) -> Result<Self>;
     async fn set_missing_requirement(self, reason: String) -> Result<Self>;
+    /// Records that the requested init version was not found.
+    /// Default no-op for instance types that don't support initFrom (e.g. SystemInstance).
+    async fn set_missing_init_version(self, _version: String) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(self)
+    }
 
     // ── Type-specific behaviors ───────────────────────────────────────────
 
@@ -147,6 +160,67 @@ pub async fn build_base_recommendations(
         rec_system_services.sort();
     }
     Ok((rec_crds, rec_system_services))
+}
+
+// ── Init version resolver ─────────────────────────────────────────────────────
+
+/// Resolves the package version to use for initial restoration.
+///
+/// Returns `Ok(Some(version))` if a valid `initFrom.version` is found,
+/// `Ok(None)` if no version was requested or the instance is already installed,
+/// or `Err(Error::MissingInitVersion)` if the requested version doesn't exist.
+pub async fn resolve_init_version<T: InstanceKind>(
+    inst: &T,
+    pck: &VynilPackage,
+    cached_packages: &[VynilPackage],
+    pull_secret: &Option<String>,
+    client: Client,
+    vynil_ns: &str,
+) -> Result<Option<String>> {
+    let requested = match inst.init_from_version() {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    // Already installed: ignore the init version override
+    if !inst.current_tag().is_empty() {
+        return Ok(None);
+    }
+
+    // 1. Check local cache first (no network call)
+    let in_cache = cached_packages.iter().any(|p| {
+        p.metadata.name == inst.spec_package()
+            && p.metadata.category == inst.spec_category()
+            && p.metadata.usage == T::package_type()
+            && p.tag == requested
+    });
+    if in_cache {
+        return Ok(Some(requested.to_string()));
+    }
+
+    // 2. Fallback: verify directly in the OCI registry
+    let auth = match pull_secret {
+        Some(secret_name) => {
+            common::ocihandler::resolve_registry_auth(
+                secret_name,
+                &pck.registry,
+                client,
+                vynil_ns,
+            )
+            .await?
+        }
+        None => common::ocihandler::OciRegistryAuth::Anonymous,
+    };
+    let exists =
+        common::ocihandler::verify_tag_in_registry(&pck.registry, &pck.image, requested, auth)
+            .await?;
+    if exists {
+        Ok(Some(requested.to_string()))
+    } else {
+        inst.clone()
+            .set_missing_init_version(requested.to_string())
+            .await?;
+        Err(Error::MissingInitVersion(requested.to_string()))
+    }
 }
 
 // ── Job helpers ───────────────────────────────────────────────────────────────
@@ -536,4 +610,140 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
         Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
     }
     Ok(Action::await_change())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SystemInstance, TenantInstance};
+    use common::{
+        instancesystem::SystemInstanceSpec,
+        instancetenant::{InitFrom, TenantInstanceSpec, TenantInstanceStatus},
+        vynilpackage::{VynilPackage, VynilPackageMeta, VynilPackageType},
+    };
+
+    fn make_tenant(version: Option<&str>, installed_tag: Option<&str>) -> TenantInstance {
+        TenantInstance {
+            metadata: kube::api::ObjectMeta {
+                name: Some("test".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: TenantInstanceSpec {
+                jukebox: "jb".to_string(),
+                category: "cat".to_string(),
+                package: "pkg".to_string(),
+                init_from: version.map(|v| InitFrom {
+                    secret_name: None,
+                    sub_path: None,
+                    snapshot: "snap1".to_string(),
+                    version: Some(v.to_string()),
+                }),
+                options: None,
+            },
+            status: installed_tag.map(|t| TenantInstanceStatus {
+                tag: Some(t.to_string()),
+                conditions: vec![],
+                digest: None,
+                tfstate: None,
+                rhaistate: None,
+                befores: None,
+                vitals: None,
+                scalables: None,
+                others: None,
+                posts: None,
+                services: None,
+            }),
+        }
+    }
+
+    fn make_package(name: &str, category: &str, tag: &str, usage: VynilPackageType) -> VynilPackage {
+        VynilPackage {
+            registry: "docker.io".to_string(),
+            image: "test/image".to_string(),
+            tag: tag.to_string(),
+            metadata: VynilPackageMeta {
+                name: name.to_string(),
+                category: category.to_string(),
+                description: "".to_string(),
+                app_version: None,
+                usage,
+                features: vec![],
+            },
+            requirements: vec![],
+            recommandations: None,
+            options: None,
+            value_script: None,
+        }
+    }
+
+    fn fake_client() -> kube::Client {
+        let config = kube::Config::new("http://localhost:9999".parse().unwrap());
+        kube::Client::try_from(config).unwrap()
+    }
+
+    // ── Tests init_from_version() ─────────────────────────────────────────
+
+    #[test]
+    fn test_init_from_version_tenant_with_version() {
+        let inst = make_tenant(Some("1.5.0"), None);
+        assert_eq!(inst.init_from_version(), Some("1.5.0"));
+    }
+
+    #[test]
+    fn test_init_from_version_tenant_no_init_from() {
+        let inst = make_tenant(None, None);
+        assert_eq!(inst.init_from_version(), None);
+    }
+
+    #[test]
+    fn test_init_from_version_system_default() {
+        let inst = SystemInstance {
+            metadata: kube::api::ObjectMeta::default(),
+            spec: SystemInstanceSpec {
+                jukebox: "jb".to_string(),
+                category: "cat".to_string(),
+                package: "pkg".to_string(),
+                options: None,
+            },
+            status: None,
+        };
+        assert_eq!(inst.init_from_version(), None);
+    }
+
+    // ── Tests resolve_init_version() ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_resolve_init_version_no_version() {
+        let inst = make_tenant(None, None);
+        let pck = make_package("pkg", "cat", "1.0.0", VynilPackageType::Tenant);
+        let result = resolve_init_version(&inst, &pck, &[], &None, fake_client(), "default").await;
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_init_version_already_installed() {
+        let inst = make_tenant(Some("1.5.0"), Some("2.0.0"));
+        let pck = make_package("pkg", "cat", "1.0.0", VynilPackageType::Tenant);
+        let result = resolve_init_version(&inst, &pck, &[], &None, fake_client(), "default").await;
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_init_version_found_in_cache() {
+        let inst = make_tenant(Some("1.5.0"), None);
+        let pck = make_package("pkg", "cat", "1.0.0", VynilPackageType::Tenant);
+        let cached = make_package("pkg", "cat", "1.5.0", VynilPackageType::Tenant);
+        let result =
+            resolve_init_version(&inst, &pck, &[cached], &None, fake_client(), "default").await;
+        assert!(matches!(result, Ok(Some(ref v)) if v == "1.5.0"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a real OCI registry"]
+    async fn test_resolve_init_version_missing_in_registry() {
+        // Covered by integration tests — requires a running OCI registry.
+    }
 }

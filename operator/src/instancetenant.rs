@@ -52,6 +52,10 @@ impl InstanceKind for TenantInstance {
             .unwrap_or_default()
     }
 
+    fn init_from_version(&self) -> Option<&str> {
+        self.spec.init_from.as_ref()?.version.as_deref()
+    }
+
     fn have_child(&self) -> bool {
         self.have_child()
     }
@@ -70,6 +74,10 @@ impl InstanceKind for TenantInstance {
 
     async fn set_missing_requirement(mut self, reason: String) -> Result<Self> {
         self.set_missing_requirement(reason).await
+    }
+
+    async fn set_missing_init_version(mut self, version: String) -> Result<Self> {
+        self.set_missing_init_version(version).await
     }
 
     async fn check_requirements(
