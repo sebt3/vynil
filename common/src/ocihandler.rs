@@ -42,16 +42,26 @@ impl Registry {
         for (key, val) in annotations {
             values.insert(key.into(), val.to_string());
         }
-        let mut tar = Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
-        tar.append_dir_all(".", source_dir)
+        // Build uncompressed tar first to compute the diff_id (sha256 of uncompressed content)
+        let mut tar_uncompressed = Builder::new(Vec::new());
+        tar_uncompressed
+            .append_dir_all(".", source_dir)
             .map_err(|e| rhai_err(Error::Stdio(e)))?;
-        let encoded = tar.into_inner().map_err(|e| rhai_err(Error::Stdio(e)))?;
-        let data = encoded.finish().map_err(|e| rhai_err(Error::Stdio(e)))?;
+        let raw_tar = tar_uncompressed.into_inner().map_err(|e| rhai_err(Error::Stdio(e)))?;
+        let diff_id = format!("sha256:{}", sha256::digest(raw_tar.as_slice()));
+        // Gzip compress for the actual layer
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        std::io::copy(&mut raw_tar.as_slice(), &mut gz).map_err(|e| rhai_err(Error::Stdio(e)))?;
+        let data = gz.finish().map_err(|e| rhai_err(Error::Stdio(e)))?;
         let layer = client::ImageLayer::oci_v1_gzip(data, None);
         let cfg = config::ConfigFile {
             created: Some(Utc::now()),
             architecture: config::Architecture::None,
             os: config::Os::Linux,
+            rootfs: config::Rootfs {
+                r#type: "layers".to_string(),
+                diff_ids: vec![diff_id],
+            },
             config: Some(config::Config {
                 working_dir: Some("/".into()),
                 ..Default::default()
