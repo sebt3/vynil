@@ -232,10 +232,9 @@ impl HandleBars<'_> {
     }
 
     pub fn rhai_render(&mut self, template: String, data: rhai::Map) -> RhaiRes<String> {
-        let json_data: serde_json::Value = serde_json::from_str(
-            &serde_json::to_string(&data).map_err(|e| format!("{e}"))?,
-        )
-        .map_err(|e| format!("{e}"))?;
+        let json_data: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&data).map_err(|e| format!("{e}"))?)
+                .map_err(|e| format!("{e}"))?;
         self.engine
             .render_template(template.as_str(), &json_data)
             .map_err(|e| format!("{e}").into())
@@ -249,10 +248,9 @@ impl HandleBars<'_> {
     }
 
     pub fn rhai_render_named(&mut self, name: String, template: String, data: rhai::Map) -> RhaiRes<String> {
-        let json_data: serde_json::Value = serde_json::from_str(
-            &serde_json::to_string(&data).map_err(|e| format!("{e}"))?,
-        )
-        .map_err(|e| format!("{e}"))?;
+        let json_data: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&data).map_err(|e| format!("{e}"))?)
+                .map_err(|e| format!("{e}"))?;
         self.engine
             .register_template_string(name.as_str(), template)
             .map_err(Error::HbsTemplateError)

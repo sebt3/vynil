@@ -1,11 +1,11 @@
-use base64::Engine as _;
 use crate::{Error, Result, RhaiRes, rhai_err, rhaihandler::Map};
+use base64::Engine as _;
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use k8s_openapi::api::core::v1::Secret;
 use kube::{Client as KubeClient, api::Api};
-use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
 pub use oci_client::secrets::RegistryAuth as OciRegistryAuth;
+use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
 use rhai::{Dynamic, Engine};
 use std::{collections::BTreeMap, path::PathBuf};
 use tar::{Archive, Builder};
@@ -47,7 +47,9 @@ impl Registry {
         tar_uncompressed
             .append_dir_all(".", source_dir)
             .map_err(|e| rhai_err(Error::Stdio(e)))?;
-        let raw_tar = tar_uncompressed.into_inner().map_err(|e| rhai_err(Error::Stdio(e)))?;
+        let raw_tar = tar_uncompressed
+            .into_inner()
+            .map_err(|e| rhai_err(Error::Stdio(e)))?;
         let diff_id = format!("sha256:{}", sha256::digest(raw_tar.as_slice()));
         // Gzip compress for the actual layer
         let mut gz = GzEncoder::new(Vec::new(), Compression::default());
@@ -170,9 +172,7 @@ pub async fn resolve_registry_auth(
     if auth_b64.is_empty() {
         return Ok(RegistryAuth::Anonymous);
     }
-    let decoded = String::from_utf8(
-        base64::engine::general_purpose::STANDARD.decode(auth_b64)?,
-    )?;
+    let decoded = String::from_utf8(base64::engine::general_purpose::STANDARD.decode(auth_b64)?)?;
     let parts: Vec<&str> = decoded.splitn(2, ':').collect();
     if parts.len() == 2 {
         Ok(RegistryAuth::Basic(parts[0].to_string(), parts[1].to_string()))
@@ -195,16 +195,13 @@ pub async fn verify_tag_in_registry(
     match oci.pull_manifest_raw(&reference, &auth, &[]).await {
         Ok(_) => Ok(true),
         Err(oci_client::errors::OciDistributionError::RegistryError { envelope, .. })
-            if envelope
-                .errors
-                .iter()
-                .any(|e| {
-                    matches!(
-                        e.code,
-                        oci_client::errors::OciErrorCode::ManifestUnknown
-                            | oci_client::errors::OciErrorCode::NotFound
-                    )
-                }) =>
+            if envelope.errors.iter().any(|e| {
+                matches!(
+                    e.code,
+                    oci_client::errors::OciErrorCode::ManifestUnknown
+                        | oci_client::errors::OciErrorCode::NotFound
+                )
+            }) =>
         {
             Ok(false)
         }

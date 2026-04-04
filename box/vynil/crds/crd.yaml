@@ -113,8 +113,8 @@ spec:
                     status:
                       description: Status ("True" or "False") describe if the condition is enbled
                       enum:
-                      - "True"
-                      - "False"
+                      - 'True'
+                      - 'False'
                       type: string
                     type:
                       description: Type is an application condition type
@@ -415,7 +415,7 @@ spec:
                 nullable: true
                 properties:
                   secretName:
-                    description: "Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to \"backup-settings\""
+                    description: 'Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"'
                     nullable: true
                     type: string
                   snapshot:
@@ -423,6 +423,10 @@ spec:
                     type: string
                   subPath:
                     description: Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
+                    nullable: true
+                    type: string
+                  version:
+                    description: Version du package à utiliser pour la restauration
                     nullable: true
                     type: string
                 required:
@@ -438,10 +442,6 @@ spec:
                 x-kubernetes-preserve-unknown-fields: true
               package:
                 description: The package name
-                type: string
-              version:
-                description: The package version
-                nullable: true
                 type: string
             required:
             - category
@@ -497,8 +497,8 @@ spec:
                     status:
                       description: Status ("True" or "False") describe if the condition is enbled
                       enum:
-                      - "True"
-                      - "False"
+                      - 'True'
+                      - 'False'
                       type: string
                     type:
                       description: Type is an application condition type
@@ -769,7 +769,7 @@ spec:
                 nullable: true
                 properties:
                   secretName:
-                    description: "Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to \"backup-settings\""
+                    description: 'Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"'
                     nullable: true
                     type: string
                   snapshot:
@@ -777,6 +777,10 @@ spec:
                     type: string
                   subPath:
                     description: Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
+                    nullable: true
+                    type: string
+                  version:
+                    description: Version du package à utiliser pour la restauration
                     nullable: true
                     type: string
                 required:
@@ -792,10 +796,6 @@ spec:
                 x-kubernetes-preserve-unknown-fields: true
               package:
                 description: The package name
-                type: string
-              version:
-                description: The package version
-                nullable: true
                 type: string
             required:
             - category
@@ -851,8 +851,8 @@ spec:
                     status:
                       description: Status ("True" or "False") describe if the condition is enbled
                       enum:
-                      - "True"
-                      - "False"
+                      - 'True'
+                      - 'False'
                       type: string
                     type:
                       description: Type is an application condition type
@@ -1136,10 +1136,6 @@ spec:
               package:
                 description: The package name
                 type: string
-              version:
-                description: The package version
-                nullable: true
-                type: string
             required:
             - category
             - jukebox
@@ -1169,8 +1165,8 @@ spec:
                     status:
                       description: Status ("True" or "False") describe if the condition is enbled
                       enum:
-                      - "True"
-                      - "False"
+                      - 'True'
+                      - 'False'
                       type: string
                     type:
                       description: Type is an application condition type

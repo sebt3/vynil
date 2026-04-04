@@ -1,5 +1,6 @@
 use clap::Args;
-use common::{Result, Error, yamlhandler::{yaml_all_serialize_to_string}};
+use client::testing::TestHandler;
+use common::{Error, Result, yamlhandler::yaml_all_serialize_to_string};
 use rhai::Dynamic;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -7,7 +8,6 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use client::testing::TestHandler;
 
 
 #[derive(clap::ValueEnum, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
@@ -68,11 +68,7 @@ pub struct Parameters {
     )]
     testset_dir: Option<PathBuf>,
     /// test-name
-    #[arg(
-        long = "test-name",
-        env = "TEST_NAME",
-        value_name = "TEST_NAME"
-    )]
+    #[arg(long = "test-name", env = "TEST_NAME", value_name = "TEST_NAME")]
     test_name: Option<String>,
     /// Start all tests
     #[arg(long = "all")]
@@ -94,19 +90,17 @@ pub struct Parameters {
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {
-    if ! args.package_dir.join("tests").is_dir() {
-        return Err(Error::MissingTestDirectory(args.package_dir.clone()))
+    if !args.package_dir.join("tests").is_dir() {
+        return Err(Error::MissingTestDirectory(args.package_dir.clone()));
     }
     let mut handler = TestHandler::new(
         args.package_dir.clone(),
         args.script_dir.clone(),
         args.config_dir.clone(),
         args.template_dir.clone(),
-        if let Some(testset_dir) = args.testset_dir.clone() {
-            Some(Vec::from(&[testset_dir]))
-        } else {
-            None
-        },
+        args.testset_dir
+            .clone()
+            .map(|testset_dir| Vec::from(&[testset_dir])),
     )?;
 
     if args.start_all {

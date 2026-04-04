@@ -164,9 +164,13 @@ fn serde_json_value_to_yaml_value(v: serde_json::Value) -> Value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(b),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() { Value::Int(i) }
-            else if let Some(f) = n.as_f64() { Value::Float(f) }
-            else { Value::String(n.to_string()) }
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::String(n.to_string())
+            }
         }
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Array(a) => {
@@ -241,16 +245,22 @@ pub fn yaml_rhai_register(engine: &mut Engine) {
     // ── Order-preserving functions (rust-yaml / YamlDoc) ─────────────────
     // Used exclusively by agent/scripts/packages/update.rhai.
     engine
-        .register_fn("yaml_decode_ordered", |val: ImmutableString| -> RhaiRes<YamlDoc> {
-            YamlDoc::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
-        })
-        .register_fn("yaml_encode_ordered", |val: Dynamic| -> RhaiRes<ImmutableString> {
-            let yaml_val = dynamic_to_value(val);
-            new_yaml()
-                .dump_str(&yaml_val)
-                .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
-                .map(|s| s.into())
-        })
+        .register_fn(
+            "yaml_decode_ordered",
+            |val: ImmutableString| -> RhaiRes<YamlDoc> {
+                YamlDoc::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
+            },
+        )
+        .register_fn(
+            "yaml_encode_ordered",
+            |val: Dynamic| -> RhaiRes<ImmutableString> {
+                let yaml_val = dynamic_to_value(val);
+                new_yaml()
+                    .dump_str(&yaml_val)
+                    .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
+                    .map(|s| s.into())
+            },
+        )
         .register_fn("yaml_encode_ordered", |yd: YamlDoc| -> RhaiRes<ImmutableString> {
             new_yaml()
                 .dump_str(&yd.0)

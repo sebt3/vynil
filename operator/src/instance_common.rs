@@ -200,19 +200,12 @@ pub async fn resolve_init_version<T: InstanceKind>(
     // 2. Fallback: verify directly in the OCI registry
     let auth = match pull_secret {
         Some(secret_name) => {
-            common::ocihandler::resolve_registry_auth(
-                secret_name,
-                &pck.registry,
-                client,
-                vynil_ns,
-            )
-            .await?
+            common::ocihandler::resolve_registry_auth(secret_name, &pck.registry, client, vynil_ns).await?
         }
         None => common::ocihandler::OciRegistryAuth::Anonymous,
     };
     let exists =
-        common::ocihandler::verify_tag_in_registry(&pck.registry, &pck.image, requested, auth)
-            .await?;
+        common::ocihandler::verify_tag_in_registry(&pck.registry, &pck.image, requested, auth).await?;
     if exists {
         Ok(Some(requested.to_string()))
     } else {
@@ -320,7 +313,12 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     ctx.diagnostics.write().await.last_event = Utc::now();
 
     // ── Suspend annotation ────────────────────────────────────────────────
-    if inst.annotations().get("vynil.solidite.fr/suspend").map(|v| v == "true").unwrap_or(false) {
+    if inst
+        .annotations()
+        .get("vynil.solidite.fr/suspend")
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
         tracing::info!(
             "{}Instance {}/{} is suspended, skipping reconciliation",
             T::type_name(),
@@ -400,13 +398,12 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     }
 
     // ── initFrom version resolution ───────────────────────────────────────
-    let effective_tag = match resolve_init_version(
-        inst, &pck, &cached_packages, &pull_secret, client.clone(), my_ns,
-    ).await {
-        Ok(Some(v)) => v,
-        Ok(None)    => pck.tag.clone(),
-        Err(e)      => return Err(e),
-    };
+    let effective_tag =
+        match resolve_init_version(inst, &pck, &cached_packages, &pull_secret, client.clone(), my_ns).await {
+            Ok(Some(v)) => v,
+            Ok(None) => pck.tag.clone(),
+            Err(e) => return Err(e),
+        };
     {
         let obj = context.as_object_mut().unwrap();
         obj.insert("tag".to_string(), effective_tag.into());
@@ -745,8 +742,7 @@ mod tests {
         let inst = make_tenant(Some("1.5.0"), None);
         let pck = make_package("pkg", "cat", "1.0.0", VynilPackageType::Tenant);
         let cached = make_package("pkg", "cat", "1.5.0", VynilPackageType::Tenant);
-        let result =
-            resolve_init_version(&inst, &pck, &[cached], &None, fake_client(), "default").await;
+        let result = resolve_init_version(&inst, &pck, &[cached], &None, fake_client(), "default").await;
         assert!(matches!(result, Ok(Some(ref v)) if v == "1.5.0"));
     }
 
@@ -776,8 +772,7 @@ mod tests {
         let inst = make_tenant(Some("1.5.0"), None);
         let pck = make_package("pkg", "cat", "2.0.0", VynilPackageType::Tenant);
         let cached = make_package("pkg", "cat", "1.5.0", VynilPackageType::Tenant);
-        let result =
-            resolve_init_version(&inst, &pck, &[cached], &None, fake_client(), "default").await;
+        let result = resolve_init_version(&inst, &pck, &[cached], &None, fake_client(), "default").await;
         // Ok(Some("1.5.0")) → do_reconcile uses "1.5.0" instead of "2.0.0"
         assert!(matches!(result, Ok(Some(ref v)) if v == "1.5.0"));
     }

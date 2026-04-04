@@ -138,10 +138,9 @@ impl VynilTest {
                     let matching = selected
                         .iter()
                         .filter(|d| {
-                            let json: serde_json::Value = serde_json::from_str(
-                                &serde_json::to_string(*d).unwrap_or_default(),
-                            )
-                            .unwrap_or_default();
+                            let json: serde_json::Value =
+                                serde_json::from_str(&serde_json::to_string(*d).unwrap_or_default())
+                                    .unwrap_or_default();
                             json_subset_match(&value, &json)
                         })
                         .count();

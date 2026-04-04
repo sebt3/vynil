@@ -241,9 +241,7 @@ macro_rules! impl_condition_children {
 
             pub fn init_version_ko(version: &str, generation: i64) -> ApplicationCondition {
                 ApplicationCondition::new(
-                    &format!(
-                        "[E_INIT_VERSION_NOT_FOUND] Version {version} introuvable dans le registre OCI"
-                    ),
+                    &format!("[E_INIT_VERSION_NOT_FOUND] Version {version} introuvable dans le registre OCI"),
                     ConditionsStatus::False,
                     ConditionsType::InitFrom,
                     generation,

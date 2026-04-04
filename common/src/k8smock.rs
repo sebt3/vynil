@@ -1,7 +1,7 @@
 use crate::RhaiRes;
 use kube::{api::DynamicObject, runtime::wait::Condition};
 use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
-use serde::{Serialize,Deserialize};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 pub fn update_cache() {}
@@ -200,7 +200,10 @@ impl K8sGenericMock {
         ns: Option<String>,
         created: Arc<Mutex<Vec<Dynamic>>>,
     ) -> Self {
-        let my_mocks: Vec<Dynamic> = mocks.lock().unwrap().clone()
+        let my_mocks: Vec<Dynamic> = mocks
+            .lock()
+            .unwrap()
+            .clone()
             .into_iter()
             .filter(|m| {
                 m.is_map()
@@ -258,11 +261,20 @@ impl K8sGenericMock {
         Self::new(mocks, name, ns, created)
     }
 
-    pub fn new_ns(mocks: Arc<Mutex<Vec<Dynamic>>>, name: String, ns: String, created: Arc<Mutex<Vec<Dynamic>>>) -> Self {
+    pub fn new_ns(
+        mocks: Arc<Mutex<Vec<Dynamic>>>,
+        name: String,
+        ns: String,
+        created: Arc<Mutex<Vec<Dynamic>>>,
+    ) -> Self {
         Self::new(mocks, name.as_str(), Some(ns), created)
     }
 
-    pub fn new_global(mocks: Arc<Mutex<Vec<Dynamic>>>, name: String, created: Arc<Mutex<Vec<Dynamic>>>) -> Self {
+    pub fn new_global(
+        mocks: Arc<Mutex<Vec<Dynamic>>>,
+        name: String,
+        created: Arc<Mutex<Vec<Dynamic>>>,
+    ) -> Self {
         Self::new(mocks, name.as_str(), None, created)
     }
 
@@ -372,14 +384,21 @@ impl K8sGenericMock {
     pub fn rhai_apply(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
         //TODO : Look if the object exist already. Merge if so
         let mut obj = data;
-        if let Some(ns) = self.ns.clone() &&
-            obj.is_map() &&
-            obj.as_map_ref().unwrap().contains_key("metadata") &&
-            obj.as_map_ref().unwrap()["metadata"].is_map() &&
-            ! obj.as_map_ref().unwrap()["metadata"].as_map_ref().unwrap().contains_key("namespace") {
-            obj.as_map_mut().unwrap().entry("metadata".into()).and_modify(|meta| {
-                meta.as_map_mut().unwrap().insert("namespace".into(), ns.into());
-            });
+        if let Some(ns) = self.ns.clone()
+            && obj.is_map()
+            && obj.as_map_ref().unwrap().contains_key("metadata")
+            && obj.as_map_ref().unwrap()["metadata"].is_map()
+            && !obj.as_map_ref().unwrap()["metadata"]
+                .as_map_ref()
+                .unwrap()
+                .contains_key("namespace")
+        {
+            obj.as_map_mut()
+                .unwrap()
+                .entry("metadata".into())
+                .and_modify(|meta| {
+                    meta.as_map_mut().unwrap().insert("namespace".into(), ns.into());
+                });
         }
         self.created.lock().unwrap().push(obj.clone());
         self.mocks.lock().unwrap().push(obj.clone());
@@ -403,7 +422,6 @@ impl K8sGenericMock {
         self.mocks.lock().unwrap().push(data.clone());
         Ok(data)
     }
-
 }
 
 // ── K8sInstance mock (ServiceInstance, SystemInstance, TenantInstance) ────────
@@ -689,7 +707,10 @@ fn find_instance_mock(
 }
 
 fn list_instance_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>, kind: &str, namespace: &str) -> RhaiRes<Dynamic> {
-    let items: Vec<K8sInstanceMock> = mocks.lock().unwrap().clone()
+    let items: Vec<K8sInstanceMock> = mocks
+        .lock()
+        .unwrap()
+        .clone()
         .iter()
         .filter(|m| {
             if !m.is_map() {
@@ -798,7 +819,10 @@ fn find_jukebox_mock(mocks: Arc<Mutex<Vec<Dynamic>>>, name: &str) -> RhaiRes<K8s
 }
 
 fn list_jukebox_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>) -> RhaiRes<Dynamic> {
-    let items: Vec<K8sJukeBoxMock> = mocks.lock().unwrap().clone()
+    let items: Vec<K8sJukeBoxMock> = mocks
+        .lock()
+        .unwrap()
+        .clone()
         .iter()
         .filter(|m| {
             if !m.is_map() {

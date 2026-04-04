@@ -46,15 +46,12 @@ fn template_json(
 
 /// Templates all strings inside a rhai::Dynamic (via JSON round-trip).
 fn template_dynamic(hbs: &mut HandleBars, ctx: &serde_json::Value, d: &Dynamic) -> common::Result<Dynamic> {
-    let json: serde_json::Value = serde_json::from_str(
-        &serde_json::to_string(d).map_err(common::Error::SerializationError)?,
-    )
-    .map_err(common::Error::SerializationError)?;
+    let json: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(d).map_err(common::Error::SerializationError)?)
+            .map_err(common::Error::SerializationError)?;
     let templated = template_json(hbs, ctx, json)?;
-    serde_json::from_str(
-        &serde_json::to_string(&templated).map_err(common::Error::SerializationError)?,
-    )
-    .map_err(common::Error::SerializationError)
+    serde_json::from_str(&serde_json::to_string(&templated).map_err(common::Error::SerializationError)?)
+        .map_err(common::Error::SerializationError)
 }
 
 /// Templates all string keys and values inside a rhai::Map.
@@ -95,7 +92,11 @@ fn template_assert(
                 .transpose()?,
         },
         matcher: a.matcher.clone(),
-        value: if a.value.is_some() {Some(template_json(hbs, ctx, a.value.clone().unwrap())?)} else {None},
+        value: if a.value.is_some() {
+            Some(template_json(hbs, ctx, a.value.clone().unwrap())?)
+        } else {
+            None
+        },
     })
 }
 
@@ -137,7 +138,10 @@ fn collect_templated(
     asserts_out: &mut Vec<VynilAssert>,
 ) -> common::Result<()> {
     let mut context = ctx.clone();
-    context.as_object_mut().unwrap().insert("context".into(), ctx.clone());
+    context
+        .as_object_mut()
+        .unwrap()
+        .insert("context".into(), ctx.clone());
 
     if let Some(m) = mocks {
         if let Some(k8s) = &m.kubernetes {
@@ -468,7 +472,11 @@ impl TestHandler {
         }
     }
 
-    fn run_test_inner(&self, name: &str, created_objects: Arc<Mutex<Vec<Dynamic>>>) -> common::Result<Vec<VynilAssertResult>> {
+    fn run_test_inner(
+        &self,
+        name: &str,
+        created_objects: Arc<Mutex<Vec<Dynamic>>>,
+    ) -> common::Result<Vec<VynilAssertResult>> {
         // Resolve test: merge testSets, template mocks/asserts
         let test = self.get_templated_test(name)?;
 
@@ -568,11 +576,15 @@ impl TestHandler {
 
         // Run the install script
         let _ = rhai.eval(
-            format!("import(\"context\") as ctx;\n\
+            format!(
+                "import(\"context\") as ctx;\n\
             let instance = {}(args.namespace, args.instance);\n\
             let context = ctx::run(instance, args);\n\
             import(\"install\") as install;\n\
-            install::run(instance, context);", fun_name).as_str(),
+            install::run(instance, context);",
+                fun_name
+            )
+            .as_str(),
         )?;
 
         // Validate asserts against created objects
