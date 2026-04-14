@@ -239,14 +239,14 @@ pub async fn delete_job_and_wait(job_api: &Api<Job>, job_name: &str) -> Result<(
 /// Applies (SSA patch) a Job definition, falling back to delete-then-create
 /// if the server-side apply is rejected.
 pub async fn upsert_job(job_api: &Api<Job>, job_name: &str, job_def: Value) -> Result<()> {
-    match job_api
+    let patch_result = job_api
         .patch(
             job_name,
             &PatchParams::apply(&get_client_name()).force(),
             &Patch::Apply(job_def.clone()),
         )
-        .await
-    {
+        .await;
+    match patch_result {
         Ok(_) => Ok(()),
         Err(_) => {
             if let either::Left(j) = job_api
@@ -291,14 +291,14 @@ where
     let ns = inst.namespace().unwrap_or_default();
     let insts: Api<T> = Api::namespaced(ctx.client.clone(), &ns);
 
-    finalizer(&insts, T::finalizer_name(), inst, |event| async {
+    let fin_result = finalizer(&insts, T::finalizer_name(), inst, |event| async {
         match event {
             Finalizer::Apply(inst) => inst.reconcile(ctx.clone()).await,
             Finalizer::Cleanup(inst) => inst.cleanup(ctx.clone()).await,
         }
     })
-    .await
-    .map_err(|e| Error::FinalizerError(Box::new(e)))
+    .await;
+    fin_result.map_err(|e| Error::FinalizerError(Box::new(e)))
 }
 
 // ── Generic reconcile (Apply) ─────────────────────────────────────────────────
@@ -477,12 +477,6 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     let job_def: Value = common::yamlhandler::yaml_str_to_json(&job_def_str)?;
     upsert_job(&job_api, &job_name, job_def).await?;
 
-    tracing::debug!(
-        "Reconcilling {}Instance {}/{} Done",
-        T::type_name(),
-        inst.namespace().unwrap(),
-        inst.name_any()
-    );
     Ok(Action::requeue(Duration::from_secs(15 * 60)))
 }
 

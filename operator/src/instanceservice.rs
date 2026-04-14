@@ -65,19 +65,19 @@ impl InstanceKind for ServiceInstance {
     }
 
     async fn set_missing_box(mut self, jukebox: String) -> Result<Self> {
-        self.set_missing_box(jukebox).await
+        ServiceInstance::set_missing_box(&mut self, jukebox).await
     }
 
     async fn set_missing_package(mut self, category: String, package: String) -> Result<Self> {
-        self.set_missing_package(category, package).await
+        ServiceInstance::set_missing_package(&mut self, category, package).await
     }
 
     async fn set_missing_requirement(mut self, reason: String) -> Result<Self> {
-        self.set_missing_requirement(reason).await
+        ServiceInstance::set_missing_requirement(&mut self, reason).await
     }
 
     async fn set_missing_init_version(mut self, version: String) -> Result<Self> {
-        self.set_missing_init_version(version).await
+        ServiceInstance::set_missing_init_version(&mut self, version).await
     }
 
     async fn check_requirements(

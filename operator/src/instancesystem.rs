@@ -61,15 +61,15 @@ impl InstanceKind for SystemInstance {
     }
 
     async fn set_missing_box(mut self, jukebox: String) -> Result<Self> {
-        self.set_missing_box(jukebox).await
+        SystemInstance::set_missing_box(&mut self, jukebox).await
     }
 
     async fn set_missing_package(mut self, category: String, package: String) -> Result<Self> {
-        self.set_missing_package(category, package).await
+        SystemInstance::set_missing_package(&mut self, category, package).await
     }
 
     async fn set_missing_requirement(mut self, reason: String) -> Result<Self> {
-        self.set_missing_requirement(reason).await
+        SystemInstance::set_missing_requirement(&mut self, reason).await
     }
 
     async fn check_requirements(

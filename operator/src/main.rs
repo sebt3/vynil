@@ -26,8 +26,16 @@ async fn index(c: Data<Manager>, _req: HttpRequest) -> impl Responder {
     HttpResponse::Ok().json(&d)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(8 * 1024 * 1024) // kube 2.0 + async_trait : state machines en debug sont larges
+        .build()
+        .expect("Failed to build Tokio runtime")
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     // Setup tracing layers
     #[cfg(feature = "telemetry")]
     let telemetry = tracing_opentelemetry::layer().with_tracer(telemetry::init_tracer().await);
