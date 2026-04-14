@@ -34,6 +34,20 @@ pub async fn run(_args: &Parameters) -> std::result::Result<(), Error> {
                         });
                     }
                 });
+        props.entry("spec".into()).and_modify(|spec| {
+            if let Some(ref mut props) = spec.properties {
+                // schemars génère anyOf:[{oneOf:[...]}, {enum:[null],nullable:true}] pour Option<Enum>
+                // On aplatit en oneOf direct + nullable:true sur le champ
+                props.entry("source".into()).and_modify(|source| {
+                    let one_of = source.any_of.as_ref()
+                        .and_then(|any_of| any_of.first())
+                        .and_then(|first| first.one_of.clone());
+                    source.one_of = one_of;
+                    source.any_of = None;
+                    source.nullable = Some(true);
+                });
+            }
+        });
     }
     print!("{}", common::yamlhandler::yaml_serialize_to_string(&crd).unwrap());
     println!("---");
