@@ -76,6 +76,15 @@ fn run(instance, context, use_init_from) {
         name: "RESTIC_HOST",
         value: context.instance.appslug
     }, #{
+        name: "GOMAXPROCS",
+        value: "2"
+    }, #{
+        name: "GOMEMLIMIT",
+        value: "1560MiB"
+    }, #{
+        name: "GOGC",
+        value: "20"
+    }, #{
         name: "AGENT_IMAGE",
         value: context.agent_image
     }, #{

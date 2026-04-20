@@ -4,7 +4,7 @@ fn list_repository(spec, namespace) {
     let registry = spec.source.harbor.registry;
     let project = spec.source.harbor.project;
     let harbor = new_http_client(`https://${registry}`);
-    if "pull_secret" in spec && spec.pull_secret!="" {
+    if "pull_secret" in spec.keys() && spec.pull_secret!="" {
         let auth = secret::get_auth_from(spec.pull_secret, namespace, registry);
         harbor.add_header_basic(auth.user, auth.pass);
     } else {

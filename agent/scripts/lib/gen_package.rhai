@@ -17,8 +17,8 @@ fn gen_system(path, docs) {
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map") {
             if doc.kind == "CustomResourceDefinition" {
                 create_dir(`${path}/get_crds`);
-                if "conversion" in doc.spec && doc.spec.conversion != () {
-                    if "webhook" in doc.spec.conversion && doc.spec.conversion.webhook != () {
+                if "conversion" in doc.spec.keys() && doc.spec.conversion != () {
+                    if "webhook" in doc.spec.conversion.keys() && doc.spec.conversion.webhook != () {
                         doc.spec.conversion.webhook.clientConfig.service.name.replace(name, "{{instance.appslug}}");
                         doc.spec.conversion.webhook.clientConfig.service.namespace = "{{instance.namespace}}";
                     }
@@ -34,7 +34,7 @@ fn gen_system(path, docs) {
                 } else {
                     doc.metadata.name.replace(name, "{{instance.appslug}}");
                 }
-                if "namespace" in doc.metadata {
+                if "namespace" in doc.metadata.keys() {
                     doc.metadata.remove("namespace");
                 }
                 if doc.kind == "ClusterRoleBinding" || doc.kind == "RoleBinding" {
@@ -46,7 +46,7 @@ fn gen_system(path, docs) {
                     }
                     doc.subjects = subj;
                     doc.roleRef.name.replace(name, "{{instance.appslug}}");
-                    if "namespace" in doc.roleRef && doc.roleRef.namespace != () {
+                    if "namespace" in doc.roleRef.keys() && doc.roleRef.namespace != () {
                         doc.roleRef.namespace = "{{instance.namespace}}";
                     }
                 }
@@ -82,7 +82,7 @@ fn gen_tenant(path, docs) {
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
             doc.metadata.name.replace(name, "{{instance.appslug}}");
-            if "namespace" in doc.metadata {
+            if "namespace" in doc.metadata.keys() {
                 doc.metadata.remove("namespace");
             }
             if ["PersistentVolumeClaim"].contains(doc.kind) {
@@ -102,7 +102,7 @@ fn gen_tenant(path, docs) {
                     }
                     doc.subjects = subj;
                     doc.roleRef.name.replace(name, "{{instance.appslug}}");
-                    if "namespace" in doc.roleRef && doc.roleRef.namespace != () {
+                    if "namespace" in doc.roleRef.keys() && doc.roleRef.namespace != () {
                         doc.roleRef.namespace = "{{instance.namespace}}";
                     }
                 }
@@ -131,7 +131,7 @@ fn gen_tenant(path, docs) {
                     }
                     doc.subjects = subj;
                     doc.roleRef.name.replace(name, "{{instance.appslug}}");
-                    if "namespace" in doc.roleRef && doc.roleRef.namespace != () {
+                    if "namespace" in doc.roleRef.keys() && doc.roleRef.namespace != () {
                         doc.roleRef.namespace = "{{instance.namespace}}";
                     }
                 }
@@ -154,7 +154,7 @@ fn gen_service(path, docs) {
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
             doc.metadata.name.replace(name, "{{instance.appslug}}");
-            if "namespace" in doc.metadata {
+            if "namespace" in doc.metadata.keys() {
                 doc.metadata.remove("namespace");
             }
             if ["PersistentVolumeClaim"].contains(doc.kind) {
@@ -165,8 +165,8 @@ fn gen_service(path, docs) {
                 gen_yaml(`${path}/get_scalables/${doc.kind}_${doc_name}.yaml.hbs`, doc);
             } else if doc.kind == "CustomResourceDefinition" {
                 create_dir(`${path}/get_crds`);
-                if "conversion" in doc.spec && doc.spec.conversion != () {
-                    if "webhook" in doc.spec.conversion && doc.spec.conversion.webhook != () {
+                if "conversion" in doc.spec.keys() && doc.spec.conversion != () {
+                    if "webhook" in doc.spec.conversion.keys() && doc.spec.conversion.webhook != () {
                         doc.spec.conversion.webhook.clientConfig.service.name.replace(name, "{{instance.appslug}}");
                         doc.spec.conversion.webhook.clientConfig.service.namespace = "{{instance.namespace}}";
                     }
@@ -188,7 +188,7 @@ fn gen_service(path, docs) {
                     }
                     doc.subjects = subj;
                     doc.roleRef.name.replace(name, "{{instance.appslug}}");
-                    if "namespace" in doc.roleRef && doc.roleRef.namespace != () {
+                    if "namespace" in doc.roleRef.keys() && doc.roleRef.namespace != () {
                         doc.roleRef.namespace = "{{instance.namespace}}";
                     }
                 }
@@ -201,7 +201,7 @@ fn gen_service(path, docs) {
                     }
                     doc.subjects = subj;
                     doc.roleRef.name.replace(name, "{{instance.appslug}}");
-                    if "namespace" in doc.roleRef && doc.roleRef.namespace != () {
+                    if "namespace" in doc.roleRef.keys() && doc.roleRef.namespace != () {
                         doc.roleRef.namespace = "{{instance.namespace}}";
                     }
                 }

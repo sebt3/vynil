@@ -23,11 +23,11 @@ fn security_filter(v) {
 }
 
 let spec = box.spec;
-let use_auth = "pull_secret" in spec && spec.pull_secret!="" && spec.pull_secret!=();
+let use_auth = "pull_secret" in spec.keys() && spec.pull_secret!="" && spec.pull_secret!=();
 try {
-    let images_list = if "harbor" in spec.source {
+    let images_list = if "harbor" in spec.source.keys() {
             harbor::list_repository(spec, args.namespace)
-        } else if "script" in spec.source {
+        } else if "script" in spec.source.keys() {
             eval(spec.source.script)
         } else {
             spec.source.list

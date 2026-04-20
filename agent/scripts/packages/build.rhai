@@ -35,7 +35,7 @@ fn build(args) {
         let base = basename(item);
         if base in ["systems", "crds"] && is_dir(item) && valid.metadata.type == "system" {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs", ".yaml", ".yml"]);
-        } else if base in ["crds"] && is_dir(item) && valid.metadata.type == "service" {
+        } else if base == "crds" && is_dir(item) && valid.metadata.type == "service" {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs", ".yaml", ".yml"]);
         } else if base in ["vitals", "scalables", "others", "befores", "posts"] && is_dir(item) && valid.metadata.type in ["tenant", "service"] {
             copy::dir_exts(item, args.temp+"/"+base, [".hbs", ".yaml", ".yml"]);
@@ -50,7 +50,7 @@ fn build(args) {
                     copy::dir_exts(sub, `${args.temp}/${base}/${subbase}`, [".rhai"]);
                 }
             }
-        } else if base in ["scripts"] && is_dir(item) {
+        } else if base == "scripts" && is_dir(item) {
             copy::dir_exts(item, args.temp+"/"+base, [".rhai", ".sh"], true);
         } else if base == "tofu" && is_dir(item) {
             copy::dir_exts(item, args.temp+"/"+base, [".tf", ".tpl", ".tftpl"], true);

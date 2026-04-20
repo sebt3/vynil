@@ -5,7 +5,7 @@ fn get_authentik(ns, name) {
     let res = new_http_client("https://"+ing.spec.rules[0].host+"/api/v3");
     res.add_header_json();
     res.add_header_bearer(base64_decode(auth.data.AUTHENTIK_BOOTSTRAP_TOKEN));
-    if ("ca.crt" in cert.data) {
+    if ("ca.crt" in cert.data.keys()) {
         res.set_server_ca(base64_decode(cert.data["ca.crt"]));
     }
     res

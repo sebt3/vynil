@@ -427,8 +427,14 @@ impl K8sGenericMock {
 // ── K8sInstance mock (ServiceInstance, SystemInstance, TenantInstance) ────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct K8sInstanceMockObj {
+    pub obj: Dynamic,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct K8sInstanceMock {
     pub obj: Dynamic,
+    pub mocks: Arc<Mutex<Vec<Dynamic>>>,
 }
 
 impl K8sInstanceMock {
@@ -654,6 +660,35 @@ impl K8sInstanceMock {
             if let Ok(m) = meta.as_map_ref() {
                 if let Some(ns) = m.get("namespace") {
                     if let Ok(s) = ns.clone().into_string() {
+                        for m in self.mocks.lock().unwrap().clone() {
+                            if !m.is_map() {
+                                continue;
+                            }
+                            let map = m.as_map_ref().unwrap();
+                            // Check kind
+                            if !map.contains_key("kind") || !map["kind"].is_string() {
+                                continue;
+                            }
+                            if map["kind"].clone().into_string().unwrap() != "Namespace" {
+                                continue;
+                            }
+                            // Check metadata.name and metadata.namespace
+                            if !map.contains_key("metadata") || !map["metadata"].is_map() {
+                                continue;
+                            }
+                            let meta = map["metadata"].as_map_ref().unwrap();
+                            let name_match = meta.contains_key("name")
+                                && meta["name"].is_string()
+                                && meta["name"].clone().into_string().unwrap() == s;
+                            if name_match && meta.contains_key("labels") && meta["labels"].is_map() {
+                                let labels = meta["labels"].as_map_ref().unwrap();
+                                let label_key = std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
+                                if labels.clone().keys().any(|k| k == &label_key) {
+                                    let tenant = labels[label_key.as_str()].clone();
+                                    return Ok(tenant.to_string());
+                                }
+                            }
+                        }
                         return Ok(s);
                     }
                 }
@@ -700,14 +735,14 @@ fn find_instance_mock(
             && meta["namespace"].is_string()
             && meta["namespace"].clone().into_string().unwrap() == namespace;
         if name_match && ns_match {
-            return Ok(K8sInstanceMock { obj: m.clone() });
+            return Ok(K8sInstanceMock { obj: m.clone(), mocks: mocks.clone() });
         }
     }
     Err(format!("Failed to find {kind} {name} in namespace {namespace} in the Mock database").into())
 }
 
 fn list_instance_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>, kind: &str, namespace: &str) -> RhaiRes<Dynamic> {
-    let items: Vec<K8sInstanceMock> = mocks
+    let items: Vec<K8sInstanceMockObj> = mocks
         .lock()
         .unwrap()
         .clone()
@@ -731,7 +766,7 @@ fn list_instance_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>, kind: &str, namespace: &
                 && meta["namespace"].is_string()
                 && meta["namespace"].clone().into_string().unwrap() == namespace
         })
-        .map(|m| K8sInstanceMock { obj: m.clone() })
+        .map(|m| K8sInstanceMockObj { obj: m.clone() })
         .collect();
     to_dynamic(serde_json::json!({"items": items}))
 }

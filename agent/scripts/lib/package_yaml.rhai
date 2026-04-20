@@ -1,29 +1,30 @@
 fn validate(yaml) {
-    if ! ("apiVersion" in yaml) {
+    debug(yaml);
+    if ! ("apiVersion" in yaml.keys()) {
         log_warn("You should set your apiVersion");
         yaml.apiVersion = "vinyl.solidite.fr/v1beta1";
     }
-    if ! ("kind" in yaml) {
+    if ! ("kind" in yaml.keys()) {
         log_warn("You should set your kind");
         yaml.kind = "Package";
     }
-    if ! ("metadata" in yaml) {
+    if ! ("metadata" in yaml.keys()) {
         throw "No metadata defined in package.yaml";
     }
-    for key in ["name","category", "type"] {
-        if ! (key in yaml.metadata) {
+    for key in ["name", "category", "type"] {
+        if ! (key in yaml.metadata.keys()) {
             throw `No metadata.${key} defined in package.yaml`;
         } else if type_of(yaml.metadata[key]) != "string" {
             throw `metadata.${key} should be a string`;
         }
     }
-    if "options" in yaml && type_of(yaml.options) != "map" {
+    if "options" in yaml.keys() && type_of(yaml.options) != "map" {
         throw "options should be a map.";
-    } else if "options" in yaml {
+    } else if "options" in yaml.keys() {
         yaml.options = properties_improve(yaml.options);
 
     }
-    if ! ("requirements" in yaml) {
+    if ! ("requirements" in yaml.keys()) {
         yaml.requirements = []
     } else if type_of(yaml.requirements) != "array" {
         throw "requirements should be an array.";
@@ -46,18 +47,18 @@ fn properties_improve(values) {
     // TODO: Support options auto_improvements
     if type_of(values) == "map" {
         for prop in values.keys() {
-            if "default" in values[prop] && (! ("type" in values[prop]) || ! (values[prop].type in valid_type)) {
+            if "default" in values[prop].keys() && (! ("type" in values[prop].keys()) || ! (values[prop].type in valid_type)) {
                 values[prop].type = get_json_type(values[prop]["default"]);
             }
-            if ! ("type" in values[prop]) {
+            if ! ("type" in values[prop].keys()) {
                 throw `no type and no default for property ${prop}`;
             } else if ! (values[prop].type in valid_type) {
                 throw `Invalid type "${values[prop].type}" for property ${prop}`;
             }
             if values[prop].type == "object" {
-                if ! ("properties" in values[prop]) {
+                if ! ("properties" in values[prop].keys()) {
                     values[prop].properties = #{};
-                    if "default" in values[prop] {
+                    if "default" in values[prop].keys() {
                         for sub in values[prop]["default"].keys() {
                             values[prop].properties[sub] = #{
                                 "default": values[prop]["default"][sub],
@@ -69,9 +70,9 @@ fn properties_improve(values) {
                 }
                 values[prop].properties = properties_improve(values[prop].properties);
             } else if values[prop].type == "array" {
-                if ! ("items" in values[prop]) {
+                if ! ("items" in values[prop].keys()) {
                     values[prop].items = #{};
-                    if "default" in values[prop] && values[prop]["default"].len()>0 {
+                    if "default" in values[prop].keys() && values[prop]["default"].len()>0 {
                         values[prop].items.type = get_json_type(values[prop]["default"][0]);
                         if values[prop].items.type == "object" {
                             values[prop].items.properties = #{};

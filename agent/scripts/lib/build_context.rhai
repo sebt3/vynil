@@ -239,10 +239,10 @@ fn template(instance, args) {
     cluster_config["storage_classes"] = scs;
     cluster_config["crds"] = defaults.crds;
     cluster_config["services"] = [];
-    if ! ("prefered_storage" in cluster_config) {
+    if ! ("prefered_storage" in cluster_config.keys()) {
         cluster_config["prefered_storage"] = sce::get_prefered_sc(scs);
     }
-    if ! ("ha" in cluster_config) {
+    if ! ("ha" in cluster_config.keys()) {
         let nodes = defaults.nodes;
         cluster_config["ha"] = nodes.len() > 1;
     }
@@ -304,10 +304,10 @@ fn run(instance, args) {
     cluster_config["storage_classes"] = scs;
     let crds = k8s_resource("CustomResourceDefinition").list_meta().items;
     cluster_config["crds"] = crds.map(|c| c.metadata.name);
-    if ! ("prefered_storage" in cluster_config) {
+    if ! ("prefered_storage" in cluster_config.keys()) {
         cluster_config["prefered_storage"] = sce::get_prefered_sc(scs);
     }
-    if ! ("ha" in cluster_config) {
+    if ! ("ha" in cluster_config.keys()) {
         let nodes = k8s_resource("Nodes").list_meta().items.map(|c| c.metadata.name);
         cluster_config["ha"] = nodes.len() > 1;
     }
@@ -330,17 +330,17 @@ fn run(instance, args) {
                             category: svc.spec.category,
                             name: svc.spec["package"],
                         };
-                        if "tenant" in s {
+                        if "tenant" in s.keys() {
                             if s.tenant == tenant {
                                 s.remove("tenant");
-                                if "service" in s {
+                                if "service" in s.keys() {
                                     s += s.service;
                                     s.remove("service");
                                 }
                                 lst.push(s);
                             }
                         } else {
-                            if "service" in s {
+                            if "service" in s.keys() {
                                 s += s.service;
                                 s.remove("service");
                             }
@@ -361,8 +361,8 @@ fn run(instance, args) {
                             category: svc.spec.category,
                             name: svc.spec["package"],
                         };
-                        if ! ("tenant" in s) {
-                            if "service" in s {
+                        if ! ("tenant" in s.keys()) {
+                            if "service" in s.keys() {
                                 s += s.service;
                                 s.remove("service");
                             }

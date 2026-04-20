@@ -1,4 +1,4 @@
-ARG RUST_VERSION=1.90
+ARG RUST_VERSION=1.92
 ARG DEBIAN_VERSION=trixie
 FROM --platform=${BUILDPLATFORM:-linux/amd64} docker.io/rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential g++"
@@ -26,10 +26,10 @@ RUN touch common/src/lib.rs agent/src/lib.rs agent/src/main.rs \
  && strip target/release/agent
 # Then create the intermediary image with run-time dependencies installed
 FROM docker.io/debian:${DEBIAN_VERSION}-slim AS middle
-ARG HELM_VERSION=v3.17.0
-ARG KUBECTL_VERSION=v1.30.3
-ARG TF_VERSION=1.9.0
-ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client mariadb-client-compat restic"
+ARG HELM_VERSION=v4.1.4
+ARG KUBECTL_VERSION=v1.34.4
+ARG TF_VERSION=1.11.6
+ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client-17 mariadb-client-compat restic"
 # hadolint ignore=DL3008,DL4006,SC2035
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
