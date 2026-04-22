@@ -6,6 +6,5 @@ fn glob(text: ImmutableString, pattern: ImmutableString) -> bool {
 }
 
 pub fn glob_rhai_register(engine: &mut Engine) {
-    engine
-        .register_fn("glob", glob);
+    engine.register_fn("glob", glob);
 }

@@ -682,7 +682,8 @@ impl K8sInstanceMock {
                                 && meta["name"].clone().into_string().unwrap() == s;
                             if name_match && meta.contains_key("labels") && meta["labels"].is_map() {
                                 let labels = meta["labels"].as_map_ref().unwrap();
-                                let label_key = std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
+                                let label_key = std::env::var("TENANT_LABEL")
+                                    .unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
                                 if labels.clone().keys().any(|k| k == &label_key) {
                                     let tenant = labels[label_key.as_str()].clone();
                                     return Ok(tenant.to_string());
@@ -735,7 +736,10 @@ fn find_instance_mock(
             && meta["namespace"].is_string()
             && meta["namespace"].clone().into_string().unwrap() == namespace;
         if name_match && ns_match {
-            return Ok(K8sInstanceMock { obj: m.clone(), mocks: mocks.clone() });
+            return Ok(K8sInstanceMock {
+                obj: m.clone(),
+                mocks: mocks.clone(),
+            });
         }
     }
     Err(format!("Failed to find {kind} {name} in namespace {namespace} in the Mock database").into())

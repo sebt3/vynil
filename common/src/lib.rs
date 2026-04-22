@@ -125,6 +125,7 @@ pub mod httpmock;
 pub mod k8smock;
 #[macro_use]
 pub mod instance_macros;
+pub mod globhandler;
 pub mod instanceservice;
 pub mod instancesystem;
 pub mod instancetenant;
@@ -140,7 +141,6 @@ pub mod shellhandler;
 mod tools;
 pub mod vynilpackage;
 pub mod yamlhandler;
-pub mod globhandler;
 pub use context::get_client_name;
 pub use semverhandler::Semver;
 

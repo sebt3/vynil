@@ -3,6 +3,7 @@ use crate::{
     Result, RhaiRes,
     chronohandler::chrono_rhai_register,
     context,
+    globhandler::glob_rhai_register,
     /*ed25519handler::Ed25519,*/
     handlebarshandler::handlebars_rhai_register,
     hasheshandlers::hashes_rhai_register,
@@ -23,7 +24,6 @@ use crate::{
     shellhandler::shell_rhai_register,
     vynilpackage::package_rhai_register,
     yamlhandler::yaml_rhai_register,
-    globhandler::glob_rhai_register
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 pub use rhai::{

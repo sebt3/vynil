@@ -675,7 +675,8 @@ impl VynilPackageSource {
 pub fn read_package_yaml(file: &PathBuf) -> Result<VynilPackageSource> {
     let f = fs::File::open(Path::new(&file)).map_err(Error::Stdio)?;
     let deserializer = serde_yaml::Deserializer::from_reader(f);
-    serde_yaml::with::singleton_map_recursive::deserialize(deserializer).map_err(|e| Error::YamlError(e.to_string()))
+    serde_yaml::with::singleton_map_recursive::deserialize(deserializer)
+        .map_err(|e| Error::YamlError(e.to_string()))
 }
 pub fn rhai_read_package_yaml(file: String) -> RhaiRes<VynilPackageSource> {
     read_package_yaml(&PathBuf::from(&file)).map_err(rhai_err)
