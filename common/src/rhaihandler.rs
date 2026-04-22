@@ -23,6 +23,7 @@ use crate::{
     shellhandler::shell_rhai_register,
     vynilpackage::package_rhai_register,
     yamlhandler::yaml_rhai_register,
+    globhandler::glob_rhai_register
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 pub use rhai::{
@@ -163,6 +164,7 @@ impl Script {
         semver_rhai_register(&mut script.engine);
         package_rhai_register(&mut script.engine);
         yaml_rhai_register(&mut script.engine);
+        glob_rhai_register(&mut script.engine);
         handlebars_rhai_register(&mut script.engine);
         oci_rhai_register(&mut script.engine);
         shell_rhai_register(&mut script.engine);

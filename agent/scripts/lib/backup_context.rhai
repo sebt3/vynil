@@ -83,7 +83,7 @@ fn run(instance, context, use_init_from) {
         value: "1560MiB"
     }, #{
         name: "GOGC",
-        value: "20"
+        value: "70"
     }, #{
         name: "AGENT_IMAGE",
         value: context.agent_image

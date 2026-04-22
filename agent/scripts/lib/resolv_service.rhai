@@ -30,6 +30,19 @@ fn get_from_key(svcs, names) {
     ()
 }
 
+fn service_glob(svcs, matcher) {
+    if svcs == () {
+        return ();
+    }
+    let found = svcs.filter(|s| s["package"].name.glob(matcher));
+    if found.len() > 0 {
+        return found.map(|s| resolv_cm(s));
+    } else {
+        return ();
+    }
+    ()
+}
+
 fn get_from_package(svcs, names) {
     if svcs == () {
         return ();
@@ -94,6 +107,14 @@ fn get_system_package(context, key, names) {
 
 fn get_tenant_package(context, key, names) {
     get_from_package(context?.tenant?.services, key, names)
+}
+
+fn glob_system_package(context, pattern) {
+    service_glob(context?.cluster?.services, pattern)
+}
+
+fn glob_tenant_package(context, pattern) {
+    service_glob(context?.tenant?.services, pattern)
 }
 
 fn resolv_secret(svc) {

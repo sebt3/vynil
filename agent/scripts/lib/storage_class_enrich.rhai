@@ -92,6 +92,7 @@ fn get_prefered_sc(scs) {
         "fs_readWriteMany": (),
         "fs_cheap_readWriteOnce": (),
         "fs_fast_readWriteOnce": (),
+        "distibuted_readWriteOnce": (),
         "fs_readWriteOnce": (),
     };
     let block = scs.filter(|s| s.volumeMode=="Block");
@@ -112,7 +113,33 @@ fn get_prefered_sc(scs) {
     if fs_many.len() > 0 {
         pref["fs_readWriteMany"] = fs_many[0].name;
     }
-    if fs_only.len() > 0 {
+    if fs_only.len() > 1 {
+        let onlys = fs_only.filter(|s| !s.accessModes.contains(["ReadWriteMany"]));
+        if onlys.len() > 1 {
+            let local = onlys.filter(|s| s.provisioner=="rancher.io/local-path");
+            let other = block.filter(|s| s.provisioner!="rancher.io/local-path");
+            if local.len() > 0 && other.len() > 0 {
+                pref["distibuted_readWriteOnce"] = other[0].name;
+                pref["fs_readWriteOnce"] = local[0].name;
+            } else if local.len() > 0 {
+                pref["distibuted_readWriteOnce"] = local[0].name;
+                pref["fs_readWriteOnce"] = local[0].name;
+            } else if other.len() > 0 {
+                pref["distibuted_readWriteOnce"] = other[0].name;
+                pref["fs_readWriteOnce"] = onlys[0].name;
+            } else {
+                pref["distibuted_readWriteOnce"] = onlys[0].name;
+                pref["fs_readWriteOnce"] = onlys[0].name;
+            }
+        } else if onlys.len() > 0 {
+            pref["distibuted_readWriteOnce"] = onlys[0].name;
+            pref["fs_readWriteOnce"] = fs_only[0].name;
+        } else {
+            pref["distibuted_readWriteOnce"] = fs_only[0].name;
+            pref["fs_readWriteOnce"] = fs_only[0].name;
+        }
+    } else if fs_only.len() > 0 {
+        pref["distibuted_readWriteOnce"] = fs_only[0].name;
         pref["fs_readWriteOnce"] = fs_only[0].name;
     }
     pref

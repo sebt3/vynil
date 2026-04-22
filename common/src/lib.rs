@@ -140,6 +140,7 @@ pub mod shellhandler;
 mod tools;
 pub mod vynilpackage;
 pub mod yamlhandler;
+pub mod globhandler;
 pub use context::get_client_name;
 pub use semverhandler::Semver;
 
