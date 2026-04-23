@@ -25,7 +25,12 @@ fn run(args) {
                         yaml["images"][k]["tag"] = new_tag.to_string();
                         changed = true;
                     }
-                } catch (e) {}
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
             } else if app_version != () {
                 if new_version != () && new_version != new_tag {
                     let newt = new_tag.to_string();

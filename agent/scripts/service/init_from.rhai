@@ -8,7 +8,6 @@ fn run(instance, context) {
         context = ctx;
     }
     try {
-        context = ctx::run(instance, context, true);
         let ctx = import_run("init_from_prepare", instance, context);
         if type_of(ctx) == "map" {
             context = ctx;
@@ -18,7 +17,7 @@ fn run(instance, context) {
         if is_dir(`${context.package_dir}/pods`) {
             hbs.register_partial_dir(`${context.package_dir}/pods`);
         }
-        let all = yaml_decode_multi(hbs.render_from("{{> init_job.yaml }}", context));
+        let all = yaml_decode_multi(hbs.render_from("{{> init_job.yaml }}", ctx::run(instance, context, true)));
         let applied_objs = [];
         for obj in all {
             applied_objs += dir::install_obj(obj, true, instance.metadata.namespace, false);
@@ -29,7 +28,7 @@ fn run(instance, context) {
             "string" => instance.set_status_init_failed(e),
             _ => instance.set_status_init_failed(json_encode(e))
         }
-        throw e;
+        throw;
     }
     ctx = import_run("init_from_post", instance, context);
     if type_of(ctx) == "map" {

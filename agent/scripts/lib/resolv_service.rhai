@@ -3,7 +3,12 @@ fn resolv_cm(svc) {
         try {
             let cfg = k8s_resource("ConfigMap", svc.definition.namespace).get(svc.definition.name);
             svc += cfg.data;
-        } catch {}
+        } catch (e) {
+            switch type_of(e) {
+                "string" => log_warn(e),
+                _ => log_warn(json_encode(e))
+            }
+        }
         svc.remove("definition");
     }
     svc
@@ -124,7 +129,12 @@ fn resolv_secret(svc) {
             for k in data.keys() {
                 svc[k] = base64_decode(data[k]);
             }
-        } catch {}
+        } catch (e) {
+            switch type_of(e) {
+                "string" => log_warn(e),
+                _ => log_warn(json_encode(e))
+            }
+        }
         svc.remove("definition");
     }
     svc

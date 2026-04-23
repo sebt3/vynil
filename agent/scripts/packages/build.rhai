@@ -76,7 +76,12 @@ fn run(args) {
             if tags.len() > 0 {
                 version = tags[0];
             }
-        } catch(e) {}
+        } catch (e) {
+            switch type_of(e) {
+                "string" => log_warn(e),
+                _ => log_warn(json_encode(e))
+            }
+        }
         switch args.build {
             "major" => version.inc_major(),
             "minor" => version.inc_minor(),

@@ -105,5 +105,5 @@ try {
         log_warn(json_encode(e));
         let tmp = box.set_status_failed(json_encode(e));
     }
-    throw e;
+    throw;
 };

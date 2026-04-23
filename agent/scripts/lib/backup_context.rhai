@@ -278,7 +278,12 @@ fn run(instance, context, use_init_from) {
                         value: dbname
                     };
                 }
-            } catch {}
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
         } else if v.kind == "NdbCluster" {
             if name.is_empty() {
                 name = "ndb";
@@ -308,7 +313,12 @@ fn run(instance, context, use_init_from) {
                         value: "*"
                     };
                 }
-            } catch {}
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
         }
     }
     let deploy = [];

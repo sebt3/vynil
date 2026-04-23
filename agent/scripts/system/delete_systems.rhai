@@ -35,7 +35,12 @@ fn run(instance, context) {
                     let o = api.get_obj(old.name);
                     o.delete();
                     deleted.push(o);
-                } catch(e) {}
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
             }
         }
         for d in deleted {
@@ -58,7 +63,12 @@ fn run(instance, context) {
                         let o = api.get_obj(old.name);
                         o.delete();
                         deleted.push(o);
-                    } catch(e) {}
+                    } catch (e) {
+                        switch type_of(e) {
+                            "string" => log_warn(e),
+                            _ => log_warn(json_encode(e))
+                        }
+                    }
                 }
             }
         }

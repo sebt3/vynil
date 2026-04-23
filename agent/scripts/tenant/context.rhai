@@ -63,7 +63,12 @@ fn run(instance, args) {
                     }
                 }
             }
-        } catch {}
+        } catch (e) {
+            switch type_of(e) {
+                "string" => log_warn(e),
+                _ => log_warn(json_encode(e))
+            }
+        }
     }
     ctx = import_run("context_tenant", instance, context);
     if type_of(ctx) == "map" {

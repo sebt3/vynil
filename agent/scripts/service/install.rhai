@@ -64,7 +64,12 @@ fn run(instance, context) {
         try {
             let settings = k8s_resource("Secrets", context.instance.namespace).get("backup-settings");
             found = true;
-        } catch {}
+        } catch (e) {
+            switch type_of(e) {
+                "string" => log_warn(e),
+                _ => log_warn(json_encode(e))
+            }
+        }
         if found {
             // this need the scalables objects to be set
             import_run("schedule_backup", instance, context);

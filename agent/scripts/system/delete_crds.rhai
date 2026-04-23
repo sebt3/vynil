@@ -17,10 +17,20 @@ fn run(instance, context) {
                         try {
                             let o = api.get_obj(old);
                             o.delete();
-                        } catch (e) {}
+                        } catch (e) {
+                            switch type_of(e) {
+                                "string" => log_warn(e),
+                                _ => log_warn(json_encode(e))
+                            }
+                        }
                     }
                 }
-            } catch (e) {}
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
         }
     }
     ctx = import_run("delete_crds_post", instance, context);

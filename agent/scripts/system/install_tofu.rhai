@@ -26,7 +26,7 @@ fn run(instance, context) {
             "string" => instance.set_status_tofu_failed(state, e),
             _ => instance.set_status_tofu_failed(state, json_encode(e))
         }
-        throw e;
+        throw;
     }
     ctx = import_run("install_tofu_post", instance, context);
     if type_of(ctx) == "map" {

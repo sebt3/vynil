@@ -29,7 +29,7 @@ fn run(instance, context) {
             "string" => instance.set_status_scalable_failed(e),
             _ => instance.set_status_scalable_failed(json_encode(e))
         }
-        throw e;
+        throw;
     }
     ctx = import_run("install_scalables_post", instance, context);
     if type_of(ctx) == "map" {

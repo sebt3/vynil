@@ -232,7 +232,12 @@ fn template(instance, args) {
     let controller = #{};
     try {
         controller = json_decode(args.controller_values);
-    } catch {}
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
     let cluster_config = if is_file(`${args.config_dir}/agent.yaml`) {
         yaml_decode(file_read(`${args.config_dir}/agent.yaml`))
     } else {#{}};
@@ -294,7 +299,12 @@ fn run(instance, args) {
     let controller = #{};
     try {
         controller = json_decode(args.controller_values);
-    } catch {}
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
     if instance.status != () && instance.status.tag != () {
         current = instance.status.tag;
     }
@@ -373,7 +383,12 @@ fn run(instance, args) {
             }
         }
         cluster_config["services"] = lst;
-    } catch {}
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
 
     #{
         cluster: cluster_config,

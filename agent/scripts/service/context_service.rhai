@@ -17,10 +17,20 @@ fn run(instance, context) {
                 opt.remove(prefix);
                 try {
                     context.namespace[opt] = json_decode(annotations[k]);
-                } catch {}
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
             }
         }
 
-    } catch {}
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
     context
 }

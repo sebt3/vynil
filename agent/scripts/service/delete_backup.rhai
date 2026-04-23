@@ -7,53 +7,111 @@ fn run(instance, context) {
     }
     let deleted = [];
     try {
-        context = ctx::run(instance, context, false);
         let ctx = import_run("delete_backup_prepare", instance, context);
         if type_of(ctx) == "map" {
             context = ctx;
         }
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
+    try {
         let api = k8s_resource("CronJob", instance.metadata.namespace);
         if api.exist() {
             try {
                 let o = api.get_obj(`${instance.appslug}-backups`);
                 o.delete();
                 deleted.push(o);
-            } catch(e) {}
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
         }
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
+    try {
         api = k8s_resource("Job", instance.metadata.namespace);
         if api.exist() {
+            debug(`app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`);
             for job in api.list(`app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`).items {
                 try {
                     let o = api.get_obj(job.metadata.name);
                     o.delete();
                     deleted.push(o);
-                } catch(e) {}
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
             }
+            debug(`app.kubernetes.io/component=restore,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`);
             for job in api.list(`app.kubernetes.io/component=restore,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`).items {
                 try {
                     let o = api.get_obj(job.metadata.name);
                     o.delete();
                     deleted.push(o);
-                } catch(e) {}
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
             }
         }
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
+    try {
         api = k8s_resource("RoleBinding", instance.metadata.namespace);
         if api.exist() {
             try {
                 let o = api.get_obj(`${instance.appslug}-backups`);
                 o.delete();
                 deleted.push(o);
-            } catch(e) {}
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
         }
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
+    try {
         api = k8s_resource("ConfigMap", instance.metadata.namespace);
         if api.exist() {
             try {
                 let o = api.get_obj(`${instance.appslug}-backups-scripts`);
                 o.delete();
                 deleted.push(o);
-            } catch(e) {}
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
         }
     } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
     }
     for d in deleted {
         log_info(`Waiting for ${d.metadata.name} to be deleted`);

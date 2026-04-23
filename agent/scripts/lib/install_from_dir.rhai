@@ -45,7 +45,7 @@ fn get_objects(context, dir) {
             } else {[]};
         } catch(e) {
             log_error(`While parsing ${file} :`);
-            throw e;
+            throw;
         }
         for obj in objects.filter(|obj| type_of(obj) != "map" || ! obj.keys().contains("kind") || ! obj.keys().contains("metadata") || type_of(obj.metadata) != "map") {
             log_warn(`No kind for an object in file ${file}`);
@@ -188,7 +188,12 @@ fn remove(applied, previous, default_ns) {
                     let o = api.get_obj(old.name);
                     o.delete();
                     deleted.push(o);
-                } catch(e) {}
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
             }
         }
     }

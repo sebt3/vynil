@@ -18,13 +18,22 @@ fn run(instance, context) {
                 opt.remove(prefix);
                 try {
                     context.namespace[opt] = json_decode(annotations[k]);
-                } catch {}
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
             }
             if type_of(context.namespace.use_backup) != "bool" {
                 context.namespace["use_backup"] = context.tenant.use_backup;
             }
         }
-
-    } catch {}
+    } catch (e) {
+        switch type_of(e) {
+            "string" => log_warn(e),
+            _ => log_warn(json_encode(e))
+        }
+    }
     context
 }

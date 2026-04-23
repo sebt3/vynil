@@ -28,7 +28,7 @@ fn run(instance, context) {
             "string" => instance.set_status_system_failed(e),
             _ => instance.set_status_system_failed(json_encode(e))
         }
-        throw e;
+        throw;
     }
     ctx = import_run("install_systems_post", instance, context);
     if type_of(ctx) == "map" {
