@@ -210,7 +210,7 @@ impl Script {
                 } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
                     log_debug(`No ${name}::run function, skipping.`);\n\
                 } else {\n\
-                    throw e;\n\
+                    throw ;\n\
                 }\n\
             }\n\
         }",
@@ -231,11 +231,11 @@ impl Script {
                         if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
                             log_debug(`No ${name}::run function, skipping.`);\n\
                         } else {\n\
-                            throw e;\n\
+                            throw;\n\
                         }\n\
                     }\n\
                 } else {\n\
-                    throw e;\n\
+                    throw;\n\
                 }\n\
             }\n\
         }",
@@ -251,7 +251,7 @@ impl Script {
                 } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
                     log_debug(`No ${name}::run function, skipping.`);\n\
                 } else {\n\
-                    throw e;\n\
+                    throw;\n\
                 }\n\
             }\n\
         }",
@@ -272,11 +272,11 @@ impl Script {
                         if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
                             log_debug(`No ${name}::run function, skipping.`);\n\
                         } else {\n\
-                            throw e;\n\
+                            throw;\n\
                         }\n\
                     }\n\
                 } else {\n\
-                    throw e;\n\
+                    throw;\n\
                 }\n\
             }\n\
         }",
@@ -292,7 +292,7 @@ impl Script {
                 } else if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
                     log_debug(`No ${name}::run function, skipping.`);\n\
                 } else {\n\
-                    throw e;\n\
+                    throw;\n\
                 }\n\
             }\n\
         }",
@@ -313,11 +313,11 @@ impl Script {
                         if type_of(e) == \"map\" && \"error\" in e && e.error == \"ErrorFunctionNotFound\" {\n\
                             log_debug(`No ${name}::run function, skipping.`);\n\
                         } else {\n\
-                            throw e;\n\
+                            throw;\n\
                         }\n\
                     }\n\
                 } else {\n\
-                    throw e;\n\
+                    throw;\n\
                 }\n\
             }\n\
         }",

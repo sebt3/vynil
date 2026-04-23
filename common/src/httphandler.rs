@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{Error, Error::*, RhaiRes, get_client_name};
 use actix_web::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -239,7 +241,7 @@ impl RestClient {
                 );
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
-                        let headers = result
+                        let headers: HashMap<_, _> = result
                             .headers()
                             .into_iter()
                             .map(|(key, val)| {
@@ -248,13 +250,13 @@ impl RestClient {
                                     val.to_str().unwrap_or_default().to_string(),
                                 )
                             })
-                            .collect::<Vec<(String, String)>>();
+                            .collect();
                         let text = result.text().await.unwrap();
                         ret.insert(
                             "json".to_string().into(),
                             serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
                         );
-                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
+                        ret.insert("headers".to_string().into(), headers.into());
                         ret.insert("body".to_string().into(), Dynamic::from(text));
                         Ok(ret)
                     })
