@@ -22,7 +22,7 @@ fn list_repository(spec, namespace) {
     let max_pages = to_int(ceiling(max_size/10.0))+1;
     let result = initial.json.map(|p| `${registry}/${p.name}`);
     for i in 2..max_pages {
-        let list = harbor.get(`api/v2.0/projects/${project}/repositories?page${i}&page_size=10&sort=name`);
+        let list = harbor.get(`api/v2.0/projects/${project}/repositories?page=${i}&page_size=10&sort=name`);
         if list.code != 200 {
             throw `Unable to list from ${registry}/${project}`;
         }

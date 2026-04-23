@@ -1,5 +1,4 @@
 fn validate(yaml) {
-    debug(yaml);
     if ! ("apiVersion" in yaml.keys()) {
         log_warn("You should set your apiVersion");
         yaml.apiVersion = "vinyl.solidite.fr/v1beta1";
