@@ -37,14 +37,14 @@ fn run(instance, context) {
                     deleted.push(o);
                 } catch (e) {
                     switch type_of(e) {
-                        "string" => log_warn(e),
+                        "string" => if ! e.contains("NotFound") { log_warn(e) },
                         _ => log_warn(json_encode(e))
                     }
                 }
             }
         }
         for d in deleted {
-            log_info(`Waiting for ${d.metadata.name} to be deleted`);
+            log_info(`Waiting for ${d.kind} ${d.metadata.name} to be deleted`);
             d.wait_deleted(60*5);
         }
         deleted = [];
@@ -65,7 +65,7 @@ fn run(instance, context) {
                         deleted.push(o);
                     } catch (e) {
                         switch type_of(e) {
-                            "string" => log_warn(e),
+                            "string" => if ! e.contains("NotFound") { log_warn(e) },
                             _ => log_warn(json_encode(e))
                         }
                     }
@@ -73,7 +73,7 @@ fn run(instance, context) {
             }
         }
         for d in deleted {
-            log_info(`Waiting for ${d.metadata.name} to be deleted`);
+            log_info(`Waiting for ${d.kind} ${d.metadata.name} to be deleted`);
             d.wait_deleted(60*5);
         }
     }

@@ -22,7 +22,7 @@ fn run(instance, context) {
         for obj in all {
             applied_objs += dir::install_allowed_obj(obj, context.tenant.namespaces, instance.metadata.namespace);
         }
-        wait::all(applied_objs);
+        wait::all(applied_objs, 20*60);
     } catch (e) {
         switch type_of(e) {
             "string" => instance.set_status_init_failed(e),

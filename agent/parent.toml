@@ -24,7 +24,7 @@ actix-web = "4.12.1"
 base64 = "0.22.1"
 
 [workspace.package]
-version = "0.6.3"
+version = "0.6.6"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2024"
 license = "BSD-3-Clause"

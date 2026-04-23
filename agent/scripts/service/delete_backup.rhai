@@ -77,7 +77,7 @@ fn run(instance, context) {
         let api = k8s_resource("RoleBinding", instance.metadata.namespace);
         if api.exist() {
             try {
-                let o = api.get_obj(`${instance.appslug}-backups`);
+                let o = api.get_obj(`${context.instance.appslug}-backups`);
                 o.delete();
                 deleted.push(o);
             } catch (e) {
@@ -97,7 +97,7 @@ fn run(instance, context) {
         let api = k8s_resource("ConfigMap", instance.metadata.namespace);
         if api.exist() {
             try {
-                let o = api.get_obj(`${instance.appslug}-backups-scripts`);
+                let o = api.get_obj(`${context.instance.appslug}-backups-scripts`);
                 o.delete();
                 deleted.push(o);
             } catch (e) {
@@ -114,7 +114,7 @@ fn run(instance, context) {
         }
     }
     for d in deleted {
-        log_info(`Waiting for ${d.metadata.name} to be deleted`);
+        log_info(`Waiting for ${d.kind} ${d.metadata.name} to be deleted`);
         d.wait_deleted(60*5);
     }
     ctx = import_run("delete_backup_post", instance, context);
