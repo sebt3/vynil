@@ -1,4 +1,4 @@
-import "backup_context" as ctx;
+import "backup_context" as bctx;
 import "install_from_dir" as dir;
 
 fn run(instance, context) {
@@ -7,7 +7,7 @@ fn run(instance, context) {
         context = ctx;
     }
     try {
-        context = ctx::run(instance, context, false);
+        context = bctx::run(instance, context, false);
         let ctx = import_run("schedule_backup_prepare", instance, context);
         if type_of(ctx) == "map" {
             context = ctx;

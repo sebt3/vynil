@@ -21,7 +21,7 @@ fn run(instance, context) {
         let api = k8s_resource("CronJob", instance.metadata.namespace);
         if api.exist() {
             try {
-                let o = api.get_obj(`${instance.appslug}-backups`);
+                let o = api.get_obj(`${context.instance.appslug}-backups`);
                 o.delete();
                 deleted.push(o);
             } catch (e) {
@@ -38,7 +38,7 @@ fn run(instance, context) {
         }
     }
     try {
-        api = k8s_resource("Job", instance.metadata.namespace);
+        let api = k8s_resource("Job", instance.metadata.namespace);
         if api.exist() {
             debug(`app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`);
             for job in api.list(`app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`).items {
@@ -74,7 +74,7 @@ fn run(instance, context) {
         }
     }
     try {
-        api = k8s_resource("RoleBinding", instance.metadata.namespace);
+        let api = k8s_resource("RoleBinding", instance.metadata.namespace);
         if api.exist() {
             try {
                 let o = api.get_obj(`${instance.appslug}-backups`);
@@ -94,7 +94,7 @@ fn run(instance, context) {
         }
     }
     try {
-        api = k8s_resource("ConfigMap", instance.metadata.namespace);
+        let api = k8s_resource("ConfigMap", instance.metadata.namespace);
         if api.exist() {
             try {
                 let o = api.get_obj(`${instance.appslug}-backups-scripts`);
