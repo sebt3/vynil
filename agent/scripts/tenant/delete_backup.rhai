@@ -26,7 +26,7 @@ fn run(instance, context) {
                 deleted.push(o);
             } catch (e) {
                 switch type_of(e) {
-                    "string" => log_warn(e),
+                    "string" => if ! e.contains("NotFound") { log_warn(e) },
                     _ => log_warn(json_encode(e))
                 }
             }
@@ -80,7 +80,7 @@ fn run(instance, context) {
                 deleted.push(o);
             } catch (e) {
                 switch type_of(e) {
-                    "string" => log_warn(e),
+                    "string" => if ! e.contains("NotFound") { log_warn(e) },
                     _ => log_warn(json_encode(e))
                 }
             }
@@ -100,7 +100,7 @@ fn run(instance, context) {
                 deleted.push(o);
             } catch (e) {
                 switch type_of(e) {
-                    "string" => log_warn(e),
+                    "string" => if ! e.contains("NotFound") { log_warn(e) },
                     _ => log_warn(json_encode(e))
                 }
             }

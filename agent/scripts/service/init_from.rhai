@@ -20,7 +20,24 @@ fn run(instance, context) {
         let all = yaml_decode_multi(hbs.render_from("{{> init_job.yaml }}", bctx::run(instance, context, true)));
         let applied_objs = [];
         for obj in all {
-            applied_objs += dir::install_obj(obj, true, instance.metadata.namespace, false);
+            let to_apply = true;
+            if obj.kind == "Job" {
+                try {
+                    let api = k8s_resource("Job", instance.metadata.namespace);
+                    if api.exist() {
+                        let lst = api.list().items.filter(|j| j.metadata.name == obj.metadata.name);
+                        to_apply = lst.len() < 1;
+                    }
+                } catch (e) {
+                    switch type_of(e) {
+                        "string" => log_warn(e),
+                        _ => log_warn(json_encode(e))
+                    }
+                }
+            }
+            if to_apply {
+                applied_objs += dir::install_obj(obj, true, instance.metadata.namespace, false);
+            }
         }
         wait::all(applied_objs, 20*60);
     } catch (e) {
