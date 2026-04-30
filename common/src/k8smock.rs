@@ -181,6 +181,41 @@ fn find_workload_mock(
     Err(format!("Failed to find {kind} {name} in namespace {namespace} in the Mock database").into())
 }
 
+fn upsert_in_list(list: &mut Vec<Dynamic>, kind: &str, obj: &Dynamic) {
+    if !obj.is_map() {
+        list.push(obj.clone());
+        return;
+    }
+    let map = obj.as_map_ref().unwrap();
+    let meta: Option<Map> = match map.get("metadata") {
+        Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
+        _ => None,
+    };
+    let obj_name = meta.as_ref().and_then(|m| m.get("name")).and_then(|n| n.clone().into_string().ok());
+    let obj_ns = meta.as_ref().and_then(|m| m.get("namespace")).and_then(|n| n.clone().into_string().ok());
+    for entry in list.iter_mut() {
+        if !entry.is_map() {
+            continue;
+        }
+        let entry_map: Map = entry.as_map_ref().unwrap().clone();
+        let entry_kind = entry_map.get("kind").and_then(|k| k.clone().into_string().ok());
+        if entry_kind.as_deref() != Some(kind) {
+            continue;
+        }
+        let entry_meta: Option<Map> = match entry_map.get("metadata") {
+            Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
+            _ => None,
+        };
+        let entry_name = entry_meta.as_ref().and_then(|m| m.get("name")).and_then(|n| n.clone().into_string().ok());
+        let entry_ns = entry_meta.as_ref().and_then(|m| m.get("namespace")).and_then(|n| n.clone().into_string().ok());
+        if entry_name == obj_name && entry_ns == obj_ns {
+            *entry = obj.clone();
+            return;
+        }
+    }
+    list.push(obj.clone());
+}
+
 // ── K8sGenericMock ──────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -382,7 +417,6 @@ impl K8sGenericMock {
     }
 
     pub fn rhai_apply(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
-        //TODO : Look if the object exist already. Merge if so
         let mut obj = data;
         if let Some(ns) = self.ns.clone()
             && obj.is_map()
@@ -400,27 +434,42 @@ impl K8sGenericMock {
                     meta.as_map_mut().unwrap().insert("namespace".into(), ns.into());
                 });
         }
-        self.created.lock().unwrap().push(obj.clone());
-        self.mocks.lock().unwrap().push(obj.clone());
+        if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
+            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+        }
+        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
+        upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
         Ok(obj)
     }
 
     pub fn rhai_replace(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
-        self.created.lock().unwrap().push(data.clone());
-        //TODO : replace the objet in the mocks DB for real
-        Ok(data)
+        let mut obj = data;
+        if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
+            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+        }
+        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
+        upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
+        Ok(obj)
     }
 
     pub fn rhai_patch(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
-        //TODO : update the objet in the mocks DB for real
-        Ok(data)
+        let mut obj = data;
+        if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
+            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+        }
+        upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
+        Ok(obj)
     }
 
     // Collected for asserts
     pub fn rhai_create(&mut self, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
-        self.created.lock().unwrap().push(data.clone());
-        self.mocks.lock().unwrap().push(data.clone());
-        Ok(data)
+        let mut obj = data;
+        if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
+            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+        }
+        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
+        upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
+        Ok(obj)
     }
 }
 
