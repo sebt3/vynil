@@ -39,10 +39,8 @@ spec:
   serviceAccountName: {{service_account}}
   restartPolicy: Never
   priorityClassName: vynil-backup
-  {{#if backup_node}}
-  nodeSelector:
-    kubernetes.io/hostname: {{backup_node}}
-  {{/if}}
+  affinity:
+    podAffinity: {{json_to_str pod_affinity}}
   securityContext:
     runAsGroup: 0
     runAsUser: 0

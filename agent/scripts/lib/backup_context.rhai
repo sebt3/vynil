@@ -60,7 +60,23 @@ fn run(instance, context, use_init_from) {
         name: "empty-dir",
         mountPath: `/backup`
     }];
-    context["backup_node"] = ();
+    // preferred (not required): co-locates backup with the running app pod, noop when app is scaled to 0.
+    context["pod_affinity"] = #{
+        preferredDuringSchedulingIgnoredDuringExecution: [#{
+            weight: 100,
+            podAffinityTerm: #{
+                labelSelector: #{
+                    matchLabels: context.instance.selector,
+                    matchExpressions: [#{
+                        key: "app.kubernetes.io/component",
+                        operator: "NotIn",
+                        values: ["backup", "restore"]
+                    }]
+                },
+                topologyKey: "kubernetes.io/hostname"
+            }
+        }]
+    };
     context["envs_from"] = [#{
         secretRef: #{
             name: secret_name
@@ -180,24 +196,6 @@ fn run(instance, context, use_init_from) {
                 name: name,
                 mountPath: `/backup/${name}`
             };
-            // Pin backup pod to the node holding the RWO volume to avoid Ceph RBD multi-attach errors.
-            if context["backup_node"] == () {
-                try {
-                    let pvc = k8s_resource("PersistentVolumeClaim", context.instance.namespace).get(v.name);
-                    if pvc.spec.accessModes.contains("ReadWriteOnce") {
-                        let pv_name = pvc.spec.volumeName;
-                        if pv_name != () && pv_name != "" {
-                            let attached = k8s_resource("VolumeAttachment").list().items.filter(|a|
-                                a.spec?.source?.persistentVolumeName == pv_name &&
-                                a.status?.attached == true
-                            );
-                            if attached.len() > 0 {
-                                context["backup_node"] = attached[0].spec.nodeName;
-                            }
-                        }
-                    }
-                } catch {}
-            }
         } else if v.kind == "Secret" {
             if name.is_empty() {
                 name = "secret";
