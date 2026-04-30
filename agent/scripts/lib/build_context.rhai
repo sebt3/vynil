@@ -403,6 +403,7 @@ fn run(instance, args) {
                 app_version: pkg.metadata.app_version,
                 options: pkg.options,
                 "type": pkg.metadata["type"],
+                backup_affinity: pkg.metadata.backup_affinity,
             },
             labels: #{
                 "app.kubernetes.io/name": instance.spec["package"],

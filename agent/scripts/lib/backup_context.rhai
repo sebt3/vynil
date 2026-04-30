@@ -156,6 +156,7 @@ fn run(instance, context, use_init_from) {
     }
     context["schedule"] = `${context.namespace.maintenance_start_minut} ${context.namespace.maintenance_start_hour} * * *`;
     context["service_account"] = `${context.instance.appslug}-backup`;
+    context["backup_affinity"] = context.instance["package"].backup_affinity;
     let pgs = [];
     let mysqls = [];
     let secrets = [];

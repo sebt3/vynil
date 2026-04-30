@@ -141,6 +141,10 @@ spec:
                           description: Application version
                           nullable: true
                           type: string
+                        backup_affinity:
+                          description: Component name to use as required pod affinity for backup jobs
+                          nullable: true
+                          type: string
                         category:
                           description: Package category
                           type: string

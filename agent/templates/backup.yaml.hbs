@@ -43,4 +43,12 @@ spec:
     runAsGroup: 0
     runAsUser: 0
     runAsNonRoot: false
+{{#if backup_affinity}}
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels: {{json_to_str (selector_from_ctx this comp=backup_affinity)}}
+        topologyKey: kubernetes.io/hostname
+{{/if}}
 {{/to_json}}

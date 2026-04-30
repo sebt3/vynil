@@ -60,6 +60,8 @@ pub struct VynilPackageMeta {
     pub usage: VynilPackageType,
     /// Package features
     pub features: Vec<VynilPackageFeature>,
+    /// Component name to use as required pod affinity for backup jobs
+    pub backup_affinity: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]

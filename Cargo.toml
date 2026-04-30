@@ -26,7 +26,7 @@ actix-web = "4.12.1"
 base64 = "0.22.1"
 
 [workspace.package]
-version = "0.6.6"
+version = "0.6.8"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2024"
 license = "BSD-3-Clause"
@@ -69,7 +69,7 @@ precommit = { cmd=[
     "cargo +nightly fmt"
 ]}
 agent-dev = { cmd=[
-    "podman build . -f agent/Dockerfile -t docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version)",
+    "podman build . -f agent/Dockerfile -t docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version)-dev && podman push docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version)-dev",
 ]}
 agent = { cmd=[
     "podman build . -f agent/Dockerfile -t docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version) && podman push docker.io/sebt3/vynil-agent:$(cargo run --bin agent -- version)",
