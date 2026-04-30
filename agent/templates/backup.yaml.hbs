@@ -39,6 +39,10 @@ spec:
   serviceAccountName: {{service_account}}
   restartPolicy: Never
   priorityClassName: vynil-backup
+  {{#if backup_node}}
+  nodeSelector:
+    kubernetes.io/hostname: {{backup_node}}
+  {{/if}}
   securityContext:
     runAsGroup: 0
     runAsUser: 0
