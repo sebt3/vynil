@@ -1,10 +1,6 @@
 fn for_singletons(context, typed) {
     let scs = context.cluster.storage_classes;
-    if typed=="fast" && context.cluster.prefered_storage.fs_fast_readWriteMany != () {
-        scs.find(|s| s.name == context.cluster.prefered_storage.fs_fast_readWriteMany && s.volumeMode == "Filesystem")
-    } else if typed=="cheap" && context.cluster.prefered_storage.fs_cheap_readWriteMany != () {
-        scs.find(|s| s.name == context.cluster.prefered_storage.fs_cheap_readWriteMany && s.volumeMode == "Filesystem")
-    } else if context.cluster.prefered_storage.distibuted_readWriteOnce != () {
+    if context.cluster.prefered_storage.distibuted_readWriteOnce != () {
         scs.find(|s| s.name == context.cluster.prefered_storage.distibuted_readWriteOnce && s.volumeMode == "Filesystem")
     } else if typed=="fast" && context.cluster.prefered_storage.fs_fast_readWriteOnce != () {
         scs.find(|s| s.name == context.cluster.prefered_storage.fs_fast_readWriteOnce && s.volumeMode == "Filesystem")
