@@ -462,6 +462,51 @@ impl K8sInstanceMock {
             *status = Dynamic::from_map(status_map);
         }
         self.obj = Dynamic::from_map(top);
+        self.persist();
+    }
+
+    fn persist(&self) {
+        if !self.obj.is_map() {
+            return;
+        }
+        let map = self.obj.as_map_ref().unwrap();
+        let kind = match map.get("kind").and_then(|k| k.clone().into_string().ok()) {
+            Some(k) => k,
+            None => return,
+        };
+        let meta: Map = match map.get("metadata") {
+            Some(m) if m.is_map() => m.as_map_ref().unwrap().clone(),
+            _ => return,
+        };
+        let name = match meta.get("name").and_then(|n| n.clone().into_string().ok()) {
+            Some(n) => n,
+            None => return,
+        };
+        let ns = match meta.get("namespace").and_then(|n| n.clone().into_string().ok()) {
+            Some(n) => n,
+            None => return,
+        };
+        let mut mocks = self.mocks.lock().unwrap();
+        for entry in mocks.iter_mut() {
+            if !entry.is_map() {
+                continue;
+            }
+            let entry_map: Map = entry.as_map_ref().unwrap().clone();
+            let entry_kind = entry_map.get("kind").and_then(|k| k.clone().into_string().ok());
+            let entry_meta: Option<Map> = match entry_map.get("metadata") {
+                Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
+                _ => None,
+            };
+            let entry_name = entry_meta.as_ref().and_then(|m| m.get("name")).and_then(|n| n.clone().into_string().ok());
+            let entry_ns = entry_meta.as_ref().and_then(|m| m.get("namespace")).and_then(|n| n.clone().into_string().ok());
+            if entry_kind.as_deref() == Some(kind.as_str())
+                && entry_name.as_deref() == Some(name.as_str())
+                && entry_ns.as_deref() == Some(ns.as_str())
+            {
+                *entry = self.obj.clone();
+                return;
+            }
+        }
     }
 
     // ── Getters ─────────────────────────────────────────────────────────
