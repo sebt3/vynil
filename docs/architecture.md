@@ -265,6 +265,22 @@ Quatre registres séparés (un par type de ressource) exposent :
 
 ---
 
+## Tests de régression Rhai
+
+La suite de tests dans `agent/tests/rhai_*.rs` exécute les scripts Rhai internes de l'agent avec un moteur Rhai réel et des mocks K8s/HTTP. Elle est structurée en deux niveaux :
+
+- **`rhai_lib.rs`** : tests unitaires des scripts `agent/scripts/lib/` (fonctions isolées, assertions sur valeurs retournées)
+  - Couvre les patterns susceptibles de régresser lors des mises à jour Rhai (`.filter()`, `.replace()`, `.reduce()`, closures)
+  - Environ 20 tests unitaires couvrant storage_class, wait, install_from_dir, gen_package, backup_context, resolv_service
+
+- **`rhai_lifecycle.rs`** : tests d'intégration des scripts de cycle de vie service/install et service/delete (flow complet avec mocks K8s)
+  - Exécute les flows end-to-end : context → install / context → delete
+  - Valide que tous les scripts lib/ s'assemblent correctement
+
+Ces tests servent de filet de régression lors des mises à jour de la version Rhai, en capturant les changements de sémantique des fonctions de manipulation de strings et collections.
+
+---
+
 ## Variables d'environnement (operator)
 
 | Variable | Défaut | Rôle |
