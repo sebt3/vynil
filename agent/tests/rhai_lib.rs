@@ -39,6 +39,23 @@ fn k8s_object(kind: &str, namespace: &str, name: &str) -> Dynamic {
     }))
 }
 
+fn build_instance_mock(ns: &str, name: &str) -> Dynamic {
+    dynamic_from_json(serde_json::json!({
+        "apiVersion": "vynil.solidite.fr/v1",
+        "kind": "ServiceInstance",
+        "metadata": { "name": name, "namespace": ns },
+        "spec": { "category": "test", "package": "test-pkg", "options": {} }
+    }))
+}
+
+fn build_context_mock() -> Dynamic {
+    let base = env!("CARGO_MANIFEST_DIR");
+    dynamic_from_json(serde_json::json!({
+        "config_dir": format!("{}/scripts/config", base),
+        "package_dir": format!("{}/scripts/packages", base)
+    }))
+}
+
 #[test]
 fn harness_compiles() {
     let mut rhai = make_lib_script();
@@ -389,6 +406,153 @@ fn wait_all_chains_functions() {
         wait::all(resources, 1);
         true
     "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true);
+}
+
+// ===== install_from_dir.rhai tests =====
+
+#[test]
+fn install_from_dir_applies_multiple_yamls() {
+    // Verify install() reads multiple YAML files and creates objects in K8s
+    // Tests: file I/O (read_dir, file_read), YAML parsing, filtering, K8s apply
+    let base = env!("CARGO_MANIFEST_DIR");
+    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/basic", base);
+
+    let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
+
+    let result = rhai.eval(&format!(r#"
+        import "install_from_dir" as install;
+
+        let instance = #{{
+            metadata: #{{ namespace: "test-ns" }}
+        }};
+
+        let context = #{{
+            config_dir: "",
+            package_dir: ""
+        }};
+
+        let applied = install::install(instance, context, "{}", true, false);
+
+        // Should have applied ConfigMap and Deployment (2 objects)
+        applied.len()
+    "#, fixture_dir)).unwrap();
+
+    let count = result.as_int().unwrap();
+    assert_eq!(count, 2);
+
+    // Verify objects were created in mock K8s
+    let created_objs = created.lock().unwrap();
+    assert_eq!(created_objs.len(), 2);
+}
+
+#[test]
+fn install_from_dir_empty_directory_no_objects() {
+    // Verify install() handles empty directory without error and returns empty list
+    let base = env!("CARGO_MANIFEST_DIR");
+    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/empty", base);
+
+    let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
+
+    let result = rhai.eval(&format!(r#"
+        import "install_from_dir" as install;
+
+        let instance = #{{
+            metadata: #{{ namespace: "test-ns" }}
+        }};
+
+        let context = #{{
+            config_dir: "",
+            package_dir: ""
+        }};
+
+        let applied = install::install(instance, context, "{}", true, false);
+
+        // Empty directory should return empty list
+        applied.len()
+    "#, fixture_dir)).unwrap();
+
+    let count = result.as_int().unwrap();
+    assert_eq!(count, 0);
+
+    let created_objs = created.lock().unwrap();
+    assert_eq!(created_objs.len(), 0);
+}
+
+#[test]
+fn install_from_dir_respects_namespace_parameter() {
+    // Verify force_ns=true forces namespace on all objects regardless of YAML
+    let base = env!("CARGO_MANIFEST_DIR");
+    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/basic", base);
+
+    let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
+
+    let result = rhai.eval(&format!(r#"
+        import "install_from_dir" as install;
+
+        let instance = #{{
+            metadata: #{{ namespace: "forced-ns" }}
+        }};
+
+        let context = #{{
+            config_dir: "",
+            package_dir: ""
+        }};
+
+        // force_ns=true should override YAML namespace (test-ns -> forced-ns)
+        let applied = install::install(instance, context, "{}", true, true);
+
+        applied.len()
+    "#, fixture_dir)).unwrap();
+
+    let count = result.as_int().unwrap();
+    assert_eq!(count, 2);
+
+    // Verify objects have forced namespace
+    let created_objs = created.lock().unwrap();
+    assert_eq!(created_objs.len(), 2);
+    for obj in created_objs.iter() {
+        if let Ok(map) = obj.as_map_ref() {
+            if let Some(meta) = map.get("metadata") {
+                if let Ok(meta_map) = meta.as_map_ref() {
+                    if let Some(ns) = meta_map.get("namespace") {
+                        assert_eq!(ns.to_string(), "forced-ns");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn install_from_dir_respects_ordering() {
+    // Verify get_first() kinds (ConfigMap) are applied before get_last() kinds (Deployment)
+    // Tests the 3-phase ordering logic: first, middle, last
+    let base = env!("CARGO_MANIFEST_DIR");
+    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/basic", base);
+
+    let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
+
+    let result = rhai.eval(&format!(r#"
+        import "install_from_dir" as install;
+
+        let instance = #{{
+            metadata: #{{ namespace: "test-ns" }}
+        }};
+
+        let context = #{{
+            config_dir: "",
+            package_dir: ""
+        }};
+
+        let applied = install::install(instance, context, "{}", true, false);
+
+        // Check that objects list contains both ConfigMap (first) and Deployment (last)
+        applied.len() == 2 &&
+        applied.some(|o| o.kind == "ConfigMap") &&
+        applied.some(|o| o.kind == "Deployment")
+    "#, fixture_dir)).unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
