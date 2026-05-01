@@ -3,43 +3,43 @@
 fn get_known_class() { [
     #{
         "driverClass": "cephfs.csi.ceph.com",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"clone": true, "dynamic": true, "expansion": true, "raw": false, "snapshot": true, "topology": false, "tracking": false},
     }, #{
         "driverClass": "rbd.csi.ceph.com",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": true},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": true},
         "capabilities": #{"clone": true, "dynamic": true, "expansion": true, "raw": true, "snapshot": true, "topology": true, "tracking": false},
     }, #{
         "driverClass": "smb.csi.k8s.io",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"dynamic": true},
     }, #{
         "driverClass": "nfs.csi.k8s.io",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"dynamic": true},
     }, #{
         "driverClass": "k8s-sigs.io/nfs-provisioner",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"dynamic": true},
     }, #{
         "driverClass": "rancher.io/local-path",
-        "accessModes": #{"readOnlyMany": false, "readWriteMany": false, "readWriteOnce": true, "readWriteOncePod": true},
+        "accessModes": #{"ReadOnlyMany": false, "ReadWriteMany": false, "ReadWriteOnce": true, "ReadWriteOncePod": true},
         "capabilities": #{"dynamic": true},
     }, #{
         "driverClass": "csi.scaleway.com",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": true},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": true},
         "capabilities": #{"clone": false, "dynamic": true, "expansion": true, "raw": true, "snapshot": true, "topology": true, "tracking": false},
     }, #{
         "driverClass": "filestore.csi.storage.gke.io",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"dynamic": true, "file": true},
     }, #{
         "driverClass": "file.csi.azure.com",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"clone": false, "dynamic": true, "expansion": true, "file": true, "raw": false, "snapshot": false, "topology": false, "tracking": false},
     }, #{
         "driverClass": "efs.csi.aws.com",
-        "accessModes": #{"readOnlyMany": true, "readWriteMany": true, "readWriteOnce": true, "readWriteOncePod": false},
+        "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"dynamic": true, "file": true},
     }
 ] }
@@ -64,7 +64,7 @@ fn classes_enrich(scs) {
         if f != () {
             i["capabilities"] = f.capabilities;
             let keys = f.accessModes.keys();
-            i["allAccessModes"] = keys.filter(|k| f.accessModes[k]).map(|s| {s.replace("read","Read");s});
+            i["allAccessModes"] = keys.filter(|k| f.accessModes[k]);
             if (f.capabilities.raw == true) {
                 let b = i;
                 b["volumeMode"] = "Block";

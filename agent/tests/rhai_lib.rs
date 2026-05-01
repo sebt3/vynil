@@ -556,3 +556,272 @@ fn install_from_dir_respects_ordering() {
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
+
+// ===== gen_package.rhai tests =====
+
+#[test]
+fn gen_package_replace_returns_modified_string() {
+    // Vérifie le comportement de .replace() : depuis Rhai 1.18+, retourne la string modifiée
+    // au lieu de muter la string originale. Pattern vulnérable: str.replace(...); str
+    // Ce test expose le bug si replace() est appelé sans assigner le résultat.
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let labels = #{
+            app: "my-app",
+            release: "old-release"
+        };
+
+        // Call replace_label_values which uses .replace() internally
+        // The function should replace 'old-release' with '{{instance.appslug}}'
+        let replaced = gen::replace_label_values(labels, "old-release");
+
+        // Debug: print what we got
+        debug(`Input: ${labels.release}`);
+        debug(`Output: ${replaced.release}`);
+
+        // Verify the replacement occurred
+        replaced.release == "{{instance.appslug}}"
+    "#).unwrap();
+
+    // This should be true if .replace() properly updates the value
+    // Currently may be false if the bug exists (pattern: v.replace(...); v without assignment)
+    assert_eq!(result.as_bool().unwrap(), true,
+        "replace_label_values must update label values using .replace() with assignment");
+}
+
+
+#[test]
+fn gen_package_clean_metadata_removes_helm_annotations() {
+    // Verify clean_metadata removes Helm-specific annotations and preserves others
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let metadata = #{
+            name: "my-release",
+            labels: #{
+                app: "myapp",
+                release: "old-release"
+            },
+            annotations: #{
+                "helm.sh/chart": "myapp-1.0",
+                "custom.io/desc": "custom value",
+                "checksum/config": "abc123"
+            }
+        };
+
+        let cleaned = gen::clean_metadata(metadata, "old-release");
+
+        // Verify Helm annotations are removed
+        let has_helm = "helm.sh/chart" in cleaned.annotations;
+        let has_checksum = "checksum/config" in cleaned.annotations;
+        let has_custom = "custom.io/desc" in cleaned.annotations;
+
+        !has_helm && !has_checksum && has_custom
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "clean_metadata must remove Helm and checksum annotations but keep custom ones");
+}
+
+#[test]
+fn gen_package_clean_metadata_empty_annotations() {
+    // Verify clean_metadata removes the annotations key entirely if it becomes empty
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let metadata = #{
+            name: "my-release",
+            annotations: #{
+                "helm.sh/chart": "myapp-1.0",
+                "checksum/config": "abc123"
+            }
+        };
+
+        let cleaned = gen::clean_metadata(metadata, "release");
+
+        // annotations key should be removed if empty
+        !("annotations" in cleaned)
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "clean_metadata must remove annotations key if all entries are Helm-related");
+}
+
+#[test]
+fn gen_package_replace_volumes_handles_configmap_and_pvc() {
+    // Verify replace_volumes updates names in configMap and persistentVolumeClaim refs
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let volumes = [
+            #{
+                name: "config-vol",
+                configMap: #{
+                    name: "old-release-config"
+                }
+            },
+            #{
+                name: "data-vol",
+                persistentVolumeClaim: #{
+                    claimName: "old-release-data"
+                }
+            }
+        ];
+
+        let replaced = gen::replace_volumes(volumes, "old-release");
+
+        // Verify both are replaced (.replace mutates in place)
+        replaced[0].configMap.name == "{{instance.appslug}}-config" &&
+        replaced[1].persistentVolumeClaim.claimName == "{{instance.appslug}}-data"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "replace_volumes must update configMap and persistentVolumeClaim names");
+}
+
+#[test]
+fn gen_package_replace_containers_handles_env_configmap_refs() {
+    // Verify replace_containers updates names in environment variable refs
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let containers = [
+            #{
+                name: "app",
+                env: [
+                    #{
+                        name: "CONFIG_MAP_NAME",
+                        value: "old-release-config"
+                    },
+                    #{
+                        name: "DB_PASS",
+                        valueFrom: #{
+                            configMapKeyRef: #{
+                                name: "old-release-secrets",
+                                key: "db-password"
+                            }
+                        }
+                    }
+                ],
+                envFrom: [
+                    #{
+                        configMapRef: #{
+                            name: "old-release-env"
+                        }
+                    }
+                ]
+            }
+        ];
+
+        let replaced = gen::replace_containers(containers, "old-release");
+
+        // Verify replacements in env value, env valueFrom, and envFrom
+        // (.replace mutates in place, replacing the matched substring)
+        replaced[0].env[0].value == "{{instance.appslug}}-config" &&
+        replaced[0].env[1].valueFrom.configMapKeyRef.name == "{{instance.appslug}}-secrets" &&
+        replaced[0].envFrom[0].configMapRef.name == "{{instance.appslug}}-env"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "replace_containers must update configMapRef names in env, envFrom, and valueFrom");
+}
+
+#[test]
+fn gen_package_replace_containers_handles_secret_refs() {
+    // Verify replace_containers updates secret names in all reference types
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let containers = [
+            #{
+                name: "app",
+                env: [
+                    #{
+                        name: "DB_PASS",
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: "old-release-db-secret",
+                                key: "password"
+                            }
+                        }
+                    }
+                ],
+                envFrom: [
+                    #{
+                        secretRef: #{
+                            name: "old-release-secret"
+                        }
+                    }
+                ]
+            }
+        ];
+
+        let replaced = gen::replace_containers(containers, "old-release");
+
+        // Verify secret name replacements (.replace mutates in place)
+        replaced[0].env[0].valueFrom.secretKeyRef.name == "{{instance.appslug}}-db-secret" &&
+        replaced[0].envFrom[0].secretRef.name == "{{instance.appslug}}-secret"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "replace_containers must update secretRef names in valueFrom and envFrom");
+}
+
+#[test]
+fn gen_package_replace_image_pull_secrets() {
+    // Verify replace_image_pull_secrets updates secret names
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let secrets = [
+            #{
+                name: "old-release-registry"
+            },
+            #{
+                name: "other-secret"
+            }
+        ];
+
+        let replaced = gen::replace_image_pull_secrets(secrets, "old-release");
+
+        // First secret should have "old-release" replaced, second untouched
+        // (.replace mutates in place, replacing the matched substring)
+        replaced[0].name == "{{instance.appslug}}-registry" &&
+        replaced[1].name == "other-secret"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "replace_image_pull_secrets must update matching secret names");
+}
+
+#[test]
+fn gen_package_clean_annotations_backward_compat() {
+    // Verify clean_annotations (backward-compat version) works without name param
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "gen_package" as gen;
+
+        let metadata = #{
+            annotations: #{
+                "helm.sh/chart": "chart-1.0",
+                "custom.io/desc": "value"
+            }
+        };
+
+        let cleaned = gen::clean_annotations(metadata);
+
+        !("helm.sh/chart" in cleaned.annotations) &&
+        "custom.io/desc" in cleaned.annotations
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "clean_annotations must remove Helm annotations without name parameter");
+}

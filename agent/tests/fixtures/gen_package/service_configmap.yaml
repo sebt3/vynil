@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-app-config
+  labels:
+    app: my-app
+    release: "{{RELEASE_NAME}}"
+  annotations:
+    description: "Configuration for {{RELEASE_NAME}}"
+data:
+  config.yaml: |
+    app:
+      name: {{RELEASE_NAME}}
+      version: 1.0

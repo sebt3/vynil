@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  labels:
+    app: my-app
+    release: "{{RELEASE_NAME}}"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+      - name: app
+        image: my-app:1.0
+        env:
+        - name: CONFIG_NAME
+          value: "{{RELEASE_NAME}}-config"
+        envFrom:
+        - configMapRef:
+            name: "{{RELEASE_NAME}}-config"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: "{{RELEASE_NAME}}-pvc"

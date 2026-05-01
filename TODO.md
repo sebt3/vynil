@@ -1,0 +1,6 @@
+- Vrai support du previous_version
+- Backup restic retour du prune et gestion intélligente de son lock
+- rustic ??
+- Backup pour mongo
+- vynil-cli qui serait un plugin kubectl (k vynil jubebox rescan kydah-alpha)
+- Backup pour s3 ?
