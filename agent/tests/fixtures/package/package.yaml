@@ -1,0 +1,11 @@
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Package
+metadata:
+  name: test-pkg
+  category: test
+  description: Test package for regression testing
+  type: service
+  features: []
+  app_version: "1.0.0"
+requirements: []
+resources: {}
