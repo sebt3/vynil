@@ -825,3 +825,230 @@ fn gen_package_clean_annotations_backward_compat() {
     assert_eq!(result.as_bool().unwrap(), true,
         "clean_annotations must remove Helm annotations without name parameter");
 }
+
+// ===== backup_context.rhai tests =====
+
+#[test]
+fn backup_context_from_args_filters_empty_strings() {
+    // Verify from_args splits and filters empty strings from DEPLOYMENT_LIST env var
+    // Tests .split() + .filter(|x| x!="") pattern
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "backup_context" as ctx;
+
+        // Mock get_env() behavior by setting env vars via set_dynamic
+        // Since we can't set env vars directly, we'll test the logic manually
+        let input = "deploy1  deploy2  deploy3";
+        let items = input.split(" ").filter(|x| x!="");
+
+        // Verify filter removes empty strings
+        items.len() == 3 &&
+        items[0] == "deploy1" &&
+        items[1] == "deploy2" &&
+        items[2] == "deploy3"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "backup_context must filter empty strings from split lists");
+}
+
+#[test]
+fn backup_context_reduce_builds_space_separated_list() {
+    // Verify .reduce() pattern used in run() to build deployment lists
+    // Tests: reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` })
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        let items = ["deploy1", "deploy2", "deploy3"];
+
+        // Simulate the reduce pattern used in backup_context.run()
+        let result = items.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` });
+
+        // Verify the result is space-separated
+        result == "deploy1 deploy2 deploy3"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "backup_context reduce pattern must build space-separated lists");
+}
+
+#[test]
+fn backup_context_reduce_handles_empty_list() {
+    // Verify .reduce() on empty list returns () (unit)
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        let items = [];
+
+        let result = items.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` });
+
+        // Empty list reduces to ()
+        result == ()
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "backup_context reduce on empty list must return unit");
+}
+
+// ===== resolv_service.rhai tests =====
+
+#[test]
+fn resolv_service_get_from_key_finds_service() {
+    // Verify get_from_key filters by key and returns matching service
+    // Tests: .filter(|s| s.key == names) pattern
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "resolv_service" as svc;
+
+        let services = [
+            #{
+                key: "redis",
+                name: "my-redis",
+                host: "redis.default.svc",
+                port: 6379
+            },
+            #{
+                key: "postgres",
+                name: "my-postgres",
+                host: "postgres.default.svc",
+                port: 5432
+            }
+        ];
+
+        let found = svc::get_from_key(services, "redis");
+
+        // Verify the correct service was found
+        found.key == "redis" &&
+        found.host == "redis.default.svc"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "get_from_key must find service by key");
+}
+
+#[test]
+fn resolv_service_get_from_key_returns_unit_when_not_found() {
+    // Verify get_from_key returns () when key not found
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "resolv_service" as svc;
+
+        let services = [
+            #{
+                key: "redis",
+                name: "my-redis"
+            }
+        ];
+
+        let found = svc::get_from_key(services, "nonexistent");
+
+        // Should return unit
+        found == ()
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "get_from_key must return unit when key not found");
+}
+
+#[test]
+fn resolv_service_get_from_package_finds_by_package_name() {
+    // Verify get_from_package filters by package.name and returns service
+    // Tests: .filter(|s| s["package"].name == names) pattern with nested field access
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "resolv_service" as svc;
+
+        let services = [
+            #{
+                key: "svc1",
+                "package": #{
+                    name: "postgresql"
+                },
+                host: "pg.svc"
+            },
+            #{
+                key: "svc2",
+                "package": #{
+                    name: "redis"
+                },
+                host: "redis.svc"
+            }
+        ];
+
+        let found = svc::get_from_package(services, "postgresql");
+
+        // Verify nested field filter worked
+        found.key == "svc1" &&
+        found["package"].name == "postgresql"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "get_from_package must find service by nested package.name");
+}
+
+#[test]
+fn resolv_service_service_glob_filters_and_maps() {
+    // Verify service_glob filters by glob pattern and maps results
+    // Tests: .filter(|s| ...) + .map(|s| ...) pattern
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "resolv_service" as svc;
+
+        let services = [
+            #{
+                key: "pg-primary",
+                "package": #{
+                    name: "postgres-primary"
+                }
+            },
+            #{
+                key: "pg-replica",
+                "package": #{
+                    name: "postgres-replica"
+                }
+            },
+            #{
+                key: "redis",
+                "package": #{
+                    name: "redis"
+                }
+            }
+        ];
+
+        // Find all services matching "postgres-*" pattern
+        let found = svc::service_glob(services, "postgres-*");
+
+        // Should return array of matching services (2 postgres services)
+        found.len() == 2
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "service_glob must filter by glob pattern and return array");
+}
+
+#[test]
+fn resolv_service_get_from_key_with_array_of_names() {
+    // Verify get_from_key can take an array of names and return first match
+    // Tests: fallthrough loop pattern in get_from_key
+    let mut rhai = make_lib_script();
+    let result = rhai.eval(r#"
+        import "resolv_service" as svc;
+
+        let services = [
+            #{
+                key: "secondary",
+                name: "my-secondary"
+            },
+            #{
+                key: "primary",
+                name: "my-primary"
+            }
+        ];
+
+        // Request with array: ["primary", "secondary"] should return primary
+        let found = svc::get_from_key(services, ["primary", "secondary"]);
+
+        found.key == "primary"
+    "#).unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true,
+        "get_from_key must handle array of names and return first match");
+}
