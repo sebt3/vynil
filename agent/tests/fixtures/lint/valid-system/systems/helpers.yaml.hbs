@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config
+data:
+  encoded: {{base64_encode "secret"}}
+  partial: {{> mypartial}}
