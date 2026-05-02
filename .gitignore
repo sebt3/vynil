@@ -1,2 +1,7 @@
 /target
 /scripts
+CLAUDE.md
+.claude/
+.kydah/
+.tasks/
+docs/conception/

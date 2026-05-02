@@ -2,16 +2,11 @@ use common::rhaihandler::Script;
 use rhai::Dynamic;
 use std::sync::{Arc, Mutex};
 
-pub fn make_service_script(
-    k8s_mocks: Vec<Dynamic>,
-) -> (Script, Arc<Mutex<Vec<Dynamic>>>) {
+pub fn make_service_script(k8s_mocks: Vec<Dynamic>) -> (Script, Arc<Mutex<Vec<Dynamic>>>) {
     let base = env!("CARGO_MANIFEST_DIR");
     let created = Arc::new(Mutex::new(vec![]));
     let script = Script::new_mock(
-        vec![
-            format!("{base}/scripts/service"),
-            format!("{base}/scripts/lib"),
-        ],
+        vec![format!("{base}/scripts/service"), format!("{base}/scripts/lib")],
         vec![],
         k8s_mocks,
         created.clone(),
@@ -19,9 +14,7 @@ pub fn make_service_script(
     (script, created)
 }
 
-pub fn build_service_instance_mock(
-    ns: &str, name: &str, category: &str, package: &str,
-) -> Dynamic {
+pub fn build_service_instance_mock(ns: &str, name: &str, category: &str, package: &str) -> Dynamic {
     let json = serde_json::json!({
         "apiVersion": "vynil.solidite.fr/v1",
         "kind": "ServiceInstance",
@@ -68,22 +61,31 @@ fn service_context_builds_context_from_instance() {
         "status": {}
     });
     let (mut rhai, _) = make_service_script(vec![
-        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap()
+        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap(),
     ]);
     let args = build_args("default", "test-app");
 
     rhai.set_dynamic("args", &args);
     rhai.set_dynamic("instance", &instance_val);
 
-    let result = rhai.eval(r#"
+    let result = rhai.eval(
+        r#"
         import "context" as ctx;
         let built_context = ctx::run(instance, args);
         type_of(built_context) == "map"
-    "#);
+    "#,
+    );
 
-    assert!(result.is_ok(), "context::run() should not error: {:?}", result.err());
-    assert_eq!(result.unwrap().as_bool().unwrap(), true,
-        "context::run() should return a map");
+    assert!(
+        result.is_ok(),
+        "context::run() should not error: {:?}",
+        result.err()
+    );
+    assert_eq!(
+        result.unwrap().as_bool().unwrap(),
+        true,
+        "context::run() should return a map"
+    );
 }
 
 // ===== service/install tests =====
@@ -100,14 +102,15 @@ fn service_install_runs_without_error() {
         "status": {}
     });
     let (mut rhai, _created) = make_service_script(vec![
-        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap()
+        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap(),
     ]);
     let args = build_args("default", "test-app");
 
     rhai.set_dynamic("args", &args);
     rhai.set_dynamic("instance", &instance_val);
 
-    let result = rhai.eval(r#"
+    let result = rhai.eval(
+        r#"
         import "context" as ctx;
         let built_context = ctx::run(instance, args);
         import "install" as install;
@@ -120,7 +123,8 @@ fn service_install_runs_without_error() {
             let err_str = `${e}`;
             err_str.contains("set_status_ready")
         }
-    "#);
+    "#,
+    );
 
     assert!(result.is_ok(), "install::run() failed: {:?}", result.err());
 }
@@ -136,14 +140,15 @@ fn service_install_context_has_expected_fields() {
         "status": {}
     });
     let (mut rhai, _) = make_service_script(vec![
-        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap()
+        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap(),
     ]);
     let args = build_args("default", "test-app");
 
     rhai.set_dynamic("args", &args);
     rhai.set_dynamic("instance", &instance_val);
 
-    let result = rhai.eval(r#"
+    let result = rhai.eval(
+        r#"
         import "context" as ctx;
         let built_context = ctx::run(instance, args);
 
@@ -154,11 +159,15 @@ fn service_install_context_has_expected_fields() {
         "package_dir" in built_context &&
         "template_dir" in built_context &&
         "agent_image" in built_context
-    "#);
+    "#,
+    );
 
     assert!(result.is_ok(), "context field checks should not error");
-    assert_eq!(result.unwrap().as_bool().unwrap(), true,
-        "context::run() should return a context with all expected fields");
+    assert_eq!(
+        result.unwrap().as_bool().unwrap(),
+        true,
+        "context::run() should return a context with all expected fields"
+    );
 }
 
 // ===== service/delete tests =====
@@ -174,21 +183,23 @@ fn service_delete_runs_without_error() {
         "status": {}
     });
     let (mut rhai, _created) = make_service_script(vec![
-        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap()
+        serde_json::from_str(&serde_json::to_string(&instance_val).unwrap()).unwrap(),
     ]);
     let args = build_args("default", "test-app");
 
     rhai.set_dynamic("args", &args);
     rhai.set_dynamic("instance", &instance_val);
 
-    let result = rhai.eval(r#"
+    let result = rhai.eval(
+        r#"
         import "context" as ctx;
         let built_context = ctx::run(instance, args);
         import "delete" as delete;
         // delete::run returns nothing but should not error
         delete::run(instance, built_context);
         true
-    "#);
+    "#,
+    );
 
     assert!(result.is_ok(), "delete::run() failed: {:?}", result.err());
 }

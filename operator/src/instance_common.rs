@@ -671,6 +671,7 @@ mod tests {
                 app_version: None,
                 usage,
                 features: vec![],
+                backup_affinity: None,
             },
             requirements: vec![],
             recommandations: None,

@@ -191,8 +191,14 @@ fn upsert_in_list(list: &mut Vec<Dynamic>, kind: &str, obj: &Dynamic) {
         Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
         _ => None,
     };
-    let obj_name = meta.as_ref().and_then(|m| m.get("name")).and_then(|n| n.clone().into_string().ok());
-    let obj_ns = meta.as_ref().and_then(|m| m.get("namespace")).and_then(|n| n.clone().into_string().ok());
+    let obj_name = meta
+        .as_ref()
+        .and_then(|m| m.get("name"))
+        .and_then(|n| n.clone().into_string().ok());
+    let obj_ns = meta
+        .as_ref()
+        .and_then(|m| m.get("namespace"))
+        .and_then(|n| n.clone().into_string().ok());
     for entry in list.iter_mut() {
         if !entry.is_map() {
             continue;
@@ -206,8 +212,14 @@ fn upsert_in_list(list: &mut Vec<Dynamic>, kind: &str, obj: &Dynamic) {
             Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
             _ => None,
         };
-        let entry_name = entry_meta.as_ref().and_then(|m| m.get("name")).and_then(|n| n.clone().into_string().ok());
-        let entry_ns = entry_meta.as_ref().and_then(|m| m.get("namespace")).and_then(|n| n.clone().into_string().ok());
+        let entry_name = entry_meta
+            .as_ref()
+            .and_then(|m| m.get("name"))
+            .and_then(|n| n.clone().into_string().ok());
+        let entry_ns = entry_meta
+            .as_ref()
+            .and_then(|m| m.get("namespace"))
+            .and_then(|n| n.clone().into_string().ok());
         if entry_name == obj_name && entry_ns == obj_ns {
             *entry = obj.clone();
             return;
@@ -435,7 +447,9 @@ impl K8sGenericMock {
                 });
         }
         if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
-            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+            obj.as_map_mut()
+                .unwrap()
+                .insert("kind".into(), Dynamic::from(self.kind.clone()));
         }
         upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
         upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
@@ -445,7 +459,9 @@ impl K8sGenericMock {
     pub fn rhai_replace(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
         let mut obj = data;
         if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
-            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+            obj.as_map_mut()
+                .unwrap()
+                .insert("kind".into(), Dynamic::from(self.kind.clone()));
         }
         upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
         upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
@@ -455,7 +471,9 @@ impl K8sGenericMock {
     pub fn rhai_patch(&mut self, _name: String, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
         let mut obj = data;
         if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
-            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+            obj.as_map_mut()
+                .unwrap()
+                .insert("kind".into(), Dynamic::from(self.kind.clone()));
         }
         upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
         Ok(obj)
@@ -465,7 +483,9 @@ impl K8sGenericMock {
     pub fn rhai_create(&mut self, data: rhai::Dynamic) -> RhaiRes<Dynamic> {
         let mut obj = data;
         if obj.is_map() && !obj.as_map_ref().unwrap().contains_key("kind") {
-            obj.as_map_mut().unwrap().insert("kind".into(), Dynamic::from(self.kind.clone()));
+            obj.as_map_mut()
+                .unwrap()
+                .insert("kind".into(), Dynamic::from(self.kind.clone()));
         }
         upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
         upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
@@ -546,8 +566,14 @@ impl K8sInstanceMock {
                 Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
                 _ => None,
             };
-            let entry_name = entry_meta.as_ref().and_then(|m| m.get("name")).and_then(|n| n.clone().into_string().ok());
-            let entry_ns = entry_meta.as_ref().and_then(|m| m.get("namespace")).and_then(|n| n.clone().into_string().ok());
+            let entry_name = entry_meta
+                .as_ref()
+                .and_then(|m| m.get("name"))
+                .and_then(|n| n.clone().into_string().ok());
+            let entry_ns = entry_meta
+                .as_ref()
+                .and_then(|m| m.get("namespace"))
+                .and_then(|n| n.clone().into_string().ok());
             if entry_kind.as_deref() == Some(kind.as_str())
                 && entry_name.as_deref() == Some(name.as_str())
                 && entry_ns.as_deref() == Some(ns.as_str())

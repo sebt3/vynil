@@ -12,9 +12,7 @@ pub fn make_lib_script() -> Script {
     )
 }
 
-pub fn make_lib_script_with_k8s(
-    k8s_mocks: Vec<Dynamic>,
-) -> (Script, Arc<Mutex<Vec<Dynamic>>>) {
+pub fn make_lib_script_with_k8s(k8s_mocks: Vec<Dynamic>) -> (Script, Arc<Mutex<Vec<Dynamic>>>) {
     let base = env!("CARGO_MANIFEST_DIR");
     let created = Arc::new(Mutex::new(vec![]));
     let script = Script::new_mock(
@@ -39,6 +37,7 @@ fn k8s_object(kind: &str, namespace: &str, name: &str) -> Dynamic {
     }))
 }
 
+#[allow(dead_code)]
 fn build_instance_mock(ns: &str, name: &str) -> Dynamic {
     dynamic_from_json(serde_json::json!({
         "apiVersion": "vynil.solidite.fr/v1",
@@ -48,6 +47,7 @@ fn build_instance_mock(ns: &str, name: &str) -> Dynamic {
     }))
 }
 
+#[allow(dead_code)]
 fn build_context_mock() -> Dynamic {
     let base = env!("CARGO_MANIFEST_DIR");
     dynamic_from_json(serde_json::json!({
@@ -69,7 +69,9 @@ fn harness_compiles() {
 fn storage_class_selector_for_singletons_with_preference_match() {
     // Verify .find() locates a storage class by name from prefered_storage preference
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "storage_class_selector" as sel;
 
         let context = #{
@@ -91,7 +93,9 @@ fn storage_class_selector_for_singletons_with_preference_match() {
 
         let selected = sel::for_singletons(context);
         selected.name
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.to_string(), "ceph-distributed");
 }
@@ -100,7 +104,9 @@ fn storage_class_selector_for_singletons_with_preference_match() {
 fn storage_class_selector_for_singletons_empty_list() {
     // Verify .find() returns () when storage_classes list is empty
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "storage_class_selector" as sel;
 
         let context = #{
@@ -119,7 +125,9 @@ fn storage_class_selector_for_singletons_empty_list() {
 
         let selected = sel::for_singletons(context);
         selected == ()
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -129,7 +137,9 @@ fn storage_class_selector_for_singletons_singleton_excluded_from_rwo() {
     // Verify fallback to default when distibuted preference is empty
     // for_singletons falls through all preferences and uses is_default
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "storage_class_selector" as sel;
 
         let context = #{
@@ -150,7 +160,9 @@ fn storage_class_selector_for_singletons_singleton_excluded_from_rwo() {
 
         let selected = sel::for_singletons(context);
         selected.name
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.to_string(), "local-path");
 }
@@ -159,7 +171,9 @@ fn storage_class_selector_for_singletons_singleton_excluded_from_rwo() {
 fn storage_class_selector_for_deployments_rwx_fallback() {
     // Verify fallback chain: no RWX preference → falls back to RWO preference
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "storage_class_selector" as sel;
 
         let context = #{
@@ -184,7 +198,9 @@ fn storage_class_selector_for_deployments_rwx_fallback() {
 
         let selected = sel::for_deployments(context);
         selected.name
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.to_string(), "ceph-rwo");
 }
@@ -195,7 +211,9 @@ fn storage_class_selector_for_deployments_rwx_fallback() {
 fn storage_class_enrich_adds_capabilities_and_modes() {
     // Verify .find() on get_known_class() matches provisioner and adds all expected fields
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "storage_class_enrich" as enrich;
 
         let scs = [
@@ -214,7 +232,9 @@ fn storage_class_enrich_adds_capabilities_and_modes() {
         first.contains("capabilities") &&
         first.contains("allAccessModes") &&
         first.contains("accessModes")
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -223,7 +243,9 @@ fn storage_class_enrich_adds_capabilities_and_modes() {
 fn storage_class_enrich_unknown_provisioner() {
     // Verify unknown provisioner gets minimal enrichment (empty capabilities, RWO only)
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "storage_class_enrich" as enrich;
 
         let scs = [
@@ -240,7 +262,9 @@ fn storage_class_enrich_unknown_provisioner() {
         first.capabilities == #{} &&
         first.allAccessModes == ["ReadWriteOnce"] &&
         first.accessModes == ["ReadWriteOnce"]
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -250,7 +274,9 @@ fn storage_class_enrich_block_volumemode_duplication() {
     // Verify raw-capable driver (rbd) has capabilities including raw support
     // and allAccessModes is properly filtered for Block variant
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "storage_class_enrich" as enrich;
 
         let scs = [
@@ -267,7 +293,9 @@ fn storage_class_enrich_block_volumemode_duplication() {
         enriched.len() >= 1 &&
         enriched[0].capabilities != #{} &&
         enriched[0].capabilities.contains("raw")
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -284,7 +312,9 @@ fn wait_installs_filters_instances() {
     ];
     let (mut rhai, _created) = make_lib_script_with_k8s(k8s_mocks);
 
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "wait" as wait;
 
         let resources = [
@@ -295,7 +325,9 @@ fn wait_installs_filters_instances() {
         // installs should filter and process only ServiceInstance
         wait::installs(resources, 1);
         true
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -309,7 +341,9 @@ fn wait_workload_filters_workloads() {
     ];
     let (mut rhai, _created) = make_lib_script_with_k8s(k8s_mocks);
 
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "wait" as wait;
 
         let resources = [
@@ -320,7 +354,9 @@ fn wait_workload_filters_workloads() {
         // workload should filter and process only Deployment
         wait::workload(resources, 1);
         true
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -338,7 +374,9 @@ fn wait_vital_handles_multiple_types() {
     ];
     let (mut rhai, _created) = make_lib_script_with_k8s(k8s_mocks);
 
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "wait" as wait;
 
         let resources = [
@@ -350,7 +388,9 @@ fn wait_vital_handles_multiple_types() {
         // vital should process all three with appropriate condition types
         wait::vital(resources, 1);
         true
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -364,7 +404,9 @@ fn wait_job_filters_jobs() {
     ];
     let (mut rhai, _created) = make_lib_script_with_k8s(k8s_mocks);
 
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "wait" as wait;
 
         let resources = [
@@ -375,7 +417,9 @@ fn wait_job_filters_jobs() {
         // job should filter and process only Job
         wait::job(resources, 1);
         true
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -392,7 +436,9 @@ fn wait_all_chains_functions() {
     ];
     let (mut rhai, _created) = make_lib_script_with_k8s(k8s_mocks);
 
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "wait" as wait;
 
         let resources = [
@@ -405,7 +451,9 @@ fn wait_all_chains_functions() {
         // all() should process all categories without errors
         wait::all(resources, 1);
         true
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -421,7 +469,9 @@ fn install_from_dir_applies_multiple_yamls() {
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
-    let result = rhai.eval(&format!(r#"
+    let result = rhai
+        .eval(&format!(
+            r#"
         import "install_from_dir" as install;
 
         let instance = #{{
@@ -437,7 +487,10 @@ fn install_from_dir_applies_multiple_yamls() {
 
         // Should have applied ConfigMap and Deployment (2 objects)
         applied.len()
-    "#, fixture_dir)).unwrap();
+    "#,
+            fixture_dir
+        ))
+        .unwrap();
 
     let count = result.as_int().unwrap();
     assert_eq!(count, 2);
@@ -455,7 +508,9 @@ fn install_from_dir_empty_directory_no_objects() {
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
-    let result = rhai.eval(&format!(r#"
+    let result = rhai
+        .eval(&format!(
+            r#"
         import "install_from_dir" as install;
 
         let instance = #{{
@@ -471,7 +526,10 @@ fn install_from_dir_empty_directory_no_objects() {
 
         // Empty directory should return empty list
         applied.len()
-    "#, fixture_dir)).unwrap();
+    "#,
+            fixture_dir
+        ))
+        .unwrap();
 
     let count = result.as_int().unwrap();
     assert_eq!(count, 0);
@@ -488,7 +546,9 @@ fn install_from_dir_respects_namespace_parameter() {
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
-    let result = rhai.eval(&format!(r#"
+    let result = rhai
+        .eval(&format!(
+            r#"
         import "install_from_dir" as install;
 
         let instance = #{{
@@ -504,7 +564,10 @@ fn install_from_dir_respects_namespace_parameter() {
         let applied = install::install(instance, context, "{}", true, true);
 
         applied.len()
-    "#, fixture_dir)).unwrap();
+    "#,
+            fixture_dir
+        ))
+        .unwrap();
 
     let count = result.as_int().unwrap();
     assert_eq!(count, 2);
@@ -532,9 +595,11 @@ fn install_from_dir_respects_ordering() {
     let base = env!("CARGO_MANIFEST_DIR");
     let fixture_dir = format!("{}/tests/fixtures/install_from_dir/basic", base);
 
-    let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
+    let (mut rhai, _created) = make_lib_script_with_k8s(vec![]);
 
-    let result = rhai.eval(&format!(r#"
+    let result = rhai
+        .eval(&format!(
+            r#"
         import "install_from_dir" as install;
 
         let instance = #{{
@@ -552,7 +617,10 @@ fn install_from_dir_respects_ordering() {
         applied.len() == 2 &&
         applied.some(|o| o.kind == "ConfigMap") &&
         applied.some(|o| o.kind == "Deployment")
-    "#, fixture_dir)).unwrap();
+    "#,
+            fixture_dir
+        ))
+        .unwrap();
 
     assert_eq!(result.as_bool().unwrap(), true);
 }
@@ -565,7 +633,9 @@ fn gen_package_replace_returns_modified_string() {
     // au lieu de muter la string originale. Pattern vulnérable: str.replace(...); str
     // Ce test expose le bug si replace() est appelé sans assigner le résultat.
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let labels = #{
@@ -583,12 +653,17 @@ fn gen_package_replace_returns_modified_string() {
 
         // Verify the replacement occurred
         replaced.release == "{{instance.appslug}}"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
     // This should be true if .replace() properly updates the value
     // Currently may be false if the bug exists (pattern: v.replace(...); v without assignment)
-    assert_eq!(result.as_bool().unwrap(), true,
-        "replace_label_values must update label values using .replace() with assignment");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "replace_label_values must update label values using .replace() with assignment"
+    );
 }
 
 
@@ -596,7 +671,9 @@ fn gen_package_replace_returns_modified_string() {
 fn gen_package_clean_metadata_removes_helm_annotations() {
     // Verify clean_metadata removes Helm-specific annotations and preserves others
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let metadata = #{
@@ -620,17 +697,24 @@ fn gen_package_clean_metadata_removes_helm_annotations() {
         let has_custom = "custom.io/desc" in cleaned.annotations;
 
         !has_helm && !has_checksum && has_custom
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "clean_metadata must remove Helm and checksum annotations but keep custom ones");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "clean_metadata must remove Helm and checksum annotations but keep custom ones"
+    );
 }
 
 #[test]
 fn gen_package_clean_metadata_empty_annotations() {
     // Verify clean_metadata removes the annotations key entirely if it becomes empty
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let metadata = #{
@@ -645,17 +729,24 @@ fn gen_package_clean_metadata_empty_annotations() {
 
         // annotations key should be removed if empty
         !("annotations" in cleaned)
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "clean_metadata must remove annotations key if all entries are Helm-related");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "clean_metadata must remove annotations key if all entries are Helm-related"
+    );
 }
 
 #[test]
 fn gen_package_replace_volumes_handles_configmap_and_pvc() {
     // Verify replace_volumes updates names in configMap and persistentVolumeClaim refs
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let volumes = [
@@ -678,17 +769,24 @@ fn gen_package_replace_volumes_handles_configmap_and_pvc() {
         // Verify both are replaced (.replace mutates in place)
         replaced[0].configMap.name == "{{instance.appslug}}-config" &&
         replaced[1].persistentVolumeClaim.claimName == "{{instance.appslug}}-data"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "replace_volumes must update configMap and persistentVolumeClaim names");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "replace_volumes must update configMap and persistentVolumeClaim names"
+    );
 }
 
 #[test]
 fn gen_package_replace_containers_handles_env_configmap_refs() {
     // Verify replace_containers updates names in environment variable refs
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let containers = [
@@ -726,17 +824,24 @@ fn gen_package_replace_containers_handles_env_configmap_refs() {
         replaced[0].env[0].value == "{{instance.appslug}}-config" &&
         replaced[0].env[1].valueFrom.configMapKeyRef.name == "{{instance.appslug}}-secrets" &&
         replaced[0].envFrom[0].configMapRef.name == "{{instance.appslug}}-env"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "replace_containers must update configMapRef names in env, envFrom, and valueFrom");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "replace_containers must update configMapRef names in env, envFrom, and valueFrom"
+    );
 }
 
 #[test]
 fn gen_package_replace_containers_handles_secret_refs() {
     // Verify replace_containers updates secret names in all reference types
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let containers = [
@@ -768,17 +873,24 @@ fn gen_package_replace_containers_handles_secret_refs() {
         // Verify secret name replacements (.replace mutates in place)
         replaced[0].env[0].valueFrom.secretKeyRef.name == "{{instance.appslug}}-db-secret" &&
         replaced[0].envFrom[0].secretRef.name == "{{instance.appslug}}-secret"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "replace_containers must update secretRef names in valueFrom and envFrom");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "replace_containers must update secretRef names in valueFrom and envFrom"
+    );
 }
 
 #[test]
 fn gen_package_replace_image_pull_secrets() {
     // Verify replace_image_pull_secrets updates secret names
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let secrets = [
@@ -796,17 +908,24 @@ fn gen_package_replace_image_pull_secrets() {
         // (.replace mutates in place, replacing the matched substring)
         replaced[0].name == "{{instance.appslug}}-registry" &&
         replaced[1].name == "other-secret"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "replace_image_pull_secrets must update matching secret names");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "replace_image_pull_secrets must update matching secret names"
+    );
 }
 
 #[test]
 fn gen_package_clean_annotations_backward_compat() {
     // Verify clean_annotations (backward-compat version) works without name param
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "gen_package" as gen;
 
         let metadata = #{
@@ -820,10 +939,15 @@ fn gen_package_clean_annotations_backward_compat() {
 
         !("helm.sh/chart" in cleaned.annotations) &&
         "custom.io/desc" in cleaned.annotations
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "clean_annotations must remove Helm annotations without name parameter");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "clean_annotations must remove Helm annotations without name parameter"
+    );
 }
 
 // ===== backup_context.rhai tests =====
@@ -833,7 +957,9 @@ fn backup_context_from_args_filters_empty_strings() {
     // Verify from_args splits and filters empty strings from DEPLOYMENT_LIST env var
     // Tests .split() + .filter(|x| x!="") pattern
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "backup_context" as ctx;
 
         // Mock get_env() behavior by setting env vars via set_dynamic
@@ -846,10 +972,15 @@ fn backup_context_from_args_filters_empty_strings() {
         items[0] == "deploy1" &&
         items[1] == "deploy2" &&
         items[2] == "deploy3"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "backup_context must filter empty strings from split lists");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "backup_context must filter empty strings from split lists"
+    );
 }
 
 #[test]
@@ -857,7 +988,9 @@ fn backup_context_reduce_builds_space_separated_list() {
     // Verify .reduce() pattern used in run() to build deployment lists
     // Tests: reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` })
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         let items = ["deploy1", "deploy2", "deploy3"];
 
         // Simulate the reduce pattern used in backup_context.run()
@@ -865,27 +998,39 @@ fn backup_context_reduce_builds_space_separated_list() {
 
         // Verify the result is space-separated
         result == "deploy1 deploy2 deploy3"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "backup_context reduce pattern must build space-separated lists");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "backup_context reduce pattern must build space-separated lists"
+    );
 }
 
 #[test]
 fn backup_context_reduce_handles_empty_list() {
     // Verify .reduce() on empty list returns () (unit)
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         let items = [];
 
         let result = items.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` });
 
         // Empty list reduces to ()
         result == ()
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "backup_context reduce on empty list must return unit");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "backup_context reduce on empty list must return unit"
+    );
 }
 
 // ===== resolv_service.rhai tests =====
@@ -895,7 +1040,9 @@ fn resolv_service_get_from_key_finds_service() {
     // Verify get_from_key filters by key and returns matching service
     // Tests: .filter(|s| s.key == names) pattern
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "resolv_service" as svc;
 
         let services = [
@@ -918,17 +1065,24 @@ fn resolv_service_get_from_key_finds_service() {
         // Verify the correct service was found
         found.key == "redis" &&
         found.host == "redis.default.svc"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "get_from_key must find service by key");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "get_from_key must find service by key"
+    );
 }
 
 #[test]
 fn resolv_service_get_from_key_returns_unit_when_not_found() {
     // Verify get_from_key returns () when key not found
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "resolv_service" as svc;
 
         let services = [
@@ -942,10 +1096,15 @@ fn resolv_service_get_from_key_returns_unit_when_not_found() {
 
         // Should return unit
         found == ()
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "get_from_key must return unit when key not found");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "get_from_key must return unit when key not found"
+    );
 }
 
 #[test]
@@ -953,7 +1112,9 @@ fn resolv_service_get_from_package_finds_by_package_name() {
     // Verify get_from_package filters by package.name and returns service
     // Tests: .filter(|s| s["package"].name == names) pattern with nested field access
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "resolv_service" as svc;
 
         let services = [
@@ -978,10 +1139,15 @@ fn resolv_service_get_from_package_finds_by_package_name() {
         // Verify nested field filter worked
         found.key == "svc1" &&
         found["package"].name == "postgresql"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "get_from_package must find service by nested package.name");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "get_from_package must find service by nested package.name"
+    );
 }
 
 #[test]
@@ -989,7 +1155,9 @@ fn resolv_service_service_glob_filters_and_maps() {
     // Verify service_glob filters by glob pattern and maps results
     // Tests: .filter(|s| ...) + .map(|s| ...) pattern
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "resolv_service" as svc;
 
         let services = [
@@ -1018,10 +1186,15 @@ fn resolv_service_service_glob_filters_and_maps() {
 
         // Should return array of matching services (2 postgres services)
         found.len() == 2
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "service_glob must filter by glob pattern and return array");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "service_glob must filter by glob pattern and return array"
+    );
 }
 
 #[test]
@@ -1029,7 +1202,9 @@ fn resolv_service_get_from_key_with_array_of_names() {
     // Verify get_from_key can take an array of names and return first match
     // Tests: fallthrough loop pattern in get_from_key
     let mut rhai = make_lib_script();
-    let result = rhai.eval(r#"
+    let result = rhai
+        .eval(
+            r#"
         import "resolv_service" as svc;
 
         let services = [
@@ -1047,8 +1222,395 @@ fn resolv_service_get_from_key_with_array_of_names() {
         let found = svc::get_from_key(services, ["primary", "secondary"]);
 
         found.key == "primary"
-    "#).unwrap();
+    "#,
+        )
+        .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true,
-        "get_from_key must handle array of names and return first match");
+    assert_eq!(
+        result.as_bool().unwrap(),
+        true,
+        "get_from_key must handle array of names and return first match"
+    );
+}
+
+// ===== gen_package — fonctions non couvertes (replace() résultat ignoré) =====
+
+#[test]
+fn gen_package_replace_pod_spec_updates_service_account_name() {
+    // replace_pod_spec line 162: spec.serviceAccountName.replace(name, "{{instance.appslug}}")
+    // résultat ignoré → serviceAccountName inchangé si Rhai change de sémantique
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let spec = #{
+            serviceAccountName: "old-release-sa",
+            containers: []
+        };
+
+        let replaced = gen::replace_pod_spec(spec, "old-release");
+        replaced.serviceAccountName
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-sa",
+        "replace_pod_spec doit remplacer serviceAccountName via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_replace_binding_updates_subject_name() {
+    // replace_binding line 441: s.name.replace(name, "{{instance.appslug}}")
+    // résultat ignoré → nom du subject inchangé si Rhai change de sémantique
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            subjects: [
+                #{ name: "old-release-sa", kind: "ServiceAccount", namespace: "default" }
+            ],
+            roleRef: #{
+                name: "old-release-role",
+                kind: "ClusterRole",
+                apiGroup: "rbac.authorization.k8s.io"
+            }
+        };
+
+        let replaced = gen::replace_binding(doc, "old-release");
+        replaced.subjects[0].name
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-sa",
+        "replace_binding doit remplacer le nom du subject via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_replace_binding_updates_role_ref_name() {
+    // replace_binding line 448: doc.roleRef.name.replace(name, "{{instance.appslug}}")
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            subjects: [],
+            roleRef: #{
+                name: "old-release-role",
+                kind: "ClusterRole",
+                apiGroup: "rbac.authorization.k8s.io"
+            }
+        };
+
+        let replaced = gen::replace_binding(doc, "old-release");
+        replaced.roleRef.name
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-role",
+        "replace_binding doit remplacer le nom du roleRef via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_replace_webhooks_updates_service_name() {
+    // replace_webhooks line 461: w.clientConfig.service.name.replace(name, "{{instance.appslug}}")
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            webhooks: [
+                #{
+                    name: "validate.old-release.io",
+                    clientConfig: #{
+                        service: #{
+                            name: "old-release-webhook",
+                            namespace: "default",
+                            path: "/validate"
+                        }
+                    }
+                }
+            ]
+        };
+
+        let replaced = gen::replace_webhooks(doc, "old-release");
+        replaced.webhooks[0].clientConfig.service.name
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-webhook",
+        "replace_webhooks doit remplacer le nom du service webhook via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_replace_ingress_updates_backend_service_name() {
+    // replace_ingress line 484: p.backend.service.name.replace(name, "{{instance.appslug}}")
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            metadata: #{
+                name: "old-release-ing",
+                annotations: #{}
+            },
+            spec: #{
+                rules: [
+                    #{
+                        http: #{
+                            paths: [
+                                #{
+                                    path: "/",
+                                    pathType: "Prefix",
+                                    backend: #{
+                                        service: #{
+                                            name: "old-release-svc",
+                                            port: #{ number: 80 }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+
+        let replaced = gen::replace_ingress(doc, "old-release");
+        replaced.spec.rules[0].http.paths[0].backend.service.name
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-svc",
+        "replace_ingress doit remplacer le nom du service backend via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_replace_ingress_updates_tls_secret_name() {
+    // replace_ingress line 498: tls.secretName.replace(name, "{{instance.appslug}}")
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            metadata: #{ name: "old-release-ing", annotations: #{} },
+            spec: #{
+                rules: [],
+                tls: [
+                    #{
+                        secretName: "old-release-tls",
+                        hosts: ["example.com"]
+                    }
+                ]
+            }
+        };
+
+        let replaced = gen::replace_ingress(doc, "old-release");
+        replaced.spec.tls[0].secretName
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-tls",
+        "replace_ingress doit remplacer le secretName TLS via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_replace_workload_statefulset_updates_service_name() {
+    // replace_workload line 531: doc.spec.serviceName.replace(name, "{{instance.appslug}}")
+    // Utilise un StatefulSet sans spec.template → extract_env_configmap retourne immédiatement
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            kind: "StatefulSet",
+            metadata: #{ name: "old-release-sts", annotations: #{} },
+            spec: #{
+                serviceName: "old-release-headless",
+                volumeClaimTemplates: []
+            }
+        };
+
+        let replaced = gen::replace_workload("/dev/null", "old-release-sts", doc, "old-release");
+        replaced.spec.serviceName
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-headless",
+        "replace_workload doit remplacer spec.serviceName du StatefulSet via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_replace_workload_statefulset_updates_volume_claim_name() {
+    // replace_workload line 537: vct.metadata.name.replace(name, "{{instance.appslug}}")
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            kind: "StatefulSet",
+            metadata: #{ name: "old-release-sts", annotations: #{} },
+            spec: #{
+                serviceName: "old-release-headless",
+                volumeClaimTemplates: [
+                    #{ metadata: #{ name: "old-release-data" }, spec: #{ accessModes: ["ReadWriteOnce"] } }
+                ]
+            }
+        };
+
+        let replaced = gen::replace_workload("/dev/null", "old-release-sts", doc, "old-release");
+        replaced.spec.volumeClaimTemplates[0].metadata.name
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.appslug}}-data",
+        "replace_workload doit remplacer le nom du volumeClaimTemplate via .replace()"
+    );
+}
+
+#[test]
+fn gen_package_apply_selector_expressions_replaces_markers_in_file() {
+    // apply_selector_expressions lines 786-792 : 6 replace() dont les résultats sont ignorés
+    // puis file_write(filepath, content) écrit le contenu ORIGINAL — bug critique
+    let mut rhai = make_lib_script();
+    let tmp_path = format!(
+        "{}/tests/tmp/apply_selector_test.yaml",
+        env!("CARGO_MANIFEST_DIR")
+    );
+
+    // Fichier avec les deux types de marqueurs (non quotés)
+    std::fs::write(
+        &tmp_path,
+        "selector: SELECTOR_COMP_mycomp\nlabels: LABELS_FROM_CTX\n",
+    )
+    .unwrap();
+
+    let _ = rhai.eval(&format!(
+        r#"
+        import "gen_package" as gen;
+        gen::apply_selector_expressions("{tmp}", "mycomp");
+    "#,
+        tmp = tmp_path
+    ))
+    .unwrap();
+
+    let content = std::fs::read_to_string(&tmp_path).unwrap();
+    let _ = std::fs::remove_file(&tmp_path);
+
+    // Avec sémantique mutation : marqueurs remplacés par expressions Handlebars
+    // Avec sémantique retour (bug) : content inchangé, marqueurs encore présents
+    assert!(
+        !content.contains("SELECTOR_COMP_mycomp"),
+        "apply_selector_expressions doit remplacer SELECTOR_COMP_mycomp dans le fichier"
+    );
+    assert!(
+        !content.contains("LABELS_FROM_CTX"),
+        "apply_selector_expressions doit remplacer LABELS_FROM_CTX dans le fichier"
+    );
+}
+
+// ===== backup_context — patterns replace() non couverts =====
+
+#[test]
+fn backup_context_replace_path_chain_normalizes_trailing_slash() {
+    // Simule le pattern de from_args() lignes 26-31 :
+    //   sub_path.replace("/", " ");  // résultat ignoré si Rhai change
+    //   sub_path.trim();
+    //   sub_path.replace(" ", "/");
+    // Avec trailing slash : "a/b/" → " a b " → "a b" → "a/b"
+    // Avec sémantique retour (bug) : "a/b/" inchangé
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        let sub_path = "repos/group/project/";
+        sub_path.replace("/", " ");
+        sub_path.trim();
+        sub_path.replace(" ", "/");
+        sub_path
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "repos/group/project",
+        "le pattern replace de backup_context.from_args doit normaliser le trailing slash"
+    );
+}
+
+#[test]
+fn backup_context_vital_name_replace_strips_appslug_prefix() {
+    // Simule le pattern de backup_context.run() lignes 165-168 :
+    //   name.replace(appslug, "");  // résultat ignoré si Rhai change
+    //   name.replace("-", " ");
+    //   name.trim();
+    //   name.replace(" ", "-");
+    // "myapp-data-pvc" → "-data-pvc" → " data pvc" → "data pvc" → "data-pvc"
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        let name = "myapp-data-pvc";
+        let appslug = "myapp";
+        name.replace(appslug, "");
+        name.replace("-", " ");
+        name.trim();
+        name.replace(" ", "-");
+        name
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "data-pvc",
+        "le pattern replace de backup_context.run doit supprimer le préfixe appslug"
+    );
 }
