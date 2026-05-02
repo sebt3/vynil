@@ -41,6 +41,9 @@ jobs:
           toolchain: 1.92.0
           components: rustfmt
 
+      - name: adding nightly rustfmt
+        run: rustup component add --toolchain nightly-x86_64-unknown-linux-gnu rustfmt
+
       - name: cargo fmt --check
         run: cargo +nightly fmt -- --check
 
