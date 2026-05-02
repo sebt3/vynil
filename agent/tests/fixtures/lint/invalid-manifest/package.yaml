@@ -1,0 +1,9 @@
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Package
+metadata:
+  app_version: 1.0.0
+  category: core
+  description: Missing name field
+  features: []
+  type: system
+requirements: []

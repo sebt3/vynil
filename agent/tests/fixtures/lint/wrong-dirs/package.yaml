@@ -1,0 +1,10 @@
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Package
+metadata:
+  app_version: 1.0.0
+  category: core
+  description: System with unexpected vitals directory
+  features: []
+  name: test-system-wrong
+  type: system
+requirements: []
