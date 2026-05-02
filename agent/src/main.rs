@@ -1,5 +1,6 @@
 mod boxes;
 mod crdgen;
+mod linting;
 mod package;
 mod run;
 mod service;

@@ -1,4 +1,5 @@
 mod build;
+mod lint;
 mod test;
 mod unpack;
 mod update;
@@ -16,6 +17,8 @@ pub struct Parameters {
 pub enum Commands {
     /// Pack a directory into a package
     Build(build::Parameters),
+    /// Lint a package
+    Lint(lint::Parameters),
     /// Update a package
     Update(update::Parameters),
     /// Test a package
@@ -30,6 +33,10 @@ pub async fn run(cmd: &Parameters) {
     match &cmd.command {
         Commands::Build(args) => build::run(args).await.unwrap_or_else(|e| {
             tracing::error!("Packing directory failed with: {e:}");
+            process::exit(1)
+        }),
+        Commands::Lint(args) => lint::run(args).await.unwrap_or_else(|e| {
+            tracing::error!("Linting the package failed with: {e:}");
             process::exit(1)
         }),
         Commands::Update(args) => update::run(args).await.unwrap_or_else(|e| {
