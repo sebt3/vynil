@@ -141,24 +141,29 @@ impl TenantInstance {
                 return true;
             }
             if let Some(child) = status.befores.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.vitals.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.others.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.scalables.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.posts.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
         }
         false
@@ -189,16 +194,17 @@ impl TenantInstance {
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
         let res = vec![my_ns];
         if let Some(labels) = my_ns_meta.metadata.labels.clone()
-            && labels.clone().keys().any(|k| k == &label_key) {
-                let tenant_name = &labels[&label_key];
-                let mut lp = ListParams::default();
-                lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
-                let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
-                return Ok(my_nss
-                    .items
-                    .into_iter()
-                    .map(|n| n.metadata.name.unwrap())
-                    .collect());
+            && labels.clone().keys().any(|k| k == &label_key)
+        {
+            let tenant_name = &labels[&label_key];
+            let mut lp = ListParams::default();
+            lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
+            let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
+            return Ok(my_nss
+                .items
+                .into_iter()
+                .map(|n| n.metadata.name.unwrap())
+                .collect());
         }
         Ok(res)
     }

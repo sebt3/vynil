@@ -144,28 +144,34 @@ impl ServiceInstance {
                 return true;
             }
             if let Some(child) = status.befores.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.vitals.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.others.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.scalables.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.posts.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.crds.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
         }
         false

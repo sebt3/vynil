@@ -30,6 +30,7 @@ pub struct YamlDoc(pub Value);
 
 impl std::str::FromStr for YamlDoc {
     type Err = String;
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         new_yaml().load_str(s).map(YamlDoc).map_err(|e| e.to_string())
     }

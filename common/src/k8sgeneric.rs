@@ -113,47 +113,47 @@ impl K8sObject {
         move |obj: Option<&DynamicObject>| {
             if let Some(dynobj) = &obj
                 && dynobj.data.is_object()
-                    && dynobj
-                        .data
+                && dynobj
+                    .data
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<&String>>()
+                    .contains(&&"status".to_string())
+            {
+                let status = dynobj.data.as_object().unwrap()["status"].clone();
+                if status.is_object()
+                    && status
                         .as_object()
                         .unwrap()
                         .keys()
                         .collect::<Vec<&String>>()
-                        .contains(&&"status".to_string())
+                        .contains(&&"conditions".to_string())
                 {
-                    let status = dynobj.data.as_object().unwrap()["status"].clone();
-                    if status.is_object()
-                        && status
-                            .as_object()
-                            .unwrap()
-                            .keys()
-                            .collect::<Vec<&String>>()
-                            .contains(&&"conditions".to_string())
+                    let conditions = status.as_object().unwrap()["conditions"].clone();
+                    if conditions.is_array()
+                        && conditions.as_array().unwrap().iter().any(|c| {
+                            c.is_object()
+                                && c.as_object()
+                                    .unwrap()
+                                    .keys()
+                                    .collect::<Vec<&String>>()
+                                    .contains(&&"type".to_string())
+                                && c.as_object().unwrap()["type"].is_string()
+                                && c.as_object().unwrap()["type"].as_str().unwrap() == cond
+                                && c.as_object()
+                                    .unwrap()
+                                    .keys()
+                                    .collect::<Vec<&String>>()
+                                    .contains(&&"status".to_string())
+                                && c.as_object().unwrap()["status"].is_string()
+                                && c.as_object().unwrap()["status"].as_str().unwrap() == "True"
+                        })
                     {
-                        let conditions = status.as_object().unwrap()["conditions"].clone();
-                        if conditions.is_array()
-                            && conditions.as_array().unwrap().iter().any(|c| {
-                                c.is_object()
-                                    && c.as_object()
-                                        .unwrap()
-                                        .keys()
-                                        .collect::<Vec<&String>>()
-                                        .contains(&&"type".to_string())
-                                    && c.as_object().unwrap()["type"].is_string()
-                                    && c.as_object().unwrap()["type"].as_str().unwrap() == cond
-                                    && c.as_object()
-                                        .unwrap()
-                                        .keys()
-                                        .collect::<Vec<&String>>()
-                                        .contains(&&"status".to_string())
-                                    && c.as_object().unwrap()["status"].is_string()
-                                    && c.as_object().unwrap()["status"].as_str().unwrap() == "True"
-                            })
-                        {
-                            return true;
-                        }
+                        return true;
                     }
                 }
+            }
             false
         }
     }
@@ -178,29 +178,29 @@ impl K8sObject {
         move |obj: Option<&DynamicObject>| {
             if let Some(dynobj) = &obj
                 && dynobj.data.is_object()
-                    && dynobj
-                        .data
+                && dynobj
+                    .data
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<&String>>()
+                    .contains(&&"status".to_string())
+            {
+                let status = dynobj.data.as_object().unwrap()["status"].clone();
+                if status.is_object()
+                    && status
                         .as_object()
                         .unwrap()
                         .keys()
                         .collect::<Vec<&String>>()
-                        .contains(&&"status".to_string())
+                        .contains(&&prop)
                 {
-                    let status = dynobj.data.as_object().unwrap()["status"].clone();
-                    if status.is_object()
-                        && status
-                            .as_object()
-                            .unwrap()
-                            .keys()
-                            .collect::<Vec<&String>>()
-                            .contains(&&prop)
-                    {
-                        let conditions = status.as_object().unwrap()[&prop].clone();
-                        if conditions.is_boolean() && conditions.as_bool().unwrap() {
-                            return true;
-                        }
+                    let conditions = status.as_object().unwrap()[&prop].clone();
+                    if conditions.is_boolean() && conditions.as_bool().unwrap() {
+                        return true;
                     }
                 }
+            }
             false
         }
     }
@@ -209,29 +209,29 @@ impl K8sObject {
         move |obj: Option<&DynamicObject>| {
             if let Some(dynobj) = &obj
                 && dynobj.data.is_object()
-                    && dynobj
-                        .data
+                && dynobj
+                    .data
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<&String>>()
+                    .contains(&&"status".to_string())
+            {
+                let status = dynobj.data.as_object().unwrap()["status"].clone();
+                if status.is_object()
+                    && status
                         .as_object()
                         .unwrap()
                         .keys()
                         .collect::<Vec<&String>>()
-                        .contains(&&"status".to_string())
+                        .contains(&&prop)
                 {
-                    let status = dynobj.data.as_object().unwrap()["status"].clone();
-                    if status.is_object()
-                        && status
-                            .as_object()
-                            .unwrap()
-                            .keys()
-                            .collect::<Vec<&String>>()
-                            .contains(&&prop)
-                    {
-                        let conditions = status.as_object().unwrap()[&prop].clone();
-                        if !conditions.is_null() {
-                            return true;
-                        }
+                    let conditions = status.as_object().unwrap()[&prop].clone();
+                    if !conditions.is_null() {
+                        return true;
                     }
                 }
+            }
             false
         }
     }
@@ -240,29 +240,29 @@ impl K8sObject {
         move |obj: Option<&DynamicObject>| {
             if let Some(dynobj) = &obj
                 && dynobj.data.is_object()
-                    && dynobj
-                        .data
+                && dynobj
+                    .data
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<&String>>()
+                    .contains(&&"status".to_string())
+            {
+                let status = dynobj.data.as_object().unwrap()["status"].clone();
+                if status.is_object()
+                    && status
                         .as_object()
                         .unwrap()
                         .keys()
                         .collect::<Vec<&String>>()
-                        .contains(&&"status".to_string())
+                        .contains(&&prop)
                 {
-                    let status = dynobj.data.as_object().unwrap()["status"].clone();
-                    if status.is_object()
-                        && status
-                            .as_object()
-                            .unwrap()
-                            .keys()
-                            .collect::<Vec<&String>>()
-                            .contains(&&prop)
-                    {
-                        let conditions = status.as_object().unwrap()[&prop].clone();
-                        if conditions.is_string() {
-                            return conditions.as_str().unwrap() == value;
-                        }
+                    let conditions = status.as_object().unwrap()[&prop].clone();
+                    if conditions.is_string() {
+                        return conditions.as_str().unwrap() == value;
                     }
                 }
+            }
             false
         }
     }
@@ -318,26 +318,21 @@ impl K8sObject {
         Ok(())
     }
 
-    pub fn is_for(
-        cond: DynObjCondition,
-    ) -> impl Condition<DynamicObject> {
+    pub fn is_for(cond: DynObjCondition) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
             if let Some(dynobj) = &obj
-                && dynobj.data.is_object() {
-                    return cond(dynobj).unwrap_or_else(|e| {
-                        tracing::warn!("wait_for closure error: {:?}", e);
-                        false
-                    });
+                && dynobj.data.is_object()
+            {
+                return cond(dynobj).unwrap_or_else(|e| {
+                    tracing::warn!("wait_for closure error: {:?}", e);
+                    false
+                });
             }
             false
         }
     }
 
-    pub fn wait_for(
-        &mut self,
-        condition: DynObjCondition,
-        timeout: i64,
-    ) -> RhaiRes<()> {
+    pub fn wait_for(&mut self, condition: DynObjCondition, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
         let cond = await_condition(self.api.clone(), &name, Self::is_for(condition));
         tokio::task::block_in_place(|| {
@@ -649,24 +644,25 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced
                 && let Some(owner) = get_owner()
-                    && let Some(ns) = get_owner_ns()
-                        && let Some(mine) = self.ns.clone()
-                            && ns == mine {
-                                if handle["metadata"]
-                                    .as_object()
-                                    .unwrap()
-                                    .contains_key("ownerReferences")
-                                {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
-                                        .as_array_mut()
-                                        .unwrap()
-                                        .push(owner);
-                                } else {
-                                    handle["metadata"]
-                                        .as_object_mut()
-                                        .unwrap()
-                                        .insert("ownerReferences".to_string(), vec![owner].into());
-                                }
+                && let Some(ns) = get_owner_ns()
+                && let Some(mine) = self.ns.clone()
+                && ns == mine
+            {
+                if handle["metadata"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("ownerReferences")
+                {
+                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(owner);
+                } else {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("ownerReferences".to_string(), vec![owner].into());
+                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
@@ -727,24 +723,25 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced
                 && let Some(owner) = get_owner()
-                    && let Some(ns) = get_owner_ns()
-                        && let Some(mine) = self.ns.clone()
-                            && ns == mine {
-                                if handle["metadata"]
-                                    .as_object()
-                                    .unwrap()
-                                    .contains_key("ownerReferences")
-                                {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
-                                        .as_array_mut()
-                                        .unwrap()
-                                        .push(owner);
-                                } else {
-                                    handle["metadata"]
-                                        .as_object_mut()
-                                        .unwrap()
-                                        .insert("ownerReferences".to_string(), vec![owner].into());
-                                }
+                && let Some(ns) = get_owner_ns()
+                && let Some(mine) = self.ns.clone()
+                && ns == mine
+            {
+                if handle["metadata"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("ownerReferences")
+                {
+                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(owner);
+                } else {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("ownerReferences".to_string(), vec![owner].into());
+                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
@@ -805,24 +802,25 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced
                 && let Some(owner) = get_owner()
-                    && let Some(ns) = get_owner_ns()
-                        && let Some(mine) = self.ns.clone()
-                            && ns == mine {
-                                if handle["metadata"]
-                                    .as_object()
-                                    .unwrap()
-                                    .contains_key("ownerReferences")
-                                {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
-                                        .as_array_mut()
-                                        .unwrap()
-                                        .push(owner);
-                                } else {
-                                    handle["metadata"]
-                                        .as_object_mut()
-                                        .unwrap()
-                                        .insert("ownerReferences".to_string(), vec![owner].into());
-                                }
+                && let Some(ns) = get_owner_ns()
+                && let Some(mine) = self.ns.clone()
+                && ns == mine
+            {
+                if handle["metadata"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("ownerReferences")
+                {
+                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(owner);
+                } else {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("ownerReferences".to_string(), vec![owner].into());
+                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
@@ -883,24 +881,25 @@ impl K8sGeneric {
             }
             if self.scope == Scope::Namespaced
                 && let Some(owner) = get_owner()
-                    && let Some(ns) = get_owner_ns()
-                        && let Some(mine) = self.ns.clone()
-                            && ns == mine {
-                                if handle["metadata"]
-                                    .as_object()
-                                    .unwrap()
-                                    .contains_key("ownerReferences")
-                                {
-                                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
-                                        .as_array_mut()
-                                        .unwrap()
-                                        .push(owner);
-                                } else {
-                                    handle["metadata"]
-                                        .as_object_mut()
-                                        .unwrap()
-                                        .insert("ownerReferences".to_string(), vec![owner].into());
-                                }
+                && let Some(ns) = get_owner_ns()
+                && let Some(mine) = self.ns.clone()
+                && ns == mine
+            {
+                if handle["metadata"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("ownerReferences")
+                {
+                    handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(owner);
+                } else {
+                    handle["metadata"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("ownerReferences".to_string(), vec![owner].into());
+                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {

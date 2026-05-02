@@ -430,21 +430,27 @@ pub struct VynilPackage {
 impl VynilPackage {
     pub fn get_min_version(&self) -> Option<String> {
         for rec in &self.requirements {
-            if let VynilPackageRequirement::MinimumPreviousVersion(v) = rec { return Some(v.clone()) }
+            if let VynilPackageRequirement::MinimumPreviousVersion(v) = rec {
+                return Some(v.clone());
+            }
         }
         None
     }
 
     pub fn get_vynil_version(&self) -> Option<String> {
         for rec in &self.requirements {
-            if let VynilPackageRequirement::VynilVersion(v) = rec { return Some(v.clone()) }
+            if let VynilPackageRequirement::VynilVersion(v) = rec {
+                return Some(v.clone());
+            }
         }
         None
     }
 
     pub fn get_cluster_version(&self) -> Option<(u64, u64)> {
         for rec in &self.requirements {
-            if let VynilPackageRequirement::ClusterVersion { major, minor } = rec { return Some((*major, *minor)) }
+            if let VynilPackageRequirement::ClusterVersion { major, minor } = rec {
+                return Some((*major, *minor));
+            }
         }
         None
     }

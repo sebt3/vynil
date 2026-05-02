@@ -83,7 +83,6 @@ impl Semver {
     pub fn rhai_inc_alpha(&mut self) -> RhaiRes<()> {
         self.inc_alpha().map_err(rhai_err)
     }
-
 }
 
 impl std::fmt::Display for Semver {

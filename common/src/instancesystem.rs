@@ -127,12 +127,14 @@ impl SystemInstance {
                 return true;
             }
             if let Some(child) = status.systems.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
             if let Some(child) = status.crds.clone()
-                && !child.is_empty() {
-                    return true;
+                && !child.is_empty()
+            {
+                return true;
             }
         }
         false

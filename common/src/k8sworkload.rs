@@ -23,8 +23,9 @@ impl K8sDaemonSet {
     pub fn is_deamonset_available() -> impl Condition<DaemonSet> {
         |obj: Option<&DaemonSet>| {
             if let Some(ds) = &obj
-                && let Some(s) = &ds.status {
-                    return s.desired_number_scheduled == s.number_available.unwrap_or(0);
+                && let Some(s) = &ds.status
+            {
+                return s.desired_number_scheduled == s.number_available.unwrap_or(0);
             }
             false
         }
@@ -86,8 +87,9 @@ impl K8sStatefulSet {
         |obj: Option<&StatefulSet>| {
             if let Some(sts) = &obj
                 && let Some(spec) = &sts.spec
-                && let Some(s) = &sts.status {
-                    return spec.replicas.unwrap_or(1) == s.available_replicas.unwrap_or(0);
+                && let Some(s) = &sts.status
+            {
+                return spec.replicas.unwrap_or(1) == s.available_replicas.unwrap_or(0);
             }
             false
         }
@@ -150,8 +152,9 @@ impl K8sDeploy {
             if let Some(job) = &obj
                 && let Some(s) = &job.status
                 && let Some(conds) = &s.conditions
-                && let Some(pcond) = conds.iter().find(|c| c.type_ == "Available") {
-                    return pcond.status == "True";
+                && let Some(pcond) = conds.iter().find(|c| c.type_ == "Available")
+            {
+                return pcond.status == "True";
             }
             false
         }

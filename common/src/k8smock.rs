@@ -69,17 +69,11 @@ impl K8sObjectMock {
         Ok(())
     }
 
-    pub fn is_for(
-        _cond: DynObjCondition,
-    ) -> impl Condition<DynamicObject> {
+    pub fn is_for(_cond: DynObjCondition) -> impl Condition<DynamicObject> {
         move |_obj: Option<&DynamicObject>| true
     }
 
-    pub fn wait_for(
-        &mut self,
-        _condition: DynObjCondition,
-        _timeout: i64,
-    ) -> RhaiRes<()> {
+    pub fn wait_for(&mut self, _condition: DynObjCondition, _timeout: i64) -> RhaiRes<()> {
         Ok(())
     }
 }
@@ -614,8 +608,9 @@ impl K8sInstanceMock {
         let status = self.get_sub("status")?;
         if let Ok(m) = status.as_map_ref()
             && let Some(v) = m.get("tfstate")
-            && let Ok(s) = v.clone().into_string() {
-                return Ok(s);
+            && let Ok(s) = v.clone().into_string()
+        {
+            return Ok(s);
         }
         Ok(String::new())
     }
@@ -624,8 +619,9 @@ impl K8sInstanceMock {
         let status = self.get_sub("status")?;
         if let Ok(m) = status.as_map_ref()
             && let Some(v) = m.get("rhaistate")
-            && let Ok(s) = v.clone().into_string() {
-                return Ok(s);
+            && let Ok(s) = v.clone().into_string()
+        {
+            return Ok(s);
         }
         Ok(String::new())
     }
@@ -759,17 +755,18 @@ impl K8sInstanceMock {
         if let Ok(status) = self.get_sub("status")
             && let Ok(status_map) = status.as_map_ref()
             && let Some(services) = status_map.get("services")
-            && let Ok(arr) = services.clone().into_array() {
-                let mut keys: Vec<String> = arr
-                    .iter()
-                    .filter_map(|s| {
-                        let m = s.as_map_ref().ok()?;
-                        let k = m.get("key")?;
-                        k.clone().into_string().ok()
-                    })
-                    .collect();
-                keys.sort();
-                return keys.join(",");
+            && let Ok(arr) = services.clone().into_array()
+        {
+            let mut keys: Vec<String> = arr
+                .iter()
+                .filter_map(|s| {
+                    let m = s.as_map_ref().ok()?;
+                    let k = m.get("key")?;
+                    k.clone().into_string().ok()
+                })
+                .collect();
+            keys.sort();
+            return keys.join(",");
         }
         String::new()
     }
@@ -780,38 +777,39 @@ impl K8sInstanceMock {
         if let Ok(meta) = self.get_sub("metadata")
             && let Ok(m) = meta.as_map_ref()
             && let Some(ns) = m.get("namespace")
-            && let Ok(s) = ns.clone().into_string() {
-                for m in self.mocks.lock().unwrap().clone() {
-                            if !m.is_map() {
-                                continue;
-                            }
-                            let map = m.as_map_ref().unwrap();
-                            // Check kind
-                            if !map.contains_key("kind") || !map["kind"].is_string() {
-                                continue;
-                            }
-                            if map["kind"].clone().into_string().unwrap() != "Namespace" {
-                                continue;
-                            }
-                            // Check metadata.name and metadata.namespace
-                            if !map.contains_key("metadata") || !map["metadata"].is_map() {
-                                continue;
-                            }
-                            let meta = map["metadata"].as_map_ref().unwrap();
-                            let name_match = meta.contains_key("name")
-                                && meta["name"].is_string()
-                                && meta["name"].clone().into_string().unwrap() == s;
-                            if name_match && meta.contains_key("labels") && meta["labels"].is_map() {
-                                let labels = meta["labels"].as_map_ref().unwrap();
-                                let label_key = std::env::var("TENANT_LABEL")
-                                    .unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
-                                if labels.clone().keys().any(|k| k == &label_key) {
-                                    let tenant = labels[label_key.as_str()].clone();
-                                    return Ok(tenant.to_string());
-                                }
-                            }
-                        }
-                return Ok(s);
+            && let Ok(s) = ns.clone().into_string()
+        {
+            for m in self.mocks.lock().unwrap().clone() {
+                if !m.is_map() {
+                    continue;
+                }
+                let map = m.as_map_ref().unwrap();
+                // Check kind
+                if !map.contains_key("kind") || !map["kind"].is_string() {
+                    continue;
+                }
+                if map["kind"].clone().into_string().unwrap() != "Namespace" {
+                    continue;
+                }
+                // Check metadata.name and metadata.namespace
+                if !map.contains_key("metadata") || !map["metadata"].is_map() {
+                    continue;
+                }
+                let meta = map["metadata"].as_map_ref().unwrap();
+                let name_match = meta.contains_key("name")
+                    && meta["name"].is_string()
+                    && meta["name"].clone().into_string().unwrap() == s;
+                if name_match && meta.contains_key("labels") && meta["labels"].is_map() {
+                    let labels = meta["labels"].as_map_ref().unwrap();
+                    let label_key = std::env::var("TENANT_LABEL")
+                        .unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
+                    if labels.clone().keys().any(|k| k == &label_key) {
+                        let tenant = labels[label_key.as_str()].clone();
+                        return Ok(tenant.to_string());
+                    }
+                }
+            }
+            return Ok(s);
         }
         Ok(String::new())
     }
