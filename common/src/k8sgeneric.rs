@@ -17,6 +17,8 @@ use kube::{
 use rhai::{Dynamic, Engine, serde::to_dynamic};
 use serde_json::json;
 
+type DynObjCondition = Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>;
+
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
 }
@@ -109,8 +111,8 @@ impl K8sObject {
 
     pub fn is_condition(cond: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj {
-                if dynobj.data.is_object()
+            if let Some(dynobj) = &obj
+                && dynobj.data.is_object()
                     && dynobj
                         .data
                         .as_object()
@@ -152,7 +154,6 @@ impl K8sObject {
                         }
                     }
                 }
-            }
             false
         }
     }
@@ -175,8 +176,8 @@ impl K8sObject {
 
     pub fn is_status(prop: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj {
-                if dynobj.data.is_object()
+            if let Some(dynobj) = &obj
+                && dynobj.data.is_object()
                     && dynobj
                         .data
                         .as_object()
@@ -200,15 +201,14 @@ impl K8sObject {
                         }
                     }
                 }
-            }
             false
         }
     }
 
     pub fn have_status(prop: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj {
-                if dynobj.data.is_object()
+            if let Some(dynobj) = &obj
+                && dynobj.data.is_object()
                     && dynobj
                         .data
                         .as_object()
@@ -232,15 +232,14 @@ impl K8sObject {
                         }
                     }
                 }
-            }
             false
         }
     }
 
     pub fn have_status_value(prop: String, value: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj {
-                if dynobj.data.is_object()
+            if let Some(dynobj) = &obj
+                && dynobj.data.is_object()
                     && dynobj
                         .data
                         .as_object()
@@ -260,11 +259,10 @@ impl K8sObject {
                     {
                         let conditions = status.as_object().unwrap()[&prop].clone();
                         if conditions.is_string() {
-                            return conditions.as_str().unwrap() == &value;
+                            return conditions.as_str().unwrap() == value;
                         }
                     }
                 }
-            }
             false
         }
     }
@@ -321,16 +319,15 @@ impl K8sObject {
     }
 
     pub fn is_for(
-        cond: Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>,
+        cond: DynObjCondition,
     ) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj {
-                if dynobj.data.is_object() {
+            if let Some(dynobj) = &obj
+                && dynobj.data.is_object() {
                     return cond(dynobj).unwrap_or_else(|e| {
                         tracing::warn!("wait_for closure error: {:?}", e);
                         false
                     });
-                }
             }
             false
         }
@@ -338,7 +335,7 @@ impl K8sObject {
 
     pub fn wait_for(
         &mut self,
-        condition: Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>,
+        condition: DynObjCondition,
         timeout: i64,
     ) -> RhaiRes<()> {
         let name = self.obj.name_any();
@@ -650,11 +647,11 @@ impl K8sGeneric {
                     }
                 }
             }
-            if self.scope == Scope::Namespaced {
-                if let Some(owner) = get_owner() {
-                    if let Some(ns) = get_owner_ns() {
-                        if let Some(mine) = self.ns.clone() {
-                            if ns == mine {
+            if self.scope == Scope::Namespaced
+                && let Some(owner) = get_owner()
+                    && let Some(ns) = get_owner_ns()
+                        && let Some(mine) = self.ns.clone()
+                            && ns == mine {
                                 if handle["metadata"]
                                     .as_object()
                                     .unwrap()
@@ -670,10 +667,6 @@ impl K8sGeneric {
                                         .unwrap()
                                         .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
-                            }
-                        }
-                    }
-                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
@@ -732,11 +725,11 @@ impl K8sGeneric {
                     }
                 }
             }
-            if self.scope == Scope::Namespaced {
-                if let Some(owner) = get_owner() {
-                    if let Some(ns) = get_owner_ns() {
-                        if let Some(mine) = self.ns.clone() {
-                            if ns == mine {
+            if self.scope == Scope::Namespaced
+                && let Some(owner) = get_owner()
+                    && let Some(ns) = get_owner_ns()
+                        && let Some(mine) = self.ns.clone()
+                            && ns == mine {
                                 if handle["metadata"]
                                     .as_object()
                                     .unwrap()
@@ -752,10 +745,6 @@ impl K8sGeneric {
                                         .unwrap()
                                         .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
-                            }
-                        }
-                    }
-                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
@@ -814,11 +803,11 @@ impl K8sGeneric {
                     }
                 }
             }
-            if self.scope == Scope::Namespaced {
-                if let Some(owner) = get_owner() {
-                    if let Some(ns) = get_owner_ns() {
-                        if let Some(mine) = self.ns.clone() {
-                            if ns == mine {
+            if self.scope == Scope::Namespaced
+                && let Some(owner) = get_owner()
+                    && let Some(ns) = get_owner_ns()
+                        && let Some(mine) = self.ns.clone()
+                            && ns == mine {
                                 if handle["metadata"]
                                     .as_object()
                                     .unwrap()
@@ -834,10 +823,6 @@ impl K8sGeneric {
                                         .unwrap()
                                         .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
-                            }
-                        }
-                    }
-                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
@@ -896,11 +881,11 @@ impl K8sGeneric {
                     }
                 }
             }
-            if self.scope == Scope::Namespaced {
-                if let Some(owner) = get_owner() {
-                    if let Some(ns) = get_owner_ns() {
-                        if let Some(mine) = self.ns.clone() {
-                            if ns == mine {
+            if self.scope == Scope::Namespaced
+                && let Some(owner) = get_owner()
+                    && let Some(ns) = get_owner_ns()
+                        && let Some(mine) = self.ns.clone()
+                            && ns == mine {
                                 if handle["metadata"]
                                     .as_object()
                                     .unwrap()
@@ -916,10 +901,6 @@ impl K8sGeneric {
                                         .unwrap()
                                         .insert("ownerReferences".to_string(), vec![owner].into());
                                 }
-                            }
-                        }
-                    }
-                }
             }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {

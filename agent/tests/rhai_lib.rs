@@ -1531,14 +1531,15 @@ fn gen_package_apply_selector_expressions_replaces_markers_in_file() {
     )
     .unwrap();
 
-    let _ = rhai.eval(&format!(
-        r#"
+    let _ = rhai
+        .eval(&format!(
+            r#"
         import "gen_package" as gen;
         gen::apply_selector_expressions("{tmp}", "mycomp");
     "#,
-        tmp = tmp_path
-    ))
-    .unwrap();
+            tmp = tmp_path
+        ))
+        .unwrap();
 
     let content = std::fs::read_to_string(&tmp_path).unwrap();
     let _ = std::fs::remove_file(&tmp_path);

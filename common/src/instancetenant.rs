@@ -140,30 +140,25 @@ impl TenantInstance {
             if status.tfstate.is_some() {
                 return true;
             }
-            if let Some(child) = status.befores.clone() {
-                if child.len() > 0 {
+            if let Some(child) = status.befores.clone()
+                && !child.is_empty() {
                     return true;
-                }
             }
-            if let Some(child) = status.vitals.clone() {
-                if child.len() > 0 {
+            if let Some(child) = status.vitals.clone()
+                && !child.is_empty() {
                     return true;
-                }
             }
-            if let Some(child) = status.others.clone() {
-                if child.len() > 0 {
+            if let Some(child) = status.others.clone()
+                && !child.is_empty() {
                     return true;
-                }
             }
-            if let Some(child) = status.scalables.clone() {
-                if child.len() > 0 {
+            if let Some(child) = status.scalables.clone()
+                && !child.is_empty() {
                     return true;
-                }
             }
-            if let Some(child) = status.posts.clone() {
-                if child.len() > 0 {
+            if let Some(child) = status.posts.clone()
+                && !child.is_empty() {
                     return true;
-                }
             }
         }
         false
@@ -193,8 +188,8 @@ impl TenantInstance {
         let label_key =
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
         let res = vec![my_ns];
-        if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().any(|k| k == &label_key) {
+        if let Some(labels) = my_ns_meta.metadata.labels.clone()
+            && labels.clone().keys().any(|k| k == &label_key) {
                 let tenant_name = &labels[&label_key];
                 let mut lp = ListParams::default();
                 lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
@@ -204,7 +199,6 @@ impl TenantInstance {
                     .into_iter()
                     .map(|n| n.metadata.name.unwrap())
                     .collect());
-            }
         }
         Ok(res)
     }
@@ -235,12 +229,11 @@ impl TenantInstance {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let arr = self.get_tenant_namespaces().await;
-                if arr.is_ok() {
-                    let arr = arr.unwrap();
+                if let Ok(arr) = arr {
                     let v = serde_json::to_string(&arr).map_err(Error::SerializationError)?;
                     serde_json::from_str::<rhai::Dynamic>(&v).map_err(Error::SerializationError)
                 } else {
-                    arr.map(|_| rhai::Dynamic::from(""))
+                    Ok(rhai::Dynamic::from(""))
                 }
             })
         })
@@ -251,12 +244,11 @@ impl TenantInstance {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let arr = self.get_tenant_services_names().await;
-                if arr.is_ok() {
-                    let arr = arr.unwrap();
+                if let Ok(arr) = arr {
                     let v = serde_json::to_string(&arr).map_err(Error::SerializationError)?;
                     serde_json::from_str::<rhai::Dynamic>(&v).map_err(Error::SerializationError)
                 } else {
-                    arr.map(|_| rhai::Dynamic::from(""))
+                    Ok(rhai::Dynamic::from(""))
                 }
             })
         })

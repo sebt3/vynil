@@ -111,10 +111,10 @@ impl Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub type RhaiRes<T> = std::result::Result<T, Box<rhai::EvalAltResult>>;
 pub fn rhai_err(e: Error) -> Box<rhai::EvalAltResult> {
-    format!("{e}").into()
+    e.to_string().into()
 }
 pub fn rhai_err_str(e: String) -> Box<rhai::EvalAltResult> {
-    format!("{e}").into()
+    e.into()
 }
 pub mod chronohandler;
 pub mod context;

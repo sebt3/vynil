@@ -2,6 +2,7 @@ use crate::{Error, RhaiRes, rhai_err};
 use indexmap::IndexMap;
 use rhai::{Dynamic, Engine, ImmutableString, Map};
 use rust_yaml::{Value, Yaml, YamlConfig, yaml::IndentConfig};
+use std::str::FromStr;
 
 fn new_yaml() -> Yaml {
     Yaml::with_config(YamlConfig {
@@ -27,11 +28,14 @@ fn new_yaml() -> Yaml {
 #[derive(Debug, Clone)]
 pub struct YamlDoc(pub Value);
 
-impl YamlDoc {
-    pub fn from_str(s: &str) -> Result<Self, String> {
+impl std::str::FromStr for YamlDoc {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         new_yaml().load_str(s).map(YamlDoc).map_err(|e| e.to_string())
     }
+}
 
+impl YamlDoc {
     pub fn to_yaml_string(&self) -> Result<String, String> {
         new_yaml().dump_str(&self.0).map_err(|e| e.to_string())
     }

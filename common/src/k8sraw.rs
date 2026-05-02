@@ -11,6 +11,12 @@ pub struct K8sRaw {
     pub client: Client,
 }
 
+impl Default for K8sRaw {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl K8sRaw {
     pub fn new() -> Self {
         Self {

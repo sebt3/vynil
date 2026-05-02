@@ -30,7 +30,7 @@ impl RestClientMock {
     pub fn new(base: &str, mocks: Vec<HttpMockItem>) -> Self {
         Self {
             baseurl: base.to_string(),
-            mocks: mocks,
+            mocks,
         }
     }
 
@@ -59,7 +59,7 @@ impl RestClientMock {
             .into_iter()
             .filter(|m| m.method == HttpMethod::Get && m.path == path)
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(found[0].clone().return_obj)
         } else {
             Err(format!("Failed to find GET {path} in the Mock database").into())
@@ -73,7 +73,7 @@ impl RestClientMock {
             .into_iter()
             .filter(|m| m.method == HttpMethod::Head && m.path == path)
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(found[0].clone().return_obj)
         } else {
             Err(format!("Failed to find HEAD {path} in the Mock database").into())
@@ -87,7 +87,7 @@ impl RestClientMock {
             .into_iter()
             .filter(|m| m.method == HttpMethod::Patch && m.path == path)
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(found[0].clone().return_obj)
         } else {
             Err(format!("Failed to find PATCH {path} in the Mock database").into())
@@ -101,7 +101,7 @@ impl RestClientMock {
             .into_iter()
             .filter(|m| m.method == HttpMethod::Put && m.path == path)
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(found[0].clone().return_obj)
         } else {
             Err(format!("Failed to find PUT {path} in the Mock database").into())
@@ -115,7 +115,7 @@ impl RestClientMock {
             .into_iter()
             .filter(|m| m.method == HttpMethod::Post && m.path == path)
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(found[0].clone().return_obj)
         } else {
             Err(format!("Failed to find POST {path} in the Mock database").into())
@@ -129,7 +129,7 @@ impl RestClientMock {
             .into_iter()
             .filter(|m| m.method == HttpMethod::Delete && m.path == path)
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(found[0].clone().return_obj)
         } else {
             Err(format!("Failed to find DELETE {path} in the Mock database").into())

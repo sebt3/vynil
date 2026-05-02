@@ -430,42 +430,30 @@ pub struct VynilPackage {
 impl VynilPackage {
     pub fn get_min_version(&self) -> Option<String> {
         for rec in &self.requirements {
-            match rec {
-                VynilPackageRequirement::MinimumPreviousVersion(v) => return Some(v.clone()),
-                _ => {}
-            }
+            if let VynilPackageRequirement::MinimumPreviousVersion(v) = rec { return Some(v.clone()) }
         }
         None
     }
 
     pub fn get_vynil_version(&self) -> Option<String> {
         for rec in &self.requirements {
-            match rec {
-                VynilPackageRequirement::VynilVersion(v) => return Some(v.clone()),
-                _ => {}
-            }
+            if let VynilPackageRequirement::VynilVersion(v) = rec { return Some(v.clone()) }
         }
         None
     }
 
     pub fn get_cluster_version(&self) -> Option<(u64, u64)> {
         for rec in &self.requirements {
-            match rec {
-                VynilPackageRequirement::ClusterVersion { major, minor } => return Some((*major, *minor)),
-                _ => {}
-            }
+            if let VynilPackageRequirement::ClusterVersion { major, minor } = rec { return Some((*major, *minor)) }
         }
         None
     }
 
     pub fn is_min_version_ok(&self, current: String) -> bool {
-        let parse = Semver::parse(&current);
-        if parse.is_ok() {
-            let cur = parse.unwrap();
+        if let Ok(cur) = Semver::parse(&current) {
             if let Some(target) = self.get_min_version() {
-                let target_parsed = Semver::parse(&target);
-                if target_parsed.is_ok() {
-                    cur >= target_parsed.unwrap()
+                if let Ok(target_parsed) = Semver::parse(&target) {
+                    cur >= target_parsed
                 } else {
                     true
                 }
@@ -478,13 +466,10 @@ impl VynilPackage {
     }
 
     pub fn is_vynil_version_ok(&self) -> bool {
-        let parse = Semver::parse(VERSION);
-        if parse.is_ok() {
-            let cur = parse.unwrap();
+        if let Ok(cur) = Semver::parse(VERSION) {
             if let Some(target) = self.get_vynil_version() {
-                let target_parsed = Semver::parse(&target);
-                if target_parsed.is_ok() {
-                    cur >= target_parsed.unwrap()
+                if let Ok(target_parsed) = Semver::parse(&target) {
+                    cur >= target_parsed
                 } else {
                     true
                 }
@@ -664,7 +649,7 @@ impl VynilPackageSource {
 
     pub fn validate_options(&mut self) -> RhaiRes<()> {
         if let Some(options) = self.options.clone() {
-            for (_key, val) in &options {
+            for val in options.values() {
                 let _schema: &Schema = &serde_json::from_str(serde_json::to_string(val).unwrap().as_str())
                     .map_err(Error::JsonError)
                     .map_err(rhai_err)?;

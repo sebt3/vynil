@@ -154,9 +154,9 @@ pub fn get_client_name() -> String {
     match get_prog_name() {
         None => "vynil.solidite.fr".to_string(),
         Some(p) => {
-            if p == "agent".to_string() {
+            if p == "agent" {
                 "agent.vynil.solidite.fr".to_string()
-            } else if p == "operator".to_string() {
+            } else if p == "operator" {
                 "controller.vynil.solidite.fr".to_string()
             } else {
                 "vynil.solidite.fr".to_string()

@@ -84,13 +84,13 @@ handlebars_helper!(have_crd: |ctx: Value, name: String| {
 handlebars_helper!(have_system_service: |ctx: Value, name: String| {
     if ctx.as_object().unwrap()["cluster"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].is_array() {
         let v: Vec<&Value> = ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].as_array().unwrap().iter().filter(|s| s.as_object().unwrap().get("key").unwrap_or_default()==&name).collect();
-        v.len()>0
+        !v.is_empty()
     } else {false}
 });
 handlebars_helper!(have_tenant_service: |ctx: Value, name: String| {
     if ctx.as_object().unwrap().contains_key("tenant") && ctx.as_object().unwrap()["tenant"].is_object() && ctx.as_object().unwrap()["tenant"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].is_array() {
         let v: Vec<&Value> = ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].as_array().unwrap().iter().filter(|s| s.as_object().unwrap().get("key").unwrap_or_default()==&name).collect();
-        v.len()>0
+        !v.is_empty()
     } else {false}
 });
 handlebars_helper!(concat: |a: Value, b: Value| format!("{}{}", a.as_str().unwrap_or_else(|| {

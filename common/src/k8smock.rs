@@ -4,6 +4,8 @@ use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+type DynObjCondition = Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>;
+
 pub fn update_cache() {}
 
 #[derive(Clone, Debug)]
@@ -68,14 +70,14 @@ impl K8sObjectMock {
     }
 
     pub fn is_for(
-        _cond: Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>,
+        _cond: DynObjCondition,
     ) -> impl Condition<DynamicObject> {
         move |_obj: Option<&DynamicObject>| true
     }
 
     pub fn wait_for(
         &mut self,
-        _condition: Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::EvalAltResult>>>,
+        _condition: DynObjCondition,
         _timeout: i64,
     ) -> RhaiRes<()> {
         Ok(())
@@ -87,6 +89,12 @@ impl K8sObjectMock {
 
 #[derive(Clone, Debug)]
 pub struct K8sRawMock;
+
+impl Default for K8sRawMock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl K8sRawMock {
     pub fn new() -> Self {
@@ -382,7 +390,7 @@ impl K8sGenericMock {
                         == name
             })
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(found[0].clone())
         } else {
             Err(format!("Failed to find {} {name} in the Mock database", self.kind).into())
@@ -414,7 +422,7 @@ impl K8sGenericMock {
                         == name
             })
             .collect();
-        if found.len() > 0 {
+        if !found.is_empty() {
             Ok(K8sObjectMock {
                 obj: found[0].clone(),
                 kind: self.kind.clone(),
@@ -604,24 +612,20 @@ impl K8sInstanceMock {
 
     pub fn get_tfstate(&mut self) -> RhaiRes<String> {
         let status = self.get_sub("status")?;
-        if let Ok(m) = status.as_map_ref() {
-            if let Some(v) = m.get("tfstate") {
-                if let Ok(s) = v.clone().into_string() {
-                    return Ok(s);
-                }
-            }
+        if let Ok(m) = status.as_map_ref()
+            && let Some(v) = m.get("tfstate")
+            && let Ok(s) = v.clone().into_string() {
+                return Ok(s);
         }
         Ok(String::new())
     }
 
     pub fn get_rhaistate(&mut self) -> RhaiRes<String> {
         let status = self.get_sub("status")?;
-        if let Ok(m) = status.as_map_ref() {
-            if let Some(v) = m.get("rhaistate") {
-                if let Ok(s) = v.clone().into_string() {
-                    return Ok(s);
-                }
-            }
+        if let Ok(m) = status.as_map_ref()
+            && let Some(v) = m.get("rhaistate")
+            && let Ok(s) = v.clone().into_string() {
+                return Ok(s);
         }
         Ok(String::new())
     }
@@ -752,23 +756,20 @@ impl K8sInstanceMock {
     }
 
     pub fn get_services_string(&mut self) -> String {
-        if let Ok(status) = self.get_sub("status") {
-            if let Ok(status_map) = status.as_map_ref() {
-                if let Some(services) = status_map.get("services") {
-                    if let Ok(arr) = services.clone().into_array() {
-                        let mut keys: Vec<String> = arr
-                            .iter()
-                            .filter_map(|s| {
-                                let m = s.as_map_ref().ok()?;
-                                let k = m.get("key")?;
-                                k.clone().into_string().ok()
-                            })
-                            .collect();
-                        keys.sort();
-                        return keys.join(",");
-                    }
-                }
-            }
+        if let Ok(status) = self.get_sub("status")
+            && let Ok(status_map) = status.as_map_ref()
+            && let Some(services) = status_map.get("services")
+            && let Ok(arr) = services.clone().into_array() {
+                let mut keys: Vec<String> = arr
+                    .iter()
+                    .filter_map(|s| {
+                        let m = s.as_map_ref().ok()?;
+                        let k = m.get("key")?;
+                        k.clone().into_string().ok()
+                    })
+                    .collect();
+                keys.sort();
+                return keys.join(",");
         }
         String::new()
     }
@@ -776,11 +777,11 @@ impl K8sInstanceMock {
     // ── Tenant-specific ─────────────────────────────────────────────────
 
     pub fn get_tenant_name(&mut self) -> RhaiRes<String> {
-        if let Ok(meta) = self.get_sub("metadata") {
-            if let Ok(m) = meta.as_map_ref() {
-                if let Some(ns) = m.get("namespace") {
-                    if let Ok(s) = ns.clone().into_string() {
-                        for m in self.mocks.lock().unwrap().clone() {
+        if let Ok(meta) = self.get_sub("metadata")
+            && let Ok(m) = meta.as_map_ref()
+            && let Some(ns) = m.get("namespace")
+            && let Ok(s) = ns.clone().into_string() {
+                for m in self.mocks.lock().unwrap().clone() {
                             if !m.is_map() {
                                 continue;
                             }
@@ -810,10 +811,7 @@ impl K8sInstanceMock {
                                 }
                             }
                         }
-                        return Ok(s);
-                    }
-                }
-            }
+                return Ok(s);
         }
         Ok(String::new())
     }

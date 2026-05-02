@@ -22,10 +22,7 @@ impl Semver {
     }
 
     pub fn opt_parse(str: &str) -> Option<Self> {
-        match Self::parse(str) {
-            Ok(version) => Some(version),
-            Err(_) => None,
-        }
+        Self::parse(str).ok()
     }
 
     pub fn rhai_parse(str: &str) -> RhaiRes<Self> {
@@ -87,18 +84,15 @@ impl Semver {
         self.inc_alpha().map_err(rhai_err)
     }
 
-    pub fn to_string(&mut self) -> String {
-        if self.use_v {
-            format!("v{}", self.version)
-        } else {
-            self.version.to_string()
-        }
-    }
 }
 
 impl std::fmt::Display for Semver {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.version.fmt(formatter)
+        if self.use_v {
+            write!(formatter, "v{}", self.version)
+        } else {
+            self.version.fmt(formatter)
+        }
     }
 }
 
@@ -117,7 +111,7 @@ pub fn semver_rhai_register(engine: &mut Engine) {
         .register_fn(">", |a: Semver, b: Semver| a > b)
         .register_fn("<=", |a: Semver, b: Semver| a <= b)
         .register_fn(">=", |a: Semver, b: Semver| a >= b)
-        .register_fn("to_string", Semver::to_string);
+        .register_fn("to_string", |s: &mut Semver| s.to_string());
 }
 
 #[cfg(test)]

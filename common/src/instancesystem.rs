@@ -126,15 +126,13 @@ impl SystemInstance {
             if status.tfstate.is_some() {
                 return true;
             }
-            if let Some(child) = status.systems.clone() {
-                if child.len() > 0 {
+            if let Some(child) = status.systems.clone()
+                && !child.is_empty() {
                     return true;
-                }
             }
-            if let Some(child) = status.crds.clone() {
-                if child.len() > 0 {
+            if let Some(child) = status.crds.clone()
+                && !child.is_empty() {
                     return true;
-                }
             }
         }
         false
