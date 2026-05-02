@@ -1,7 +1,11 @@
+pub mod config;
+
 use std::path::PathBuf;
 use std::str::FromStr;
 use junit_report::{ReportBuilder, TestCase, TestSuiteBuilder};
 use serde::{Deserialize, Serialize};
+
+pub use config::{LintConfig, FileRule, parse_inline_disables};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Serialize, Deserialize)]
 pub enum LintLevel {
