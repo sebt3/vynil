@@ -64,7 +64,7 @@ fn expected_dirs(pkg_type: &VynilPackageType) -> &[&str] {
 
 pub async fn run(args: &Parameters) -> Result<()> {
     let mut collector = crate::linting::LintResultCollector::new();
-    let config = crate::linting::LintConfig::load(&args.package_dir)?;
+    let _config = crate::linting::LintConfig::load(&args.package_dir)?;
 
     // Check 1: Missing manifest
     let manifest_path = args.package_dir.join("package.yaml");
@@ -198,6 +198,27 @@ pub async fn run(args: &Parameters) -> Result<()> {
         }
     }
 
+    // Check HBS files
+    let config = crate::linting::LintConfig::load(&args.package_dir)?;
+    let mut hbs_checker = crate::linting::hbs_checker::HbsChecker::new(
+        &args.package_dir,
+        &package,
+        &config,
+    );
+
+    // Scan for .hbs files
+    if let Ok(entries) = std::fs::read_dir(&args.package_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_hbs_files(&path, &args.package_dir, &mut hbs_checker, &mut collector, &config, &package)?;
+            }
+        }
+    }
+
+    // Add finalized findings (e.g., unused helpers, unused options)
+    collector.extend(hbs_checker.finalize());
+
     let level_filter = level_filter_to_lint_level(&args.level);
     println!("{}", collector.to_text(level_filter));
 
@@ -214,4 +235,32 @@ fn level_filter_to_lint_level(filter: &LevelFilter) -> crate::linting::LintLevel
         LevelFilter::Warn => crate::linting::LintLevel::Warn,
         LevelFilter::Error => crate::linting::LintLevel::Error,
     }
+}
+
+fn scan_hbs_files(
+    dir: &std::path::Path,
+    package_dir: &std::path::Path,
+    hbs_checker: &mut crate::linting::hbs_checker::HbsChecker,
+    collector: &mut crate::linting::LintResultCollector,
+    config: &crate::linting::LintConfig,
+    package: &common::vynilpackage::VynilPackageSource,
+) -> Result<()> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_hbs_files(&path, package_dir, hbs_checker, collector, config, package)?;
+            } else if path.extension().and_then(|e| e.to_str()) == Some("hbs") {
+                if let Ok(source) = std::fs::read_to_string(&path) {
+                    if let Ok(rel_path) = path.strip_prefix(package_dir) {
+                        let findings = hbs_checker.check_file(rel_path, &source);
+                        for finding in findings {
+                            collector.add(finding);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }

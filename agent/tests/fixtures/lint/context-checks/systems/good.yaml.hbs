@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: myservice
+spec:
+  port: {{values.port}}
+  host: {{values.host}}
+  image: {{image_from_ctx this "app"}}
+  resources: {{resources_from_ctx this "app"}}

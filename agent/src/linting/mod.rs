@@ -63,6 +63,10 @@ impl LintResultCollector {
         self.findings.push(finding);
     }
 
+    pub fn extend(&mut self, findings: Vec<LintFinding>) {
+        self.findings.extend(findings);
+    }
+
     pub fn has_errors(&self) -> bool {
         self.findings.iter().any(|f| f.level == LintLevel::Error)
     }

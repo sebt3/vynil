@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: VynilPackage
+metadata:
+  name: test-context
+  category: test
+  description: Test package for context checks
+  type: system
+  features: []
+requirements: []
+options:
+  port:
+    type: integer
+    default: 8080
+  host:
+    type: string
+    default: localhost
+images:
+  app:
+    registry: docker.io
+    repository: myapp
+    tag: "1.0"
+resources:
+  app:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

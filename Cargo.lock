@@ -198,6 +198,7 @@ dependencies = [
  "clap",
  "common",
  "env_logger",
+ "handlebars",
  "junit-report",
  "k8s-openapi",
  "kube",
@@ -207,6 +208,7 @@ dependencies = [
  "serde_yaml",
  "tokio",
  "tracing",
+ "wildmatch",
 ]
 
 [[package]]
