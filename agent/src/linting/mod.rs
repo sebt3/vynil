@@ -1,5 +1,6 @@
 pub mod config;
 pub mod hbs_checker;
+pub mod rhai_checker;
 
 use std::path::PathBuf;
 use std::str::FromStr;
