@@ -1,5 +1,5 @@
 use crate::linting::{LintFinding, LintLevel, LintConfig};
-use common::vynilpackage::VynilPackageSource;
+use common::vynilpackage::{VynilPackageSource, VynilPackageType};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use rhai::{Engine, ASTNode, Stmt, Expr};
@@ -8,6 +8,15 @@ const ENTRY_POINT_PATTERNS: &[&str] = &[
     "install.rhai",
     "delete.rhai",
     "reconfigure.rhai",
+];
+
+const FULL_ONLY_FUNCTIONS: &[&str] = &[
+    "http_get", "http_post", "http_put", "http_delete", "http_patch",
+    "get_service_instance", "list_service_instances",
+    "get_system_instance", "list_system_instances",
+    "get_tenant_instance", "list_tenant_instances",
+    "get_jukebox", "list_jukeboxes",
+    "k8s_resource", "k8s_raw", "k8s_workload",
 ];
 
 pub struct RhaiChecker<'a> {
@@ -88,6 +97,18 @@ impl<'a> RhaiChecker<'a> {
 
                 // Check 6: accumulate function definitions and calls for later finalize()
                 self.accumulate_functions(&ast);
+
+                // Check 7: rhai/wrong-api-mode
+                let api_mode_findings = check_wrong_api_mode(file, &ast);
+                findings.extend(api_mode_findings);
+
+                // Check 8: rhai/wrong-package-type
+                let pkg_type_findings = check_wrong_package_type(&ast, file, self.pkg);
+                findings.extend(pkg_type_findings);
+
+                // Check 9: rhai/context-hook-no-return
+                let context_findings = check_context_hook_no_return(&ast, file);
+                findings.extend(context_findings);
             }
             Err(e) => {
                 if let Some(level) = self.config.resolve_level(
@@ -417,6 +438,141 @@ fn check_unused_parameters(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
     findings
 }
 
+fn is_core_script(file: &Path) -> bool {
+    if let Some(file_name) = file.file_name().and_then(|n| n.to_str()) {
+        if file_name == "build.rhai" || file_name == "validate.rhai" {
+            return true;
+        }
+    }
+    file.to_string_lossy().contains("handlebars/helpers/")
+}
+
+fn check_wrong_api_mode(file: &Path, ast: &rhai::AST) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    if !is_core_script(file) {
+        return findings;
+    }
+
+    ast.walk(&mut |nodes: &[ASTNode]| {
+        for node in nodes {
+            if let ASTNode::Expr(expr) = node {
+                if let Expr::FnCall(fn_call, _) = expr {
+                    let fn_name = fn_call.name.to_string();
+                    if FULL_ONLY_FUNCTIONS.contains(&fn_name.as_str()) {
+                        findings.push(LintFinding {
+                            rule: "rhai/wrong-api-mode".to_string(),
+                            level: LintLevel::Warn,
+                            file: file.to_path_buf(),
+                            line: None,
+                            col: None,
+                            message: format!(
+                                "Function `{}` is not available in core mode scripts",
+                                fn_name
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        true
+    });
+
+    findings
+}
+
+fn check_wrong_package_type(ast: &rhai::AST, file: &Path, pkg: &VynilPackageSource) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    if pkg.metadata.usage != VynilPackageType::System {
+        return findings;
+    }
+
+    ast.walk(&mut |nodes: &[ASTNode]| {
+        for node in nodes {
+            match node {
+                ASTNode::Expr(expr) => {
+                    if let Expr::Variable(var_data, _, _) = expr {
+                        let (_, name, _, _) = &**var_data;
+                        if name.to_string() == "tenant" {
+                            findings.push(LintFinding {
+                                rule: "rhai/wrong-package-type".to_string(),
+                                level: LintLevel::Warn,
+                                file: file.to_path_buf(),
+                                line: None,
+                                col: None,
+                                message: "System packages cannot access tenant context".to_string(),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    });
+
+    findings
+}
+
+fn check_context_hook_no_return(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    if !file.to_string_lossy().contains("context_") {
+        return findings;
+    }
+
+    // Check if the file has code that returns something
+    // In Rhai, "return ctx" can be parsed as just the expression "ctx"
+    // So we check if there's any return statement OR if the last statement is an expression
+    let mut has_valid_return = false;
+
+    // Check all function definitions
+    for fn_def in ast.iter_fn_def() {
+        let stmts = fn_def.body.iter().collect::<Vec<_>>();
+        if let Some(last_stmt) = stmts.last() {
+            match last_stmt {
+                Stmt::Return(..) => {
+                    has_valid_return = true;
+                    break;
+                }
+                Stmt::Expr(..) => {
+                    // Expression statements that end the function are valid returns
+                    has_valid_return = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Also check top-level statements
+    if !has_valid_return {
+        let stmts = ast.statements();
+        if let Some(last_stmt) = stmts.last() {
+            match last_stmt {
+                Stmt::Return(..) | Stmt::Expr(..) => {
+                    has_valid_return = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if !has_valid_return {
+        findings.push(LintFinding {
+            rule: "rhai/context-hook-no-return".to_string(),
+            level: LintLevel::Error,
+            file: file.to_path_buf(),
+            line: None,
+            col: None,
+            message: "Context hook must return the context".to_string(),
+        });
+    }
+
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,6 +813,96 @@ mod tests {
                 .iter()
                 .any(|f| f.rule == "rhai/unused-function" && f.message.contains("run")),
             "Expected no rhai/unused-function finding for 'run' entry point"
+        );
+    }
+
+    #[test]
+    fn full_api_in_core_script_warns() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = r#"let r = k8s_resource("Pod");"#;
+        let findings = checker.check_file(
+            &PathBuf::from("handlebars/helpers/test.rhai"),
+            source,
+        );
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/wrong-api-mode"),
+            "Expected rhai/wrong-api-mode finding for k8s_resource in core script"
+        );
+    }
+
+    #[test]
+    fn full_api_in_lifecycle_script_ok() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = r#"let r = k8s_resource("Pod");"#;
+        let findings = checker.check_file(&PathBuf::from("scripts/install.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/wrong-api-mode"),
+            "Expected no rhai/wrong-api-mode finding for k8s_resource in lifecycle script"
+        );
+    }
+
+    #[test]
+    fn context_hook_with_return_ok() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "fn run(inst, ctx, args) { ctx.extra = 1; return ctx; }";
+        let findings = checker.check_file(&PathBuf::from("scripts/context_post.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/context-hook-no-return"),
+            "Expected no rhai/context-hook-no-return finding for valid context hook"
+        );
+    }
+
+    #[test]
+    fn context_hook_without_return_errors() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "let x = 1;";
+        let findings = checker.check_file(&PathBuf::from("scripts/context_post.rhai"), source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/context-hook-no-return"),
+            "Expected rhai/context-hook-no-return finding for context hook without return"
+        );
+    }
+
+    #[test]
+    fn tenant_access_in_system_package_warns() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        // Note: the fixture package is a System type, so this test should trigger
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "let name = tenant.name;";
+        let findings = checker.check_file(&PathBuf::from("scripts/tenant_in_system.rhai"), source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/wrong-package-type"),
+            "Expected rhai/wrong-package-type finding for tenant access"
         );
     }
 }
