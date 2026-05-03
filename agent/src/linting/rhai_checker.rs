@@ -17,6 +17,8 @@ pub struct RhaiChecker<'a> {
     resolver_paths: Vec<PathBuf>,
     importable_scripts: HashSet<PathBuf>,
     imported_scripts: HashSet<String>,
+    defined_functions: HashSet<String>,
+    called_functions: HashSet<String>,
 }
 
 impl<'a> RhaiChecker<'a> {
@@ -56,6 +58,8 @@ impl<'a> RhaiChecker<'a> {
             resolver_paths,
             importable_scripts,
             imported_scripts: HashSet::new(),
+            defined_functions: HashSet::new(),
+            called_functions: HashSet::new(),
         }
     }
 
@@ -73,6 +77,17 @@ impl<'a> RhaiChecker<'a> {
                 // Check 3: rhai/dead-code
                 let dead_code_findings = check_dead_code(&ast, file);
                 findings.extend(dead_code_findings);
+
+                // Check 4: rhai/unused-variable and rhai/shadowed-variable
+                let var_findings = check_unused_variables(&ast, file);
+                findings.extend(var_findings);
+
+                // Check 5: rhai/unused-parameter
+                let param_findings = check_unused_parameters(&ast, file);
+                findings.extend(param_findings);
+
+                // Check 6: accumulate function definitions and calls for later finalize()
+                self.accumulate_functions(&ast);
             }
             Err(e) => {
                 if let Some(level) = self.config.resolve_level(
@@ -148,6 +163,30 @@ impl<'a> RhaiChecker<'a> {
         false
     }
 
+    fn accumulate_functions(&mut self, ast: &rhai::AST) {
+        // Collect defined functions
+        for fn_def in ast.iter_fn_def() {
+            self.defined_functions.insert(fn_def.name.to_string());
+        }
+
+        // Collect called functions
+        ast.walk(&mut |nodes: &[ASTNode]| {
+            for node in nodes {
+                match node {
+                    ASTNode::Expr(expr) => {
+                        if let Expr::FnCall(fn_call, _) = expr {
+                            self.called_functions.insert(fn_call.name.to_string());
+                        } else if let Expr::MethodCall(fn_call, _) = expr {
+                            self.called_functions.insert(fn_call.name.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            true
+        });
+    }
+
     pub fn finalize(&self) -> Vec<LintFinding> {
         let mut findings = Vec::new();
 
@@ -173,6 +212,33 @@ impl<'a> RhaiChecker<'a> {
                             ),
                         });
                     }
+                }
+            }
+        }
+
+        // Check unused-function
+        let entry_points = ["run", "template", "new", "main"];
+        for func_name in &self.defined_functions {
+            if !self.called_functions.contains(func_name)
+                && !entry_points.contains(&func_name.as_str())
+            {
+                if let Some(level) = self.config.resolve_level(
+                    "rhai/unused-function",
+                    &PathBuf::from("scripts"),
+                    LintLevel::Warn,
+                    &HashSet::new(),
+                ) {
+                    findings.push(LintFinding {
+                        rule: "rhai/unused-function".to_string(),
+                        level,
+                        file: PathBuf::from("scripts"),
+                        line: None,
+                        col: None,
+                        message: format!(
+                            "Function `{}` defined but never called",
+                            func_name
+                        ),
+                    });
                 }
             }
         }
@@ -240,6 +306,115 @@ fn extract_position(e: &rhai::ParseError) -> (Option<usize>, Option<usize>) {
     let line = pos.line();
     let col = pos.position();
     (line, col)
+}
+
+fn check_unused_variables(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+    let mut declarations: Vec<(String, usize)> = Vec::new();
+    let mut used: HashSet<String> = HashSet::new();
+
+    // Pass 1: collect variable declarations
+    ast.walk(&mut |nodes: &[ASTNode]| {
+        for node in nodes {
+            if let ASTNode::Stmt(stmt) = node {
+                if let Stmt::Var(var_data, _, pos) = stmt {
+                    let (ident, _, _) = &**var_data;
+                    let name = ident.name.to_string();
+                    declarations.push((name, pos.line().unwrap_or(0)));
+                }
+            }
+        }
+        true
+    });
+
+    // Pass 2: collect variable usages
+    ast.walk(&mut |nodes: &[ASTNode]| {
+        for node in nodes {
+            if let ASTNode::Expr(expr) = node {
+                if let Expr::Variable(var_data, _, _) = expr {
+                    let (_, name, _, _) = &**var_data;
+                    used.insert(name.to_string());
+                }
+            }
+        }
+        true
+    });
+
+    // Check for shadowing
+    let mut seen: HashSet<String> = HashSet::new();
+    for (name, line) in &declarations {
+        if !name.starts_with('_') {
+            if seen.contains(name) {
+                findings.push(LintFinding {
+                    rule: "rhai/shadowed-variable".to_string(),
+                    level: LintLevel::Warn,
+                    file: file.to_path_buf(),
+                    line: Some(*line),
+                    col: None,
+                    message: format!("Variable `{}` shadows a previous declaration", name),
+                });
+            }
+            seen.insert(name.clone());
+        }
+    }
+
+    // Check for unused variables
+    for (name, line) in declarations {
+        if !name.starts_with('_') && !used.contains(&name) {
+            findings.push(LintFinding {
+                rule: "rhai/unused-variable".to_string(),
+                level: LintLevel::Warn,
+                file: file.to_path_buf(),
+                line: Some(line),
+                col: None,
+                message: format!("Variable `{}` is declared but never used", name),
+            });
+        }
+    }
+
+    findings
+}
+
+fn check_unused_parameters(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    for fn_def in ast.iter_fn_def() {
+        let mut used_params: HashSet<String> = HashSet::new();
+
+        // Walk the entire AST looking for variable references within function bodies
+        // We use a simple heuristic: collect all variable references and filter by known params
+        ast.walk(&mut |nodes: &[ASTNode]| {
+            for node in nodes {
+                if let ASTNode::Expr(expr) = node {
+                    if let Expr::Variable(var_data, _, _) = expr {
+                        let (_, name, _, _) = &**var_data;
+                        used_params.insert(name.to_string());
+                    }
+                }
+            }
+            true
+        });
+
+        // Check for unused parameters
+        for param_name in &fn_def.params {
+            let param_str = param_name.to_string();
+            if !param_str.starts_with('_') && !used_params.contains(&param_str) {
+                findings.push(LintFinding {
+                    rule: "rhai/unused-parameter".to_string(),
+                    level: LintLevel::Warn,
+                    file: file.to_path_buf(),
+                    line: None,
+                    col: None,
+                    message: format!(
+                        "Parameter `{}` in function `{}` is never used",
+                        param_str, fn_def.name
+                    ),
+                });
+            }
+        }
+    }
+
+    findings
 }
 
 #[cfg(test)]
@@ -356,6 +531,132 @@ mod tests {
                 .iter()
                 .any(|f| f.rule == "rhai/unused-script" && f.message.contains("orphan")),
             "Expected rhai/unused-script finding for orphan"
+        );
+    }
+
+    #[test]
+    fn used_variable_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "let x = 1; x + 1;";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-variable"),
+            "Expected no rhai/unused-variable finding"
+        );
+    }
+
+    #[test]
+    fn unused_variable_produces_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "let unused = 42;";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("unused")),
+            "Expected rhai/unused-variable finding for 'unused'"
+        );
+    }
+
+    #[test]
+    fn underscore_variable_ignored() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "let _unused = 42;";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-variable"),
+            "Expected no rhai/unused-variable finding for underscore-prefixed variables"
+        );
+    }
+
+    #[test]
+    fn shadowed_variable_produces_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "let x = 1; let x = 2;";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/shadowed-variable"),
+            "Expected rhai/shadowed-variable finding"
+        );
+    }
+
+    #[test]
+    fn unused_parameter_produces_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "fn foo(used, unused) { used }";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("unused")),
+            "Expected rhai/unused-parameter finding for 'unused'"
+        );
+    }
+
+    #[test]
+    fn unused_function_produces_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "fn helper() { 42 }";
+        let _ = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        let findings = checker.finalize();
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-function" && f.message.contains("helper")),
+            "Expected rhai/unused-function finding for 'helper'"
+        );
+    }
+
+    #[test]
+    fn run_function_not_flagged_as_unused() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+
+        let source = "fn run(inst, ctx, args) { 42 }";
+        let _ = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        let findings = checker.finalize();
+
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-function" && f.message.contains("run")),
+            "Expected no rhai/unused-function finding for 'run' entry point"
         );
     }
 }
