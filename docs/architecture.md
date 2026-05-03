@@ -45,7 +45,7 @@ Responsabilités :
 Binaire `agent` — outil en ligne de commande lancé dans des Jobs Kubernetes.
 
 Sous-commandes principales :
-- `package {build,update,test,validate,unpack}` — gestion du cycle de vie des packages OCI
+- `package {build,update,test,validate,unpack,lint}` — gestion du cycle de vie des packages OCI et linting statique
 - `{system,service,tenant} {install,delete,reconfigure,backup,restore}` — opérations d'instance
 - `crdgen` — génération des manifestes CRD
 - `box`, `template`, `run` — utilitaires
