@@ -1,5 +1,5 @@
 use clap::{Args, ValueEnum};
-use common::{Result, vynilpackage::{VynilPackageType, read_package_yaml}};
+use common::{Result, vynilpackage::{VynilPackageSource, VynilPackageType, read_package_yaml}};
 use std::path::PathBuf;
 use std::collections::HashSet;
 
@@ -92,7 +92,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
         return Err(common::Error::YamlError("Missing package manifest".to_string()));
     }
 
-    let package = match read_package_yaml(&manifest_path) {
+    let mut package = match read_package_yaml(&manifest_path) {
         Ok(pkg) => pkg,
         Err(e) => {
             collector.add(crate::linting::LintFinding {
@@ -109,37 +109,8 @@ pub async fn run(args: &Parameters) -> Result<()> {
         }
     };
 
-    // Check 2: Invalid manifest (missing required fields)
-    if package.metadata.name.is_empty() {
-        collector.add(crate::linting::LintFinding {
-            rule: "package/invalid-manifest".to_string(),
-            level: crate::linting::LintLevel::Error,
-            file: PathBuf::from("package.yaml"),
-            line: None,
-            col: None,
-            message: "Missing required field: name".to_string(),
-        });
-    }
-    if package.metadata.category.is_empty() {
-        collector.add(crate::linting::LintFinding {
-            rule: "package/invalid-manifest".to_string(),
-            level: crate::linting::LintLevel::Error,
-            file: PathBuf::from("package.yaml"),
-            line: None,
-            col: None,
-            message: "Missing required field: category".to_string(),
-        });
-    }
-    if package.metadata.description.is_empty() {
-        collector.add(crate::linting::LintFinding {
-            rule: "package/invalid-manifest".to_string(),
-            level: crate::linting::LintLevel::Error,
-            file: PathBuf::from("package.yaml"),
-            line: None,
-            col: None,
-            message: "Missing required field: description".to_string(),
-        });
-    }
+    // Check 2: Invalid manifest (missing required fields + option schemas)
+    check_manifest_fields(&mut package, &mut collector);
 
     if collector.has_errors() {
         let level_filter = level_filter_to_lint_level(&args.level);
@@ -234,6 +205,41 @@ pub async fn run(args: &Parameters) -> Result<()> {
     }
 }
 
+fn check_manifest_fields(package: &mut VynilPackageSource, collector: &mut crate::linting::LintResultCollector) {
+    let manifest = PathBuf::from("package.yaml");
+    let empty_fields: Vec<&str> = [
+        ("name", package.metadata.name.is_empty()),
+        ("category", package.metadata.category.is_empty()),
+        ("description", package.metadata.description.is_empty()),
+        ("apiVersion", package.apiVersion.is_empty()),
+        ("kind", package.kind.is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(field, empty)| if empty { Some(field) } else { None })
+    .collect();
+
+    for field in empty_fields {
+        collector.add(crate::linting::LintFinding {
+            rule: "package/invalid-manifest".to_string(),
+            level: crate::linting::LintLevel::Error,
+            file: manifest.clone(),
+            line: None,
+            col: None,
+            message: format!("Missing required field: {}", field),
+        });
+    }
+    if let Err(e) = package.validate_options() {
+        collector.add(crate::linting::LintFinding {
+            rule: "package/invalid-option-schema".to_string(),
+            level: crate::linting::LintLevel::Error,
+            file: manifest,
+            line: None,
+            col: None,
+            message: format!("Invalid option schema: {}", e),
+        });
+    }
+}
+
 fn level_filter_to_lint_level(filter: &LevelFilter) -> crate::linting::LintLevel {
     match filter {
         LevelFilter::All => crate::linting::LintLevel::Info,
@@ -294,4 +300,78 @@ fn scan_hbs_files(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::vynilpackage::{VynilPackageMeta, VynilPackageSource, VynilPackageType};
+
+    fn make_valid_package() -> VynilPackageSource {
+        VynilPackageSource {
+            apiVersion: "vynil.solidite.fr/v1".to_string(),
+            kind: "Package".to_string(),
+            metadata: VynilPackageMeta {
+                name: "test".to_string(),
+                category: "apps".to_string(),
+                description: "A test package".to_string(),
+                app_version: None,
+                usage: VynilPackageType::Tenant,
+                features: vec![],
+                backup_affinity: None,
+            },
+            requirements: vec![],
+            recommandations: None,
+            options: None,
+            images: None,
+            resources: None,
+            value_script: None,
+        }
+    }
+
+    #[test]
+    fn check_manifest_fields_valid_has_no_errors() {
+        let mut package = make_valid_package();
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_manifest_fields(&mut package, &mut collector);
+        assert!(!collector.has_errors());
+    }
+
+    #[test]
+    fn check_manifest_fields_empty_name_is_error() {
+        let mut package = make_valid_package();
+        package.metadata.name = String::new();
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_manifest_fields(&mut package, &mut collector);
+        assert!(collector.has_errors());
+    }
+
+    #[test]
+    fn check_manifest_fields_empty_api_version_is_error() {
+        let mut package = make_valid_package();
+        package.apiVersion = String::new();
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_manifest_fields(&mut package, &mut collector);
+        assert!(collector.has_errors());
+    }
+
+    #[test]
+    fn check_manifest_fields_empty_kind_is_error() {
+        let mut package = make_valid_package();
+        package.kind = String::new();
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_manifest_fields(&mut package, &mut collector);
+        assert!(collector.has_errors());
+    }
+
+    #[test]
+    fn check_manifest_fields_invalid_option_schema_is_error() {
+        let mut package = make_valid_package();
+        let mut options = std::collections::BTreeMap::new();
+        options.insert("bad".to_string(), serde_json::json!(42));
+        package.options = Some(options);
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_manifest_fields(&mut package, &mut collector);
+        assert!(collector.has_errors());
+    }
 }
