@@ -96,10 +96,11 @@ impl<'a> RhaiChecker<'a> {
                 let dead_code_findings = check_dead_code(&ast, file);
                 findings.extend(dead_code_findings);
 
-                let var_findings = check_unused_variables(&ast, file);
+                let inline_disables = parse_inline_disables(source);
+
+                let var_findings = check_unused_variables(&ast, file, &inline_disables);
                 findings.extend(var_findings);
 
-                let inline_disables = parse_inline_disables(source);
                 let param_findings = check_unused_parameters(&ast, file, self.config, &inline_disables);
                 findings.extend(param_findings);
 
@@ -496,7 +497,7 @@ fn extract_position(e: &ParseError) -> (Option<usize>, Option<usize>) {
     (line, col)
 }
 
-fn check_unused_variables(ast: &AST, file: &Path) -> Vec<LintFinding> {
+fn check_unused_variables(ast: &AST, file: &Path, inline_disables: &HashMap<usize, HashSet<String>>) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     let mut declarations: Vec<(String, usize)> = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
@@ -533,14 +534,20 @@ fn check_unused_variables(ast: &AST, file: &Path) -> Vec<LintFinding> {
     // Check for unused variables
     for (name, line) in declarations {
         if !name.starts_with('_') && !used.contains(&name) {
-            findings.push(LintFinding {
-                rule: "rhai/unused-variable".to_string(),
-                level: LintLevel::Warn,
-                file: file.to_path_buf(),
-                line: Some(line),
-                col: None,
-                message: format!("Variable `{}` is declared but never used", name),
-            });
+            let disabled = inline_disables
+                .get(&line)
+                .map(|rules| rules.contains("rhai/unused-variable"))
+                .unwrap_or(false);
+            if !disabled {
+                findings.push(LintFinding {
+                    rule: "rhai/unused-variable".to_string(),
+                    level: LintLevel::Warn,
+                    file: file.to_path_buf(),
+                    line: Some(line),
+                    col: None,
+                    message: format!("Variable `{}` is declared but never used", name),
+                });
+            }
         }
     }
 
@@ -1188,6 +1195,22 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.rule == "rhai/unused-parameter"),
             "inline disable should suppress rhai/unused-parameter"
+        );
+    }
+
+    #[test]
+    fn inline_disable_suppresses_unused_variable() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "let x = 1; // vynil-lint-disable rhai/unused-variable\nlet used = 2;\nused";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-variable"),
+            "inline disable should suppress rhai/unused-variable"
         );
     }
 }
