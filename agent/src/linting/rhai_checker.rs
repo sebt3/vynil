@@ -1,7 +1,7 @@
-use crate::linting::{LintFinding, LintLevel, LintConfig};
+use crate::linting::{LintFinding, LintLevel, LintConfig, parse_inline_disables};
 use common::vynilpackage::{VynilPackageSource, VynilPackageType};
 use common::rhaihandler::{Engine, AST, ASTNode, Stmt, Expr, ParseError};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const ENTRY_POINT_PATTERNS: &[&str] = &[
@@ -99,7 +99,8 @@ impl<'a> RhaiChecker<'a> {
                 let var_findings = check_unused_variables(&ast, file);
                 findings.extend(var_findings);
 
-                let param_findings = check_unused_parameters(&ast, file);
+                let inline_disables = parse_inline_disables(source);
+                let param_findings = check_unused_parameters(&ast, file, self.config, &inline_disables);
                 findings.extend(param_findings);
 
                 // Track scripts that define entry-point functions (lifecycle hooks)
@@ -320,6 +321,10 @@ fn collect_used_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
             collect_used_vars_expr(&data[0], vars);
             collect_used_vars_expr(&data[1], vars);
         }
+        // `if`/`while`/etc. used as expressions are wrapped in Expr::Stmt
+        Expr::Stmt(block) => {
+            collect_used_vars_stmts(block.statements(), vars);
+        }
         _ => {}
     }
 }
@@ -357,6 +362,12 @@ fn collect_used_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
         Stmt::TryCatch(data, _) => {
             collect_used_vars_stmts(data.body.statements(), vars);
             collect_used_vars_stmts(data.branch.statements(), vars);
+        }
+        // Top-level operator expressions (e.g. `a >= b`) are Stmt::FnCall, not Stmt::Expr
+        Stmt::FnCall(fn_call, _) => {
+            for arg in fn_call.args.iter() {
+                collect_used_vars_expr(arg, vars);
+            }
         }
         _ => {}
     }
@@ -536,29 +547,45 @@ fn check_unused_variables(ast: &AST, file: &Path) -> Vec<LintFinding> {
     findings
 }
 
-fn check_unused_parameters(ast: &AST, file: &Path) -> Vec<LintFinding> {
+fn check_unused_parameters(
+    ast: &AST,
+    file: &Path,
+    config: &LintConfig,
+    inline_disables: &HashMap<usize, HashSet<String>>,
+) -> Vec<LintFinding> {
+    // Aggregate all inline-disabled rules across the file for file-level suppression
+    let file_disabled: HashSet<String> = inline_disables
+        .values()
+        .flat_map(|rules| rules.iter().cloned())
+        .collect();
+
     let mut findings = Vec::new();
 
     for fn_def in ast.iter_fn_def() {
-        // Use custom walker: ast.walk() misses variables used as method call arguments
-        // (rhai 1.20.0 bug — walker skips Dot rhs args)
         let mut used_params: HashSet<String> = HashSet::new();
         collect_used_vars_stmts(fn_def.body.statements(), &mut used_params);
 
         for param_name in &fn_def.params {
             let param_str = param_name.to_string();
             if !param_str.starts_with('_') && !used_params.contains(&param_str) {
-                findings.push(LintFinding {
-                    rule: "rhai/unused-parameter".to_string(),
-                    level: LintLevel::Warn,
-                    file: file.to_path_buf(),
-                    line: None,
-                    col: None,
-                    message: format!(
-                        "Parameter `{}` in function `{}` is never used",
-                        param_str, fn_def.name
-                    ),
-                });
+                if let Some(level) = config.resolve_level(
+                    "rhai/unused-parameter",
+                    file,
+                    LintLevel::Warn,
+                    &file_disabled,
+                ) {
+                    findings.push(LintFinding {
+                        rule: "rhai/unused-parameter".to_string(),
+                        level,
+                        file: file.to_path_buf(),
+                        line: None,
+                        col: None,
+                        message: format!(
+                            "Parameter `{}` in function `{}` is never used",
+                            param_str, fn_def.name
+                        ),
+                    });
+                }
             }
         }
     }
@@ -1104,6 +1131,63 @@ mod tests {
         assert!(
             findings.iter().any(|f| f.rule == "rhai/shadowed-variable"),
             "Variable re-declared in nested scope should still be flagged"
+        );
+    }
+
+    #[test]
+    fn parameter_used_in_if_expr_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // context is used inside an if-expression used as init value (Expr::Stmt case)
+        let source = r#"fn template(_instance, context) {
+    let replicas = if context.cluster.ha { 2 } else { 1 };
+    replicas
+}"#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("context")),
+            "context used in if-expression init should not be flagged as unused"
+        );
+    }
+
+    #[test]
+    fn parameter_used_in_closure_operator_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // v and app_version are used inside a closure body that is a Stmt::FnCall (operator)
+        let source = r#"fn run(args) {
+    let app_version = "1.0.0";
+    let more = [1,2,3].filter(|v| v >= 2); // vynil-lint-disable rhai/unused-parameter
+    more
+}"#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("\"v\"")),
+            "v used in closure operator body should not be flagged as unused"
+        );
+    }
+
+    #[test]
+    fn inline_disable_suppresses_unused_parameter() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "fn foo(used, unused) { used } // vynil-lint-disable rhai/unused-parameter";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-parameter"),
+            "inline disable should suppress rhai/unused-parameter"
         );
     }
 }

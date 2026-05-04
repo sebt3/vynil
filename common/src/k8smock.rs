@@ -183,6 +183,23 @@ fn find_workload_mock(
     Err(format!("Failed to find {kind} {name} in namespace {namespace} in the Mock database").into())
 }
 
+fn deep_merge_dynamic(base: Dynamic, patch: &Dynamic) -> Dynamic {
+    if base.is_map() && patch.is_map() {
+        let mut merged: Map = base.as_map_ref().unwrap().clone();
+        for (k, v) in patch.as_map_ref().unwrap().iter() {
+            let new_val = if let Some(existing) = merged.get(k.as_str()) {
+                deep_merge_dynamic(existing.clone(), v)
+            } else {
+                v.clone()
+            };
+            merged.insert(k.clone(), new_val);
+        }
+        Dynamic::from_map(merged)
+    } else {
+        patch.clone()
+    }
+}
+
 fn upsert_in_list(list: &mut Vec<Dynamic>, kind: &str, obj: &Dynamic) {
     if !obj.is_map() {
         list.push(obj.clone());
@@ -223,7 +240,7 @@ fn upsert_in_list(list: &mut Vec<Dynamic>, kind: &str, obj: &Dynamic) {
             .and_then(|m| m.get("namespace"))
             .and_then(|n| n.clone().into_string().ok());
         if entry_name == obj_name && entry_ns == obj_ns {
-            *entry = obj.clone();
+            *entry = deep_merge_dynamic(entry.clone(), obj);
             return;
         }
     }

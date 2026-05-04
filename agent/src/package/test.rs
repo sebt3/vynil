@@ -1,7 +1,7 @@
 use clap::Args;
 use client::testing::TestHandler;
 use common::{Error, Result, yamlhandler::yaml_all_serialize_to_string};
-use rhai::Dynamic;
+use common::rhaihandler::Dynamic;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,

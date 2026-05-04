@@ -41,6 +41,16 @@ pub struct Parameters {
     )]
     pub config_dir: PathBuf,
 
+    /// Agent script directory (used to resolve shared imports like lib/)
+    #[arg(
+        short = 's',
+        long = "script-dir",
+        env = "SCRIPT_DIRECTORY",
+        value_name = "SCRIPT_DIRECTORY",
+        default_value = "./agent/scripts"
+    )]
+    pub script_dir: Option<PathBuf>,
+
     /// Output format
     #[arg(long = "format", default_value = "text")]
     pub format: OutputFormat,
@@ -56,9 +66,9 @@ pub struct Parameters {
 
 fn expected_dirs(pkg_type: &VynilPackageType) -> &[&str] {
     match pkg_type {
-        VynilPackageType::System => &["systems", "crds"],
-        VynilPackageType::Service => &["vitals", "scalables", "others", "befores", "posts", "pods", "handlebars", "scripts"],
-        VynilPackageType::Tenant => &["vitals", "scalables", "others", "befores", "posts", "pods", "handlebars", "scripts"],
+        VynilPackageType::System => &["systems", "crds", "scripts"],
+        VynilPackageType::Service => &["vitals", "scalables", "others", "befores", "posts", "handlebars", "scripts", "crds"],
+        VynilPackageType::Tenant => &["vitals", "scalables", "others", "befores", "posts", "handlebars", "scripts"],
     }
 }
 
@@ -165,39 +175,6 @@ pub async fn run(args: &Parameters) -> Result<()> {
         }
     }
 
-    // Check 4: Declared directories missing
-    if let Some(images) = &package.images {
-        if !images.is_empty() {
-            let images_dir = args.package_dir.join("images");
-            if !images_dir.exists() {
-                collector.add(crate::linting::LintFinding {
-                    rule: "package/declared-dir-missing".to_string(),
-                    level: crate::linting::LintLevel::Warn,
-                    file: PathBuf::from("package.yaml"),
-                    line: None,
-                    col: None,
-                    message: "images section defined but images/ directory not found".to_string(),
-                });
-            }
-        }
-    }
-
-    if let Some(resources) = &package.resources {
-        if !resources.is_empty() {
-            let resources_dir = args.package_dir.join("resources");
-            if !resources_dir.exists() {
-                collector.add(crate::linting::LintFinding {
-                    rule: "package/declared-dir-missing".to_string(),
-                    level: crate::linting::LintLevel::Warn,
-                    file: PathBuf::from("package.yaml"),
-                    line: None,
-                    col: None,
-                    message: "resources section defined but resources/ directory not found".to_string(),
-                });
-            }
-        }
-    }
-
     // Check HBS files
     let config = crate::linting::LintConfig::load(&args.package_dir)?;
     let mut hbs_checker = crate::linting::hbs_checker::HbsChecker::new(
@@ -216,11 +193,39 @@ pub async fn run(args: &Parameters) -> Result<()> {
         }
     }
 
-    // Add finalized findings (e.g., unused helpers, unused options)
     collector.extend(hbs_checker.finalize());
 
+    // Check Rhai files
+    let mut rhai_checker = crate::linting::rhai_checker::RhaiChecker::new(
+        &args.package_dir,
+        &args.config_dir,
+        args.script_dir.as_deref(),
+        &package,
+        &config,
+    );
+
+    if let Ok(entries) = std::fs::read_dir(&args.package_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_rhai_files(&path, &args.package_dir, &mut rhai_checker, &mut collector)?;
+            }
+        }
+    }
+
+    collector.extend(rhai_checker.finalize());
+
+    collector.prefix_files(&args.package_dir);
+
     let level_filter = level_filter_to_lint_level(&args.level);
-    println!("{}", collector.to_text(level_filter));
+    let text_output = collector.to_text(level_filter);
+    println!("{}", text_output);
+
+    if let Some(junit_path) = &args.junit_output_filename {
+        let junit_xml = collector.to_junit();
+        std::fs::write(junit_path, junit_xml)
+            .map_err(|e| common::Error::YamlError(format!("Failed to write JUnit output: {}", e)))?;
+    }
 
     if collector.has_errors() {
         Err(common::Error::YamlError("Linting failed with errors".to_string()))
@@ -235,6 +240,32 @@ fn level_filter_to_lint_level(filter: &LevelFilter) -> crate::linting::LintLevel
         LevelFilter::Warn => crate::linting::LintLevel::Warn,
         LevelFilter::Error => crate::linting::LintLevel::Error,
     }
+}
+
+fn scan_rhai_files(
+    dir: &std::path::Path,
+    package_dir: &std::path::Path,
+    rhai_checker: &mut crate::linting::rhai_checker::RhaiChecker,
+    collector: &mut crate::linting::LintResultCollector,
+) -> Result<()> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_rhai_files(&path, package_dir, rhai_checker, collector)?;
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rhai") {
+                if let Ok(source) = std::fs::read_to_string(&path) {
+                    if let Ok(rel_path) = path.strip_prefix(package_dir) {
+                        let findings = rhai_checker.check_file(rel_path, &source);
+                        for finding in findings {
+                            collector.add(finding);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn scan_hbs_files(

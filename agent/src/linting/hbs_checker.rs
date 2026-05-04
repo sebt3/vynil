@@ -1,44 +1,8 @@
 use crate::linting::{LintFinding, LintLevel, LintConfig, parse_inline_disables};
+use common::handlebarshandler::{Template, TemplateElement, Parameter, HbsPath, PathSeg, NATIVE_HBS_HELPERS};
 use common::vynilpackage::VynilPackageSource;
-use handlebars::template::{Template, TemplateElement, Parameter};
-use handlebars::{Path as HbsPath, PathSeg};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-
-const NATIVE_HELPERS: &[&str] = &[
-    "base64_encode",
-    "base64_decode",
-    "url_encode",
-    "to_decimal",
-    "header_basic",
-    "argon_hash",
-    "bcrypt_hash",
-    "crc32_hash",
-    "gen_password",
-    "gen_password_alphanum",
-    "concat",
-    "selector_from_ctx",
-    "labels_from_ctx",
-    "ctx_have_crd",
-    "have_system_service",
-    "have_tenant_service",
-    "image_from_ctx",
-    "resources_from_ctx",
-    "render_template",
-    "render_file",
-    // handlebars_misc_helpers
-    "to_json",
-    "json_to_str",
-    // handlebars built-ins (no-op blocks)
-    "if",
-    "unless",
-    "each",
-    "with",
-    "lookup",
-    "log",
-    "raw",
-    "inline",
-];
 
 pub struct HbsChecker<'a> {
     _package_dir: &'a Path,
@@ -108,20 +72,23 @@ impl<'a> HbsChecker<'a> {
         // Check 1: hbs/syntax
         match Template::compile(source) {
             Ok(template) => {
-                // Check 2-5: helpers and partials
-                let mut walker = HelperWalker::new(file, self.config.clone(), inline_disables, self._pkg);
-                walker.walk(&template);
-                let walker_findings = walker.get_findings();
-                let walker_used_helpers = walker.used_helpers;
-                let walker_used_partials = walker.used_partials;
-                let walker_used_values = walker.used_values;
+                let (walker_findings, used_helpers, used_partials, used_values) = {
+                    let mut walker = HelperWalker::new(
+                        file,
+                        self.config.clone(),
+                        inline_disables,
+                        self._pkg,
+                        self.defined_helpers.clone(),
+                        self.defined_partials.clone(),
+                    );
+                    walker.walk(&template);
+                    (walker.findings, walker.used_helpers, walker.used_partials, walker.used_values)
+                };
 
                 findings.extend(walker_findings);
-
-                // Accumulate for unused checks
-                self.used_helpers.extend(walker_used_helpers);
-                self.used_partials.extend(walker_used_partials);
-                self.used_values.extend(walker_used_values);
+                self.used_helpers.extend(used_helpers);
+                self.used_partials.extend(used_partials);
+                self.used_values.extend(used_values);
             }
             Err(e) => {
                 if let Some(level) = self
@@ -229,16 +196,21 @@ struct HelperWalker<'a> {
 }
 
 impl<'a> HelperWalker<'a> {
-    fn new(file: &Path, config: LintConfig, inline_disables: HashMap<usize, HashSet<String>>, pkg: &'a VynilPackageSource) -> Self {
-        // Collect defined helpers and partials from the first call
-        // Note: This is initialized per file, but we track globally in HbsChecker
+    fn new(
+        file: &Path,
+        config: LintConfig,
+        inline_disables: HashMap<usize, HashSet<String>>,
+        pkg: &'a VynilPackageSource,
+        defined_helpers: HashSet<String>,
+        defined_partials: HashSet<String>,
+    ) -> Self {
         HelperWalker {
             file: file.to_path_buf(),
             config,
             inline_disables,
             findings: Vec::new(),
-            defined_helpers: HashSet::new(),
-            defined_partials: HashSet::new(),
+            defined_helpers,
+            defined_partials,
             used_helpers: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
@@ -283,17 +255,25 @@ impl<'a> HelperWalker<'a> {
                 self.check_helper(&h.name, &h.params);
                 self.check_image_resource_helper(&h.name, &h.params);
                 self.check_path(&h.name);
+                for param in &h.params {
+                    self.check_values_path(param);
+                }
             }
             TemplateElement::Expression(e) => {
-                // Check for helper references - Expressions with Name parameters are helpers
                 self.check_helper(&e.name, &e.params);
                 self.check_values_path(&e.name);
+                for param in &e.params {
+                    self.check_values_path(param);
+                }
                 self.check_image_resource_helper(&e.name, &e.params);
                 self.check_path(&e.name);
             }
             TemplateElement::HtmlExpression(e) => {
                 self.check_helper(&e.name, &e.params);
                 self.check_values_path(&e.name);
+                for param in &e.params {
+                    self.check_values_path(param);
+                }
                 self.check_image_resource_helper(&e.name, &e.params);
                 self.check_path(&e.name);
             }
@@ -312,7 +292,7 @@ impl<'a> HelperWalker<'a> {
 
     fn check_helper(&mut self, name: &Parameter, params: &[Parameter]) {
         if let Parameter::Name(helper_name) = name {
-            if !NATIVE_HELPERS.contains(&helper_name.as_str()) {
+            if !NATIVE_HBS_HELPERS.contains(&helper_name.as_str()) {
                 self.used_helpers.insert(helper_name.clone());
 
                 if !self.defined_helpers.contains(helper_name) {
@@ -338,7 +318,6 @@ impl<'a> HelperWalker<'a> {
         // Check for nested subexpressions
         for param in params {
             if let Parameter::Subexpression(sub) = param {
-                // Recurse into subexpression by visiting its element
                 self.visit_element(sub.as_element());
             }
         }
@@ -458,9 +437,7 @@ impl<'a> HelperWalker<'a> {
     fn check_partial(&mut self, name: &Parameter) {
         let partial_name = match name {
             Parameter::Name(s) => s.clone(),
-            Parameter::Literal(v) => {
-                v.as_str().unwrap_or("").to_string()
-            }
+            Parameter::Literal(v) => v.as_str().unwrap_or("").to_string(),
             _ => return,
         };
 
@@ -483,10 +460,6 @@ impl<'a> HelperWalker<'a> {
                 });
             }
         }
-    }
-
-    fn get_findings(&self) -> Vec<LintFinding> {
-        self.findings.clone()
     }
 }
 
@@ -561,12 +534,32 @@ mod tests {
     }
 
     #[test]
+    fn read_to_str_helper_no_finding() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = r#"{{read_to_str "/some/file"}}"#;
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(!findings.iter().any(|f| f.rule == "hbs/unknown-helper"),
+            "read_to_str should be known (registered by handlebars_misc_helpers)");
+    }
+
+    #[test]
     fn unknown_helper_produces_error() {
         let mut test = TestChecker::new(vec![], vec![]);
         let source = "{{unknown_helper_xyz val}}";
         let findings = test.checker.check_file(Path::new("test.hbs"), source);
 
         assert!(findings.iter().any(|f| f.rule == "hbs/unknown-helper"));
+    }
+
+    #[test]
+    fn defined_custom_helper_no_error() {
+        let mut test = TestChecker::new(vec!["my_custom_helper"], vec![]);
+        let source = "{{my_custom_helper val}}";
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(!findings.iter().any(|f| f.rule == "hbs/unknown-helper"),
+            "Custom helper defined in handlebars/helpers/ should not be flagged");
     }
 
     #[test]

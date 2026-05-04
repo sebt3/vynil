@@ -20,7 +20,6 @@ junit-report = "0.8.3"
 clap = { version = "4.5.53", features = ["derive", "env"] }
 env_logger = "0.11.5"
 wildmatch = "2.6.1"
-handlebars = { version = "6.2.0", features = ["script_helper", "string_helpers"] }
 
 
 [[bin]]

@@ -1,7 +1,7 @@
 use super::vyniltestset::{
     VynilAssert, VynilAssertMatch, VynilAssertResult, VynilAssertSelector, VynilTestSetMocks,
 };
-use rhai::Dynamic;
+use common::rhaihandler::Dynamic;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

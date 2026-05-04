@@ -198,7 +198,6 @@ dependencies = [
  "clap",
  "common",
  "env_logger",
- "handlebars",
  "junit-report",
  "k8s-openapi",
  "kube",

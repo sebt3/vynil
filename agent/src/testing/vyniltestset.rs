@@ -1,5 +1,5 @@
 use common::httpmock::HttpMockItem;
-use rhai::Dynamic;
+use common::rhaihandler::Dynamic;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

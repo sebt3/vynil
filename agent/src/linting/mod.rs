@@ -72,10 +72,12 @@ impl LintResultCollector {
         self.findings.iter().any(|f| f.level == LintLevel::Error)
     }
 
-    pub fn has_warnings(&self) -> bool {
-        self.findings
-            .iter()
-            .any(|f| f.level == LintLevel::Warn || f.level == LintLevel::Error)
+    pub fn prefix_files(&mut self, base: &std::path::Path) {
+        for finding in &mut self.findings {
+            if finding.file.is_relative() {
+                finding.file = base.join(&finding.file);
+            }
+        }
     }
 
     pub fn to_text(&self, level_filter: LintLevel) -> String {
@@ -166,7 +168,6 @@ mod tests {
     fn collector_has_no_errors_when_empty() {
         let collector = LintResultCollector::new();
         assert!(!collector.has_errors());
-        assert!(!collector.has_warnings());
     }
 
     #[test]
@@ -181,7 +182,6 @@ mod tests {
             message: "Test error".to_string(),
         });
         assert!(collector.has_errors());
-        assert!(collector.has_warnings());
     }
 
     #[test]

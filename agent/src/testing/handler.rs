@@ -9,7 +9,7 @@ use common::{
     rhaihandler::Script,
     vynilpackage::{VynilPackageSource, VynilPackageType, read_package_yaml},
 };
-use rhai::{Dynamic, Map};
+use common::rhaihandler::{Dynamic, Map};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -519,7 +519,7 @@ impl TestHandler {
                         passed: true,
                         message: "value script executed successfully".to_string(),
                     });
-                    serde_json::to_string(&rhai::serde::to_dynamic(&val).unwrap_or_default())
+                    serde_json::to_string(&common::rhaihandler::to_dynamic(&val).unwrap_or_default())
                         .unwrap_or_else(|_| "{}".to_string())
                 }
                 Err(e) => {

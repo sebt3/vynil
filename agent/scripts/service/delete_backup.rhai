@@ -40,7 +40,6 @@ fn run(instance, context) {
     try {
         let api = k8s_resource("Job", instance.metadata.namespace);
         if api.exist() {
-            debug(`app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`);
             for job in api.list(`app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`).items {
                 try {
                     let o = api.get_obj(job.metadata.name);
@@ -53,7 +52,6 @@ fn run(instance, context) {
                     }
                 }
             }
-            debug(`app.kubernetes.io/component=restore,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`);
             for job in api.list(`app.kubernetes.io/component=restore,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`).items {
                 try {
                     let o = api.get_obj(job.metadata.name);
