@@ -511,14 +511,13 @@ fn check_unused_variables(ast: &AST, file: &Path, inline_disables: &HashMap<usiz
         true
     });
 
-    // Collect variable usages
-    ast.walk(&mut |nodes: &[ASTNode]| {
-        if let Some(ASTNode::Expr(Expr::Variable(var_data, _, _))) = nodes.last() {
-            let (_, name, _, _) = &**var_data;
-            used.insert(name.to_string());
-        }
-        true
-    });
+    // Collect variable usages — use explicit traversal instead of ast.walk() because
+    // walk() does not descend into try-catch blocks, causing false positives for
+    // variables used only inside try { } bodies.
+    collect_used_vars_stmts(ast.statements(), &mut used);
+    for fn_def in ast.iter_fn_def() {
+        collect_used_vars_stmts(fn_def.body.statements(), &mut used);
+    }
 
     // Check for shadowing (scope-aware: sibling try/if/for blocks don't count)
     {
@@ -1211,6 +1210,38 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.rule == "rhai/unused-variable"),
             "inline disable should suppress rhai/unused-variable"
+        );
+    }
+
+    #[test]
+    fn variable_used_in_try_block_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "let x = 1;\ntry { let _r = x + 1; } catch {}";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`x`")),
+            "variable used inside try block should not be flagged as unused"
+        );
+    }
+
+    #[test]
+    fn variable_used_via_dot_access_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "fn run(ctx) {\n  let obj = ctx.values;\n  obj.name\n}";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`obj`")),
+            "variable used as dot-access base should not be flagged as unused"
         );
     }
 }
