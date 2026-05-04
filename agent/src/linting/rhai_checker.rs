@@ -1,14 +1,16 @@
 use crate::linting::{LintFinding, LintLevel, LintConfig};
 use common::vynilpackage::{VynilPackageSource, VynilPackageType};
+use common::rhaihandler::{Engine, AST, ASTNode, Stmt, Expr, ParseError};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use rhai::{Engine, ASTNode, Stmt, Expr};
 
 const ENTRY_POINT_PATTERNS: &[&str] = &[
     "install.rhai",
     "delete.rhai",
     "reconfigure.rhai",
 ];
+
+const ENTRY_POINT_FUNCTIONS: &[&str] = &["run", "template", "new", "main"];
 
 const FULL_ONLY_FUNCTIONS: &[&str] = &[
     "http_get", "http_post", "http_put", "http_delete", "http_patch",
@@ -20,13 +22,13 @@ const FULL_ONLY_FUNCTIONS: &[&str] = &[
 ];
 
 pub struct RhaiChecker<'a> {
-    package_dir: &'a Path,
     pkg: &'a VynilPackageSource,
     config: &'a LintConfig,
     resolver_paths: Vec<PathBuf>,
     importable_scripts: HashSet<PathBuf>,
     imported_scripts: HashSet<String>,
-    defined_functions: HashSet<String>,
+    scripts_with_entry_points: HashSet<String>,
+    defined_functions: Vec<(String, PathBuf)>,
     called_functions: HashSet<String>,
 }
 
@@ -34,11 +36,21 @@ impl<'a> RhaiChecker<'a> {
     pub fn new(
         package_dir: &'a Path,
         config_dir: &'a Path,
+        script_dir: Option<&Path>,
         pkg: &'a VynilPackageSource,
         config: &'a LintConfig,
     ) -> Self {
         let mut resolver_paths = vec![package_dir.join("scripts")];
         resolver_paths.push(config_dir.to_path_buf());
+        if let Some(dir) = script_dir {
+            resolver_paths.push(dir.join("lib"));
+            let type_subdir = match pkg.metadata.usage {
+                VynilPackageType::Tenant => "tenant",
+                VynilPackageType::Service => "service",
+                VynilPackageType::System => "system",
+            };
+            resolver_paths.push(dir.join(type_subdir));
+        }
 
         let mut importable_scripts = HashSet::new();
         let scripts_dir = package_dir.join("scripts");
@@ -47,7 +59,6 @@ impl<'a> RhaiChecker<'a> {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().map_or(false, |ext| ext == "rhai") {
-                        // Exclude entry points and context_*.rhai
                         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                             let is_entry_point = ENTRY_POINT_PATTERNS.iter().any(|p| name == *p)
                                 || name.starts_with("context_");
@@ -61,13 +72,13 @@ impl<'a> RhaiChecker<'a> {
         }
 
         RhaiChecker {
-            package_dir,
             pkg,
             config,
             resolver_paths,
             importable_scripts,
             imported_scripts: HashSet::new(),
-            defined_functions: HashSet::new(),
+            scripts_with_entry_points: HashSet::new(),
+            defined_functions: Vec::new(),
             called_functions: HashSet::new(),
         }
     }
@@ -75,40 +86,41 @@ impl<'a> RhaiChecker<'a> {
     pub fn check_file(&mut self, file: &Path, source: &str) -> Vec<LintFinding> {
         let mut findings = Vec::new();
 
-        // Check 1: rhai/syntax
-        let engine = Engine::new();
+        let mut engine = Engine::new();
+        engine.set_max_expr_depths(128, 64);
         match engine.compile(source) {
             Ok(ast) => {
-                // Check 2: rhai/unresolved-import and accumulate imported scripts
                 let import_findings = self.check_imports(&ast, file);
                 findings.extend(import_findings);
 
-                // Check 3: rhai/dead-code
                 let dead_code_findings = check_dead_code(&ast, file);
                 findings.extend(dead_code_findings);
 
-                // Check 4: rhai/unused-variable and rhai/shadowed-variable
                 let var_findings = check_unused_variables(&ast, file);
                 findings.extend(var_findings);
 
-                // Check 5: rhai/unused-parameter
                 let param_findings = check_unused_parameters(&ast, file);
                 findings.extend(param_findings);
 
-                // Check 6: accumulate function definitions and calls for later finalize()
-                self.accumulate_functions(&ast);
+                // Track scripts that define entry-point functions (lifecycle hooks)
+                let has_entry_point = ast.iter_fn_def()
+                    .any(|f| ENTRY_POINT_FUNCTIONS.contains(&f.name.as_str()));
+                if has_entry_point {
+                    if let Some(stem) = file.file_stem().and_then(|s| s.to_str()) {
+                        self.scripts_with_entry_points.insert(stem.to_string());
+                    }
+                }
 
-                // Check 7: rhai/wrong-api-mode
                 let api_mode_findings = check_wrong_api_mode(file, &ast);
                 findings.extend(api_mode_findings);
 
-                // Check 8: rhai/wrong-package-type
                 let pkg_type_findings = check_wrong_package_type(&ast, file, self.pkg);
                 findings.extend(pkg_type_findings);
 
-                // Check 9: rhai/context-hook-no-return
                 let context_findings = check_context_hook_no_return(&ast, file);
                 findings.extend(context_findings);
+
+                self.accumulate_functions(&ast, file);
             }
             Err(e) => {
                 if let Some(level) = self.config.resolve_level(
@@ -133,11 +145,11 @@ impl<'a> RhaiChecker<'a> {
         findings
     }
 
-    fn check_imports(&mut self, ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+    fn check_imports(&mut self, ast: &AST, file: &Path) -> Vec<LintFinding> {
         let mut findings = Vec::new();
 
         ast.walk(&mut |nodes: &[ASTNode]| {
-            for node in nodes {
+            if let Some(node) = nodes.last() {
                 if let ASTNode::Stmt(stmt) = node {
                     if let Stmt::Import(import_data, _) = stmt {
                         let (path_expr, _alias) = &**import_data;
@@ -184,24 +196,22 @@ impl<'a> RhaiChecker<'a> {
         false
     }
 
-    fn accumulate_functions(&mut self, ast: &rhai::AST) {
-        // Collect defined functions
+    fn accumulate_functions(&mut self, ast: &AST, file: &Path) {
         for fn_def in ast.iter_fn_def() {
-            self.defined_functions.insert(fn_def.name.to_string());
+            let name = fn_def.name.to_string();
+            if !name.starts_with("anon$") {
+                self.defined_functions.push((name, file.to_path_buf()));
+            }
         }
 
-        // Collect called functions
         ast.walk(&mut |nodes: &[ASTNode]| {
-            for node in nodes {
-                match node {
-                    ASTNode::Expr(expr) => {
-                        if let Expr::FnCall(fn_call, _) = expr {
-                            self.called_functions.insert(fn_call.name.to_string());
-                        } else if let Expr::MethodCall(fn_call, _) = expr {
-                            self.called_functions.insert(fn_call.name.to_string());
-                        }
+            if let Some(node) = nodes.last() {
+                if let ASTNode::Expr(expr) = node {
+                    if let Expr::FnCall(fn_call, _) = expr {
+                        self.called_functions.insert(fn_call.name.to_string());
+                    } else if let Expr::MethodCall(fn_call, _) = expr {
+                        self.called_functions.insert(fn_call.name.to_string());
                     }
-                    _ => {}
                 }
             }
             true
@@ -211,10 +221,12 @@ impl<'a> RhaiChecker<'a> {
     pub fn finalize(&self) -> Vec<LintFinding> {
         let mut findings = Vec::new();
 
-        // Check unused-script
+        // Check unused-script: skip scripts that define entry-point functions (lifecycle hooks)
         for script_path in &self.importable_scripts {
             if let Some(file_stem) = script_path.file_stem().and_then(|s| s.to_str()) {
-                if !self.imported_scripts.contains(file_stem) {
+                if !self.imported_scripts.contains(file_stem)
+                    && !self.scripts_with_entry_points.contains(file_stem)
+                {
                     if let Some(level) = self.config.resolve_level(
                         "rhai/unused-script",
                         script_path,
@@ -238,21 +250,20 @@ impl<'a> RhaiChecker<'a> {
         }
 
         // Check unused-function
-        let entry_points = ["run", "template", "new", "main"];
-        for func_name in &self.defined_functions {
+        for (func_name, func_file) in &self.defined_functions {
             if !self.called_functions.contains(func_name)
-                && !entry_points.contains(&func_name.as_str())
+                && !ENTRY_POINT_FUNCTIONS.contains(&func_name.as_str())
             {
                 if let Some(level) = self.config.resolve_level(
                     "rhai/unused-function",
-                    &PathBuf::from("scripts"),
+                    func_file,
                     LintLevel::Warn,
                     &HashSet::new(),
                 ) {
                     findings.push(LintFinding {
                         rule: "rhai/unused-function".to_string(),
                         level,
-                        file: PathBuf::from("scripts"),
+                        file: func_file.clone(),
                         line: None,
                         col: None,
                         message: format!(
@@ -268,12 +279,159 @@ impl<'a> RhaiChecker<'a> {
     }
 }
 
-fn check_dead_code(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+/// Recursively collects variable names used in an expression.
+/// Unlike ast.walk(), this correctly descends into method call arguments
+/// (rhai 1.20.0 ast.walk() skips them).
+fn collect_used_vars_expr(expr: &Expr, vars: &mut HashSet<String>) {
+    match expr {
+        Expr::Variable(var_data, _, _) => {
+            let (_, name, _, _) = &**var_data;
+            vars.insert(name.to_string());
+        }
+        Expr::Dot(data, _, _) => {
+            collect_used_vars_expr(&data.lhs, vars);
+            collect_used_vars_expr(&data.rhs, vars);
+        }
+        Expr::Index(data, _, _) => {
+            collect_used_vars_expr(&data.lhs, vars);
+            collect_used_vars_expr(&data.rhs, vars);
+        }
+        Expr::FnCall(fn_call, _) | Expr::MethodCall(fn_call, _) => {
+            for arg in fn_call.args.iter() {
+                collect_used_vars_expr(arg, vars);
+            }
+        }
+        Expr::Array(items, _) => {
+            for item in items.iter() {
+                collect_used_vars_expr(item, vars);
+            }
+        }
+        Expr::Map(pairs, _) => {
+            for (_, val) in pairs.0.iter() {
+                collect_used_vars_expr(val, vars);
+            }
+        }
+        Expr::InterpolatedString(parts, _) => {
+            for part in parts.iter() {
+                collect_used_vars_expr(part, vars);
+            }
+        }
+        Expr::And(data, _) | Expr::Or(data, _) | Expr::Coalesce(data, _) => {
+            collect_used_vars_expr(&data[0], vars);
+            collect_used_vars_expr(&data[1], vars);
+        }
+        _ => {}
+    }
+}
+
+fn collect_used_vars_stmts(stmts: &[Stmt], vars: &mut HashSet<String>) {
+    for stmt in stmts {
+        collect_used_vars_stmt(stmt, vars);
+    }
+}
+
+fn collect_used_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
+    match stmt {
+        Stmt::Var(var_data, _, _) => {
+            let (_, init, _) = &**var_data;
+            collect_used_vars_expr(init, vars);
+        }
+        Stmt::Expr(expr) => collect_used_vars_expr(expr, vars),
+        Stmt::Return(expr, ..) => {
+            if let Some(e) = expr { collect_used_vars_expr(e, vars); }
+        }
+        Stmt::If(data, _) => {
+            collect_used_vars_expr(&data.expr, vars);
+            collect_used_vars_stmts(data.body.statements(), vars);
+            collect_used_vars_stmts(data.branch.statements(), vars);
+        }
+        Stmt::While(data, _) | Stmt::Do(data, ..) => {
+            collect_used_vars_expr(&data.expr, vars);
+            collect_used_vars_stmts(data.body.statements(), vars);
+        }
+        Stmt::For(data, _) => {
+            collect_used_vars_expr(&data.2.expr, vars);
+            collect_used_vars_stmts(data.2.body.statements(), vars);
+        }
+        Stmt::Block(block) => collect_used_vars_stmts(block.statements(), vars),
+        Stmt::TryCatch(data, _) => {
+            collect_used_vars_stmts(data.body.statements(), vars);
+            collect_used_vars_stmts(data.branch.statements(), vars);
+        }
+        _ => {}
+    }
+}
+
+/// Scope-aware shadowing check: walks statements maintaining a scope stack.
+/// Only flags shadowing when a name is already declared in the current scope chain,
+/// preventing false positives for sibling scopes (e.g. two try blocks).
+fn check_shadowing_scoped(
+    stmts: &[Stmt],
+    file: &Path,
+    scope_stack: &mut Vec<HashSet<String>>,
+    findings: &mut Vec<LintFinding>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Var(var_data, _, pos) => {
+                let (ident, _, _) = &**var_data;
+                let name = ident.name.to_string();
+                if !name.starts_with('_') {
+                    if scope_stack.iter().any(|s| s.contains(&name)) {
+                        findings.push(LintFinding {
+                            rule: "rhai/shadowed-variable".to_string(),
+                            level: LintLevel::Warn,
+                            file: file.to_path_buf(),
+                            line: Some(pos.line().unwrap_or(0)),
+                            col: None,
+                            message: format!("Variable `{}` shadows a previous declaration", name),
+                        });
+                    }
+                    if let Some(scope) = scope_stack.last_mut() {
+                        scope.insert(name);
+                    }
+                }
+            }
+            Stmt::Block(block) => {
+                scope_stack.push(HashSet::new());
+                check_shadowing_scoped(block.statements(), file, scope_stack, findings);
+                scope_stack.pop();
+            }
+            Stmt::If(data, _) => {
+                scope_stack.push(HashSet::new());
+                check_shadowing_scoped(data.body.statements(), file, scope_stack, findings);
+                scope_stack.pop();
+                scope_stack.push(HashSet::new());
+                check_shadowing_scoped(data.branch.statements(), file, scope_stack, findings);
+                scope_stack.pop();
+            }
+            Stmt::While(data, _) | Stmt::Do(data, ..) => {
+                scope_stack.push(HashSet::new());
+                check_shadowing_scoped(data.body.statements(), file, scope_stack, findings);
+                scope_stack.pop();
+            }
+            Stmt::For(data, _) => {
+                scope_stack.push(HashSet::new());
+                scope_stack.last_mut().unwrap().insert(data.0.name.to_string());
+                check_shadowing_scoped(data.2.body.statements(), file, scope_stack, findings);
+                scope_stack.pop();
+            }
+            Stmt::TryCatch(data, _) => {
+                scope_stack.push(HashSet::new());
+                check_shadowing_scoped(data.body.statements(), file, scope_stack, findings);
+                scope_stack.pop();
+                scope_stack.push(HashSet::new());
+                check_shadowing_scoped(data.branch.statements(), file, scope_stack, findings);
+                scope_stack.pop();
+            }
+            _ => {}
+        }
+    }
+}
+
+fn check_dead_code(ast: &AST, file: &Path) -> Vec<LintFinding> {
     let mut findings = Vec::new();
-
-    // Check top-level statements
     check_statements_for_dead_code(ast.statements(), file, &mut findings);
-
     findings
 }
 
@@ -283,7 +441,6 @@ fn check_statements_for_dead_code(
     findings: &mut Vec<LintFinding>,
 ) {
     for (idx, stmt) in statements.iter().enumerate() {
-        // If this is a terminating statement and there are statements after it, report dead code
         if matches!(stmt, Stmt::Return(..) | Stmt::BreakLoop(..)) {
             for _dead_idx in (idx + 1)..statements.len() {
                 findings.push(LintFinding {
@@ -298,7 +455,6 @@ fn check_statements_for_dead_code(
             break;
         }
 
-        // Recursively check nested blocks
         match stmt {
             Stmt::Block(block) => {
                 check_statements_for_dead_code(block.statements(), file, findings);
@@ -322,60 +478,44 @@ fn check_statements_for_dead_code(
     }
 }
 
-fn extract_position(e: &rhai::ParseError) -> (Option<usize>, Option<usize>) {
+fn extract_position(e: &ParseError) -> (Option<usize>, Option<usize>) {
     let pos = e.position();
     let line = pos.line();
     let col = pos.position();
     (line, col)
 }
 
-fn check_unused_variables(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+fn check_unused_variables(ast: &AST, file: &Path) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     let mut declarations: Vec<(String, usize)> = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
 
-    // Pass 1: collect variable declarations
+    // Collect variable declarations
     ast.walk(&mut |nodes: &[ASTNode]| {
-        for node in nodes {
-            if let ASTNode::Stmt(stmt) = node {
-                if let Stmt::Var(var_data, _, pos) = stmt {
-                    let (ident, _, _) = &**var_data;
-                    let name = ident.name.to_string();
-                    declarations.push((name, pos.line().unwrap_or(0)));
-                }
-            }
+        if let Some(ASTNode::Stmt(Stmt::Var(var_data, _, pos))) = nodes.last() {
+            let (ident, _, _) = &**var_data;
+            declarations.push((ident.name.to_string(), pos.line().unwrap_or(0)));
         }
         true
     });
 
-    // Pass 2: collect variable usages
+    // Collect variable usages
     ast.walk(&mut |nodes: &[ASTNode]| {
-        for node in nodes {
-            if let ASTNode::Expr(expr) = node {
-                if let Expr::Variable(var_data, _, _) = expr {
-                    let (_, name, _, _) = &**var_data;
-                    used.insert(name.to_string());
-                }
-            }
+        if let Some(ASTNode::Expr(Expr::Variable(var_data, _, _))) = nodes.last() {
+            let (_, name, _, _) = &**var_data;
+            used.insert(name.to_string());
         }
         true
     });
 
-    // Check for shadowing
-    let mut seen: HashSet<String> = HashSet::new();
-    for (name, line) in &declarations {
-        if !name.starts_with('_') {
-            if seen.contains(name) {
-                findings.push(LintFinding {
-                    rule: "rhai/shadowed-variable".to_string(),
-                    level: LintLevel::Warn,
-                    file: file.to_path_buf(),
-                    line: Some(*line),
-                    col: None,
-                    message: format!("Variable `{}` shadows a previous declaration", name),
-                });
-            }
-            seen.insert(name.clone());
+    // Check for shadowing (scope-aware: sibling try/if/for blocks don't count)
+    {
+        let mut scope: Vec<HashSet<String>> = vec![HashSet::new()];
+        check_shadowing_scoped(ast.statements(), file, &mut scope, &mut findings);
+        for fn_def in ast.iter_fn_def() {
+            let params: HashSet<String> = fn_def.params.iter().map(|p| p.to_string()).collect();
+            let mut fn_scope: Vec<HashSet<String>> = vec![params];
+            check_shadowing_scoped(fn_def.body.statements(), file, &mut fn_scope, &mut findings);
         }
     }
 
@@ -396,27 +536,15 @@ fn check_unused_variables(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
     findings
 }
 
-fn check_unused_parameters(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+fn check_unused_parameters(ast: &AST, file: &Path) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
     for fn_def in ast.iter_fn_def() {
+        // Use custom walker: ast.walk() misses variables used as method call arguments
+        // (rhai 1.20.0 bug — walker skips Dot rhs args)
         let mut used_params: HashSet<String> = HashSet::new();
+        collect_used_vars_stmts(fn_def.body.statements(), &mut used_params);
 
-        // Walk the entire AST looking for variable references within function bodies
-        // We use a simple heuristic: collect all variable references and filter by known params
-        ast.walk(&mut |nodes: &[ASTNode]| {
-            for node in nodes {
-                if let ASTNode::Expr(expr) = node {
-                    if let Expr::Variable(var_data, _, _) = expr {
-                        let (_, name, _, _) = &**var_data;
-                        used_params.insert(name.to_string());
-                    }
-                }
-            }
-            true
-        });
-
-        // Check for unused parameters
         for param_name in &fn_def.params {
             let param_str = param_name.to_string();
             if !param_str.starts_with('_') && !used_params.contains(&param_str) {
@@ -447,7 +575,7 @@ fn is_core_script(file: &Path) -> bool {
     file.to_string_lossy().contains("handlebars/helpers/")
 }
 
-fn check_wrong_api_mode(file: &Path, ast: &rhai::AST) -> Vec<LintFinding> {
+fn check_wrong_api_mode(file: &Path, ast: &AST) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
     if !is_core_script(file) {
@@ -455,24 +583,20 @@ fn check_wrong_api_mode(file: &Path, ast: &rhai::AST) -> Vec<LintFinding> {
     }
 
     ast.walk(&mut |nodes: &[ASTNode]| {
-        for node in nodes {
-            if let ASTNode::Expr(expr) = node {
-                if let Expr::FnCall(fn_call, _) = expr {
-                    let fn_name = fn_call.name.to_string();
-                    if FULL_ONLY_FUNCTIONS.contains(&fn_name.as_str()) {
-                        findings.push(LintFinding {
-                            rule: "rhai/wrong-api-mode".to_string(),
-                            level: LintLevel::Warn,
-                            file: file.to_path_buf(),
-                            line: None,
-                            col: None,
-                            message: format!(
-                                "Function `{}` is not available in core mode scripts",
-                                fn_name
-                            ),
-                        });
-                    }
-                }
+        if let Some(ASTNode::Expr(Expr::FnCall(fn_call, _))) = nodes.last() {
+            let fn_name = fn_call.name.to_string();
+            if FULL_ONLY_FUNCTIONS.contains(&fn_name.as_str()) {
+                findings.push(LintFinding {
+                    rule: "rhai/wrong-api-mode".to_string(),
+                    level: LintLevel::Warn,
+                    file: file.to_path_buf(),
+                    line: None,
+                    col: None,
+                    message: format!(
+                        "Function `{}` is not available in core mode scripts",
+                        fn_name
+                    ),
+                });
             }
         }
         true
@@ -481,7 +605,7 @@ fn check_wrong_api_mode(file: &Path, ast: &rhai::AST) -> Vec<LintFinding> {
     findings
 }
 
-fn check_wrong_package_type(ast: &rhai::AST, file: &Path, pkg: &VynilPackageSource) -> Vec<LintFinding> {
+fn check_wrong_package_type(ast: &AST, file: &Path, pkg: &VynilPackageSource) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
     if pkg.metadata.usage != VynilPackageType::System {
@@ -489,24 +613,17 @@ fn check_wrong_package_type(ast: &rhai::AST, file: &Path, pkg: &VynilPackageSour
     }
 
     ast.walk(&mut |nodes: &[ASTNode]| {
-        for node in nodes {
-            match node {
-                ASTNode::Expr(expr) => {
-                    if let Expr::Variable(var_data, _, _) = expr {
-                        let (_, name, _, _) = &**var_data;
-                        if name.to_string() == "tenant" {
-                            findings.push(LintFinding {
-                                rule: "rhai/wrong-package-type".to_string(),
-                                level: LintLevel::Warn,
-                                file: file.to_path_buf(),
-                                line: None,
-                                col: None,
-                                message: "System packages cannot access tenant context".to_string(),
-                            });
-                        }
-                    }
-                }
-                _ => {}
+        if let Some(ASTNode::Expr(Expr::Variable(var_data, _, _))) = nodes.last() {
+            let (_, name, _, _) = &**var_data;
+            if name.to_string() == "tenant" {
+                findings.push(LintFinding {
+                    rule: "rhai/wrong-package-type".to_string(),
+                    level: LintLevel::Warn,
+                    file: file.to_path_buf(),
+                    line: None,
+                    col: None,
+                    message: "System packages cannot access tenant context".to_string(),
+                });
             }
         }
         true
@@ -515,29 +632,20 @@ fn check_wrong_package_type(ast: &rhai::AST, file: &Path, pkg: &VynilPackageSour
     findings
 }
 
-fn check_context_hook_no_return(ast: &rhai::AST, file: &Path) -> Vec<LintFinding> {
+fn check_context_hook_no_return(ast: &AST, file: &Path) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
     if !file.to_string_lossy().contains("context_") {
         return findings;
     }
 
-    // Check if the file has code that returns something
-    // In Rhai, "return ctx" can be parsed as just the expression "ctx"
-    // So we check if there's any return statement OR if the last statement is an expression
     let mut has_valid_return = false;
 
-    // Check all function definitions
     for fn_def in ast.iter_fn_def() {
         let stmts = fn_def.body.iter().collect::<Vec<_>>();
         if let Some(last_stmt) = stmts.last() {
             match last_stmt {
-                Stmt::Return(..) => {
-                    has_valid_return = true;
-                    break;
-                }
-                Stmt::Expr(..) => {
-                    // Expression statements that end the function are valid returns
+                Stmt::Return(..) | Stmt::Expr(..) => {
                     has_valid_return = true;
                     break;
                 }
@@ -546,7 +654,6 @@ fn check_context_hook_no_return(ast: &rhai::AST, file: &Path) -> Vec<LintFinding
         }
     }
 
-    // Also check top-level statements
     if !has_valid_return {
         let stmts = ast.statements();
         if let Some(last_stmt) = stmts.last() {
@@ -588,9 +695,9 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
-        let source = "let x = ;"; // syntax invalid
+        let source = "let x = ;";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
@@ -604,7 +711,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "let x = 1;";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
@@ -620,15 +727,13 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = r#"import "mylib" as lib;"#;
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings
-                .iter()
-                .any(|f| f.rule == "rhai/unresolved-import"),
+            !findings.iter().any(|f| f.rule == "rhai/unresolved-import"),
             "Expected no rhai/unresolved-import finding"
         );
     }
@@ -638,17 +743,29 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = r#"import "nonexistent" as x;"#;
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/unresolved-import"),
+            findings.iter().any(|f| f.rule == "rhai/unresolved-import"),
             "Expected rhai/unresolved-import finding"
         );
+    }
+
+    #[test]
+    fn unresolved_import_no_duplicate() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = r#"import "nonexistent" as x;"#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        let count = findings.iter().filter(|f| f.rule == "rhai/unresolved-import").count();
+        assert_eq!(count, 1, "Expected exactly 1 unresolved-import, got {}", count);
     }
 
     #[test]
@@ -657,9 +774,8 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
-        // TODO: Test function body dead code detection
         let source = "fn foo() { return 1; let x = 2; }";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
@@ -674,19 +790,35 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
-        // Check install.rhai (which doesn't import orphan)
         let install_source = "fn run() {}";
         let _ = checker.check_file(&PathBuf::from("scripts/install.rhai"), install_source);
 
         let findings = checker.finalize();
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/unused-script" && f.message.contains("orphan")),
+            findings.iter().any(|f| f.rule == "rhai/unused-script" && f.message.contains("orphan")),
             "Expected rhai/unused-script finding for orphan"
+        );
+    }
+
+    #[test]
+    fn lifecycle_hook_script_not_flagged_as_unused() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // Simulate a lifecycle hook script (has a run function, never imported)
+        let hook_source = "fn run(instance, context) { context }";
+        let _ = checker.check_file(&PathBuf::from("scripts/install_post.rhai"), hook_source);
+
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-script" && f.message.contains("install_post")),
+            "Lifecycle hook with run() should not be flagged as unused"
         );
     }
 
@@ -695,7 +827,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "let x = 1; x + 1;";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
@@ -711,15 +843,13 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "let unused = 42;";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("unused")),
+            findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("unused")),
             "Expected rhai/unused-variable finding for 'unused'"
         );
     }
@@ -729,7 +859,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "let _unused = 42;";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
@@ -745,17 +875,29 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "let x = 1; let x = 2;";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/shadowed-variable"),
+            findings.iter().any(|f| f.rule == "rhai/shadowed-variable"),
             "Expected rhai/shadowed-variable finding"
         );
+    }
+
+    #[test]
+    fn shadowed_variable_no_duplicate() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "let x = 1; let x = 2;";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        let count = findings.iter().filter(|f| f.rule == "rhai/shadowed-variable").count();
+        assert_eq!(count, 1, "Expected exactly 1 shadowed-variable warning, got {}", count);
     }
 
     #[test]
@@ -763,15 +905,13 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "fn foo(used, unused) { used }";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("unused")),
+            findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("unused")),
             "Expected rhai/unused-parameter finding for 'unused'"
         );
     }
@@ -781,7 +921,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "fn helper() { 42 }";
         let _ = checker.check_file(&PathBuf::from("test.rhai"), source);
@@ -789,9 +929,7 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/unused-function" && f.message.contains("helper")),
+            findings.iter().any(|f| f.rule == "rhai/unused-function" && f.message.contains("helper")),
             "Expected rhai/unused-function finding for 'helper'"
         );
     }
@@ -801,7 +939,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "fn run(inst, ctx, args) { 42 }";
         let _ = checker.check_file(&PathBuf::from("test.rhai"), source);
@@ -809,9 +947,7 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            !findings
-                .iter()
-                .any(|f| f.rule == "rhai/unused-function" && f.message.contains("run")),
+            !findings.iter().any(|f| f.rule == "rhai/unused-function" && f.message.contains("run")),
             "Expected no rhai/unused-function finding for 'run' entry point"
         );
     }
@@ -821,7 +957,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = r#"let r = k8s_resource("Pod");"#;
         let findings = checker.check_file(
@@ -830,9 +966,7 @@ mod tests {
         );
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/wrong-api-mode"),
+            findings.iter().any(|f| f.rule == "rhai/wrong-api-mode"),
             "Expected rhai/wrong-api-mode finding for k8s_resource in core script"
         );
     }
@@ -842,7 +976,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = r#"let r = k8s_resource("Pod");"#;
         let findings = checker.check_file(&PathBuf::from("scripts/install.rhai"), source);
@@ -858,7 +992,7 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "fn run(inst, ctx, args) { ctx.extra = 1; return ctx; }";
         let findings = checker.check_file(&PathBuf::from("scripts/context_post.rhai"), source);
@@ -874,15 +1008,13 @@ mod tests {
         let base_dir = get_fixture_dir("rhai-checks");
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "let x = 1;";
         let findings = checker.check_file(&PathBuf::from("scripts/context_post.rhai"), source);
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/context-hook-no-return"),
+            findings.iter().any(|f| f.rule == "rhai/context-hook-no-return"),
             "Expected rhai/context-hook-no-return finding for context hook without return"
         );
     }
@@ -890,19 +1022,88 @@ mod tests {
     #[test]
     fn tenant_access_in_system_package_warns() {
         let base_dir = get_fixture_dir("rhai-checks");
-        // Note: the fixture package is a System type, so this test should trigger
         let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
         let config = LintConfig::default();
-        let mut checker = RhaiChecker::new(&base_dir, &base_dir, &pkg, &config);
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = "let name = tenant.name;";
         let findings = checker.check_file(&PathBuf::from("scripts/tenant_in_system.rhai"), source);
 
         assert!(
-            findings
-                .iter()
-                .any(|f| f.rule == "rhai/wrong-package-type"),
+            findings.iter().any(|f| f.rule == "rhai/wrong-package-type"),
             "Expected rhai/wrong-package-type finding for tenant access"
+        );
+    }
+
+    #[test]
+    fn parameter_used_in_method_call_arg_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // context is used only as a method call argument — rhai 1.20+ ast.walk() missed these
+        let source = r#"fn run(instance, context) {
+  instance.set_services([#{ key: context.ns }]);
+}"#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("context")),
+            "context used as method call arg should not be flagged as unused"
+        );
+    }
+
+    #[test]
+    fn underscore_parameter_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "fn run(instance, _context) { instance.foo(); }";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-parameter"),
+            "_context should not be flagged as unused parameter"
+        );
+    }
+
+    #[test]
+    fn sibling_try_blocks_no_shadowing_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // Two `let api` in sibling try blocks — not true shadowing
+        let source = r#"fn run(ctx) {
+  try { let api = ctx.a; api.get(); } catch {}
+  try { let api = ctx.b; api.get(); } catch {}
+}"#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/shadowed-variable"),
+            "Same variable name in sibling try blocks should not be flagged as shadowing"
+        );
+    }
+
+    #[test]
+    fn nested_block_shadowing_still_warns() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // let x declared in outer scope then re-declared in inner block — real shadowing
+        let source = "fn run() { let x = 1; if true { let x = 2; x } }";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "rhai/shadowed-variable"),
+            "Variable re-declared in nested scope should still be flagged"
         );
     }
 }
