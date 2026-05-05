@@ -159,14 +159,23 @@ impl<'a> HbsChecker<'a> {
 
         // Check unused options
         if let Some(options) = &self._pkg.options {
-            let line_numbers = super::find_option_line_numbers(&self._package_dir.join("package.yaml"));
+            let yaml_path = self._package_dir.join("package.yaml");
+            let line_numbers = super::find_option_line_numbers(&yaml_path);
+            let yaml_inline_disables = std::fs::read_to_string(&yaml_path)
+                .map(|src| parse_inline_disables(&src))
+                .unwrap_or_default();
             for key in options.keys() {
+                let line = line_numbers.get(key).copied();
+                let disables = line
+                    .and_then(|l| yaml_inline_disables.get(&l))
+                    .cloned()
+                    .unwrap_or_default();
                 if !self.used_values.contains(key)
                     && let Some(level) = self.config.resolve_level(
                         "hbs/unused-option",
                         &PathBuf::from("package.yaml"),
                         LintLevel::Warn,
-                        &HashSet::new(),
+                        &disables,
                     )
                 {
                     findings.push(LintFinding {

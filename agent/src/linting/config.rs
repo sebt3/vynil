@@ -122,6 +122,16 @@ pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
             let rules = parse_rules(rest);
             if !rules.is_empty() {
                 result.insert(line_number, rules);
+                continue;
+            }
+        }
+
+        // Try YAML pattern: # vynil-lint-disable
+        if let Some(pos) = line.find("# vynil-lint-disable") {
+            let rest = &line[pos + 20..];
+            let rules = parse_rules(rest);
+            if !rules.is_empty() {
+                result.insert(line_number, rules);
             }
         }
     }
@@ -258,5 +268,13 @@ mod tests {
         let map = parse_inline_disables(src);
         assert!(map.contains_key(&1));
         assert!(map[&1].contains("hbs/unknown-helper"));
+    }
+
+    #[test]
+    fn parse_yaml_inline_disable() {
+        let src = "size: # vynil-lint-disable hbs/unused-option\n";
+        let map = parse_inline_disables(src);
+        assert!(map.contains_key(&1));
+        assert!(map[&1].contains("hbs/unused-option"));
     }
 }
