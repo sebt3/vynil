@@ -200,6 +200,51 @@ fn deep_merge_dynamic(base: Dynamic, patch: &Dynamic) -> Dynamic {
     }
 }
 
+fn merge_with_existing(list: &[Dynamic], kind: &str, obj: &Dynamic) -> Dynamic {
+    if !obj.is_map() {
+        return obj.clone();
+    }
+    let map = obj.as_map_ref().unwrap();
+    let meta: Option<Map> = match map.get("metadata") {
+        Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
+        _ => None,
+    };
+    let obj_name = meta
+        .as_ref()
+        .and_then(|m| m.get("name"))
+        .and_then(|n| n.clone().into_string().ok());
+    let obj_ns = meta
+        .as_ref()
+        .and_then(|m| m.get("namespace"))
+        .and_then(|n| n.clone().into_string().ok());
+    for entry in list.iter() {
+        if !entry.is_map() {
+            continue;
+        }
+        let entry_map: Map = entry.as_map_ref().unwrap().clone();
+        let entry_kind = entry_map.get("kind").and_then(|k| k.clone().into_string().ok());
+        if entry_kind.as_deref() != Some(kind) {
+            continue;
+        }
+        let entry_meta: Option<Map> = match entry_map.get("metadata") {
+            Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
+            _ => None,
+        };
+        let entry_name = entry_meta
+            .as_ref()
+            .and_then(|m| m.get("name"))
+            .and_then(|n| n.clone().into_string().ok());
+        let entry_ns = entry_meta
+            .as_ref()
+            .and_then(|m| m.get("namespace"))
+            .and_then(|n| n.clone().into_string().ok());
+        if entry_name == obj_name && entry_ns == obj_ns {
+            return deep_merge_dynamic(entry.clone(), obj);
+        }
+    }
+    obj.clone()
+}
+
 fn upsert_in_list(list: &mut Vec<Dynamic>, kind: &str, obj: &Dynamic) {
     if !obj.is_map() {
         list.push(obj.clone());
@@ -470,7 +515,8 @@ impl K8sGenericMock {
                 .unwrap()
                 .insert("kind".into(), Dynamic::from(self.kind.clone()));
         }
-        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
+        let merged = merge_with_existing(&self.mocks.lock().unwrap(), &self.kind, &obj);
+        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &merged);
         upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
         Ok(obj)
     }
@@ -482,7 +528,8 @@ impl K8sGenericMock {
                 .unwrap()
                 .insert("kind".into(), Dynamic::from(self.kind.clone()));
         }
-        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
+        let merged = merge_with_existing(&self.mocks.lock().unwrap(), &self.kind, &obj);
+        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &merged);
         upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
         Ok(obj)
     }
@@ -506,7 +553,8 @@ impl K8sGenericMock {
                 .unwrap()
                 .insert("kind".into(), Dynamic::from(self.kind.clone()));
         }
-        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &obj);
+        let merged = merge_with_existing(&self.mocks.lock().unwrap(), &self.kind, &obj);
+        upsert_in_list(&mut self.created.lock().unwrap(), &self.kind, &merged);
         upsert_in_list(&mut self.mocks.lock().unwrap(), &self.kind, &obj);
         Ok(obj)
     }

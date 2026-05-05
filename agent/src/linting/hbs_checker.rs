@@ -8,6 +8,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const KNOWN_HBS_ROOTS: &[&str] = &[
+    "cluster",
+    "controller",
+    "instance",
+    "values",
+    "defaults",
+    "package_dir",
+    "config_dir",
+    "extra",
+    "this",
+    "tenant",
+    "system",
+    "service",
+];
+
 pub struct HbsChecker<'a> {
     _package_dir: &'a Path,
     _pkg: &'a VynilPackageSource,
@@ -280,6 +295,7 @@ impl<'a> HelperWalker<'a> {
                 self.check_path(&h.name);
                 for param in &h.params {
                     self.check_values_path(param);
+                    self.check_root_var(param);
                 }
             }
             TemplateElement::Expression(e) => {
@@ -287,18 +303,22 @@ impl<'a> HelperWalker<'a> {
                 self.check_values_path(&e.name);
                 for param in &e.params {
                     self.check_values_path(param);
+                    self.check_root_var(param);
                 }
                 self.check_image_resource_helper(&e.name, &e.params);
                 self.check_path(&e.name);
+                self.check_root_var(&e.name);
             }
             TemplateElement::HtmlExpression(e) => {
                 self.check_helper(&e.name, &e.params);
                 self.check_values_path(&e.name);
                 for param in &e.params {
                     self.check_values_path(param);
+                    self.check_root_var(param);
                 }
                 self.check_image_resource_helper(&e.name, &e.params);
                 self.check_path(&e.name);
+                self.check_root_var(&e.name);
             }
             TemplateElement::DecoratorBlock(d) => {
                 self.check_helper(&d.name, &d.params);
@@ -445,6 +465,34 @@ impl<'a> HelperWalker<'a> {
                 file: self.file.clone(),
                 line: None,
                 message: "Accessing `tenant` in a System package is not allowed".to_string(),
+            });
+        }
+    }
+
+    fn check_root_var(&mut self, param: &Parameter) {
+        if let Parameter::Path(path) = param
+            && let HbsPath::Relative((segs, _)) = path
+            && segs.len() >= 2
+            && let PathSeg::Named(first) = &segs[0]
+            && !first.starts_with('@')
+            && !KNOWN_HBS_ROOTS.contains(&first.as_str())
+            && let Some(level) = self.config.resolve_level(
+                "hbs/unknown-root-variable",
+                &self.file,
+                LintLevel::Warn,
+                self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+            )
+        {
+            self.findings.push(LintFinding {
+                rule: "hbs/unknown-root-variable".to_string(),
+                level,
+                file: self.file.clone(),
+                line: None,
+                message: format!(
+                    "Unknown root variable `{}` in template path — expected one of: {}",
+                    first,
+                    KNOWN_HBS_ROOTS.join(", ")
+                ),
             });
         }
     }
@@ -720,6 +768,54 @@ mod tests {
         let findings = checker.check_file(Path::new("test.hbs"), source);
 
         assert!(findings.iter().any(|f| f.rule == "hbs/unknown-resource"));
+    }
+
+    #[test]
+    fn unknown_root_variable_produces_warning() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = "{{ins_bug_tance.appslug}}-controller";
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "hbs/unknown-root-variable"),
+            "Expected hbs/unknown-root-variable for 'ins_bug_tance'"
+        );
+    }
+
+    #[test]
+    fn known_root_variable_no_warning() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = "{{instance.appslug}}-controller";
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unknown-root-variable"),
+            "Known root 'instance' should not be flagged"
+        );
+    }
+
+    #[test]
+    fn this_root_not_flagged() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = "{{this.appslug}}";
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unknown-root-variable"),
+            "'this' should not be flagged as unknown root"
+        );
+    }
+
+    #[test]
+    fn single_segment_path_not_flagged_as_unknown_root() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = "{{appslug}}";
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unknown-root-variable"),
+            "Single-segment paths should not be flagged as unknown root"
+        );
     }
 
     #[test]

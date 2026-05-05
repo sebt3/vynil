@@ -118,6 +118,9 @@ impl<'a> RhaiChecker<'a> {
                 let empty_catch_findings = check_empty_catch(&ast, file, &inline_disables);
                 findings.extend(empty_catch_findings);
 
+                let undef_findings = check_undefined_variables(&ast, file, self.config, &inline_disables);
+                findings.extend(undef_findings);
+
                 // Track scripts that define entry-point functions (lifecycle hooks)
                 let has_entry_point = ast
                     .iter_fn_def()
@@ -480,6 +483,91 @@ fn check_statements_for_dead_code(statements: &[Stmt], file: &Path, findings: &m
             _ => {}
         }
     }
+}
+
+fn collect_declared_vars_stmts(stmts: &[Stmt], declared: &mut HashSet<String>) {
+    for stmt in stmts {
+        collect_declared_vars_stmt(stmt, declared);
+    }
+}
+
+fn collect_declared_vars_stmt(stmt: &Stmt, declared: &mut HashSet<String>) {
+    match stmt {
+        Stmt::Var(var_data, _, _) => {
+            let (ident, _, _) = &**var_data;
+            declared.insert(ident.name.to_string());
+        }
+        Stmt::Block(block) => collect_declared_vars_stmts(block.statements(), declared),
+        Stmt::If(data, _) => {
+            collect_declared_vars_stmts(data.body.statements(), declared);
+            collect_declared_vars_stmts(data.branch.statements(), declared);
+        }
+        Stmt::While(data, _) | Stmt::Do(data, ..) => {
+            collect_declared_vars_stmts(data.body.statements(), declared);
+        }
+        Stmt::For(data, _) => {
+            declared.insert(data.0.name.to_string());
+            collect_declared_vars_stmts(data.2.body.statements(), declared);
+        }
+        Stmt::TryCatch(data, _) => {
+            // Catch variable (e.g. `e` in `catch(e)`) is bound in the catch block
+            if let Expr::Variable(var_data, _, _) = &data.expr {
+                let (_, name, _, _) = &**var_data;
+                declared.insert(name.to_string());
+            }
+            collect_declared_vars_stmts(data.body.statements(), declared);
+            collect_declared_vars_stmts(data.branch.statements(), declared);
+        }
+        _ => {}
+    }
+}
+
+fn check_undefined_variables(
+    ast: &AST,
+    file: &Path,
+    config: &LintConfig,
+    inline_disables: &HashMap<usize, HashSet<String>>,
+) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    let file_disabled: HashSet<String> = inline_disables
+        .values()
+        .flat_map(|rules| rules.iter().cloned())
+        .collect();
+
+    for fn_def in ast.iter_fn_def() {
+        if fn_def.name.starts_with("anon$") {
+            continue;
+        }
+
+        let mut known: HashSet<String> = fn_def.params.iter().map(|p| p.to_string()).collect();
+        collect_declared_vars_stmts(fn_def.body.statements(), &mut known);
+
+        let mut refs = HashSet::new();
+        collect_used_vars_stmts(fn_def.body.statements(), &mut refs);
+
+        let mut flagged: Vec<String> = refs
+            .into_iter()
+            .filter(|name| !known.contains(name) && !name.starts_with('_'))
+            .collect();
+        flagged.sort();
+
+        for name in flagged {
+            if let Some(level) =
+                config.resolve_level("rhai/undefined-variable", file, LintLevel::Error, &file_disabled)
+            {
+                findings.push(LintFinding {
+                    rule: "rhai/undefined-variable".to_string(),
+                    level,
+                    file: file.to_path_buf(),
+                    line: None,
+                    message: format!("Variable `{}` is used but never declared", name),
+                });
+            }
+        }
+    }
+
+    findings
 }
 
 fn check_empty_catch(
@@ -973,7 +1061,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`ing`")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`ing`")),
             "Variable used in assignment RHS should not be flagged as unused"
         );
     }
@@ -990,7 +1080,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`obj`")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`obj`")),
             "Variable used as assignment LHS should not be flagged as unused"
         );
     }
@@ -1402,6 +1494,91 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.rule == "rhai/empty-catch"),
             "non-empty catch block should not be flagged"
+        );
+    }
+
+    #[test]
+    fn undefined_variable_in_function_produces_error() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "fn run(instance, context) { log_info(con_bug_text.toto); }";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/undefined-variable" && f.message.contains("con_bug_text")),
+            "Expected rhai/undefined-variable for 'con_bug_text'"
+        );
+    }
+
+    #[test]
+    fn function_params_not_flagged_as_undefined() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "fn run(instance, context) { log_info(context.field); }";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/undefined-variable"),
+            "Function parameters should not be flagged as undefined"
+        );
+    }
+
+    #[test]
+    fn let_variable_not_flagged_as_undefined() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "fn run(instance, context) { let x = context.field; log_info(x.foo); }";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/undefined-variable"),
+            "Let-declared variables should not be flagged as undefined"
+        );
+    }
+
+    #[test]
+    fn catch_variable_not_flagged_as_undefined() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source =
+            r#"fn run(instance, context) { try { log_info(context.x); } catch(e) { log_warn(e); } }"#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/undefined-variable" && f.message.contains("`e`")),
+            "Catch-bound variable should not be flagged as undefined"
+        );
+    }
+
+    #[test]
+    fn inline_disable_suppresses_undefined_variable() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "fn run(instance, context) { log_info(con_bug_text.toto); } // vynil-lint-disable rhai/undefined-variable";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/undefined-variable"),
+            "inline disable should suppress rhai/undefined-variable"
         );
     }
 
