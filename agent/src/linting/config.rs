@@ -1,8 +1,10 @@
 use crate::linting::LintLevel;
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use common::Result;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 #[derive(Deserialize, Default, Clone, Debug, Serialize)]
 pub struct LintConfig {

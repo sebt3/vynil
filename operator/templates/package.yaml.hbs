@@ -4,6 +4,11 @@ kind: Job
 metadata:
   name: {{ job_name }}
   labels:
+    app.kubernetes.io/name: {{job_name}}
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/managed-by: vynil
+    vynil.solidite.fr/action: {{package_action}}
+    vynil.solidite.fr/type: {{package_type}}
     namespace: {{namespace}}
     instance: {{name}}
     type: {{package_type}}
@@ -15,6 +20,11 @@ spec:
       annotations:
         mayfly.cloud.namecheap.com/expire: 120h
       labels:
+        app.kubernetes.io/name: {{job_name}}
+        app.kubernetes.io/component: agent
+        app.kubernetes.io/managed-by: vynil
+        vynil.solidite.fr/action: {{package_action}}
+        vynil.solidite.fr/type: {{package_type}}
         namespace: {{namespace}}
         instance: {{name}}
         type: {{package_type}}

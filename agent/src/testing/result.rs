@@ -1,11 +1,20 @@
 use super::vyniltestset::VynilAssertResult;
 use junit_report::{Duration, ReportBuilder, TestCase, TestSuiteBuilder};
+use serde::Serialize;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TestResult {
     pub test_name: String,
     pub asserts: Vec<VynilAssertResult>,
+    #[serde(serialize_with = "serialize_duration")]
     pub duration: std::time::Duration,
+}
+
+fn serialize_duration<S>(d: &std::time::Duration, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    s.serialize_f64(d.as_secs_f64())
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +91,19 @@ impl TestResultCollector {
             self.total_asserts()
         ));
         out
+    }
+
+    pub fn to_json(&self) -> String {
+        let output = serde_json::json!({
+            "tests": self.results,
+            "summary": {
+                "total_tests": self.total_tests(),
+                "total_asserts": self.total_asserts(),
+                "passed": self.total_passed(),
+                "failed": self.total_failed()
+            }
+        });
+        serde_json::to_string_pretty(&output).unwrap_or_default()
     }
 
     pub fn to_junit(&self) -> String {

@@ -27,18 +27,18 @@ use crate::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 pub use rhai::{
+    AST,
+    ASTNode,
     Array,
     Dynamic,
     Engine,
+    Expr,
     ImmutableString,
     Map,
     Module,
-    Scope,
-    AST,
-    ASTNode,
-    Stmt,
-    Expr,
     ParseError,
+    Scope,
+    Stmt,
     //    FnPtr, NativeCallContext,
     module_resolvers::{FileModuleResolver, ModuleResolversCollection},
     serde::to_dynamic,

@@ -6,10 +6,9 @@ use super::{
 use common::{
     handlebarshandler::HandleBars,
     httpmock::HttpMockItem,
-    rhaihandler::Script,
+    rhaihandler::{Dynamic, Map, Script},
     vynilpackage::{VynilPackageSource, VynilPackageType, read_package_yaml},
 };
-use common::rhaihandler::{Dynamic, Map};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

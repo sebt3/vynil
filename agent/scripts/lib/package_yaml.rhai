@@ -42,7 +42,6 @@ fn get_json_type(val) {
 }
 fn properties_improve(values) {
     let valid_type = ["string", "object", "array", "boolean", "integer", "number"];
-    // TODO: Faire en sorte que les valeurs par défault déscendent des feuilles en plus de remonter du tron.
     // TODO: Support options auto_improvements
     if type_of(values) == "map" {
         for prop in values.keys() {
@@ -68,6 +67,17 @@ fn properties_improve(values) {
                     }
                 }
                 values[prop].properties = properties_improve(values[prop].properties);
+                if ! ("default" in values[prop].keys()) && values[prop].properties.len() > 0 {
+                    let computed = #{};
+                    for sub in values[prop].properties.keys() {
+                        if "default" in values[prop].properties[sub].keys() {
+                            computed[sub] = values[prop].properties[sub]["default"];
+                        }
+                    }
+                    if computed.len() > 0 {
+                        values[prop]["default"] = computed;
+                    }
+                }
             } else if values[prop].type == "array" {
                 if ! ("items" in values[prop].keys()) {
                     values[prop].items = #{};

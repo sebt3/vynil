@@ -1,5 +1,4 @@
-use common::httpmock::HttpMockItem;
-use common::rhaihandler::Dynamic;
+use common::{httpmock::HttpMockItem, rhaihandler::Dynamic};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -77,7 +76,7 @@ pub struct VynilAssert {
     pub value: Option<serde_json::Value>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VynilAssertResult {
     pub name: String,
     pub description: Option<String>,

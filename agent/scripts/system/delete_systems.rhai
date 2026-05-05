@@ -44,7 +44,7 @@ fn run(instance, context) {
             }
         }
         for d in deleted {
-            log_info(`Waiting for ${d.kind} ${d.metadata.name} to be deleted`);
+            log_info(`Waiting for ${d.original_kind} ${d.metadata.name} to be deleted`);
             d.wait_deleted(60*5);
         }
         deleted = [];
@@ -73,7 +73,7 @@ fn run(instance, context) {
             }
         }
         for d in deleted {
-            log_info(`Waiting for ${d.kind} ${d.metadata.name} to be deleted`);
+            log_info(`Waiting for ${d.original_kind} ${d.metadata.name} to be deleted`);
             d.wait_deleted(60*5);
         }
     }

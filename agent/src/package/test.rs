@@ -1,7 +1,6 @@
-use clap::Args;
+use clap::{Args, ValueEnum};
 use client::testing::TestHandler;
-use common::{Error, Result, yamlhandler::yaml_all_serialize_to_string};
-use common::rhaihandler::Dynamic;
+use common::{Error, Result, rhaihandler::Dynamic, yamlhandler::yaml_all_serialize_to_string};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -9,6 +8,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+
+#[derive(ValueEnum, Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    #[value(name = "text")]
+    Text,
+    #[value(name = "json")]
+    Json,
+}
 
 #[derive(clap::ValueEnum, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -73,6 +81,9 @@ pub struct Parameters {
     /// Start all tests
     #[arg(long = "all")]
     start_all: bool,
+    /// Output format
+    #[arg(long = "format", default_value = "text")]
+    format: OutputFormat,
     /// junit output filename
     #[arg(
         long = "junit-output-filename",
@@ -87,6 +98,13 @@ pub struct Parameters {
         value_name = "TEMPLATE_OUTPUT_FILENAME"
     )]
     template_output_filename: Option<PathBuf>,
+}
+
+fn format_results(results: &client::testing::TestResultCollector, format: &OutputFormat) -> String {
+    match format {
+        OutputFormat::Json => results.to_json(),
+        OutputFormat::Text => results.to_text(),
+    }
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {
@@ -105,14 +123,14 @@ pub async fn run(args: &Parameters) -> Result<()> {
 
     if args.start_all {
         handler.run_all_tests();
-        println!("{}", handler.results.to_text());
+        println!("{}", format_results(&handler.results, &args.format));
         if let Some(output) = args.junit_output_filename.clone() {
             fs::write(output, handler.results.to_junit()).map_err(Error::Stdio)?;
         }
     } else if let Some(test_name) = args.test_name.clone() {
         let created_objects: Arc<Mutex<Vec<Dynamic>>> = Default::default();
         handler.run_test(&test_name, created_objects.clone());
-        println!("{}", handler.results.to_text());
+        println!("{}", format_results(&handler.results, &args.format));
         if let Some(output) = args.junit_output_filename.clone() {
             fs::write(output, handler.results.to_junit()).map_err(Error::Stdio)?;
         }

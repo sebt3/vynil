@@ -109,6 +109,10 @@ impl K8sObject {
         }
     }
 
+    pub fn original_kind(&mut self) -> String {
+        self.kind.clone()
+    }
+
     pub fn is_condition(cond: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
             if let Some(dynobj) = &obj
@@ -934,6 +938,7 @@ pub fn k8sgeneric_rhai_register(engine: &mut Engine) {
     engine
         .register_type_with_name::<K8sObject>("K8sObject")
         .register_get("kind", K8sObject::get_kind)
+        .register_get("original_kind", K8sObject::original_kind)
         .register_get("metadata", K8sObject::get_metadata)
         .register_fn("delete", K8sObject::rhai_delete)
         .register_fn("wait_condition", K8sObject::wait_condition)

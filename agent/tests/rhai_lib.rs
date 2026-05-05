@@ -1615,3 +1615,160 @@ fn backup_context_vital_name_replace_strips_appslug_prefix() {
         "le pattern replace de backup_context.run doit supprimer le préfixe appslug"
     );
 }
+
+// ===== package_yaml — properties_improve tests =====
+
+#[test]
+fn package_yaml_properties_improve_leaf_defaults_all_children_compute_parent_default() {
+    // Quand toutes les sous-propriétés ont un default, le parent doit recevoir un default calculé
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "package_yaml" as pkg;
+
+        let options = #{
+            myobj: #{
+                type: "object",
+                properties: #{
+                    key1: #{ type: "string", "default": "v1" },
+                    key2: #{ type: "string", "default": "v2" },
+                }
+            }
+        };
+
+        let improved = pkg::properties_improve(options);
+
+        improved.myobj["default"].key1 == "v1" &&
+        improved.myobj["default"].key2 == "v2"
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true);
+}
+
+#[test]
+fn package_yaml_properties_improve_leaf_defaults_partial_children_compute_partial_default() {
+    // Quand seulement certaines sous-propriétés ont un default, le parent doit recevoir un default partiel
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "package_yaml" as pkg;
+
+        let options = #{
+            myobj: #{
+                type: "object",
+                properties: #{
+                    key1: #{ type: "string", "default": "v1" },
+                    key2: #{ type: "string" },
+                }
+            }
+        };
+
+        let improved = pkg::properties_improve(options);
+
+        "default" in improved.myobj &&
+        improved.myobj["default"].key1 == "v1" &&
+        !("key2" in improved.myobj["default"])
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true);
+}
+
+#[test]
+fn package_yaml_properties_improve_leaf_defaults_no_children_default_means_no_parent_default() {
+    // Quand aucune sous-propriété n'a de default, le parent ne doit pas avoir de default
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "package_yaml" as pkg;
+
+        let options = #{
+            myobj: #{
+                type: "object",
+                properties: #{
+                    key1: #{ type: "string" },
+                    key2: #{ type: "integer" },
+                }
+            }
+        };
+
+        let improved = pkg::properties_improve(options);
+
+        !("default" in improved.myobj)
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true);
+}
+
+#[test]
+fn package_yaml_properties_improve_existing_parent_default_not_overwritten() {
+    // Un default existant sur le parent ne doit pas être écrasé par les defaults des enfants
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "package_yaml" as pkg;
+
+        let options = #{
+            myobj: #{
+                type: "object",
+                "default": #{ key1: "original" },
+                properties: #{
+                    key1: #{ type: "string", "default": "from-leaf" },
+                }
+            }
+        };
+
+        let improved = pkg::properties_improve(options);
+
+        improved.myobj["default"].key1 == "original"
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true);
+}
+
+#[test]
+fn package_yaml_properties_improve_leaf_defaults_cascade_multiple_levels() {
+    // Les defaults remontent sur plusieurs niveaux : petit-enfant → enfant → parent
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "package_yaml" as pkg;
+
+        let options = #{
+            root: #{
+                type: "object",
+                properties: #{
+                    child: #{
+                        type: "object",
+                        properties: #{
+                            leaf: #{ type: "string", "default": "deep" },
+                        }
+                    }
+                }
+            }
+        };
+
+        let improved = pkg::properties_improve(options);
+
+        // child doit avoir reçu un default depuis leaf
+        improved.root.properties.child["default"].leaf == "deep" &&
+        // root doit avoir reçu un default depuis child
+        improved.root["default"].child.leaf == "deep"
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(result.as_bool().unwrap(), true);
+}

@@ -198,7 +198,7 @@ fn remove(applied, previous, default_ns) {
         }
     }
     for d in deleted {
-        log_info(`Waiting for ${d.kind} ${d.metadata.name} to be deleted`);
+        log_info(`Waiting for ${d.original_kind} ${d.metadata.name} to be deleted`);
         d.wait_deleted(60*5);
     }
 }

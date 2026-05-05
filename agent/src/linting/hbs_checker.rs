@@ -1,8 +1,12 @@
-use crate::linting::{LintFinding, LintLevel, LintConfig, parse_inline_disables};
-use common::handlebarshandler::{Template, TemplateElement, Parameter, HbsPath, PathSeg, NATIVE_HBS_HELPERS};
-use common::vynilpackage::VynilPackageSource;
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use crate::linting::{LintConfig, LintFinding, LintLevel, parse_inline_disables};
+use common::{
+    handlebarshandler::{HbsPath, NATIVE_HBS_HELPERS, Parameter, PathSeg, Template, TemplateElement},
+    vynilpackage::VynilPackageSource,
+};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 pub struct HbsChecker<'a> {
     _package_dir: &'a Path,
@@ -16,11 +20,7 @@ pub struct HbsChecker<'a> {
 }
 
 impl<'a> HbsChecker<'a> {
-    pub fn new(
-        package_dir: &'a Path,
-        pkg: &'a VynilPackageSource,
-        config: &'a LintConfig,
-    ) -> Self {
+    pub fn new(package_dir: &'a Path, pkg: &'a VynilPackageSource, config: &'a LintConfig) -> Self {
         let mut checker = HbsChecker {
             _package_dir: package_dir,
             _pkg: pkg,
@@ -34,30 +34,30 @@ impl<'a> HbsChecker<'a> {
 
         // Scan handlebars/helpers/ for defined helpers
         let helpers_dir = package_dir.join("handlebars/helpers");
-        if helpers_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&helpers_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "rhai") {
-                        if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                            checker.defined_helpers.insert(name.to_string());
-                        }
-                    }
+        if helpers_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&helpers_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "rhai")
+                    && let Some(name) = path.file_stem().and_then(|n| n.to_str())
+                {
+                    checker.defined_helpers.insert(name.to_string());
                 }
             }
         }
 
         // Scan handlebars/partials/ for defined partials
         let partials_dir = package_dir.join("handlebars/partials");
-        if partials_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&partials_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "hbs") {
-                        if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                            checker.defined_partials.insert(name.to_string());
-                        }
-                    }
+        if partials_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&partials_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "hbs")
+                    && let Some(name) = path.file_stem().and_then(|n| n.to_str())
+                {
+                    checker.defined_partials.insert(name.to_string());
                 }
             }
         }
@@ -82,7 +82,12 @@ impl<'a> HbsChecker<'a> {
                         self.defined_partials.clone(),
                     );
                     walker.walk(&template);
-                    (walker.findings, walker.used_helpers, walker.used_partials, walker.used_values)
+                    (
+                        walker.findings,
+                        walker.used_helpers,
+                        walker.used_partials,
+                        walker.used_values,
+                    )
                 };
 
                 findings.extend(walker_findings);
@@ -91,16 +96,15 @@ impl<'a> HbsChecker<'a> {
                 self.used_values.extend(used_values);
             }
             Err(e) => {
-                if let Some(level) = self
-                    .config
-                    .resolve_level("hbs/syntax", file, LintLevel::Error, &HashSet::new())
+                if let Some(level) =
+                    self.config
+                        .resolve_level("hbs/syntax", file, LintLevel::Error, &HashSet::new())
                 {
                     findings.push(LintFinding {
                         rule: "hbs/syntax".to_string(),
                         level,
                         file: file.to_path_buf(),
                         line: None,
-                        col: None,
                         message: format!("Syntax error: {}", e),
                     });
                 }
@@ -115,65 +119,63 @@ impl<'a> HbsChecker<'a> {
 
         // Check unused helpers
         for helper in &self.defined_helpers {
-            if !self.used_helpers.contains(helper) {
-                if let Some(level) = self.config.resolve_level(
+            if !self.used_helpers.contains(helper)
+                && let Some(level) = self.config.resolve_level(
                     "hbs/unused-helper",
                     &PathBuf::from(&format!("handlebars/helpers/{}.rhai", helper)),
                     LintLevel::Warn,
                     &HashSet::new(),
-                ) {
-                    findings.push(LintFinding {
-                        rule: "hbs/unused-helper".to_string(),
-                        level,
-                        file: PathBuf::from(&format!("handlebars/helpers/{}.rhai", helper)),
-                        line: None,
-                        col: None,
-                        message: format!("Helper `{}` defined but never used", helper),
-                    });
-                }
+                )
+            {
+                findings.push(LintFinding {
+                    rule: "hbs/unused-helper".to_string(),
+                    level,
+                    file: PathBuf::from(&format!("handlebars/helpers/{}.rhai", helper)),
+                    line: None,
+                    message: format!("Helper `{}` defined but never used", helper),
+                });
             }
         }
 
         // Check unused partials
         for partial in &self.defined_partials {
-            if !self.used_partials.contains(partial) {
-                if let Some(level) = self.config.resolve_level(
+            if !self.used_partials.contains(partial)
+                && let Some(level) = self.config.resolve_level(
                     "hbs/unused-partial",
                     &PathBuf::from(&format!("handlebars/partials/{}.hbs", partial)),
                     LintLevel::Warn,
                     &HashSet::new(),
-                ) {
-                    findings.push(LintFinding {
-                        rule: "hbs/unused-partial".to_string(),
-                        level,
-                        file: PathBuf::from(&format!("handlebars/partials/{}.hbs", partial)),
-                        line: None,
-                        col: None,
-                        message: format!("Partial `{}` defined but never used", partial),
-                    });
-                }
+                )
+            {
+                findings.push(LintFinding {
+                    rule: "hbs/unused-partial".to_string(),
+                    level,
+                    file: PathBuf::from(&format!("handlebars/partials/{}.hbs", partial)),
+                    line: None,
+                    message: format!("Partial `{}` defined but never used", partial),
+                });
             }
         }
 
         // Check unused options
         if let Some(options) = &self._pkg.options {
+            let line_numbers = super::find_option_line_numbers(&self._package_dir.join("package.yaml"));
             for key in options.keys() {
-                if !self.used_values.contains(key) {
-                    if let Some(level) = self.config.resolve_level(
+                if !self.used_values.contains(key)
+                    && let Some(level) = self.config.resolve_level(
                         "hbs/unused-option",
                         &PathBuf::from("package.yaml"),
                         LintLevel::Warn,
                         &HashSet::new(),
-                    ) {
-                        findings.push(LintFinding {
-                            rule: "hbs/unused-option".to_string(),
-                            level,
-                            file: PathBuf::from("package.yaml"),
-                            line: None,
-                            col: None,
-                            message: format!("Option `{}` defined but never used", key),
-                        });
-                    }
+                    )
+                {
+                    findings.push(LintFinding {
+                        rule: "hbs/unused-option".to_string(),
+                        level,
+                        file: PathBuf::from("package.yaml"),
+                        line: line_numbers.get(key).copied(),
+                        message: format!("Option `{}` defined but never used", key),
+                    });
                 }
             }
         }
@@ -291,27 +293,26 @@ impl<'a> HelperWalker<'a> {
     }
 
     fn check_helper(&mut self, name: &Parameter, params: &[Parameter]) {
-        if let Parameter::Name(helper_name) = name {
-            if !NATIVE_HBS_HELPERS.contains(&helper_name.as_str()) {
-                self.used_helpers.insert(helper_name.clone());
+        if let Parameter::Name(helper_name) = name
+            && !NATIVE_HBS_HELPERS.contains(&helper_name.as_str())
+        {
+            self.used_helpers.insert(helper_name.clone());
 
-                if !self.defined_helpers.contains(helper_name) {
-                    if let Some(level) = self.config.resolve_level(
-                        "hbs/unknown-helper",
-                        &self.file,
-                        LintLevel::Error,
-                        self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
-                    ) {
-                        self.findings.push(LintFinding {
-                            rule: "hbs/unknown-helper".to_string(),
-                            level,
-                            file: self.file.clone(),
-                            line: None,
-                            col: None,
-                            message: format!("Helper `{}` not found", helper_name),
-                        });
-                    }
-                }
+            if !self.defined_helpers.contains(helper_name)
+                && let Some(level) = self.config.resolve_level(
+                    "hbs/unknown-helper",
+                    &self.file,
+                    LintLevel::Error,
+                    self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                )
+            {
+                self.findings.push(LintFinding {
+                    rule: "hbs/unknown-helper".to_string(),
+                    level,
+                    file: self.file.clone(),
+                    line: None,
+                    message: format!("Helper `{}` not found", helper_name),
+                });
             }
         }
 
@@ -324,37 +325,32 @@ impl<'a> HelperWalker<'a> {
     }
 
     fn check_values_path(&mut self, param: &Parameter) {
-        if let Parameter::Path(path) = param {
-            if let HbsPath::Relative((segs, _)) = path {
-                if !segs.is_empty() {
-                    if let PathSeg::Named(first) = &segs[0] {
-                        if first == "values" && segs.len() >= 2 {
-                            if let PathSeg::Named(key) = &segs[1] {
-                                self.used_values.insert(key.clone());
+        if let Parameter::Path(path) = param
+            && let HbsPath::Relative((segs, _)) = path
+            && !segs.is_empty()
+            && let PathSeg::Named(first) = &segs[0]
+            && first == "values"
+            && segs.len() >= 2
+            && let PathSeg::Named(key) = &segs[1]
+        {
+            self.used_values.insert(key.clone());
 
-                                if let Some(options) = &self.pkg.options {
-                                    if !options.contains_key(key) {
-                                        if let Some(level) = self.config.resolve_level(
-                                            "hbs/unknown-value",
-                                            &self.file,
-                                            LintLevel::Error,
-                                            self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
-                                        ) {
-                                            self.findings.push(LintFinding {
-                                                rule: "hbs/unknown-value".to_string(),
-                                                level,
-                                                file: self.file.clone(),
-                                                line: None,
-                                                col: None,
-                                                message: format!("Unknown value key `{}`", key),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if let Some(options) = &self.pkg.options
+                && !options.contains_key(key)
+                && let Some(level) = self.config.resolve_level(
+                    "hbs/unknown-value",
+                    &self.file,
+                    LintLevel::Error,
+                    self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                )
+            {
+                self.findings.push(LintFinding {
+                    rule: "hbs/unknown-value".to_string(),
+                    level,
+                    file: self.file.clone(),
+                    line: None,
+                    message: format!("Unknown value key `{}`", key),
+                });
             }
         }
     }
@@ -369,68 +365,66 @@ impl<'a> HelperWalker<'a> {
                 None
             };
 
-            if let Some((rule_name, field_name)) = rule {
-                if params.len() > 1 {
-                    if let Parameter::Literal(json_val) = &params[1] {
-                        if let Some(key) = json_val.as_str() {
-                            let has_key = if field_name == "images" {
-                                self.pkg.images.as_ref().map_or(false, |imgs| imgs.contains_key(key))
-                            } else {
-                                self.pkg.resources.as_ref().map_or(false, |res| res.contains_key(key))
-                            };
+            if let Some((rule_name, field_name)) = rule
+                && params.len() > 1
+                && let Parameter::Literal(json_val) = &params[1]
+                && let Some(key) = json_val.as_str()
+            {
+                let has_key = if field_name == "images" {
+                    self.pkg
+                        .images
+                        .as_ref()
+                        .is_some_and(|imgs| imgs.contains_key(key))
+                } else {
+                    self.pkg
+                        .resources
+                        .as_ref()
+                        .is_some_and(|res| res.contains_key(key))
+                };
 
-                            if !has_key && (
-                                (field_name == "images" && self.pkg.images.is_some()) ||
-                                (field_name == "resources" && self.pkg.resources.is_some())
-                            ) {
-                                if let Some(level) = self.config.resolve_level(
-                                    rule_name,
-                                    &self.file,
-                                    LintLevel::Error,
-                                    self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
-                                ) {
-                                    self.findings.push(LintFinding {
-                                        rule: rule_name.to_string(),
-                                        level,
-                                        file: self.file.clone(),
-                                        line: None,
-                                        col: None,
-                                        message: format!("Unknown {} key `{}`", field_name.trim_end_matches('s'), key),
-                                    });
-                                }
-                            }
-                        }
-                    }
+                if !has_key
+                    && ((field_name == "images" && self.pkg.images.is_some())
+                        || (field_name == "resources" && self.pkg.resources.is_some()))
+                    && let Some(level) = self.config.resolve_level(
+                        rule_name,
+                        &self.file,
+                        LintLevel::Error,
+                        self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                    )
+                {
+                    self.findings.push(LintFinding {
+                        rule: rule_name.to_string(),
+                        level,
+                        file: self.file.clone(),
+                        line: None,
+                        message: format!("Unknown {} key `{}`", field_name.trim_end_matches('s'), key),
+                    });
                 }
             }
         }
     }
 
     fn check_path(&mut self, param: &Parameter) {
-        if let Parameter::Path(path) = param {
-            if let HbsPath::Relative((segs, _)) = path {
-                if !segs.is_empty() {
-                    if let PathSeg::Named(first) = &segs[0] {
-                        if first == "tenant" && self.pkg.metadata.usage == common::vynilpackage::VynilPackageType::System {
-                            if let Some(level) = self.config.resolve_level(
-                                "hbs/wrong-package-type",
-                                &self.file,
-                                LintLevel::Warn,
-                                self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
-                            ) {
-                                self.findings.push(LintFinding {
-                                    rule: "hbs/wrong-package-type".to_string(),
-                                    level,
-                                    file: self.file.clone(),
-                                    line: None,
-                                    col: None,
-                                    message: "Accessing `tenant` in a System package is not allowed".to_string(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+        if let Parameter::Path(path) = param
+            && let HbsPath::Relative((segs, _)) = path
+            && !segs.is_empty()
+            && let PathSeg::Named(first) = &segs[0]
+            && first == "tenant"
+            && self.pkg.metadata.usage == common::vynilpackage::VynilPackageType::System
+            && let Some(level) = self.config.resolve_level(
+                "hbs/wrong-package-type",
+                &self.file,
+                LintLevel::Warn,
+                self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+            )
+        {
+            self.findings.push(LintFinding {
+                rule: "hbs/wrong-package-type".to_string(),
+                level,
+                file: self.file.clone(),
+                line: None,
+                message: "Accessing `tenant` in a System package is not allowed".to_string(),
+            });
         }
     }
 
@@ -443,22 +437,21 @@ impl<'a> HelperWalker<'a> {
 
         self.used_partials.insert(partial_name.clone());
 
-        if !self.defined_partials.contains(&partial_name) {
-            if let Some(level) = self.config.resolve_level(
+        if !self.defined_partials.contains(&partial_name)
+            && let Some(level) = self.config.resolve_level(
                 "hbs/unknown-partial",
                 &self.file,
                 LintLevel::Error,
                 self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
-            ) {
-                self.findings.push(LintFinding {
-                    rule: "hbs/unknown-partial".to_string(),
-                    level,
-                    file: self.file.clone(),
-                    line: None,
-                    col: None,
-                    message: format!("Partial `{}` not found", partial_name),
-                });
-            }
+            )
+        {
+            self.findings.push(LintFinding {
+                rule: "hbs/unknown-partial".to_string(),
+                level,
+                file: self.file.clone(),
+                line: None,
+                message: format!("Partial `{}` not found", partial_name),
+            });
         }
     }
 }
@@ -539,8 +532,10 @@ mod tests {
         let source = r#"{{read_to_str "/some/file"}}"#;
         let findings = test.checker.check_file(Path::new("test.hbs"), source);
 
-        assert!(!findings.iter().any(|f| f.rule == "hbs/unknown-helper"),
-            "read_to_str should be known (registered by handlebars_misc_helpers)");
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unknown-helper"),
+            "read_to_str should be known (registered by handlebars_misc_helpers)"
+        );
     }
 
     #[test]
@@ -558,8 +553,10 @@ mod tests {
         let source = "{{my_custom_helper val}}";
         let findings = test.checker.check_file(Path::new("test.hbs"), source);
 
-        assert!(!findings.iter().any(|f| f.rule == "hbs/unknown-helper"),
-            "Custom helper defined in handlebars/helpers/ should not be flagged");
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unknown-helper"),
+            "Custom helper defined in handlebars/helpers/ should not be flagged"
+        );
     }
 
     #[test]
@@ -569,9 +566,11 @@ mod tests {
         test.checker.check_file(Path::new("test.hbs"), source);
         let final_findings = test.checker.finalize();
 
-        assert!(!final_findings
-            .iter()
-            .any(|f| f.rule == "hbs/unused-partial" && f.message.contains("mypartial")));
+        assert!(
+            !final_findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-partial" && f.message.contains("mypartial"))
+        );
     }
 
     #[test]
@@ -581,9 +580,11 @@ mod tests {
         test.checker.check_file(Path::new("test.hbs"), source);
         let final_findings = test.checker.finalize();
 
-        assert!(final_findings
-            .iter()
-            .any(|f| f.rule == "hbs/unused-partial" && f.message.contains("unused_partial")));
+        assert!(
+            final_findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-partial" && f.message.contains("unused_partial"))
+        );
     }
 
     #[test]
@@ -742,7 +743,11 @@ mod tests {
         checker.check_file(Path::new("test.hbs"), source);
         let final_findings = checker.finalize();
 
-        assert!(final_findings.iter().any(|f| f.rule == "hbs/unused-option" && f.message.contains("host")));
+        assert!(
+            final_findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-option" && f.message.contains("host"))
+        );
     }
 
     fn create_pkg_with_options() -> VynilPackageSource {

@@ -1,49 +1,102 @@
 use crate::{Error, Result, RhaiRes, hasheshandlers::Argon, passwordhandler::Passwords, rhai_err};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use handlebars::{Handlebars, handlebars_helper};
+pub use handlebars::{
+    Path as HbsPath, PathSeg,
+    template::{Parameter, Template, TemplateElement},
+};
 use handlebars_misc_helpers::new_hbs;
 use regex::Regex;
 use rhai::Engine;
 pub use serde_json::Value;
-pub use handlebars::template::{Template, TemplateElement, Parameter};
-pub use handlebars::{Path as HbsPath, PathSeg};
 
 /// All helpers available in a HandleBars engine created by HandleBars::new().
 /// Includes: handlebars built-ins, handlebars_misc_helpers (file, path, env, string,
 /// json, jsonnet, regex, uuid features), and vynil-specific helpers.
 pub const NATIVE_HBS_HELPERS: &[&str] = &[
     // Handlebars built-ins
-    "if", "unless", "each", "with", "lookup", "raw", "log", "inline",
-    "eq", "ne", "gt", "gte", "lt", "lte", "and", "or", "not", "len",
+    "if",
+    "unless",
+    "each",
+    "with",
+    "lookup",
+    "raw",
+    "log",
+    "inline",
+    "eq",
+    "ne",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "and",
+    "or",
+    "not",
+    "len",
     // handlebars string_helpers feature (case helpers)
-    "lowerCamelCase", "upperCamelCase", "snakeCase", "kebabCase",
-    "shoutySnakeCase", "shoutyKebabCase", "titleCase", "trainCase",
+    "lowerCamelCase",
+    "upperCamelCase",
+    "snakeCase",
+    "kebabCase",
+    "shoutySnakeCase",
+    "shoutyKebabCase",
+    "titleCase",
+    "trainCase",
     // handlebars_misc_helpers — file (unconditional)
     "read_to_str",
     // handlebars_misc_helpers — path (unconditional)
-    "parent", "file_name", "extension", "canonicalize",
+    "parent",
+    "file_name",
+    "extension",
+    "canonicalize",
     // handlebars_misc_helpers — env (unconditional)
     "env_var",
     // handlebars_misc_helpers — string feature
-    "to_lower_case", "to_upper_case", "trim", "trim_start", "trim_end",
-    "replace", "quote", "unquote", "first_non_empty",
+    "to_lower_case",
+    "to_upper_case",
+    "trim",
+    "trim_start",
+    "trim_end",
+    "replace",
+    "quote",
+    "unquote",
+    "first_non_empty",
     // handlebars_misc_helpers — json feature
-    "json_to_str", "str_to_json", "from_json", "to_json", "json_query", "json_str_query",
+    "json_to_str",
+    "str_to_json",
+    "from_json",
+    "to_json",
+    "json_query",
+    "json_str_query",
     // handlebars_misc_helpers — jsonnet feature
     "jsonnet",
     // handlebars_misc_helpers — regex feature
-    "regex_captures", "regex_is_match",
+    "regex_captures",
+    "regex_is_match",
     // handlebars_misc_helpers — uuid feature
-    "uuid_new_v4", "uuid_new_v7",
+    "uuid_new_v4",
+    "uuid_new_v7",
     // vynil helpers registered by HandleBars::new()
-    "base64_encode", "base64_decode", "url_encode", "to_decimal", "header_basic",
-    "argon_hash", "bcrypt_hash", "crc32_hash",
-    "gen_password", "gen_password_alphanum",
+    "base64_encode",
+    "base64_decode",
+    "url_encode",
+    "to_decimal",
+    "header_basic",
+    "argon_hash",
+    "bcrypt_hash",
+    "crc32_hash",
+    "gen_password",
+    "gen_password_alphanum",
     "concat",
-    "selector_from_ctx", "labels_from_ctx", "ctx_have_crd",
-    "have_system_service", "have_tenant_service",
-    "image_from_ctx", "resources_from_ctx",
-    "render_template", "render_file",
+    "selector_from_ctx",
+    "labels_from_ctx",
+    "ctx_have_crd",
+    "have_system_service",
+    "have_tenant_service",
+    "image_from_ctx",
+    "resources_from_ctx",
+    "render_template",
+    "render_file",
 ];
 use std::{
     fs,

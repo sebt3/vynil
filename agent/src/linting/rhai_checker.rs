@@ -1,24 +1,35 @@
-use crate::linting::{LintFinding, LintLevel, LintConfig, parse_inline_disables};
-use common::vynilpackage::{VynilPackageSource, VynilPackageType};
-use common::rhaihandler::{Engine, AST, ASTNode, Stmt, Expr, ParseError};
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use crate::linting::{LintConfig, LintFinding, LintLevel, parse_inline_disables};
+use common::{
+    rhaihandler::{AST, ASTNode, Engine, Expr, ParseError, Stmt},
+    vynilpackage::{VynilPackageSource, VynilPackageType},
+};
+use rhai::OptimizationLevel;
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
-const ENTRY_POINT_PATTERNS: &[&str] = &[
-    "install.rhai",
-    "delete.rhai",
-    "reconfigure.rhai",
-];
+const ENTRY_POINT_PATTERNS: &[&str] = &["install.rhai", "delete.rhai", "reconfigure.rhai"];
 
 const ENTRY_POINT_FUNCTIONS: &[&str] = &["run", "template", "new", "main"];
 
 const FULL_ONLY_FUNCTIONS: &[&str] = &[
-    "http_get", "http_post", "http_put", "http_delete", "http_patch",
-    "get_service_instance", "list_service_instances",
-    "get_system_instance", "list_system_instances",
-    "get_tenant_instance", "list_tenant_instances",
-    "get_jukebox", "list_jukeboxes",
-    "k8s_resource", "k8s_raw", "k8s_workload",
+    "http_get",
+    "http_post",
+    "http_put",
+    "http_delete",
+    "http_patch",
+    "get_service_instance",
+    "list_service_instances",
+    "get_system_instance",
+    "list_system_instances",
+    "get_tenant_instance",
+    "list_tenant_instances",
+    "get_jukebox",
+    "list_jukeboxes",
+    "k8s_resource",
+    "k8s_raw",
+    "k8s_workload",
 ];
 
 pub struct RhaiChecker<'a> {
@@ -54,18 +65,17 @@ impl<'a> RhaiChecker<'a> {
 
         let mut importable_scripts = HashSet::new();
         let scripts_dir = package_dir.join("scripts");
-        if scripts_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&scripts_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "rhai") {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            let is_entry_point = ENTRY_POINT_PATTERNS.iter().any(|p| name == *p)
-                                || name.starts_with("context_");
-                            if !is_entry_point {
-                                importable_scripts.insert(path);
-                            }
-                        }
+        if scripts_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&scripts_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "rhai")
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    let is_entry_point = ENTRY_POINT_PATTERNS.contains(&name) || name.starts_with("context_");
+                    if !is_entry_point {
+                        importable_scripts.insert(path);
                     }
                 }
             }
@@ -88,6 +98,7 @@ impl<'a> RhaiChecker<'a> {
 
         let mut engine = Engine::new();
         engine.set_max_expr_depths(128, 64);
+        engine.set_optimization_level(OptimizationLevel::None);
         match engine.compile(source) {
             Ok(ast) => {
                 let import_findings = self.check_imports(&ast, file);
@@ -104,13 +115,15 @@ impl<'a> RhaiChecker<'a> {
                 let param_findings = check_unused_parameters(&ast, file, self.config, &inline_disables);
                 findings.extend(param_findings);
 
+                let empty_catch_findings = check_empty_catch(&ast, file, &inline_disables);
+                findings.extend(empty_catch_findings);
+
                 // Track scripts that define entry-point functions (lifecycle hooks)
-                let has_entry_point = ast.iter_fn_def()
+                let has_entry_point = ast
+                    .iter_fn_def()
                     .any(|f| ENTRY_POINT_FUNCTIONS.contains(&f.name.as_str()));
-                if has_entry_point {
-                    if let Some(stem) = file.file_stem().and_then(|s| s.to_str()) {
-                        self.scripts_with_entry_points.insert(stem.to_string());
-                    }
+                if has_entry_point && let Some(stem) = file.file_stem().and_then(|s| s.to_str()) {
+                    self.scripts_with_entry_points.insert(stem.to_string());
                 }
 
                 let api_mode_findings = check_wrong_api_mode(file, &ast);
@@ -125,19 +138,15 @@ impl<'a> RhaiChecker<'a> {
                 self.accumulate_functions(&ast, file);
             }
             Err(e) => {
-                if let Some(level) = self.config.resolve_level(
-                    "rhai/syntax",
-                    file,
-                    LintLevel::Error,
-                    &HashSet::new(),
-                ) {
-                    let (line, col) = extract_position(&e);
+                if let Some(level) =
+                    self.config
+                        .resolve_level("rhai/syntax", file, LintLevel::Error, &HashSet::new())
+                {
                     findings.push(LintFinding {
                         rule: "rhai/syntax".to_string(),
                         level,
                         file: file.to_path_buf(),
-                        line,
-                        col,
+                        line: extract_position(&e),
                         message: format!("Syntax error: {}", e),
                     });
                 }
@@ -151,33 +160,28 @@ impl<'a> RhaiChecker<'a> {
         let mut findings = Vec::new();
 
         ast.walk(&mut |nodes: &[ASTNode]| {
-            if let Some(node) = nodes.last() {
-                if let ASTNode::Stmt(stmt) = node {
-                    if let Stmt::Import(import_data, _) = stmt {
-                        let (path_expr, _alias) = &**import_data;
-                        if let Expr::StringConstant(module_name, _) = path_expr {
-                            self.imported_scripts.insert(module_name.to_string());
-                            if !self.resolve_import(module_name) {
-                                if let Some(level) = self.config.resolve_level(
-                                    "rhai/unresolved-import",
-                                    file,
-                                    LintLevel::Error,
-                                    &HashSet::new(),
-                                ) {
-                                    findings.push(LintFinding {
-                                        rule: "rhai/unresolved-import".to_string(),
-                                        level,
-                                        file: file.to_path_buf(),
-                                        line: None,
-                                        col: None,
-                                        message: format!(
-                                            "Cannot resolve import \"{}\"",
-                                            module_name
-                                        ),
-                                    });
-                                }
-                            }
-                        }
+            if let Some(node) = nodes.last()
+                && let ASTNode::Stmt(stmt) = node
+                && let Stmt::Import(import_data, _) = stmt
+            {
+                let (path_expr, _alias) = &**import_data;
+                if let Expr::StringConstant(module_name, _) = path_expr {
+                    self.imported_scripts.insert(module_name.to_string());
+                    if !self.resolve_import(module_name)
+                        && let Some(level) = self.config.resolve_level(
+                            "rhai/unresolved-import",
+                            file,
+                            LintLevel::Error,
+                            &HashSet::new(),
+                        )
+                    {
+                        findings.push(LintFinding {
+                            rule: "rhai/unresolved-import".to_string(),
+                            level,
+                            file: file.to_path_buf(),
+                            line: None,
+                            message: format!("Cannot resolve import \"{}\"", module_name),
+                        });
                     }
                 }
             }
@@ -207,13 +211,13 @@ impl<'a> RhaiChecker<'a> {
         }
 
         ast.walk(&mut |nodes: &[ASTNode]| {
-            if let Some(node) = nodes.last() {
-                if let ASTNode::Expr(expr) = node {
-                    if let Expr::FnCall(fn_call, _) = expr {
-                        self.called_functions.insert(fn_call.name.to_string());
-                    } else if let Expr::MethodCall(fn_call, _) = expr {
-                        self.called_functions.insert(fn_call.name.to_string());
-                    }
+            if let Some(node) = nodes.last()
+                && let ASTNode::Expr(expr) = node
+            {
+                if let Expr::FnCall(fn_call, _) = expr {
+                    self.called_functions.insert(fn_call.name.to_string());
+                } else if let Expr::MethodCall(fn_call, _) = expr {
+                    self.called_functions.insert(fn_call.name.to_string());
                 }
             }
             true
@@ -225,29 +229,23 @@ impl<'a> RhaiChecker<'a> {
 
         // Check unused-script: skip scripts that define entry-point functions (lifecycle hooks)
         for script_path in &self.importable_scripts {
-            if let Some(file_stem) = script_path.file_stem().and_then(|s| s.to_str()) {
-                if !self.imported_scripts.contains(file_stem)
-                    && !self.scripts_with_entry_points.contains(file_stem)
-                {
-                    if let Some(level) = self.config.resolve_level(
-                        "rhai/unused-script",
-                        script_path,
-                        LintLevel::Warn,
-                        &HashSet::new(),
-                    ) {
-                        findings.push(LintFinding {
-                            rule: "rhai/unused-script".to_string(),
-                            level,
-                            file: script_path.to_path_buf(),
-                            line: None,
-                            col: None,
-                            message: format!(
-                                "Script `{}` defined but never imported",
-                                file_stem
-                            ),
-                        });
-                    }
-                }
+            if let Some(file_stem) = script_path.file_stem().and_then(|s| s.to_str())
+                && !self.imported_scripts.contains(file_stem)
+                && !self.scripts_with_entry_points.contains(file_stem)
+                && let Some(level) = self.config.resolve_level(
+                    "rhai/unused-script",
+                    script_path,
+                    LintLevel::Warn,
+                    &HashSet::new(),
+                )
+            {
+                findings.push(LintFinding {
+                    rule: "rhai/unused-script".to_string(),
+                    level,
+                    file: script_path.to_path_buf(),
+                    line: None,
+                    message: format!("Script `{}` defined but never imported", file_stem),
+                });
             }
         }
 
@@ -255,25 +253,20 @@ impl<'a> RhaiChecker<'a> {
         for (func_name, func_file) in &self.defined_functions {
             if !self.called_functions.contains(func_name)
                 && !ENTRY_POINT_FUNCTIONS.contains(&func_name.as_str())
-            {
-                if let Some(level) = self.config.resolve_level(
+                && let Some(level) = self.config.resolve_level(
                     "rhai/unused-function",
                     func_file,
                     LintLevel::Warn,
                     &HashSet::new(),
-                ) {
-                    findings.push(LintFinding {
-                        rule: "rhai/unused-function".to_string(),
-                        level,
-                        file: func_file.clone(),
-                        line: None,
-                        col: None,
-                        message: format!(
-                            "Function `{}` defined but never called",
-                            func_name
-                        ),
-                    });
-                }
+                )
+            {
+                findings.push(LintFinding {
+                    rule: "rhai/unused-function".to_string(),
+                    level,
+                    file: func_file.clone(),
+                    line: None,
+                    message: format!("Function `{}` defined but never called", func_name),
+                });
             }
         }
 
@@ -343,9 +336,10 @@ fn collect_used_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
             collect_used_vars_expr(init, vars);
         }
         Stmt::Expr(expr) => collect_used_vars_expr(expr, vars),
-        Stmt::Return(expr, ..) => {
-            if let Some(e) = expr { collect_used_vars_expr(e, vars); }
+        Stmt::Return(Some(e), ..) => {
+            collect_used_vars_expr(e, vars);
         }
+        Stmt::Return(None, ..) => {}
         Stmt::If(data, _) => {
             collect_used_vars_expr(&data.expr, vars);
             collect_used_vars_stmts(data.body.statements(), vars);
@@ -395,7 +389,6 @@ fn check_shadowing_scoped(
                             level: LintLevel::Warn,
                             file: file.to_path_buf(),
                             line: Some(pos.line().unwrap_or(0)),
-                            col: None,
                             message: format!("Variable `{}` shadows a previous declaration", name),
                         });
                     }
@@ -447,11 +440,7 @@ fn check_dead_code(ast: &AST, file: &Path) -> Vec<LintFinding> {
     findings
 }
 
-fn check_statements_for_dead_code(
-    statements: &[Stmt],
-    file: &Path,
-    findings: &mut Vec<LintFinding>,
-) {
+fn check_statements_for_dead_code(statements: &[Stmt], file: &Path, findings: &mut Vec<LintFinding>) {
     for (idx, stmt) in statements.iter().enumerate() {
         if matches!(stmt, Stmt::Return(..) | Stmt::BreakLoop(..)) {
             for _dead_idx in (idx + 1)..statements.len() {
@@ -460,7 +449,6 @@ fn check_statements_for_dead_code(
                     level: LintLevel::Warn,
                     file: file.to_path_buf(),
                     line: None,
-                    col: None,
                     message: "Unreachable code after return or break".to_string(),
                 });
             }
@@ -490,14 +478,104 @@ fn check_statements_for_dead_code(
     }
 }
 
-fn extract_position(e: &ParseError) -> (Option<usize>, Option<usize>) {
-    let pos = e.position();
-    let line = pos.line();
-    let col = pos.position();
-    (line, col)
+fn check_empty_catch(
+    ast: &AST,
+    file: &Path,
+    inline_disables: &HashMap<usize, HashSet<String>>,
+) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    // ast.walk() finds TryCatch nodes in top-level statements and function bodies,
+    // but does NOT recurse into try/catch bodies itself. We handle nested try-catch
+    // by delegating recursion to check_stmts_for_empty_catch when a TryCatch is found.
+    ast.walk(&mut |nodes: &[ASTNode]| {
+        if let Some(ASTNode::Stmt(Stmt::TryCatch(data, pos))) = nodes.last() {
+            if data.branch.statements().is_empty() {
+                let line = pos.line().unwrap_or(0);
+                let disabled = inline_disables
+                    .get(&line)
+                    .map(|rules| rules.contains("rhai/empty-catch"))
+                    .unwrap_or(false);
+                if !disabled {
+                    findings.push(LintFinding {
+                        rule: "rhai/empty-catch".to_string(),
+                        level: LintLevel::Warn,
+                        file: file.to_path_buf(),
+                        line: Some(line),
+                        message: "Empty catch block silently ignores errors".to_string(),
+                    });
+                }
+            }
+            // Manually recurse into try/catch bodies to catch nested try-catch
+            check_stmts_for_empty_catch(data.body.statements(), file, inline_disables, &mut findings);
+            check_stmts_for_empty_catch(data.branch.statements(), file, inline_disables, &mut findings);
+        }
+        true
+    });
+
+    findings
 }
 
-fn check_unused_variables(ast: &AST, file: &Path, inline_disables: &HashMap<usize, HashSet<String>>) -> Vec<LintFinding> {
+fn check_stmts_for_empty_catch(
+    stmts: &[Stmt],
+    file: &Path,
+    inline_disables: &HashMap<usize, HashSet<String>>,
+    findings: &mut Vec<LintFinding>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::TryCatch(data, pos) => {
+                if data.branch.statements().is_empty() {
+                    let line = pos.line().unwrap_or(0);
+                    let disabled = inline_disables
+                        .get(&line)
+                        .map(|rules| rules.contains("rhai/empty-catch"))
+                        .unwrap_or(false);
+                    if !disabled {
+                        findings.push(LintFinding {
+                            rule: "rhai/empty-catch".to_string(),
+                            level: LintLevel::Warn,
+                            file: file.to_path_buf(),
+                            line: Some(line),
+                            message: "Empty catch block silently ignores errors".to_string(),
+                        });
+                    }
+                }
+                check_stmts_for_empty_catch(data.body.statements(), file, inline_disables, findings);
+                check_stmts_for_empty_catch(data.branch.statements(), file, inline_disables, findings);
+            }
+            Stmt::Block(block) => {
+                check_stmts_for_empty_catch(block.statements(), file, inline_disables, findings);
+            }
+            Stmt::If(flow_control, _) => {
+                check_stmts_for_empty_catch(flow_control.body.statements(), file, inline_disables, findings);
+                check_stmts_for_empty_catch(
+                    flow_control.branch.statements(),
+                    file,
+                    inline_disables,
+                    findings,
+                );
+            }
+            Stmt::While(data, _) | Stmt::Do(data, ..) => {
+                check_stmts_for_empty_catch(data.body.statements(), file, inline_disables, findings);
+            }
+            Stmt::For(data, _) => {
+                check_stmts_for_empty_catch(data.2.body.statements(), file, inline_disables, findings);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn extract_position(e: &ParseError) -> Option<usize> {
+    e.position().line()
+}
+
+fn check_unused_variables(
+    ast: &AST,
+    file: &Path,
+    inline_disables: &HashMap<usize, HashSet<String>>,
+) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     let mut declarations: Vec<(String, usize)> = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
@@ -543,7 +621,6 @@ fn check_unused_variables(ast: &AST, file: &Path, inline_disables: &HashMap<usiz
                     level: LintLevel::Warn,
                     file: file.to_path_buf(),
                     line: Some(line),
-                    col: None,
                     message: format!("Variable `{}` is declared but never used", name),
                 });
             }
@@ -573,25 +650,21 @@ fn check_unused_parameters(
 
         for param_name in &fn_def.params {
             let param_str = param_name.to_string();
-            if !param_str.starts_with('_') && !used_params.contains(&param_str) {
-                if let Some(level) = config.resolve_level(
-                    "rhai/unused-parameter",
-                    file,
-                    LintLevel::Warn,
-                    &file_disabled,
-                ) {
-                    findings.push(LintFinding {
-                        rule: "rhai/unused-parameter".to_string(),
-                        level,
-                        file: file.to_path_buf(),
-                        line: None,
-                        col: None,
-                        message: format!(
-                            "Parameter `{}` in function `{}` is never used",
-                            param_str, fn_def.name
-                        ),
-                    });
-                }
+            if !param_str.starts_with('_')
+                && !used_params.contains(&param_str)
+                && let Some(level) =
+                    config.resolve_level("rhai/unused-parameter", file, LintLevel::Warn, &file_disabled)
+            {
+                findings.push(LintFinding {
+                    rule: "rhai/unused-parameter".to_string(),
+                    level,
+                    file: file.to_path_buf(),
+                    line: None,
+                    message: format!(
+                        "Parameter `{}` in function `{}` is never used",
+                        param_str, fn_def.name
+                    ),
+                });
             }
         }
     }
@@ -600,10 +673,10 @@ fn check_unused_parameters(
 }
 
 fn is_core_script(file: &Path) -> bool {
-    if let Some(file_name) = file.file_name().and_then(|n| n.to_str()) {
-        if file_name == "build.rhai" || file_name == "validate.rhai" {
-            return true;
-        }
+    if let Some(file_name) = file.file_name().and_then(|n| n.to_str())
+        && (file_name == "build.rhai" || file_name == "validate.rhai")
+    {
+        return true;
     }
     file.to_string_lossy().contains("handlebars/helpers/")
 }
@@ -624,11 +697,7 @@ fn check_wrong_api_mode(file: &Path, ast: &AST) -> Vec<LintFinding> {
                     level: LintLevel::Warn,
                     file: file.to_path_buf(),
                     line: None,
-                    col: None,
-                    message: format!(
-                        "Function `{}` is not available in core mode scripts",
-                        fn_name
-                    ),
+                    message: format!("Function `{}` is not available in core mode scripts", fn_name),
                 });
             }
         }
@@ -648,13 +717,12 @@ fn check_wrong_package_type(ast: &AST, file: &Path, pkg: &VynilPackageSource) ->
     ast.walk(&mut |nodes: &[ASTNode]| {
         if let Some(ASTNode::Expr(Expr::Variable(var_data, _, _))) = nodes.last() {
             let (_, name, _, _) = &**var_data;
-            if name.to_string() == "tenant" {
+            if *name == "tenant" {
                 findings.push(LintFinding {
                     rule: "rhai/wrong-package-type".to_string(),
                     level: LintLevel::Warn,
                     file: file.to_path_buf(),
                     line: None,
-                    col: None,
                     message: "System packages cannot access tenant context".to_string(),
                 });
             }
@@ -676,26 +744,16 @@ fn check_context_hook_no_return(ast: &AST, file: &Path) -> Vec<LintFinding> {
 
     for fn_def in ast.iter_fn_def() {
         let stmts = fn_def.body.iter().collect::<Vec<_>>();
-        if let Some(last_stmt) = stmts.last() {
-            match last_stmt {
-                Stmt::Return(..) | Stmt::Expr(..) => {
-                    has_valid_return = true;
-                    break;
-                }
-                _ => {}
-            }
+        if let Some(Stmt::Return(..) | Stmt::Expr(..)) = stmts.last() {
+            has_valid_return = true;
+            break;
         }
     }
 
     if !has_valid_return {
         let stmts = ast.statements();
-        if let Some(last_stmt) = stmts.last() {
-            match last_stmt {
-                Stmt::Return(..) | Stmt::Expr(..) => {
-                    has_valid_return = true;
-                }
-                _ => {}
-            }
+        if let Some(Stmt::Return(..) | Stmt::Expr(..)) = stmts.last() {
+            has_valid_return = true;
         }
     }
 
@@ -705,7 +763,6 @@ fn check_context_hook_no_return(ast: &AST, file: &Path) -> Vec<LintFinding> {
             level: LintLevel::Error,
             file: file.to_path_buf(),
             line: None,
-            col: None,
             message: "Context hook must return the context".to_string(),
         });
     }
@@ -797,7 +854,10 @@ mod tests {
         let source = r#"import "nonexistent" as x;"#;
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
-        let count = findings.iter().filter(|f| f.rule == "rhai/unresolved-import").count();
+        let count = findings
+            .iter()
+            .filter(|f| f.rule == "rhai/unresolved-import")
+            .count();
         assert_eq!(count, 1, "Expected exactly 1 unresolved-import, got {}", count);
     }
 
@@ -831,7 +891,9 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            findings.iter().any(|f| f.rule == "rhai/unused-script" && f.message.contains("orphan")),
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-script" && f.message.contains("orphan")),
             "Expected rhai/unused-script finding for orphan"
         );
     }
@@ -850,7 +912,9 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-script" && f.message.contains("install_post")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-script" && f.message.contains("install_post")),
             "Lifecycle hook with run() should not be flagged as unused"
         );
     }
@@ -882,7 +946,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("unused")),
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("unused")),
             "Expected rhai/unused-variable finding for 'unused'"
         );
     }
@@ -929,8 +995,15 @@ mod tests {
         let source = "let x = 1; let x = 2;";
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
-        let count = findings.iter().filter(|f| f.rule == "rhai/shadowed-variable").count();
-        assert_eq!(count, 1, "Expected exactly 1 shadowed-variable warning, got {}", count);
+        let count = findings
+            .iter()
+            .filter(|f| f.rule == "rhai/shadowed-variable")
+            .count();
+        assert_eq!(
+            count, 1,
+            "Expected exactly 1 shadowed-variable warning, got {}",
+            count
+        );
     }
 
     #[test]
@@ -944,7 +1017,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("unused")),
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("unused")),
             "Expected rhai/unused-parameter finding for 'unused'"
         );
     }
@@ -962,7 +1037,9 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            findings.iter().any(|f| f.rule == "rhai/unused-function" && f.message.contains("helper")),
+            findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-function" && f.message.contains("helper")),
             "Expected rhai/unused-function finding for 'helper'"
         );
     }
@@ -980,7 +1057,9 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-function" && f.message.contains("run")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-function" && f.message.contains("run")),
             "Expected no rhai/unused-function finding for 'run' entry point"
         );
     }
@@ -993,10 +1072,7 @@ mod tests {
         let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
 
         let source = r#"let r = k8s_resource("Pod");"#;
-        let findings = checker.check_file(
-            &PathBuf::from("handlebars/helpers/test.rhai"),
-            source,
-        );
+        let findings = checker.check_file(&PathBuf::from("handlebars/helpers/test.rhai"), source);
 
         assert!(
             findings.iter().any(|f| f.rule == "rhai/wrong-api-mode"),
@@ -1082,7 +1158,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("context")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("context")),
             "context used as method call arg should not be flagged as unused"
         );
     }
@@ -1155,7 +1233,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("context")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("context")),
             "context used in if-expression init should not be flagged as unused"
         );
     }
@@ -1176,7 +1256,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("\"v\"")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-parameter" && f.message.contains("\"v\"")),
             "v used in closure operator body should not be flagged as unused"
         );
     }
@@ -1224,7 +1306,9 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`x`")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`x`")),
             "variable used inside try block should not be flagged as unused"
         );
     }
@@ -1240,8 +1324,58 @@ mod tests {
         let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
 
         assert!(
-            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`obj`")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`obj`")),
             "variable used as dot-access base should not be flagged as unused"
+        );
+    }
+
+    #[test]
+    fn empty_catch_warns() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "try { let _x = 1; } catch {}";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "rhai/empty-catch"),
+            "empty catch block should be flagged as rhai/empty-catch"
+        );
+    }
+
+    #[test]
+    fn non_empty_catch_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = r#"try { let _x = 1; } catch(e) { print(e); }"#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/empty-catch"),
+            "non-empty catch block should not be flagged"
+        );
+    }
+
+    #[test]
+    fn inline_disable_suppresses_empty_catch() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = "try { let _x = 1; } catch {} // vynil-lint-disable rhai/empty-catch";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/empty-catch"),
+            "inline disable should suppress rhai/empty-catch"
         );
     }
 }
