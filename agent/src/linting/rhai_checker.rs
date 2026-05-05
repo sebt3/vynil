@@ -358,6 +358,10 @@ fn collect_used_vars_stmt(stmt: &Stmt, vars: &mut HashSet<String>) {
             collect_used_vars_stmts(data.body.statements(), vars);
             collect_used_vars_stmts(data.branch.statements(), vars);
         }
+        Stmt::Assignment(data) => {
+            collect_used_vars_expr(&data.1.lhs, vars);
+            collect_used_vars_expr(&data.1.rhs, vars);
+        }
         // Top-level operator expressions (e.g. `a >= b`) are Stmt::FnCall, not Stmt::Expr
         Stmt::FnCall(fn_call, _) => {
             for arg in fn_call.args.iter() {
@@ -950,6 +954,44 @@ mod tests {
                 .iter()
                 .any(|f| f.rule == "rhai/unused-variable" && f.message.contains("unused")),
             "Expected rhai/unused-variable finding for 'unused'"
+        );
+    }
+
+    #[test]
+    fn variable_used_in_assignment_rhs_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // `ing` used as RHS of a property assignment — must not be flagged
+        let source = r#"
+            let obj = #{};
+            let ing = #{spec: #{rules: [#{host: "h"}]}};
+            obj.host = ing.spec.rules[0].host;
+        "#;
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`ing`")),
+            "Variable used in assignment RHS should not be flagged as unused"
+        );
+    }
+
+    #[test]
+    fn variable_used_in_assignment_lhs_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        // `obj` used as LHS target of an assignment — must not be flagged
+        let source = "let obj = #{}; obj.x = 1;";
+        let findings = checker.check_file(&PathBuf::from("test.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/unused-variable" && f.message.contains("`obj`")),
+            "Variable used as assignment LHS should not be flagged as unused"
         );
     }
 
