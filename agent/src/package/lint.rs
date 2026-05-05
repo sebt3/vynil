@@ -188,6 +188,16 @@ pub async fn run(args: &Parameters) -> Result<()> {
         }
     }
 
+    // Scan rhai files for context.values.X usages before finalizing hbs checker
+    if let Ok(entries) = std::fs::read_dir(&args.package_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_rhai_files_for_values(&path, &mut hbs_checker)?;
+            }
+        }
+    }
+
     collector.extend(hbs_checker.finalize());
 
     // Check Rhai files
@@ -375,6 +385,25 @@ fn scan_rhai_files(
                 for finding in findings {
                     collector.add(finding);
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn scan_rhai_files_for_values(
+    dir: &std::path::Path,
+    hbs_checker: &mut crate::linting::hbs_checker::HbsChecker,
+) -> Result<()> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_rhai_files_for_values(&path, hbs_checker)?;
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rhai")
+                && let Ok(source) = std::fs::read_to_string(&path)
+            {
+                hbs_checker.scan_rhai_for_values(&source);
             }
         }
     }

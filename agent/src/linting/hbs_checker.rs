@@ -182,6 +182,18 @@ impl<'a> HbsChecker<'a> {
 
         findings
     }
+
+    pub fn scan_rhai_for_values(&mut self, source: &str) {
+        for part in source.split("context.values.").skip(1) {
+            let key: String = part
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !key.is_empty() {
+                self.used_values.insert(key);
+            }
+        }
+    }
 }
 
 struct HelperWalker<'a> {
@@ -747,6 +759,39 @@ mod tests {
             final_findings
                 .iter()
                 .any(|f| f.rule == "hbs/unused-option" && f.message.contains("host"))
+        );
+    }
+
+    #[test]
+    fn rhai_context_values_usage_suppresses_unused_option_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_options()));
+        let config = Box::leak(Box::new(LintConfig::default()));
+        let mut checker = HbsChecker {
+            _package_dir: Path::new("."),
+            _pkg: pkg,
+            config,
+            defined_helpers: HashSet::new(),
+            used_helpers: HashSet::new(),
+            defined_partials: HashSet::new(),
+            used_partials: HashSet::new(),
+            used_values: HashSet::new(),
+        };
+
+        // "host" is used only in a rhai file via context.values.host
+        checker.scan_rhai_for_values("size: context.values.host,");
+        let final_findings = checker.finalize();
+
+        assert!(
+            !final_findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-option" && f.message.contains("host")),
+            "host used in rhai should not produce unused-option warning"
+        );
+        // "port" is still unused
+        assert!(
+            final_findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-option" && f.message.contains("port"))
         );
     }
 
