@@ -1146,6 +1146,7 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
     engine
         .register_type_with_name::<K8sObjectMock>("K8sObject")
         .register_get("kind", K8sObjectMock::get_kind)
+        .register_get("original_kind", K8sObjectMock::get_kind)
         .register_get("metadata", K8sObjectMock::get_metadata)
         .register_fn("delete", K8sObjectMock::rhai_delete)
         .register_fn("wait_condition", K8sObjectMock::wait_condition)

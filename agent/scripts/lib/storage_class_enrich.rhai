@@ -47,8 +47,6 @@ fn get_known_class() { [
 fn get_default_access_modes_from_all(all) {
     if all.contains("ReadWriteMany") {
         ["ReadWriteMany"]
-    } else if all.contains("ReadOnlyMany") && all.contains("ReadWriteOnce") {
-        ["ReadOnlyMany", "ReadWriteOnce"]
     } else if all.contains("ReadWriteOnce") {
         ["ReadWriteOnce"]
     } else {
