@@ -95,43 +95,91 @@ impl LintConfig {
     }
 }
 
-/// Parse inline disable comments from source code.
+/// Detect a block-mode disable directive (comment alone on line).
+/// Returns the text after the keyword, or None if not a block directive.
+fn extract_block_disable(trimmed: &str) -> Option<&str> {
+    trimmed
+        .strip_prefix("// vynil-lint-disable")
+        .or_else(|| trimmed.strip_prefix("{{!-- vynil-lint-disable"))
+        .or_else(|| trimmed.strip_prefix("# vynil-lint-disable"))
+}
+
+/// Detect a block-mode enable directive (comment alone on line).
+/// Returns the text after the keyword, or None if not a block directive.
+fn extract_block_enable(trimmed: &str) -> Option<&str> {
+    trimmed
+        .strip_prefix("// vynil-lint-enable")
+        .or_else(|| trimmed.strip_prefix("{{!-- vynil-lint-enable"))
+        .or_else(|| trimmed.strip_prefix("# vynil-lint-enable"))
+}
+
+/// Parse disable comments from source code.
 /// Returns a map of rule IDs disabled on each line.
-/// Patterns:
-/// - Rhai: `// vynil-lint-disable rule-a, rule-b`
-/// - HBS:  `{{!-- vynil-lint-disable rule-a, rule-b --}}`
+///
+/// Block mode (comment alone on its line — applies to all lines until enable):
+/// - Rhai: `// vynil-lint-disable rule-a` … `// vynil-lint-enable rule-a`
+/// - HBS:  `{{!-- vynil-lint-disable rule-a --}}` … `{{!-- vynil-lint-enable rule-a --}}`
+/// - YAML: `# vynil-lint-disable rule-a` … `# vynil-lint-enable rule-a`
+///
+/// Inline mode (comment after code on the same line — applies to that line only):
+/// - Rhai: `code; // vynil-lint-disable rule-a`
+/// - HBS:  `{{expr}}{{!-- vynil-lint-disable rule-a --}}`
+/// - YAML: `key: val # vynil-lint-disable rule-a`
 pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
     let mut result: HashMap<usize, HashSet<String>> = HashMap::new();
+    let mut active_blocks: HashSet<String> = HashSet::new();
 
     for (line_num, line) in source.lines().enumerate() {
         let line_number = line_num + 1; // 1-based
+        let trimmed = line.trim();
 
-        // Try Rhai pattern: // vynil-lint-disable
+        // Block-mode disable: comment alone on this line
+        if let Some(rest) = extract_block_disable(trimmed) {
+            active_blocks.extend(parse_rules(rest));
+            continue;
+        }
+
+        // Block-mode enable: comment alone on this line
+        if let Some(rest) = extract_block_enable(trimmed) {
+            for rule in parse_rules(rest) {
+                active_blocks.remove(&rule);
+            }
+            continue;
+        }
+
+        // Propagate active block-disables to this line
+        if !active_blocks.is_empty() {
+            result.entry(line_number).or_default().extend(active_blocks.iter().cloned());
+        }
+
+        // Inline mode: comment after code on the same line
+
+        // Rhai: // vynil-lint-disable
         if let Some(pos) = line.find("// vynil-lint-disable") {
             let rest = &line[pos + 21..];
             let rules = parse_rules(rest);
             if !rules.is_empty() {
-                result.insert(line_number, rules);
+                result.entry(line_number).or_default().extend(rules);
                 continue;
             }
         }
 
-        // Try HBS pattern: {{!-- vynil-lint-disable
+        // HBS: {{!-- vynil-lint-disable
         if let Some(pos) = line.find("{{!-- vynil-lint-disable") {
             let rest = &line[pos + 24..];
             let rules = parse_rules(rest);
             if !rules.is_empty() {
-                result.insert(line_number, rules);
+                result.entry(line_number).or_default().extend(rules);
                 continue;
             }
         }
 
-        // Try YAML pattern: # vynil-lint-disable
+        // YAML: # vynil-lint-disable
         if let Some(pos) = line.find("# vynil-lint-disable") {
             let rest = &line[pos + 20..];
             let rules = parse_rules(rest);
             if !rules.is_empty() {
-                result.insert(line_number, rules);
+                result.entry(line_number).or_default().extend(rules);
             }
         }
     }
@@ -276,5 +324,58 @@ mod tests {
         let map = parse_inline_disables(src);
         assert!(map.contains_key(&1));
         assert!(map[&1].contains("hbs/unused-option"));
+    }
+
+    #[test]
+    fn parse_rhai_block_disable() {
+        let src = "// vynil-lint-disable rhai/empty-catch\ncode();\ntry {} catch {}\n// vynil-lint-enable rhai/empty-catch\nmore_code();\n";
+        let map = parse_inline_disables(src);
+        assert!(!map.contains_key(&1), "directive line must not appear in result");
+        assert!(map.get(&2).is_some_and(|s| s.contains("rhai/empty-catch")));
+        assert!(map.get(&3).is_some_and(|s| s.contains("rhai/empty-catch")));
+        assert!(!map.contains_key(&4), "enable directive line must not appear in result");
+        assert!(!map.contains_key(&5), "code after enable must not be disabled");
+    }
+
+    #[test]
+    fn parse_hbs_block_disable() {
+        let src = "{{!-- vynil-lint-disable hbs/unknown-helper --}}\n{{foo}}\n{{!-- vynil-lint-enable hbs/unknown-helper --}}\n{{bar}}\n";
+        let map = parse_inline_disables(src);
+        assert!(!map.contains_key(&1));
+        assert!(map.get(&2).is_some_and(|s| s.contains("hbs/unknown-helper")));
+        assert!(!map.contains_key(&3));
+        assert!(!map.contains_key(&4));
+    }
+
+    #[test]
+    fn parse_yaml_block_disable() {
+        let src = "# vynil-lint-disable package/foo\nkey: value\n# vynil-lint-enable package/foo\nother: value\n";
+        let map = parse_inline_disables(src);
+        assert!(!map.contains_key(&1));
+        assert!(map.get(&2).is_some_and(|s| s.contains("package/foo")));
+        assert!(!map.contains_key(&3));
+        assert!(!map.contains_key(&4));
+    }
+
+    #[test]
+    fn block_and_inline_combine_on_same_line() {
+        let src = "// vynil-lint-disable rhai/foo\ncode(); // vynil-lint-disable rhai/bar\n// vynil-lint-enable rhai/foo\n";
+        let map = parse_inline_disables(src);
+        let line2 = map.get(&2).expect("line 2 should have disables");
+        assert!(line2.contains("rhai/foo"), "block disable must propagate");
+        assert!(line2.contains("rhai/bar"), "inline disable must also apply");
+    }
+
+    #[test]
+    fn block_disable_multiple_rules() {
+        let src = "// vynil-lint-disable rhai/foo, rhai/bar\ncode();\n// vynil-lint-enable rhai/foo\ncode2();\n// vynil-lint-enable rhai/bar\n";
+        let map = parse_inline_disables(src);
+        let line2 = map.get(&2).expect("line 2 should have disables");
+        assert!(line2.contains("rhai/foo"));
+        assert!(line2.contains("rhai/bar"));
+        // After enabling foo, only bar remains
+        let line4 = map.get(&4).expect("line 4 should have rhai/bar");
+        assert!(!line4.contains("rhai/foo"), "rhai/foo should be re-enabled");
+        assert!(line4.contains("rhai/bar"), "rhai/bar still disabled");
     }
 }
