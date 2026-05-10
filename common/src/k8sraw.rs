@@ -103,16 +103,17 @@ impl K8sRaw {
 #[macro_export]
 macro_rules! register_k8s_raw {
     ($engine:expr, $type:ty, $new:expr) => {{
-        let _get_url:           fn(&mut $type, String) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_get_url;
-        let _get_version:       fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>         = <$type>::rhai_get_api_version;
-        let _get_api_resources: fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>         = <$type>::rhai_get_api_resources;
+        let _get_url: fn(&mut $type, String) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_get_url;
+        let _get_version: fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_get_api_version;
+        let _get_api_resources: fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic> =
+            <$type>::rhai_get_api_resources;
 
         $engine
             .register_type_with_name::<$type>("K8sRaw")
-            .register_fn("new_k8s_raw",        $new)
-            .register_fn("get_url",            _get_url)
-            .register_fn("get_cluster_version",_get_version)
-            .register_fn("get_api_resources",  _get_api_resources)
+            .register_fn("new_k8s_raw", $new)
+            .register_fn("get_url", _get_url)
+            .register_fn("get_cluster_version", _get_version)
+            .register_fn("get_api_resources", _get_api_resources)
     }};
 }
 

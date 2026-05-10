@@ -149,7 +149,10 @@ pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
 
         // Propagate active block-disables to this line
         if !active_blocks.is_empty() {
-            result.entry(line_number).or_default().extend(active_blocks.iter().cloned());
+            result
+                .entry(line_number)
+                .or_default()
+                .extend(active_blocks.iter().cloned());
         }
 
         // Inline mode: comment after code on the same line
@@ -196,7 +199,7 @@ fn parse_rules(s: &str) -> HashSet<String> {
     let mut rules = HashSet::new();
     for part in s.split(',') {
         // Take only the first whitespace token; the rest may be a trailing comment
-        let raw = part.trim().split_whitespace().next().unwrap_or("");
+        let raw = part.split_whitespace().next().unwrap_or("");
         // Strip HBS/block-comment closing markers that may appear without a preceding space
         let token = raw.trim_end_matches("--}}").trim_end_matches("*/").trim();
         if token.is_empty() {
@@ -375,7 +378,10 @@ mod tests {
         assert!(!map.contains_key(&1), "directive line must not appear in result");
         assert!(map.get(&2).is_some_and(|s| s.contains("rhai/empty-catch")));
         assert!(map.get(&3).is_some_and(|s| s.contains("rhai/empty-catch")));
-        assert!(!map.contains_key(&4), "enable directive line must not appear in result");
+        assert!(
+            !map.contains_key(&4),
+            "enable directive line must not appear in result"
+        );
         assert!(!map.contains_key(&5), "code after enable must not be disabled");
     }
 
@@ -391,7 +397,8 @@ mod tests {
 
     #[test]
     fn parse_yaml_block_disable() {
-        let src = "# vynil-lint-disable package/foo\nkey: value\n# vynil-lint-enable package/foo\nother: value\n";
+        let src =
+            "# vynil-lint-disable package/foo\nkey: value\n# vynil-lint-enable package/foo\nother: value\n";
         let map = parse_inline_disables(src);
         assert!(!map.contains_key(&1));
         assert!(map.get(&2).is_some_and(|s| s.contains("package/foo")));
