@@ -188,18 +188,28 @@ pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
 }
 
 /// Parse comma-separated rule IDs from a string.
+/// Each comma-separated segment contributes only its first whitespace token as a rule ID.
+/// The first segment whose token does not contain '/' is treated as the start of a free-text
+/// comment and stops parsing — this allows trailing explanations such as:
+///   `rhai/foo, rhai/bar  ← reason why`
 fn parse_rules(s: &str) -> HashSet<String> {
-    s.split(',')
-        .map(|r| r.trim())
-        .filter(|r| !r.is_empty())
-        .map(|r| {
-            // Remove closing patterns if present
-            r.trim_end_matches("--}}")
-                .trim_end_matches("*/")
-                .trim()
-                .to_string()
-        })
-        .collect()
+    let mut rules = HashSet::new();
+    for part in s.split(',') {
+        // Take only the first whitespace token; the rest may be a trailing comment
+        let raw = part.trim().split_whitespace().next().unwrap_or("");
+        // Strip HBS/block-comment closing markers that may appear without a preceding space
+        let token = raw.trim_end_matches("--}}").trim_end_matches("*/").trim();
+        if token.is_empty() {
+            continue;
+        }
+        if token.contains('/') {
+            rules.insert(token.to_string());
+        } else {
+            // Non-rule token signals start of free-text comment — stop here
+            break;
+        }
+    }
+    rules
 }
 
 #[cfg(test)]
@@ -308,6 +318,38 @@ mod tests {
         let map = parse_inline_disables(src);
         assert!(map.contains_key(&1));
         assert!(map[&1].contains("rhai/unused-variable"));
+    }
+
+    #[test]
+    fn inline_disable_with_trailing_comment() {
+        let src = "catch {} // vynil-lint-disable rhai/empty-catch ici c'est paris\n";
+        let map = parse_inline_disables(src);
+        assert!(map.get(&1).is_some_and(|s| s.contains("rhai/empty-catch")));
+    }
+
+    #[test]
+    fn inline_disable_multi_rules_with_trailing_comment() {
+        let src = "x; // vynil-lint-disable rhai/foo, rhai/bar reason here\n";
+        let map = parse_inline_disables(src);
+        let set = map.get(&1).expect("line 1 should have disables");
+        assert!(set.contains("rhai/foo"));
+        assert!(set.contains("rhai/bar"));
+    }
+
+    #[test]
+    fn inline_disable_comment_with_comma_stops_at_non_rule() {
+        let src = "x; // vynil-lint-disable rhai/foo this is, not a rule\n";
+        let map = parse_inline_disables(src);
+        let set = map.get(&1).expect("line 1 should have disables");
+        assert!(set.contains("rhai/foo"));
+        assert_eq!(set.len(), 1, "non-rule tokens must not be added as rules");
+    }
+
+    #[test]
+    fn hbs_inline_disable_with_trailing_comment() {
+        let src = "{{foo}}{{!-- vynil-lint-disable hbs/unknown-helper legacy helper --}}\n";
+        let map = parse_inline_disables(src);
+        assert!(map.get(&1).is_some_and(|s| s.contains("hbs/unknown-helper")));
     }
 
     #[test]
