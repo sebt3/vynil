@@ -974,6 +974,7 @@ resources:
                 app_version: None,
                 usage: VynilPackageType::Tenant,
                 features: vec![],
+                backup_affinity: None,
             },
             requirements,
             recommandations: None,

@@ -76,6 +76,10 @@ impl K8sObjectMock {
     pub fn wait_for(&mut self, _condition: DynObjCondition, _timeout: i64) -> RhaiRes<()> {
         Ok(())
     }
+
+    pub fn original_kind(&mut self) -> String {
+        self.get_kind()
+    }
 }
 
 
@@ -1337,4 +1341,15 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
         .register_get("metadata", K8sJukeBoxMock::get_metadata)
         .register_get("spec", K8sJukeBoxMock::get_spec)
         .register_get("status", K8sJukeBoxMock::get_status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn k8sobjectmock_original_kind_exists() {
+        let mut obj = K8sObjectMock { obj: rhai::Dynamic::UNIT, kind: "Pod".to_string() };
+        let _: String = obj.original_kind();
+    }
 }
