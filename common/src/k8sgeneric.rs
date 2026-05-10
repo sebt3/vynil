@@ -929,30 +929,40 @@ impl K8sGeneric {
     }
 }
 
+#[macro_export]
+macro_rules! register_k8s_object {
+    ($engine:expr, $type:ty) => {{
+        let _delete:             fn(&mut $type) -> $crate::RhaiRes<()>                          = <$type>::rhai_delete;
+        let _wait_deleted:       fn(&mut $type, i64) -> $crate::RhaiRes<()>                     = <$type>::rhai_wait_deleted;
+        let _get_kind:           fn(&mut $type) -> String                                       = <$type>::get_kind;
+        let _original_kind:      fn(&mut $type) -> String                                       = <$type>::original_kind;
+        let _get_metadata:       fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>               = <$type>::get_metadata;
+        let _wait_condition:     fn(&mut $type, String, i64) -> $crate::RhaiRes<()>             = <$type>::wait_condition;
+        let _wait_status:        fn(&mut $type, String, i64) -> $crate::RhaiRes<()>             = <$type>::wait_status;
+        let _wait_status_prop:   fn(&mut $type, String, i64) -> $crate::RhaiRes<()>             = <$type>::wait_status_prop;
+        let _wait_status_string: fn(&mut $type, String, String, i64) -> $crate::RhaiRes<()>    = <$type>::wait_status_string;
+
+        $engine
+            .register_type_with_name::<$type>("K8sObject")
+            .register_get("kind",              _get_kind)
+            .register_get("original_kind",     _original_kind)
+            .register_get("metadata",          _get_metadata)
+            .register_fn("delete",             _delete)
+            .register_fn("wait_condition",     _wait_condition)
+            .register_fn("wait_status",        _wait_status)
+            .register_fn("wait_status_prop",   _wait_status_prop)
+            .register_fn("wait_status_string", _wait_status_string)
+            .register_fn("wait_deleted",       _wait_deleted)
+    }};
+}
+
 pub fn k8sgeneric_rhai_register(engine: &mut Engine) {
     engine
         .register_type_with_name::<DynamicObject>("DynamicObject")
         .register_get("data", |obj: &mut DynamicObject| -> Dynamic {
             Dynamic::from(obj.data.clone())
         });
-    engine
-        .register_type_with_name::<K8sObject>("K8sObject")
-        .register_get("kind", K8sObject::get_kind)
-        .register_get("original_kind", K8sObject::original_kind)
-        .register_get("metadata", K8sObject::get_metadata)
-        .register_fn("delete", K8sObject::rhai_delete)
-        .register_fn("wait_condition", K8sObject::wait_condition)
-        .register_fn("wait_status", K8sObject::wait_status)
-        .register_fn("wait_status_prop", K8sObject::wait_status_prop)
-        .register_fn("wait_status_string", K8sObject::wait_status_string)
-        .register_fn("wait_deleted", K8sObject::rhai_wait_deleted)
-        /*.register_fn("wait_for", |context: NativeCallContext, k8sobj: &mut K8sObject, fnp: FnPtr, timeout: i64| {
-            let condition = Box::new(move |obj: &DynamicObject| -> RhaiRes<bool> {
-                fnp.call_within_context(&context, (obj.clone(),))
-            });
-            tracing::warn!("wait_for");
-            k8sobj.wait_for(condition, timeout)
-        })*/;
+    register_k8s_object!(engine, K8sObject);
     engine
         .register_type_with_name::<K8sGeneric>("K8sGeneric")
         .register_fn("k8s_resource", K8sGeneric::new_global)
@@ -972,4 +982,15 @@ pub fn k8sgeneric_rhai_register(engine: &mut Engine) {
         .register_fn("apply", K8sGeneric::rhai_apply)
         .register_fn("exist", K8sGeneric::rhai_exist)
         .register_get("scope", K8sGeneric::rhai_get_scope);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_k8s_object_compiles_for_k8sobject() {
+        let mut engine = rhai::Engine::new();
+        register_k8s_object!(engine, K8sObject);
+    }
 }

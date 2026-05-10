@@ -1,4 +1,4 @@
-use crate::RhaiRes;
+use crate::{register_k8s_object, RhaiRes};
 use kube::{api::DynamicObject, runtime::wait::Condition};
 use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
 use serde::{Deserialize, Serialize};
@@ -1143,17 +1143,7 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
         .register_get("data", |obj: &mut DynamicObject| -> Dynamic {
             Dynamic::from(obj.data.clone())
         });
-    engine
-        .register_type_with_name::<K8sObjectMock>("K8sObject")
-        .register_get("kind", K8sObjectMock::get_kind)
-        .register_get("original_kind", K8sObjectMock::get_kind)
-        .register_get("metadata", K8sObjectMock::get_metadata)
-        .register_fn("delete", K8sObjectMock::rhai_delete)
-        .register_fn("wait_condition", K8sObjectMock::wait_condition)
-        .register_fn("wait_status", K8sObjectMock::wait_status)
-        .register_fn("wait_status_prop", K8sObjectMock::wait_status_prop)
-        .register_fn("wait_status_string", K8sObjectMock::wait_status_string)
-        .register_fn("wait_deleted", K8sObjectMock::rhai_wait_deleted);
+    register_k8s_object!(engine, K8sObjectMock);
     engine
         .register_type_with_name::<K8sGenericMock>("K8sGeneric")
         .register_fn("k8s_resource", new_global)
@@ -1351,5 +1341,11 @@ mod tests {
     fn k8sobjectmock_original_kind_exists() {
         let mut obj = K8sObjectMock { obj: rhai::Dynamic::UNIT, kind: "Pod".to_string() };
         let _: String = obj.original_kind();
+    }
+
+    #[test]
+    fn register_k8s_object_mock_compiles() {
+        let mut engine = rhai::Engine::new();
+        register_k8s_object!(engine, K8sObjectMock);
     }
 }
