@@ -956,6 +956,46 @@ macro_rules! register_k8s_object {
     }};
 }
 
+#[macro_export]
+macro_rules! register_k8s_generic {
+    ($engine:expr, $type:ty, $obj_type:ty,
+     $new_global:expr, $new_ns:expr, $new_group_ns:expr) => {{
+        let _scope:        fn(&mut $type) -> String                                        = <$type>::rhai_get_scope;
+        let _exist:        fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>                = <$type>::rhai_exist;
+        let _list:         fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>                = <$type>::rhai_list;
+        let _list_labels:  fn(&mut $type, String) -> $crate::RhaiRes<rhai::Dynamic>        = <$type>::rhai_list_labels;
+        let _list_meta:    fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>                = <$type>::rhai_list_meta;
+        let _get:          fn(&mut $type, String) -> $crate::RhaiRes<rhai::Dynamic>        = <$type>::rhai_get;
+        let _get_meta:     fn(&mut $type, String) -> $crate::RhaiRes<rhai::Dynamic>        = <$type>::rhai_get_meta;
+        let _get_obj:      fn(&mut $type, String) -> $crate::RhaiRes<$obj_type>            = <$type>::rhai_get_obj;
+        let _delete:       fn(&mut $type, String) -> $crate::RhaiRes<()>                   = <$type>::rhai_delete;
+        let _create:       fn(&mut $type, rhai::Dynamic) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_create;
+        let _replace:      fn(&mut $type, String, rhai::Dynamic) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_replace;
+        let _patch:        fn(&mut $type, String, rhai::Dynamic) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_patch;
+        let _apply:        fn(&mut $type, String, rhai::Dynamic) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_apply;
+
+        $engine
+            .register_type_with_name::<$type>("K8sGeneric")
+            .register_fn("k8s_resource",         $new_global)
+            .register_fn("k8s_resource",         $new_ns)
+            .register_fn("k8s_resource",         $new_group_ns)
+            .register_fn("list",                 _list)
+            .register_fn("list",                 _list_labels)
+            .register_fn("update_k8s_crd_cache", update_cache)
+            .register_fn("list_meta",            _list_meta)
+            .register_fn("get",                  _get)
+            .register_fn("get_meta",             _get_meta)
+            .register_fn("get_obj",              _get_obj)
+            .register_fn("delete",               _delete)
+            .register_fn("create",               _create)
+            .register_fn("replace",              _replace)
+            .register_fn("patch",                _patch)
+            .register_fn("apply",                _apply)
+            .register_fn("exist",                _exist)
+            .register_get("scope",               _scope)
+    }};
+}
+
 pub fn k8sgeneric_rhai_register(engine: &mut Engine) {
     engine
         .register_type_with_name::<DynamicObject>("DynamicObject")
@@ -963,25 +1003,8 @@ pub fn k8sgeneric_rhai_register(engine: &mut Engine) {
             Dynamic::from(obj.data.clone())
         });
     register_k8s_object!(engine, K8sObject);
-    engine
-        .register_type_with_name::<K8sGeneric>("K8sGeneric")
-        .register_fn("k8s_resource", K8sGeneric::new_global)
-        .register_fn("k8s_resource", K8sGeneric::new_ns)
-        .register_fn("k8s_resource", K8sGeneric::new_group_ns)
-        .register_fn("list", K8sGeneric::rhai_list)
-        .register_fn("list", K8sGeneric::rhai_list_labels)
-        .register_fn("update_k8s_crd_cache", update_cache)
-        .register_fn("list_meta", K8sGeneric::rhai_list_meta)
-        .register_fn("get", K8sGeneric::rhai_get)
-        .register_fn("get_meta", K8sGeneric::rhai_get_meta)
-        .register_fn("get_obj", K8sGeneric::rhai_get_obj)
-        .register_fn("delete", K8sGeneric::rhai_delete)
-        .register_fn("create", K8sGeneric::rhai_create)
-        .register_fn("replace", K8sGeneric::rhai_replace)
-        .register_fn("patch", K8sGeneric::rhai_patch)
-        .register_fn("apply", K8sGeneric::rhai_apply)
-        .register_fn("exist", K8sGeneric::rhai_exist)
-        .register_get("scope", K8sGeneric::rhai_get_scope);
+    register_k8s_generic!(engine, K8sGeneric, K8sObject,
+        K8sGeneric::new_global, K8sGeneric::new_ns, K8sGeneric::new_group_ns);
 }
 
 #[cfg(test)]
@@ -992,5 +1015,12 @@ mod tests {
     fn register_k8s_object_compiles_for_k8sobject() {
         let mut engine = rhai::Engine::new();
         register_k8s_object!(engine, K8sObject);
+    }
+
+    #[test]
+    fn register_k8s_generic_compiles_for_real() {
+        let mut engine = rhai::Engine::new();
+        register_k8s_generic!(engine, K8sGeneric, K8sObject,
+            K8sGeneric::new_global, K8sGeneric::new_ns, K8sGeneric::new_group_ns);
     }
 }

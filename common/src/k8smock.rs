@@ -1,4 +1,4 @@
-use crate::{register_k8s_object, register_k8s_raw, RhaiRes};
+use crate::{register_k8s_generic, register_k8s_object, register_k8s_raw, RhaiRes};
 use kube::{api::DynamicObject, runtime::wait::Condition};
 use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
 use serde::{Deserialize, Serialize};
@@ -1144,25 +1144,7 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
             Dynamic::from(obj.data.clone())
         });
     register_k8s_object!(engine, K8sObjectMock);
-    engine
-        .register_type_with_name::<K8sGenericMock>("K8sGeneric")
-        .register_fn("k8s_resource", new_global)
-        .register_fn("k8s_resource", new_ns)
-        .register_fn("k8s_resource", new_group_ns)
-        .register_fn("list", K8sGenericMock::rhai_list)
-        .register_fn("list", K8sGenericMock::rhai_list_labels)
-        .register_fn("update_k8s_crd_cache", update_cache)
-        .register_fn("list_meta", K8sGenericMock::rhai_list_meta)
-        .register_fn("get", K8sGenericMock::rhai_get)
-        .register_fn("get_meta", K8sGenericMock::rhai_get_meta)
-        .register_fn("get_obj", K8sGenericMock::rhai_get_obj)
-        .register_fn("delete", K8sGenericMock::rhai_delete)
-        .register_fn("create", K8sGenericMock::rhai_create)
-        .register_fn("replace", K8sGenericMock::rhai_replace)
-        .register_fn("patch", K8sGenericMock::rhai_patch)
-        .register_fn("apply", K8sGenericMock::rhai_apply)
-        .register_fn("exist", K8sGenericMock::rhai_exist)
-        .register_get("scope", K8sGenericMock::rhai_get_scope);
+    register_k8s_generic!(engine, K8sGenericMock, K8sObjectMock, new_global, new_ns, new_group_ns);
 
     // ── K8sRaw mock ─────────────────────────────────────────────────────
     register_k8s_raw!(engine, K8sRawMock, K8sRawMock::new);
@@ -1348,5 +1330,21 @@ mod tests {
     fn register_k8s_raw_mock_compiles() {
         let mut engine = rhai::Engine::new();
         register_k8s_raw!(engine, K8sRawMock, K8sRawMock::new);
+    }
+
+    #[test]
+    fn register_k8s_generic_mock_compiles() {
+        use std::sync::{Arc, Mutex};
+        let mocks: Arc<Mutex<Vec<rhai::Dynamic>>> = Arc::new(Mutex::new(vec![]));
+        let created: Arc<Mutex<Vec<rhai::Dynamic>>> = Arc::new(Mutex::new(vec![]));
+        let m1 = mocks.clone(); let c1 = created.clone();
+        let new_global = move |name: String| K8sGenericMock::new_global(m1.clone(), name, c1.clone());
+        let m2 = mocks.clone(); let c2 = created.clone();
+        let new_ns = move |n: String, ns: String| K8sGenericMock::new_ns(m2.clone(), n, ns, c2.clone());
+        let m3 = mocks.clone(); let c3 = created.clone();
+        let new_group_ns = move |a: String, n: String, ns: String|
+            K8sGenericMock::new_group_ns(m3.clone(), a, n, ns, c3.clone());
+        let mut engine = rhai::Engine::new();
+        register_k8s_generic!(engine, K8sGenericMock, K8sObjectMock, new_global, new_ns, new_group_ns);
     }
 }
