@@ -63,7 +63,7 @@ pub struct Parameters {
 
 fn expected_dirs(pkg_type: &VynilPackageType) -> &[&str] {
     match pkg_type {
-        VynilPackageType::System => &["systems", "crds", "scripts"],
+        VynilPackageType::System => &["systems", "crds", "scripts", "handlebars"],
         VynilPackageType::Service => &[
             "vitals",
             "scalables",
@@ -404,6 +404,7 @@ fn scan_rhai_files_for_values(
                 && let Ok(source) = std::fs::read_to_string(&path)
             {
                 hbs_checker.scan_rhai_for_values(&source);
+                hbs_checker.scan_rhai_for_partials(&source);
             }
         }
     }

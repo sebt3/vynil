@@ -21,6 +21,7 @@ const KNOWN_HBS_ROOTS: &[&str] = &[
     "tenant",
     "system",
     "service",
+    "namespace",
 ];
 
 pub struct HbsChecker<'a> {
@@ -215,6 +216,19 @@ impl<'a> HbsChecker<'a> {
                 .collect();
             if !key.is_empty() {
                 self.used_values.insert(key);
+            }
+        }
+    }
+
+    pub fn scan_rhai_for_partials(&mut self, source: &str) {
+        for part in source.split("{{>").skip(1) {
+            let name: String = part
+                .trim_start_matches(|c: char| c.is_whitespace())
+                .chars()
+                .take_while(|c| !c.is_whitespace() && *c != '}')
+                .collect();
+            if !name.is_empty() {
+                self.used_partials.insert(name);
             }
         }
     }

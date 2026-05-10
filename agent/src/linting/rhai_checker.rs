@@ -740,6 +740,7 @@ fn check_unused_parameters(
         let mut used_params: HashSet<String> = HashSet::new();
         collect_used_vars_stmts(fn_def.body.statements(), &mut used_params);
 
+        let fn_line = fn_def.body.position().line();
         for param_name in &fn_def.params {
             let param_str = param_name.to_string();
             if !param_str.starts_with('_')
@@ -751,7 +752,7 @@ fn check_unused_parameters(
                     rule: "rhai/unused-parameter".to_string(),
                     level,
                     file: file.to_path_buf(),
-                    line: None,
+                    line: fn_line,
                     message: format!(
                         "Parameter `{}` in function `{}` is never used",
                         param_str, fn_def.name
@@ -806,15 +807,20 @@ fn check_wrong_package_type(ast: &AST, file: &Path, pkg: &VynilPackageSource) ->
         return findings;
     }
 
+    // Context builder hooks in files/ are explicitly allowed to work with tenant data
+    if file.starts_with("files/") {
+        return findings;
+    }
+
     ast.walk(&mut |nodes: &[ASTNode]| {
-        if let Some(ASTNode::Expr(Expr::Variable(var_data, _, _))) = nodes.last() {
+        if let Some(ASTNode::Expr(Expr::Variable(var_data, _, pos))) = nodes.last() {
             let (_, name, _, _) = &**var_data;
             if *name == "tenant" {
                 findings.push(LintFinding {
                     rule: "rhai/wrong-package-type".to_string(),
                     level: LintLevel::Warn,
                     file: file.to_path_buf(),
-                    line: None,
+                    line: pos.line(),
                     message: "System packages cannot access tenant context".to_string(),
                 });
             }
