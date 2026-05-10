@@ -425,29 +425,46 @@ impl K8sGenericMock {
         self.rhai_list()
     }
 
+    fn meta_name(m: &Dynamic) -> Option<String> {
+        let map = m.as_map_ref().ok()?;
+        let meta = map.get("metadata")?.clone();
+        let mm = meta.as_map_ref().ok()?;
+        mm.get("name")?.clone().into_string().ok()
+    }
+
+    fn find_by_name_in(items: &[Dynamic], name: &str) -> Option<Dynamic> {
+        items.iter().find(|m| Self::meta_name(m).as_deref() == Some(name)).cloned()
+    }
+
+    fn find_by_name_in_live(&self, name: &str) -> Option<Dynamic> {
+        let mocks = self.mocks.lock().unwrap();
+        mocks.iter().find(|m| {
+            let Ok(map) = m.as_map_ref() else { return false };
+            let kind_ok = map.get("kind")
+                .and_then(|k| k.clone().into_string().ok())
+                .as_deref() == Some(self.kind.as_str());
+            let meta_dyn = match map.get("metadata").cloned() {
+                Some(v) => v,
+                None => return false,
+            };
+            let Ok(meta) = meta_dyn.as_map_ref() else { return false };
+            let name_ok = meta.get("name")
+                .and_then(|n: &Dynamic| n.clone().into_string().ok())
+                .as_deref() == Some(name);
+            let ns_ok = self.ns.as_ref().map_or(true, |ns| {
+                meta.get("namespace")
+                    .and_then(|n: &Dynamic| n.clone().into_string().ok())
+                    .as_deref() == Some(ns.as_str())
+            });
+            kind_ok && name_ok && ns_ok
+        }).cloned()
+    }
+
     pub fn rhai_get(&mut self, name: String) -> RhaiRes<Dynamic> {
-        let found: Vec<Dynamic> = self
-            .my_mocks
-            .clone()
-            .into_iter()
-            .filter(|m| {
-                m.is_map()
-                    && m.as_map_ref().unwrap().contains_key("metadata")
-                    && m.as_map_ref().unwrap()["metadata"].is_map()
-                    && m.as_map_ref().unwrap()["metadata"]
-                        .as_map_ref()
-                        .unwrap()
-                        .contains_key("name")
-                    && m.as_map_ref().unwrap()["metadata"].as_map_ref().unwrap()["name"].is_string()
-                    && m.as_map_ref().unwrap()["metadata"].as_map_ref().unwrap()["name"]
-                        .clone()
-                        .into_string()
-                        .unwrap()
-                        == name
-            })
-            .collect();
-        if !found.is_empty() {
-            Ok(found[0].clone())
+        if let Some(obj) = Self::find_by_name_in(&self.my_mocks, &name)
+            .or_else(|| self.find_by_name_in_live(&name))
+        {
+            Ok(obj)
         } else {
             Err(format!("Failed to find {} {name} in the Mock database", self.kind).into())
         }
@@ -458,31 +475,10 @@ impl K8sGenericMock {
     }
 
     pub fn rhai_get_obj(&mut self, name: String) -> RhaiRes<K8sObjectMock> {
-        let found: Vec<Dynamic> = self
-            .my_mocks
-            .clone()
-            .into_iter()
-            .filter(|m| {
-                m.is_map()
-                    && m.as_map_ref().unwrap().contains_key("metadata")
-                    && m.as_map_ref().unwrap()["metadata"].is_map()
-                    && m.as_map_ref().unwrap()["metadata"]
-                        .as_map_ref()
-                        .unwrap()
-                        .contains_key("name")
-                    && m.as_map_ref().unwrap()["metadata"].as_map_ref().unwrap()["name"].is_string()
-                    && m.as_map_ref().unwrap()["metadata"].as_map_ref().unwrap()["name"]
-                        .clone()
-                        .into_string()
-                        .unwrap()
-                        == name
-            })
-            .collect();
-        if !found.is_empty() {
-            Ok(K8sObjectMock {
-                obj: found[0].clone(),
-                kind: self.kind.clone(),
-            })
+        if let Some(obj) = Self::find_by_name_in(&self.my_mocks, &name)
+            .or_else(|| self.find_by_name_in_live(&name))
+        {
+            Ok(K8sObjectMock { obj, kind: self.kind.clone() })
         } else {
             Err(format!("Failed to find {} {name} in the Mock database", self.kind).into())
         }
