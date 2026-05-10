@@ -1,4 +1,4 @@
-use crate::{register_k8s_generic, register_k8s_object, register_k8s_raw, RhaiRes};
+use crate::{RhaiRes, register_k8s_generic, register_k8s_object, register_k8s_raw};
 use kube::{api::DynamicObject, runtime::wait::Condition};
 use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
 use serde::{Deserialize, Serialize};
@@ -437,36 +437,49 @@ impl K8sGenericMock {
     }
 
     fn find_by_name_in(items: &[Dynamic], name: &str) -> Option<Dynamic> {
-        items.iter().find(|m| Self::meta_name(m).as_deref() == Some(name)).cloned()
+        items
+            .iter()
+            .find(|m| Self::meta_name(m).as_deref() == Some(name))
+            .cloned()
     }
 
     fn find_by_name_in_live(&self, name: &str) -> Option<Dynamic> {
         let mocks = self.mocks.lock().unwrap();
-        mocks.iter().find(|m| {
-            let Ok(map) = m.as_map_ref() else { return false };
-            let kind_ok = map.get("kind")
-                .and_then(|k| k.clone().into_string().ok())
-                .as_deref() == Some(self.kind.as_str());
-            let meta_dyn = match map.get("metadata").cloned() {
-                Some(v) => v,
-                None => return false,
-            };
-            let Ok(meta) = meta_dyn.as_map_ref() else { return false };
-            let name_ok = meta.get("name")
-                .and_then(|n: &Dynamic| n.clone().into_string().ok())
-                .as_deref() == Some(name);
-            let ns_ok = self.ns.as_ref().map_or(true, |ns| {
-                meta.get("namespace")
+        mocks
+            .iter()
+            .find(|m| {
+                let Ok(map) = m.as_map_ref() else { return false };
+                let kind_ok = map
+                    .get("kind")
+                    .and_then(|k| k.clone().into_string().ok())
+                    .as_deref()
+                    == Some(self.kind.as_str());
+                let meta_dyn = match map.get("metadata").cloned() {
+                    Some(v) => v,
+                    None => return false,
+                };
+                let Ok(meta) = meta_dyn.as_map_ref() else {
+                    return false;
+                };
+                let name_ok = meta
+                    .get("name")
                     .and_then(|n: &Dynamic| n.clone().into_string().ok())
-                    .as_deref() == Some(ns.as_str())
-            });
-            kind_ok && name_ok && ns_ok
-        }).cloned()
+                    .as_deref()
+                    == Some(name);
+                let ns_ok = self.ns.as_ref().is_none_or(|ns| {
+                    meta.get("namespace")
+                        .and_then(|n: &Dynamic| n.clone().into_string().ok())
+                        .as_deref()
+                        == Some(ns.as_str())
+                });
+                kind_ok && name_ok && ns_ok
+            })
+            .cloned()
     }
 
     pub fn rhai_get(&mut self, name: String) -> RhaiRes<Dynamic> {
-        if let Some(obj) = Self::find_by_name_in(&self.my_mocks, &name)
-            .or_else(|| self.find_by_name_in_live(&name))
+        if let Some(obj) =
+            Self::find_by_name_in(&self.my_mocks, &name).or_else(|| self.find_by_name_in_live(&name))
         {
             Ok(obj)
         } else {
@@ -479,10 +492,13 @@ impl K8sGenericMock {
     }
 
     pub fn rhai_get_obj(&mut self, name: String) -> RhaiRes<K8sObjectMock> {
-        if let Some(obj) = Self::find_by_name_in(&self.my_mocks, &name)
-            .or_else(|| self.find_by_name_in_live(&name))
+        if let Some(obj) =
+            Self::find_by_name_in(&self.my_mocks, &name).or_else(|| self.find_by_name_in_live(&name))
         {
-            Ok(K8sObjectMock { obj, kind: self.kind.clone() })
+            Ok(K8sObjectMock {
+                obj,
+                kind: self.kind.clone(),
+            })
         } else {
             Err(format!("Failed to find {} {name} in the Mock database", self.kind).into())
         }
@@ -1144,7 +1160,14 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
             Dynamic::from(obj.data.clone())
         });
     register_k8s_object!(engine, K8sObjectMock);
-    register_k8s_generic!(engine, K8sGenericMock, K8sObjectMock, new_global, new_ns, new_group_ns);
+    register_k8s_generic!(
+        engine,
+        K8sGenericMock,
+        K8sObjectMock,
+        new_global,
+        new_ns,
+        new_group_ns
+    );
 
     // ── K8sRaw mock ─────────────────────────────────────────────────────
     register_k8s_raw!(engine, K8sRawMock, K8sRawMock::new);
@@ -1316,7 +1339,10 @@ mod tests {
 
     #[test]
     fn k8sobjectmock_original_kind_exists() {
-        let mut obj = K8sObjectMock { obj: rhai::Dynamic::UNIT, kind: "Pod".to_string() };
+        let mut obj = K8sObjectMock {
+            obj: rhai::Dynamic::UNIT,
+            kind: "Pod".to_string(),
+        };
         let _: String = obj.original_kind();
     }
 
@@ -1337,14 +1363,25 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let mocks: Arc<Mutex<Vec<rhai::Dynamic>>> = Arc::new(Mutex::new(vec![]));
         let created: Arc<Mutex<Vec<rhai::Dynamic>>> = Arc::new(Mutex::new(vec![]));
-        let m1 = mocks.clone(); let c1 = created.clone();
+        let m1 = mocks.clone();
+        let c1 = created.clone();
         let new_global = move |name: String| K8sGenericMock::new_global(m1.clone(), name, c1.clone());
-        let m2 = mocks.clone(); let c2 = created.clone();
+        let m2 = mocks.clone();
+        let c2 = created.clone();
         let new_ns = move |n: String, ns: String| K8sGenericMock::new_ns(m2.clone(), n, ns, c2.clone());
-        let m3 = mocks.clone(); let c3 = created.clone();
-        let new_group_ns = move |a: String, n: String, ns: String|
-            K8sGenericMock::new_group_ns(m3.clone(), a, n, ns, c3.clone());
+        let m3 = mocks.clone();
+        let c3 = created.clone();
+        let new_group_ns = move |a: String, n: String, ns: String| {
+            K8sGenericMock::new_group_ns(m3.clone(), a, n, ns, c3.clone())
+        };
         let mut engine = rhai::Engine::new();
-        register_k8s_generic!(engine, K8sGenericMock, K8sObjectMock, new_global, new_ns, new_group_ns);
+        register_k8s_generic!(
+            engine,
+            K8sGenericMock,
+            K8sObjectMock,
+            new_global,
+            new_ns,
+            new_group_ns
+        );
     }
 }
