@@ -100,11 +100,33 @@ impl K8sRaw {
     }
 }
 
+#[macro_export]
+macro_rules! register_k8s_raw {
+    ($engine:expr, $type:ty, $new:expr) => {{
+        let _get_url:           fn(&mut $type, String) -> $crate::RhaiRes<rhai::Dynamic> = <$type>::rhai_get_url;
+        let _get_version:       fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>         = <$type>::rhai_get_api_version;
+        let _get_api_resources: fn(&mut $type) -> $crate::RhaiRes<rhai::Dynamic>         = <$type>::rhai_get_api_resources;
+
+        $engine
+            .register_type_with_name::<$type>("K8sRaw")
+            .register_fn("new_k8s_raw",        $new)
+            .register_fn("get_url",            _get_url)
+            .register_fn("get_cluster_version",_get_version)
+            .register_fn("get_api_resources",  _get_api_resources)
+    }};
+}
+
 pub fn k8sraw_rhai_register(engine: &mut Engine) {
-    engine
-        .register_type_with_name::<K8sRaw>("K8sRaw")
-        .register_fn("new_k8s_raw", K8sRaw::new)
-        .register_fn("get_url", K8sRaw::rhai_get_url)
-        .register_fn("get_api_resources", K8sRaw::rhai_get_api_resources)
-        .register_fn("get_cluster_version", K8sRaw::rhai_get_api_version);
+    register_k8s_raw!(engine, K8sRaw, K8sRaw::new);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_k8s_raw_compiles_for_real() {
+        let mut engine = rhai::Engine::new();
+        register_k8s_raw!(engine, K8sRaw, K8sRaw::new);
+    }
 }

@@ -1,4 +1,4 @@
-use crate::{register_k8s_object, RhaiRes};
+use crate::{register_k8s_object, register_k8s_raw, RhaiRes};
 use kube::{api::DynamicObject, runtime::wait::Condition};
 use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
 use serde::{Deserialize, Serialize};
@@ -1165,12 +1165,7 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
         .register_get("scope", K8sGenericMock::rhai_get_scope);
 
     // ── K8sRaw mock ─────────────────────────────────────────────────────
-    engine
-        .register_type_with_name::<K8sRawMock>("K8sRaw")
-        .register_fn("new_k8s_raw", K8sRawMock::new)
-        .register_fn("get_url", K8sRawMock::rhai_get_url)
-        .register_fn("get_api_resources", K8sRawMock::rhai_get_api_resources)
-        .register_fn("get_cluster_version", K8sRawMock::rhai_get_api_version);
+    register_k8s_raw!(engine, K8sRawMock, K8sRawMock::new);
 
     // ── K8sWorkload mocks ───────────────────────────────────────────────
     // All four workload types share K8sWorkloadMock which extracts
@@ -1347,5 +1342,11 @@ mod tests {
     fn register_k8s_object_mock_compiles() {
         let mut engine = rhai::Engine::new();
         register_k8s_object!(engine, K8sObjectMock);
+    }
+
+    #[test]
+    fn register_k8s_raw_mock_compiles() {
+        let mut engine = rhai::Engine::new();
+        register_k8s_raw!(engine, K8sRawMock, K8sRawMock::new);
     }
 }
