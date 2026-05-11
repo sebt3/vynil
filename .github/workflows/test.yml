@@ -16,7 +16,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -33,7 +33,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -50,7 +50,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
