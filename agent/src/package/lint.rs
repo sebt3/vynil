@@ -284,6 +284,100 @@ fn check_manifest_fields(
         });
     }
     check_options(package, manifest_path, collector);
+    check_prerelease_versions(package, manifest_path, collector);
+}
+
+fn is_prerelease(version: &str) -> bool {
+    let lower = version.to_lowercase();
+    lower.contains("alpha") || lower.contains("beta") || lower.contains("rc")
+}
+
+fn find_line_with_key(manifest_path: &std::path::Path, key: &str) -> Option<usize> {
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    let search = format!("{}:", key);
+    content.lines().enumerate().find_map(|(i, line)| {
+        if line.trim_start().starts_with(&search) { Some(i + 1) } else { None }
+    })
+}
+
+fn find_image_tag_line(manifest_path: &std::path::Path, image_name: &str) -> Option<usize> {
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    let mut in_images = false;
+    let mut images_indent = 0usize;
+    let mut in_image = false;
+    let mut image_indent = 0usize;
+    let image_key = format!("{}:", image_name);
+
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+
+        if !in_images {
+            if trimmed == "images:" {
+                in_images = true;
+                images_indent = indent;
+            }
+        } else if !in_image {
+            if indent <= images_indent {
+                break;
+            }
+            if trimmed.starts_with(&image_key) {
+                in_image = true;
+                image_indent = indent;
+            }
+        } else {
+            if indent <= image_indent {
+                break;
+            }
+            if trimmed.starts_with("tag:") {
+                return Some(i + 1);
+            }
+        }
+    }
+    None
+}
+
+fn check_prerelease_versions(
+    package: &VynilPackageSource,
+    manifest_path: &std::path::Path,
+    collector: &mut crate::linting::LintResultCollector,
+) {
+    let manifest = PathBuf::from("package.yaml");
+    if let Some(app_version) = &package.metadata.app_version {
+        if is_prerelease(app_version) {
+            collector.add(crate::linting::LintFinding {
+                rule: "package/prerelease-version".to_string(),
+                level: crate::linting::LintLevel::Warn,
+                file: manifest.clone(),
+                line: find_line_with_key(manifest_path, "app_version"),
+                message: format!(
+                    "app_version '{}' contains a pre-release marker (alpha/beta/rc)",
+                    app_version
+                ),
+            });
+        }
+    }
+    if let Some(images) = &package.images {
+        for (name, image) in images {
+            if let Some(tag) = &image.tag {
+                if is_prerelease(tag) {
+                    collector.add(crate::linting::LintFinding {
+                        rule: "package/prerelease-version".to_string(),
+                        level: crate::linting::LintLevel::Warn,
+                        file: manifest.clone(),
+                        line: find_image_tag_line(manifest_path, name),
+                        message: format!(
+                            "Image '{}' tag '{}' contains a pre-release marker (alpha/beta/rc)",
+                            name, tag
+                        ),
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn check_options(
@@ -609,6 +703,128 @@ mod tests {
         let mut collector = crate::linting::LintResultCollector::new();
         check_options(&package, std::path::Path::new(""), &mut collector);
         assert!(!collector.has_errors());
+    }
+
+    #[test]
+    fn check_prerelease_versions_clean_app_version_no_warn() {
+        let mut package = make_valid_package();
+        package.metadata.app_version = Some("1.2.3".to_string());
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(!text.contains("prerelease-version"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_alpha_app_version_warns() {
+        let mut package = make_valid_package();
+        package.metadata.app_version = Some("1.0.0-alpha.1".to_string());
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(text.contains("package/prerelease-version"));
+        assert!(text.contains("1.0.0-alpha.1"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_beta_app_version_warns() {
+        let mut package = make_valid_package();
+        package.metadata.app_version = Some("2.0-beta".to_string());
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(text.contains("package/prerelease-version"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_rc_app_version_warns() {
+        let mut package = make_valid_package();
+        package.metadata.app_version = Some("3.1.0-rc2".to_string());
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(text.contains("package/prerelease-version"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_uppercase_beta_warns() {
+        let mut package = make_valid_package();
+        package.metadata.app_version = Some("1.0-BETA".to_string());
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(text.contains("package/prerelease-version"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_none_app_version_no_warn() {
+        let package = make_valid_package();
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(!text.contains("prerelease-version"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_image_tag_alpha_warns() {
+        use common::vynilpackage::Image;
+        let mut package = make_valid_package();
+        let mut images = std::collections::BTreeMap::new();
+        images.insert(
+            "app".to_string(),
+            Image {
+                tag: Some("v1.0-alpha".to_string()),
+                registry: "docker.io".to_string(),
+                repository: "myapp".to_string(),
+            },
+        );
+        package.images = Some(images);
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(text.contains("package/prerelease-version"));
+        assert!(text.contains("app"));
+        assert!(text.contains("v1.0-alpha"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_image_tag_stable_no_warn() {
+        use common::vynilpackage::Image;
+        let mut package = make_valid_package();
+        let mut images = std::collections::BTreeMap::new();
+        images.insert(
+            "app".to_string(),
+            Image {
+                tag: Some("1.25.3".to_string()),
+                registry: "docker.io".to_string(),
+                repository: "myapp".to_string(),
+            },
+        );
+        package.images = Some(images);
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(!text.contains("prerelease-version"));
+    }
+
+    #[test]
+    fn check_prerelease_versions_image_tag_none_no_warn() {
+        use common::vynilpackage::Image;
+        let mut package = make_valid_package();
+        let mut images = std::collections::BTreeMap::new();
+        images.insert(
+            "app".to_string(),
+            Image {
+                tag: None,
+                registry: "docker.io".to_string(),
+                repository: "myapp".to_string(),
+            },
+        );
+        package.images = Some(images);
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(!text.contains("prerelease-version"));
     }
 
     #[test]

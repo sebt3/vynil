@@ -271,17 +271,18 @@ impl<'a> HelperWalker<'a> {
     }
 
     fn walk(&mut self, template: &Template) {
-        Self::walk_template(template, &mut |elem| {
-            self.visit_element(elem);
+        Self::walk_template(template, &mut |elem, line| {
+            self.visit_element(elem, line);
         });
     }
 
     fn walk_template<F>(tpl: &Template, visitor: &mut F)
     where
-        F: FnMut(&TemplateElement),
+        F: FnMut(&TemplateElement, Option<usize>),
     {
-        for elem in &tpl.elements {
-            visitor(elem);
+        for (i, elem) in tpl.elements.iter().enumerate() {
+            let line = tpl.mapping.get(i).map(|m| m.0);
+            visitor(elem, line);
             match elem {
                 TemplateElement::HelperBlock(h) => {
                     if let Some(t) = &h.template {
@@ -301,53 +302,53 @@ impl<'a> HelperWalker<'a> {
         }
     }
 
-    fn visit_element(&mut self, elem: &TemplateElement) {
+    fn visit_element(&mut self, elem: &TemplateElement, line: Option<usize>) {
         match elem {
             TemplateElement::HelperBlock(h) => {
-                self.check_helper(&h.name, &h.params);
-                self.check_image_resource_helper(&h.name, &h.params);
-                self.check_path(&h.name);
+                self.check_helper(&h.name, &h.params, line);
+                self.check_image_resource_helper(&h.name, &h.params, line);
+                self.check_path(&h.name, line);
                 for param in &h.params {
-                    self.check_values_path(param);
-                    self.check_root_var(param);
+                    self.check_values_path(param, line);
+                    self.check_root_var(param, line);
                 }
             }
             TemplateElement::Expression(e) => {
-                self.check_helper(&e.name, &e.params);
-                self.check_values_path(&e.name);
+                self.check_helper(&e.name, &e.params, line);
+                self.check_values_path(&e.name, line);
                 for param in &e.params {
-                    self.check_values_path(param);
-                    self.check_root_var(param);
+                    self.check_values_path(param, line);
+                    self.check_root_var(param, line);
                 }
-                self.check_image_resource_helper(&e.name, &e.params);
-                self.check_path(&e.name);
-                self.check_root_var(&e.name);
+                self.check_image_resource_helper(&e.name, &e.params, line);
+                self.check_path(&e.name, line);
+                self.check_root_var(&e.name, line);
             }
             TemplateElement::HtmlExpression(e) => {
-                self.check_helper(&e.name, &e.params);
-                self.check_values_path(&e.name);
+                self.check_helper(&e.name, &e.params, line);
+                self.check_values_path(&e.name, line);
                 for param in &e.params {
-                    self.check_values_path(param);
-                    self.check_root_var(param);
+                    self.check_values_path(param, line);
+                    self.check_root_var(param, line);
                 }
-                self.check_image_resource_helper(&e.name, &e.params);
-                self.check_path(&e.name);
-                self.check_root_var(&e.name);
+                self.check_image_resource_helper(&e.name, &e.params, line);
+                self.check_path(&e.name, line);
+                self.check_root_var(&e.name, line);
             }
             TemplateElement::DecoratorBlock(d) => {
-                self.check_helper(&d.name, &d.params);
+                self.check_helper(&d.name, &d.params, line);
             }
             TemplateElement::PartialExpression(d) => {
-                self.check_partial(&d.name);
+                self.check_partial(&d.name, line);
             }
             TemplateElement::PartialBlock(d) => {
-                self.check_partial(&d.name);
+                self.check_partial(&d.name, line);
             }
             _ => {}
         }
     }
 
-    fn check_helper(&mut self, name: &Parameter, params: &[Parameter]) {
+    fn check_helper(&mut self, name: &Parameter, params: &[Parameter], line: Option<usize>) {
         if let Parameter::Name(helper_name) = name
             && !NATIVE_HBS_HELPERS.contains(&helper_name.as_str())
         {
@@ -365,7 +366,7 @@ impl<'a> HelperWalker<'a> {
                     rule: "hbs/unknown-helper".to_string(),
                     level,
                     file: self.file.clone(),
-                    line: None,
+                    line,
                     message: format!("Helper `{}` not found", helper_name),
                 });
             }
@@ -374,12 +375,12 @@ impl<'a> HelperWalker<'a> {
         // Check for nested subexpressions
         for param in params {
             if let Parameter::Subexpression(sub) = param {
-                self.visit_element(sub.as_element());
+                self.visit_element(sub.as_element(), line);
             }
         }
     }
 
-    fn check_values_path(&mut self, param: &Parameter) {
+    fn check_values_path(&mut self, param: &Parameter, line: Option<usize>) {
         if let Parameter::Path(path) = param
             && let HbsPath::Relative((segs, _)) = path
             && !segs.is_empty()
@@ -403,14 +404,14 @@ impl<'a> HelperWalker<'a> {
                     rule: "hbs/unknown-value".to_string(),
                     level,
                     file: self.file.clone(),
-                    line: None,
+                    line,
                     message: format!("Unknown value key `{}`", key),
                 });
             }
         }
     }
 
-    fn check_image_resource_helper(&mut self, name: &Parameter, params: &[Parameter]) {
+    fn check_image_resource_helper(&mut self, name: &Parameter, params: &[Parameter], line: Option<usize>) {
         if let Parameter::Name(helper_name) = name {
             let rule = if helper_name == "image_from_ctx" {
                 Some(("hbs/unknown-image", "images"))
@@ -451,7 +452,7 @@ impl<'a> HelperWalker<'a> {
                         rule: rule_name.to_string(),
                         level,
                         file: self.file.clone(),
-                        line: None,
+                        line,
                         message: format!("Unknown {} key `{}`", field_name.trim_end_matches('s'), key),
                     });
                 }
@@ -459,7 +460,7 @@ impl<'a> HelperWalker<'a> {
         }
     }
 
-    fn check_path(&mut self, param: &Parameter) {
+    fn check_path(&mut self, param: &Parameter, line: Option<usize>) {
         if let Parameter::Path(path) = param
             && let HbsPath::Relative((segs, _)) = path
             && !segs.is_empty()
@@ -477,13 +478,13 @@ impl<'a> HelperWalker<'a> {
                 rule: "hbs/wrong-package-type".to_string(),
                 level,
                 file: self.file.clone(),
-                line: None,
+                line,
                 message: "Accessing `tenant` in a System package is not allowed".to_string(),
             });
         }
     }
 
-    fn check_root_var(&mut self, param: &Parameter) {
+    fn check_root_var(&mut self, param: &Parameter, line: Option<usize>) {
         if let Parameter::Path(path) = param
             && let HbsPath::Relative((segs, _)) = path
             && segs.len() >= 2
@@ -501,7 +502,7 @@ impl<'a> HelperWalker<'a> {
                 rule: "hbs/unknown-root-variable".to_string(),
                 level,
                 file: self.file.clone(),
-                line: None,
+                line,
                 message: format!(
                     "Unknown root variable `{}` in template path — expected one of: {}",
                     first,
@@ -511,7 +512,7 @@ impl<'a> HelperWalker<'a> {
         }
     }
 
-    fn check_partial(&mut self, name: &Parameter) {
+    fn check_partial(&mut self, name: &Parameter, line: Option<usize>) {
         let partial_name = match name {
             Parameter::Name(s) => s.clone(),
             Parameter::Literal(v) => v.as_str().unwrap_or("").to_string(),
@@ -532,7 +533,7 @@ impl<'a> HelperWalker<'a> {
                 rule: "hbs/unknown-partial".to_string(),
                 level,
                 file: self.file.clone(),
-                line: None,
+                line,
                 message: format!("Partial `{}` not found", partial_name),
             });
         }
