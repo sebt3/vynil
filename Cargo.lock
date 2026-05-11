@@ -199,7 +199,7 @@ dependencies = [
  "common",
  "env_logger",
  "junit-report",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube",
  "rhai",
  "serde",
@@ -698,7 +698,7 @@ dependencies = [
  "handlebars_misc_helpers",
  "http 1.4.0",
  "indexmap",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube",
  "lazy_static",
  "oci-client",
@@ -2080,6 +2080,18 @@ checksum = "06d9e5e61dd037cdc51da0d7e2b2be10f497478ea7e120d85dad632adb99882b"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "k8s-openapi"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51b326f5219dd55872a72c1b6ddd1b830b8334996c667449c29391d657d78d5e"
+dependencies = [
+ "base64 0.22.1",
+ "jiff",
  "schemars",
  "serde",
  "serde_json",
@@ -2106,7 +2118,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e7bb0b6a46502cc20e4575b6ff401af45cfea150b34ba272a3410b78aa014e"
 dependencies = [
- "k8s-openapi",
+ "k8s-openapi 0.26.1",
  "kube-client",
  "kube-core",
  "kube-derive",
@@ -2133,7 +2145,7 @@ dependencies = [
  "hyper-timeout",
  "hyper-util",
  "jsonpath-rust",
- "k8s-openapi",
+ "k8s-openapi 0.26.1",
  "kube-core",
  "pem",
  "rustls",
@@ -2160,7 +2172,7 @@ dependencies = [
  "form_urlencoded",
  "http 1.4.0",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.26.1",
  "schemars",
  "serde",
  "serde-value",
@@ -2197,7 +2209,7 @@ dependencies = [
  "hashbrown 0.15.5",
  "hostname",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.26.1",
  "kube-client",
  "parking_lot",
  "pin-project",
@@ -2616,7 +2628,7 @@ dependencies = [
  "either",
  "futures",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.27.1",
  "kube",
  "opentelemetry",
  "opentelemetry-otlp",
