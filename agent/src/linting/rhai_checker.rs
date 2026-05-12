@@ -11,6 +11,18 @@ use std::{
 
 const ENTRY_POINT_PATTERNS: &[&str] = &["install.rhai", "delete.rhai", "reconfigure.rhai"];
 
+// (plural, singular) pairs — k8s_resource must be called with the singular kind
+const K8S_RESOURCE_PLURAL_KINDS: &[(&str, &str)] = &[
+    ("Deployments", "Deployment"),
+    ("Endpoints", "Endpoint"),
+    ("Issuers", "Issuer"),
+    ("Namespaces", "Namespace"),
+    ("Nodes", "Node"),
+    ("Secrets", "Secret"),
+    ("Services", "Service"),
+    ("TenantInstances", "TenantInstance"),
+];
+
 const ENTRY_POINT_FUNCTIONS: &[&str] = &["run", "template", "new", "main"];
 
 const FULL_ONLY_FUNCTIONS: &[&str] = &[
@@ -134,6 +146,9 @@ impl<'a> RhaiChecker<'a> {
 
                 let pkg_type_findings = check_wrong_package_type(&ast, file, self.pkg);
                 findings.extend(pkg_type_findings);
+
+                let plural_findings = check_k8s_resource_plural(&ast, file, self.config, &inline_disables);
+                findings.extend(plural_findings);
 
                 let context_findings = check_context_hook_no_return(&ast, file);
                 findings.extend(context_findings);
@@ -864,6 +879,52 @@ fn check_context_hook_no_return(ast: &AST, file: &Path) -> Vec<LintFinding> {
             message: "Context hook must return the context".to_string(),
         });
     }
+
+    findings
+}
+
+fn check_k8s_resource_plural(
+    ast: &AST,
+    file: &Path,
+    config: &LintConfig,
+    inline_disables: &HashMap<usize, HashSet<String>>,
+) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+
+    ast.walk(&mut |nodes: &[ASTNode]| {
+        if let Some(ASTNode::Expr(Expr::FnCall(fn_call, _))) = nodes.last() {
+            if fn_call.name.as_str() == "k8s_resource" {
+                if let Some(Expr::StringConstant(kind, pos)) = fn_call.args.first() {
+                    if let Some((_, singular)) =
+                        K8S_RESOURCE_PLURAL_KINDS.iter().find(|(plural, _)| *plural == kind.as_str())
+                    {
+                        let line = pos.line();
+                        let disabled = line
+                            .and_then(|l| inline_disables.get(&l))
+                            .cloned()
+                            .unwrap_or_default();
+                        if let Some(level) = config.resolve_level(
+                            "rhai/k8s-resource-plural",
+                            file,
+                            LintLevel::Warn,
+                            &disabled,
+                        ) {
+                            findings.push(LintFinding {
+                                rule: "rhai/k8s-resource-plural".to_string(),
+                                level,
+                                file: file.to_path_buf(),
+                                line,
+                                message: format!(
+                                    "`k8s_resource(\"{kind}\", ...)` uses plural kind; use \"{singular}\" instead"
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        true
+    });
 
     findings
 }
@@ -1601,6 +1662,38 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.rule == "rhai/empty-catch"),
             "inline disable should suppress rhai/empty-catch"
+        );
+    }
+
+    #[test]
+    fn k8s_resource_plural_kind_produces_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = r#"let s = k8s_resource("Secrets", "ns").get("my-secret");"#;
+        let findings = checker.check_file(&PathBuf::from("install.rhai"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "rhai/k8s-resource-plural"),
+            "Expected rhai/k8s-resource-plural warning for plural kind"
+        );
+    }
+
+    #[test]
+    fn k8s_resource_singular_kind_no_warning() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = r#"let s = k8s_resource("Secret", "ns").get("my-secret");"#;
+        let findings = checker.check_file(&PathBuf::from("install.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/k8s-resource-plural"),
+            "No warning expected for singular kind"
         );
     }
 }
