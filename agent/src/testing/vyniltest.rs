@@ -135,7 +135,7 @@ impl VynilTest {
                     };
                 }
                 let (passed, message) = if let Some(value) = a.value.clone() {
-                    let matching = selected
+                    let matches: Vec<&Dynamic> = selected
                         .iter()
                         .filter(|d| {
                             let json: serde_json::Value =
@@ -143,7 +143,8 @@ impl VynilTest {
                                     .unwrap_or_default();
                             json_subset_match(&value, &json)
                         })
-                        .count();
+                        .collect();
+                    let matching = matches.len();
                     match &a.matcher {
                         VynilAssertMatch::All => {
                             if matching == total {
@@ -161,7 +162,7 @@ impl VynilTest {
                         }
                         VynilAssertMatch::Exact(n) => {
                             let n = *n as usize;
-                            if matching == n {
+                            if matching == n && total == n {
                                 (true, format!("{matching}/{total} match"))
                             } else {
                                 (false, format!("{matching}/{total} match, expected exactly {n}"))

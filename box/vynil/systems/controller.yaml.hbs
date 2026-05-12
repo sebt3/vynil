@@ -22,7 +22,7 @@ spec:
         maxSkew: 1
         topologyKey: kubernetes.io/hostname
         whenUnsatisfiable: ScheduleAnyway
-      serviceAccountName: {{ins_bug_tance.appslug}}-controller
+      serviceAccountName: {{instance.appslug}}-controller
       containers:
       - name: vynil-controller
         image: {{image_from_ctx this "controller"}}

@@ -318,7 +318,7 @@ fn run(instance, args) {
         cluster_config["prefered_storage"] = sce::get_prefered_sc(scs);
     }
     if ! ("ha" in cluster_config.keys()) {
-        let nodes = k8s_resource("Nodes").list_meta().items.map(|c| c.metadata.name);
+        let nodes = k8s_resource("Node").list_meta().items.map(|c| c.metadata.name);
         cluster_config["ha"] = nodes.len() > 1;
     }
     cluster_config["vynil_namespace"] = args.vynil_namespace;
