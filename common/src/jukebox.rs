@@ -54,10 +54,9 @@ pub enum JukeBoxMaturity {
 )]
 #[kube(
     doc = "Custom resource representing a JukeBox, source of vynil packages",
-    printcolumn = r#"
-    {"name":"schedule", "type":"string", "description":"Update schedule", "jsonPath":".spec.schedule"},
-    {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
-    {"name":"message", "type":"string", "description":"Message", "jsonPath":".status.conditions[?(@.type == 'Updated')].message"}"#
+    printcolumn = r#"{"name":"schedule",    "type":"string", "description":"Update schedule",   "jsonPath":".spec.schedule"}"#,
+    printcolumn = r#"{"name":"last_updated","type":"date",   "description":"Last update date",  "format":"date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"}"#,
+    printcolumn = r#"{"name":"message",     "type":"string", "description":"Message",           "jsonPath":".status.conditions[?(@.type == 'Updated')].message"}"#
 )]
 pub struct JukeBoxSpec {
     /// Source type

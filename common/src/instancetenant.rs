@@ -35,14 +35,13 @@ pub struct InitFrom {
 )]
 #[kube(
     doc = "Custom resource representing an Vynil tenant package installation",
-    printcolumn = r#"
-    {"name":"Juke",   "type":"string", "description":"JukeBox", "jsonPath":".spec.jukebox"},
-    {"name":"cat",    "type":"string", "description":"Category", "jsonPath":".spec.category"},
-    {"name":"pkg",    "type":"string", "description":"Package", "jsonPath":".spec.package"},
-    {"name":"tag",    "type":"string", "description":"Version", "jsonPath":".status.tag"},
-    {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
-    {"name":"stage",  "type":"string", "description":"Stage", "jsonPath":".status.conditions[-1:].type"},
-    {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
+    printcolumn = r#"{"name":"Juke",        "type":"string", "description":"JukeBox",          "jsonPath":".spec.jukebox"}"#,
+    printcolumn = r#"{"name":"cat",         "type":"string", "description":"Category",          "jsonPath":".spec.category"}"#,
+    printcolumn = r#"{"name":"pkg",         "type":"string", "description":"Package",           "jsonPath":".spec.package"}"#,
+    printcolumn = r#"{"name":"tag",         "type":"string", "description":"Version",           "jsonPath":".status.tag"}"#,
+    printcolumn = r#"{"name":"last_updated","type":"date",   "description":"Last update date",  "format":"date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"}"#,
+    printcolumn = r#"{"name":"stage",       "type":"string", "description":"Stage",             "jsonPath":".status.conditions[-1:].type"}"#,
+    printcolumn = r#"{"name":"errors",      "type":"string", "description":"Errors",            "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
 )]
 #[serde(rename_all = "camelCase")]
 pub struct TenantInstanceSpec {
