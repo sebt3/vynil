@@ -296,7 +296,11 @@ fn find_line_with_key(manifest_path: &std::path::Path, key: &str) -> Option<usiz
     let content = std::fs::read_to_string(manifest_path).ok()?;
     let search = format!("{}:", key);
     content.lines().enumerate().find_map(|(i, line)| {
-        if line.trim_start().starts_with(&search) { Some(i + 1) } else { None }
+        if line.trim_start().starts_with(&search) {
+            Some(i + 1)
+        } else {
+            None
+        }
     })
 }
 
@@ -346,35 +350,35 @@ fn check_prerelease_versions(
     collector: &mut crate::linting::LintResultCollector,
 ) {
     let manifest = PathBuf::from("package.yaml");
-    if let Some(app_version) = &package.metadata.app_version {
-        if is_prerelease(app_version) {
-            collector.add(crate::linting::LintFinding {
-                rule: "package/prerelease-version".to_string(),
-                level: crate::linting::LintLevel::Warn,
-                file: manifest.clone(),
-                line: find_line_with_key(manifest_path, "app_version"),
-                message: format!(
-                    "app_version '{}' contains a pre-release marker (alpha/beta/rc)",
-                    app_version
-                ),
-            });
-        }
+    if let Some(app_version) = &package.metadata.app_version
+        && is_prerelease(app_version)
+    {
+        collector.add(crate::linting::LintFinding {
+            rule: "package/prerelease-version".to_string(),
+            level: crate::linting::LintLevel::Warn,
+            file: manifest.clone(),
+            line: find_line_with_key(manifest_path, "app_version"),
+            message: format!(
+                "app_version '{}' contains a pre-release marker (alpha/beta/rc)",
+                app_version
+            ),
+        });
     }
     if let Some(images) = &package.images {
         for (name, image) in images {
-            if let Some(tag) = &image.tag {
-                if is_prerelease(tag) {
-                    collector.add(crate::linting::LintFinding {
-                        rule: "package/prerelease-version".to_string(),
-                        level: crate::linting::LintLevel::Warn,
-                        file: manifest.clone(),
-                        line: find_image_tag_line(manifest_path, name),
-                        message: format!(
-                            "Image '{}' tag '{}' contains a pre-release marker (alpha/beta/rc)",
-                            name, tag
-                        ),
-                    });
-                }
+            if let Some(tag) = &image.tag
+                && is_prerelease(tag)
+            {
+                collector.add(crate::linting::LintFinding {
+                    rule: "package/prerelease-version".to_string(),
+                    level: crate::linting::LintLevel::Warn,
+                    file: manifest.clone(),
+                    line: find_image_tag_line(manifest_path, name),
+                    message: format!(
+                        "Image '{}' tag '{}' contains a pre-release marker (alpha/beta/rc)",
+                        name, tag
+                    ),
+                });
             }
         }
     }
@@ -770,14 +774,11 @@ mod tests {
         use common::vynilpackage::Image;
         let mut package = make_valid_package();
         let mut images = std::collections::BTreeMap::new();
-        images.insert(
-            "app".to_string(),
-            Image {
-                tag: Some("v1.0-alpha".to_string()),
-                registry: "docker.io".to_string(),
-                repository: "myapp".to_string(),
-            },
-        );
+        images.insert("app".to_string(), Image {
+            tag: Some("v1.0-alpha".to_string()),
+            registry: "docker.io".to_string(),
+            repository: "myapp".to_string(),
+        });
         package.images = Some(images);
         let mut collector = crate::linting::LintResultCollector::new();
         check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
@@ -792,14 +793,11 @@ mod tests {
         use common::vynilpackage::Image;
         let mut package = make_valid_package();
         let mut images = std::collections::BTreeMap::new();
-        images.insert(
-            "app".to_string(),
-            Image {
-                tag: Some("1.25.3".to_string()),
-                registry: "docker.io".to_string(),
-                repository: "myapp".to_string(),
-            },
-        );
+        images.insert("app".to_string(), Image {
+            tag: Some("1.25.3".to_string()),
+            registry: "docker.io".to_string(),
+            repository: "myapp".to_string(),
+        });
         package.images = Some(images);
         let mut collector = crate::linting::LintResultCollector::new();
         check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);
@@ -812,14 +810,11 @@ mod tests {
         use common::vynilpackage::Image;
         let mut package = make_valid_package();
         let mut images = std::collections::BTreeMap::new();
-        images.insert(
-            "app".to_string(),
-            Image {
-                tag: None,
-                registry: "docker.io".to_string(),
-                repository: "myapp".to_string(),
-            },
-        );
+        images.insert("app".to_string(), Image {
+            tag: None,
+            registry: "docker.io".to_string(),
+            repository: "myapp".to_string(),
+        });
         package.images = Some(images);
         let mut collector = crate::linting::LintResultCollector::new();
         check_prerelease_versions(&package, std::path::Path::new(""), &mut collector);

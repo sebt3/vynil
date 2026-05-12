@@ -892,35 +892,30 @@ fn check_k8s_resource_plural(
     let mut findings = Vec::new();
 
     ast.walk(&mut |nodes: &[ASTNode]| {
-        if let Some(ASTNode::Expr(Expr::FnCall(fn_call, _))) = nodes.last() {
-            if fn_call.name.as_str() == "k8s_resource" {
-                if let Some(Expr::StringConstant(kind, pos)) = fn_call.args.first() {
-                    if let Some((_, singular)) =
-                        K8S_RESOURCE_PLURAL_KINDS.iter().find(|(plural, _)| *plural == kind.as_str())
-                    {
-                        let line = pos.line();
-                        let disabled = line
-                            .and_then(|l| inline_disables.get(&l))
-                            .cloned()
-                            .unwrap_or_default();
-                        if let Some(level) = config.resolve_level(
-                            "rhai/k8s-resource-plural",
-                            file,
-                            LintLevel::Warn,
-                            &disabled,
-                        ) {
-                            findings.push(LintFinding {
-                                rule: "rhai/k8s-resource-plural".to_string(),
-                                level,
-                                file: file.to_path_buf(),
-                                line,
-                                message: format!(
-                                    "`k8s_resource(\"{kind}\", ...)` uses plural kind; use \"{singular}\" instead"
-                                ),
-                            });
-                        }
-                    }
-                }
+        if let Some(ASTNode::Expr(Expr::FnCall(fn_call, _))) = nodes.last()
+            && fn_call.name.as_str() == "k8s_resource"
+            && let Some(Expr::StringConstant(kind, pos)) = fn_call.args.first()
+            && let Some((_, singular)) = K8S_RESOURCE_PLURAL_KINDS
+                .iter()
+                .find(|(plural, _)| *plural == kind.as_str())
+        {
+            let line = pos.line();
+            let disabled = line
+                .and_then(|l| inline_disables.get(&l))
+                .cloned()
+                .unwrap_or_default();
+            if let Some(level) =
+                config.resolve_level("rhai/k8s-resource-plural", file, LintLevel::Warn, &disabled)
+            {
+                findings.push(LintFinding {
+                    rule: "rhai/k8s-resource-plural".to_string(),
+                    level,
+                    file: file.to_path_buf(),
+                    line,
+                    message: format!(
+                        "`k8s_resource(\"{kind}\", ...)` uses plural kind; use \"{singular}\" instead"
+                    ),
+                });
             }
         }
         true

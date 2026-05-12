@@ -55,13 +55,6 @@ spec:
               source:
                 description: Source type
                 nullable: true
-                oneOf:
-                - required:
-                  - list
-                - required:
-                  - harbor
-                - required:
-                  - script
                 properties:
                   harbor:
                     description: Harbor project to list image from

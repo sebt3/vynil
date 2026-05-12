@@ -79,7 +79,11 @@ fn json_subset_diff(expected: &serde_json::Value, actual: &serde_json::Value, pa
         (serde_json::Value::Object(exp), serde_json::Value::Object(act)) => exp
             .iter()
             .flat_map(|(k, v)| {
-                let child = if path.is_empty() { format!(".{k}") } else { format!("{path}.{k}") };
+                let child = if path.is_empty() {
+                    format!(".{k}")
+                } else {
+                    format!("{path}.{k}")
+                };
                 match act.get(k) {
                     None => vec![format!("{child}: expected {v}, got <missing>")],
                     Some(av) => json_subset_diff(v, av, &child),
@@ -112,17 +116,30 @@ fn object_label(d: &Dynamic) -> String {
         Ok(m) => m,
         Err(_) => return "<unknown>".into(),
     };
-    let kind = map.get("kind").and_then(|v| v.clone().into_string().ok()).unwrap_or_default();
+    let kind = map
+        .get("kind")
+        .and_then(|v| v.clone().into_string().ok())
+        .unwrap_or_default();
     let (name, ns) = map
         .get("metadata")
         .and_then(|m| m.as_map_ref().ok())
         .map(|meta| {
-            let name = meta.get("name").and_then(|v| v.clone().into_string().ok()).unwrap_or_default();
-            let ns = meta.get("namespace").and_then(|v| v.clone().into_string().ok()).unwrap_or_default();
+            let name = meta
+                .get("name")
+                .and_then(|v| v.clone().into_string().ok())
+                .unwrap_or_default();
+            let ns = meta
+                .get("namespace")
+                .and_then(|v| v.clone().into_string().ok())
+                .unwrap_or_default();
             (name, ns)
         })
         .unwrap_or_default();
-    if ns.is_empty() { format!("{kind}/{name}") } else { format!("{kind}/{ns}/{name}") }
+    if ns.is_empty() {
+        format!("{kind}/{name}")
+    } else {
+        format!("{kind}/{ns}/{name}")
+    }
 }
 
 /// Returns true if a generated Dynamic object matches the selector criteria.
@@ -186,13 +203,13 @@ impl VynilTest {
                                 Ok(m) => m,
                                 Err(_) => return false,
                             };
-                            let kind_match = a.selector.kind.as_ref().map_or(false, |k| {
+                            let kind_match = a.selector.kind.as_ref().is_some_and(|k| {
                                 map.get("kind")
                                     .and_then(|v| v.clone().into_string().ok())
                                     .as_deref()
                                     .is_some_and(|ak| ak.eq_ignore_ascii_case(k))
                             });
-                            let name_match = a.selector.name.as_ref().map_or(false, |n| {
+                            let name_match = a.selector.name.as_ref().is_some_and(|n| {
                                 map.get("metadata")
                                     .and_then(|m| m.as_map_ref().ok())
                                     .and_then(|meta| {
@@ -208,10 +225,7 @@ impl VynilTest {
                     let message = if hints.is_empty() {
                         "no objects matched selector".into()
                     } else {
-                        format!(
-                            "no objects matched selector (did you mean: {})",
-                            hints.join(", ")
-                        )
+                        format!("no objects matched selector (did you mean: {})", hints.join(", "))
                     };
                     return VynilAssertResult {
                         name: a.name.clone(),
@@ -268,14 +282,20 @@ impl VynilTest {
                             if matching == total {
                                 (true, format!("{matching}/{total} match"))
                             } else {
-                                (false, format!("{matching}/{total} match, expected all{}", non_match_detail()))
+                                (
+                                    false,
+                                    format!("{matching}/{total} match, expected all{}", non_match_detail()),
+                                )
                             }
                         }
                         VynilAssertMatch::Any => {
                             if matching > 0 {
                                 (true, format!("{matching}/{total} match"))
                             } else {
-                                (false, format!("0/{total} match, expected at least one{}", non_match_detail()))
+                                (
+                                    false,
+                                    format!("0/{total} match, expected at least one{}", non_match_detail()),
+                                )
                             }
                         }
                         VynilAssertMatch::Exact(n) => {
@@ -283,7 +303,13 @@ impl VynilTest {
                             if matching == n && total == n {
                                 (true, format!("{matching}/{total} match"))
                             } else {
-                                (false, format!("{matching}/{total} match, expected exactly {n}{}", non_match_detail()))
+                                (
+                                    false,
+                                    format!(
+                                        "{matching}/{total} match, expected exactly {n}{}",
+                                        non_match_detail()
+                                    ),
+                                )
                             }
                         }
                         VynilAssertMatch::AtLeast(n) => {
@@ -291,7 +317,13 @@ impl VynilTest {
                             if matching >= n {
                                 (true, format!("{matching}/{total} match"))
                             } else {
-                                (false, format!("{matching}/{total} match, expected at least {n}{}", non_match_detail()))
+                                (
+                                    false,
+                                    format!(
+                                        "{matching}/{total} match, expected at least {n}{}",
+                                        non_match_detail()
+                                    ),
+                                )
                             }
                         }
                         VynilAssertMatch::AtMost(n) => {
@@ -299,14 +331,23 @@ impl VynilTest {
                             if matching <= n {
                                 (true, format!("{matching}/{total} match"))
                             } else {
-                                (false, format!("{matching}/{total} match, expected at most {n}{}", match_detail()))
+                                (
+                                    false,
+                                    format!(
+                                        "{matching}/{total} match, expected at most {n}{}",
+                                        match_detail()
+                                    ),
+                                )
                             }
                         }
                         VynilAssertMatch::None => {
                             if matching == 0 {
                                 (true, format!("0/{total} match as expected"))
                             } else {
-                                (false, format!("{matching}/{total} match, expected none{}", match_detail()))
+                                (
+                                    false,
+                                    format!("{matching}/{total} match, expected none{}", match_detail()),
+                                )
                             }
                         }
                     }
