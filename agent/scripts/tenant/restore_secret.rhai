@@ -1,6 +1,6 @@
 fn run(context) {
     import_run("restore_secret_pre", context);
-    let api = k8s_resource("Secrets", context.namespace);
+    let api = k8s_resource("Secret", context.namespace);
     let hbs = new_hbs();
     hbs.register_partial_dir(context.template_dir);
     for secret in context.secret_list {

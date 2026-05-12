@@ -62,7 +62,7 @@ fn run(instance, context) {
     if instance.status != () && instance.status.vitals != () && context.namespace.use_backup {
         let found = false;
         try {
-            let settings = k8s_resource("Secrets", context.instance.namespace).get("backup-settings");
+            let settings = k8s_resource("Secret", context.instance.namespace).get("backup-settings");
             found = true;
         } catch (e) {
             switch type_of(e) {

@@ -206,7 +206,7 @@ fn run(instance, context, use_init_from) {
                 name = "postgres";
             }
             pgs += name;
-            let lst = k8s_resource("Secrets", context.instance.namespace).list_meta().items;
+            let lst = k8s_resource("Secret", context.instance.namespace).list_meta().items;
             let secret = `${v.name}-app`;
             if lst.filter(|s| s.metadata.name == `${v.name}-superuser`).len() > 0 {
                 secret = `${v.name}-superuser`;
