@@ -165,15 +165,19 @@ impl LintResultCollector {
     }
 }
 
-/// Scan raw YAML text to find the line number (1-indexed) of each key under `options:`.
-pub fn find_option_line_numbers(yaml_path: &std::path::Path) -> std::collections::BTreeMap<String, usize> {
+/// Scan raw YAML text to find the line number (1-indexed) of each direct key under a given section.
+pub fn find_section_key_line_numbers(
+    yaml_path: &std::path::Path,
+    section: &str,
+) -> std::collections::BTreeMap<String, usize> {
     let mut map = std::collections::BTreeMap::new();
     let Ok(content) = std::fs::read_to_string(yaml_path) else {
         return map;
     };
 
-    let mut in_options = false;
-    let mut options_indent: Option<usize> = None;
+    let section_header = format!("{}:", section);
+    let mut in_section = false;
+    let mut section_indent: Option<usize> = None;
     let mut key_indent: Option<usize> = None;
 
     for (i, line) in content.lines().enumerate() {
@@ -183,14 +187,14 @@ pub fn find_option_line_numbers(yaml_path: &std::path::Path) -> std::collections
         }
         let indent = line.len() - trimmed.len();
 
-        if !in_options {
-            if trimmed == "options:" || trimmed.starts_with("options: ") {
-                in_options = true;
-                options_indent = Some(indent);
+        if !in_section {
+            if trimmed == section_header || trimmed.starts_with(&format!("{} ", section_header)) {
+                in_section = true;
+                section_indent = Some(indent);
             }
         } else {
-            let opt_indent = options_indent.unwrap();
-            if indent <= opt_indent {
+            let sec_indent = section_indent.unwrap();
+            if indent <= sec_indent {
                 break;
             }
             if key_indent.is_none() {
@@ -207,6 +211,11 @@ pub fn find_option_line_numbers(yaml_path: &std::path::Path) -> std::collections
         }
     }
     map
+}
+
+/// Scan raw YAML text to find the line number (1-indexed) of each key under `options:`.
+pub fn find_option_line_numbers(yaml_path: &std::path::Path) -> std::collections::BTreeMap<String, usize> {
+    find_section_key_line_numbers(yaml_path, "options")
 }
 
 impl Default for LintResultCollector {

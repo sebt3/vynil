@@ -503,6 +503,8 @@ fn scan_rhai_files_for_values(
             {
                 hbs_checker.scan_rhai_for_values(&source);
                 hbs_checker.scan_rhai_for_partials(&source);
+                hbs_checker.scan_rhai_for_images(&source);
+                hbs_checker.scan_rhai_for_resources(&source);
             }
         }
     }

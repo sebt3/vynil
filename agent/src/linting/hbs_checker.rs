@@ -33,6 +33,9 @@ pub struct HbsChecker<'a> {
     defined_partials: HashSet<String>,
     used_partials: HashSet<String>,
     used_values: HashSet<String>,
+    used_value_paths: HashSet<String>,
+    used_images: HashSet<String>,
+    used_resources: HashSet<String>,
 }
 
 impl<'a> HbsChecker<'a> {
@@ -46,6 +49,9 @@ impl<'a> HbsChecker<'a> {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         // Scan handlebars/helpers/ for defined helpers
@@ -88,7 +94,7 @@ impl<'a> HbsChecker<'a> {
         // Check 1: hbs/syntax
         match Template::compile(source) {
             Ok(template) => {
-                let (walker_findings, used_helpers, used_partials, used_values) = {
+                let (walker_findings, used_helpers, used_partials, used_values, used_value_paths, used_images, used_resources) = {
                     let mut walker = HelperWalker::new(
                         file,
                         self.config.clone(),
@@ -103,6 +109,9 @@ impl<'a> HbsChecker<'a> {
                         walker.used_helpers,
                         walker.used_partials,
                         walker.used_values,
+                        walker.used_value_paths,
+                        walker.used_images,
+                        walker.used_resources,
                     )
                 };
 
@@ -110,6 +119,9 @@ impl<'a> HbsChecker<'a> {
                 self.used_helpers.extend(used_helpers);
                 self.used_partials.extend(used_partials);
                 self.used_values.extend(used_values);
+                self.used_value_paths.extend(used_value_paths);
+                self.used_images.extend(used_images);
+                self.used_resources.extend(used_resources);
             }
             Err(e) => {
                 if let Some(level) =
@@ -180,7 +192,7 @@ impl<'a> HbsChecker<'a> {
             let yaml_inline_disables = std::fs::read_to_string(&yaml_path)
                 .map(|src| parse_inline_disables(&src))
                 .unwrap_or_default();
-            for key in options.keys() {
+            for (key, schema) in options {
                 let line = line_numbers.get(key).copied();
                 let disables = line
                     .and_then(|l| yaml_inline_disables.get(&l))
@@ -198,8 +210,94 @@ impl<'a> HbsChecker<'a> {
                         rule: "hbs/unused-option".to_string(),
                         level,
                         file: PathBuf::from("package.yaml"),
-                        line: line_numbers.get(key).copied(),
+                        line,
                         message: format!("Option `{}` defined but never used", key),
+                    });
+                }
+
+                // Check unused fields of object-type options
+                let mut leaf_paths = Vec::new();
+                collect_option_leaf_paths(key, schema, &mut leaf_paths);
+                for leaf_path in leaf_paths {
+                    if !is_value_path_covered(&leaf_path, &self.used_value_paths)
+                        && let Some(level) = self.config.resolve_level(
+                            "hbs/unused-option-field",
+                            &PathBuf::from("package.yaml"),
+                            LintLevel::Warn,
+                            &disables,
+                        )
+                    {
+                        findings.push(LintFinding {
+                            rule: "hbs/unused-option-field".to_string(),
+                            level,
+                            file: PathBuf::from("package.yaml"),
+                            line,
+                            message: format!("Option `{}` defined but never used", leaf_path),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Check unused images
+        if let Some(images) = &self._pkg.images {
+            let yaml_path = self._package_dir.join("package.yaml");
+            let line_numbers = super::find_section_key_line_numbers(&yaml_path, "images");
+            let yaml_inline_disables = std::fs::read_to_string(&yaml_path)
+                .map(|src| parse_inline_disables(&src))
+                .unwrap_or_default();
+            for key in images.keys() {
+                let line = line_numbers.get(key).copied();
+                let disables = line
+                    .and_then(|l| yaml_inline_disables.get(&l))
+                    .cloned()
+                    .unwrap_or_default();
+                if !self.used_images.contains(key)
+                    && let Some(level) = self.config.resolve_level(
+                        "hbs/unused-image",
+                        &PathBuf::from("package.yaml"),
+                        LintLevel::Warn,
+                        &disables,
+                    )
+                {
+                    findings.push(LintFinding {
+                        rule: "hbs/unused-image".to_string(),
+                        level,
+                        file: PathBuf::from("package.yaml"),
+                        line,
+                        message: format!("Image `{}` defined but never used", key),
+                    });
+                }
+            }
+        }
+
+        // Check unused resources
+        if let Some(resources) = &self._pkg.resources {
+            let yaml_path = self._package_dir.join("package.yaml");
+            let line_numbers = super::find_section_key_line_numbers(&yaml_path, "resources");
+            let yaml_inline_disables = std::fs::read_to_string(&yaml_path)
+                .map(|src| parse_inline_disables(&src))
+                .unwrap_or_default();
+            for key in resources.keys() {
+                let line = line_numbers.get(key).copied();
+                let disables = line
+                    .and_then(|l| yaml_inline_disables.get(&l))
+                    .cloned()
+                    .unwrap_or_default();
+                if !self.used_resources.contains(key)
+                    && let Some(level) = self.config.resolve_level(
+                        "hbs/unused-resource",
+                        &PathBuf::from("package.yaml"),
+                        LintLevel::Warn,
+                        &disables,
+                    )
+                {
+                    findings.push(LintFinding {
+                        rule: "hbs/unused-resource".to_string(),
+                        level,
+                        file: PathBuf::from("package.yaml"),
+                        line,
+                        message: format!("Resource `{}` defined but never used", key),
                     });
                 }
             }
@@ -210,12 +308,40 @@ impl<'a> HbsChecker<'a> {
 
     pub fn scan_rhai_for_values(&mut self, source: &str) {
         for part in source.split("context.values.").skip(1) {
+            let path: String = part
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                .collect();
+            let path = path.trim_end_matches('.').to_string();
+            if !path.is_empty() {
+                if let Some(key) = path.split('.').next() {
+                    self.used_values.insert(key.to_string());
+                }
+                self.used_value_paths.insert(path);
+            }
+        }
+    }
+
+    pub fn scan_rhai_for_images(&mut self, source: &str) {
+        for part in source.split("context.images.").skip(1) {
             let key: String = part
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !key.is_empty() {
-                self.used_values.insert(key);
+                self.used_images.insert(key);
+            }
+        }
+    }
+
+    pub fn scan_rhai_for_resources(&mut self, source: &str) {
+        for part in source.split("context.resources.").skip(1) {
+            let key: String = part
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !key.is_empty() {
+                self.used_resources.insert(key);
             }
         }
     }
@@ -234,6 +360,33 @@ impl<'a> HbsChecker<'a> {
     }
 }
 
+fn collect_option_leaf_paths(prefix: &str, schema: &serde_json::Value, paths: &mut Vec<String>) {
+    if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (key, sub_schema) in props {
+            let child_path = format!("{}.{}", prefix, key);
+            if sub_schema.get("properties").is_some() {
+                collect_option_leaf_paths(&child_path, sub_schema, paths);
+            } else {
+                paths.push(child_path);
+            }
+        }
+    }
+}
+
+fn is_value_path_covered(path: &str, used_paths: &HashSet<String>) -> bool {
+    if used_paths.contains(path) {
+        return true;
+    }
+    let mut current = path.to_string();
+    while let Some(idx) = current.rfind('.') {
+        current.truncate(idx);
+        if used_paths.contains(&current) {
+            return true;
+        }
+    }
+    false
+}
+
 struct HelperWalker<'a> {
     file: PathBuf,
     config: LintConfig,
@@ -244,6 +397,9 @@ struct HelperWalker<'a> {
     pub used_helpers: HashSet<String>,
     pub used_partials: HashSet<String>,
     pub used_values: HashSet<String>,
+    pub used_value_paths: HashSet<String>,
+    pub used_images: HashSet<String>,
+    pub used_resources: HashSet<String>,
     pkg: &'a VynilPackageSource,
 }
 
@@ -266,6 +422,9 @@ impl<'a> HelperWalker<'a> {
             used_helpers: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
             pkg,
         }
     }
@@ -391,6 +550,15 @@ impl<'a> HelperWalker<'a> {
         {
             self.used_values.insert(key.clone());
 
+            // Track the full dot-separated path for leaf detection
+            let path_parts: Vec<&str> = segs[1..]
+                .iter()
+                .filter_map(|s| if let PathSeg::Named(n) = s { Some(n.as_str()) } else { None })
+                .collect();
+            if !path_parts.is_empty() {
+                self.used_value_paths.insert(path_parts.join("."));
+            }
+
             if let Some(options) = &self.pkg.options
                 && !options.contains_key(key)
                 && let Some(level) = self.config.resolve_level(
@@ -437,6 +605,13 @@ impl<'a> HelperWalker<'a> {
                         .as_ref()
                         .is_some_and(|res| res.contains_key(key))
                 };
+
+                // Track the used key regardless of whether it exists
+                if field_name == "images" {
+                    self.used_images.insert(key.to_string());
+                } else {
+                    self.used_resources.insert(key.to_string());
+                }
 
                 if !has_key
                     && ((field_name == "images" && self.pkg.images.is_some())
@@ -563,6 +738,9 @@ mod tests {
                 defined_partials: defined_partials.iter().map(|s| s.to_string()).collect(),
                 used_partials: HashSet::new(),
                 used_values: HashSet::new(),
+                used_value_paths: HashSet::new(),
+                used_images: HashSet::new(),
+                used_resources: HashSet::new(),
             };
             TestChecker { checker }
         }
@@ -693,6 +871,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         let source = "{{values.port}}";
@@ -714,6 +895,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         let source = "{{values.unknown_key}}";
@@ -735,6 +919,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         let source = "{{values.anything}}";
@@ -756,6 +943,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         let source = "{{image_from_ctx this \"missing\"}}";
@@ -777,6 +967,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         let source = "{{resources_from_ctx this \"missing\"}}";
@@ -846,6 +1039,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         let source = "{{tenant.name}}";
@@ -868,6 +1064,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         // Only use "port", but package has "port" and "host"
@@ -895,6 +1094,9 @@ mod tests {
             defined_partials: HashSet::new(),
             used_partials: HashSet::new(),
             used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
         };
 
         // "host" is used only in a rhai file via context.values.host
@@ -1027,5 +1229,193 @@ mod tests {
             resources: None,
             value_script: None,
         }
+    }
+
+    fn create_pkg_with_object_option() -> VynilPackageSource {
+        let mut options = std::collections::BTreeMap::new();
+        options.insert(
+            "database".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "host": {"type": "string"},
+                    "port": {"type": "integer"}
+                }
+            }),
+        );
+        VynilPackageSource {
+            apiVersion: "v1".to_string(),
+            kind: "VynilPackage".to_string(),
+            metadata: VynilPackageMeta {
+                name: "test".to_string(),
+                category: "system".to_string(),
+                description: "test package".to_string(),
+                app_version: None,
+                usage: common::vynilpackage::VynilPackageType::Tenant,
+                features: vec![],
+                backup_affinity: None,
+            },
+            requirements: vec![],
+            recommandations: None,
+            options: Some(options),
+            images: None,
+            resources: None,
+            value_script: None,
+        }
+    }
+
+    fn make_checker(pkg: &'static VynilPackageSource) -> HbsChecker<'static> {
+        let config = Box::leak(Box::new(LintConfig::default()));
+        HbsChecker {
+            _package_dir: Path::new("."),
+            _pkg: pkg,
+            config,
+            defined_helpers: HashSet::new(),
+            used_helpers: HashSet::new(),
+            defined_partials: HashSet::new(),
+            used_partials: HashSet::new(),
+            used_values: HashSet::new(),
+            used_value_paths: HashSet::new(),
+            used_images: HashSet::new(),
+            used_resources: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn unused_option_field_produces_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_object_option()));
+        let mut checker = make_checker(pkg);
+
+        // Use only database.host; database.port is never accessed
+        checker.check_file(Path::new("test.hbs"), "{{values.database.host}}");
+        let findings = checker.finalize();
+
+        assert!(
+            findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.port")),
+            "database.port should produce hbs/unused-option-field"
+        );
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.host")),
+            "database.host should not be flagged"
+        );
+    }
+
+    #[test]
+    fn whole_object_used_suppresses_field_warnings() {
+        let pkg = Box::leak(Box::new(create_pkg_with_object_option()));
+        let mut checker = make_checker(pkg);
+
+        // Use the whole object — all fields are implicitly used
+        checker.check_file(Path::new("test.hbs"), "{{values.database}}");
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-option-field"),
+            "No field warnings when the whole object is used"
+        );
+    }
+
+    #[test]
+    fn rhai_access_suppresses_option_field_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_object_option()));
+        let mut checker = make_checker(pkg);
+
+        // database.port accessed in Rhai, database.host never accessed
+        checker.scan_rhai_for_values("let p = context.values.database.port;");
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.port")),
+            "database.port used in Rhai should not produce warning"
+        );
+        assert!(
+            findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.host")),
+            "database.host still unused should produce warning"
+        );
+    }
+
+    #[test]
+    fn unused_image_produces_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_images()));
+        let mut checker = make_checker(pkg);
+
+        // No HBS file uses the image
+        checker.check_file(Path::new("test.hbs"), "hello world");
+        let findings = checker.finalize();
+
+        assert!(
+            findings.iter().any(|f| f.rule == "hbs/unused-image" && f.message.contains("app")),
+            "Unused image should produce hbs/unused-image warning"
+        );
+    }
+
+    #[test]
+    fn used_image_no_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_images()));
+        let mut checker = make_checker(pkg);
+
+        checker.check_file(Path::new("test.hbs"), r#"{{image_from_ctx this "app"}}"#);
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-image"),
+            "Used image should not produce warning"
+        );
+    }
+
+    #[test]
+    fn rhai_context_images_suppresses_unused_image_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_images()));
+        let mut checker = make_checker(pkg);
+
+        checker.scan_rhai_for_images("let img = context.images.app;");
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-image"),
+            "Image used in Rhai should not produce warning"
+        );
+    }
+
+    #[test]
+    fn unused_resource_produces_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_resources()));
+        let mut checker = make_checker(pkg);
+
+        checker.check_file(Path::new("test.hbs"), "hello world");
+        let findings = checker.finalize();
+
+        assert!(
+            findings.iter().any(|f| f.rule == "hbs/unused-resource" && f.message.contains("app")),
+            "Unused resource should produce hbs/unused-resource warning"
+        );
+    }
+
+    #[test]
+    fn used_resource_no_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_resources()));
+        let mut checker = make_checker(pkg);
+
+        checker.check_file(Path::new("test.hbs"), r#"{{resources_from_ctx this "app"}}"#);
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-resource"),
+            "Used resource should not produce warning"
+        );
+    }
+
+    #[test]
+    fn rhai_context_resources_suppresses_unused_resource_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_resources()));
+        let mut checker = make_checker(pkg);
+
+        checker.scan_rhai_for_resources("let r = context.resources.app;");
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-resource"),
+            "Resource used in Rhai should not produce warning"
+        );
     }
 }
