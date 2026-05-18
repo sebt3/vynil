@@ -94,7 +94,15 @@ impl<'a> HbsChecker<'a> {
         // Check 1: hbs/syntax
         match Template::compile(source) {
             Ok(template) => {
-                let (walker_findings, used_helpers, used_partials, used_values, used_value_paths, used_images, used_resources) = {
+                let (
+                    walker_findings,
+                    used_helpers,
+                    used_partials,
+                    used_values,
+                    used_value_paths,
+                    used_images,
+                    used_resources,
+                ) = {
                     let mut walker = HelperWalker::new(
                         file,
                         self.config.clone(),
@@ -553,7 +561,13 @@ impl<'a> HelperWalker<'a> {
             // Track the full dot-separated path for leaf detection
             let path_parts: Vec<&str> = segs[1..]
                 .iter()
-                .filter_map(|s| if let PathSeg::Named(n) = s { Some(n.as_str()) } else { None })
+                .filter_map(|s| {
+                    if let PathSeg::Named(n) = s {
+                        Some(n.as_str())
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             if !path_parts.is_empty() {
                 self.used_value_paths.insert(path_parts.join("."));
@@ -1291,11 +1305,15 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.port")),
+            findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.port")),
             "database.port should produce hbs/unused-option-field"
         );
         assert!(
-            !findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.host")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.host")),
             "database.host should not be flagged"
         );
     }
@@ -1325,11 +1343,15 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            !findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.port")),
+            !findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.port")),
             "database.port used in Rhai should not produce warning"
         );
         assert!(
-            findings.iter().any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.host")),
+            findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-option-field" && f.message.contains("database.host")),
             "database.host still unused should produce warning"
         );
     }
@@ -1344,7 +1366,9 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            findings.iter().any(|f| f.rule == "hbs/unused-image" && f.message.contains("app")),
+            findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-image" && f.message.contains("app")),
             "Unused image should produce hbs/unused-image warning"
         );
     }
@@ -1386,7 +1410,9 @@ mod tests {
         let findings = checker.finalize();
 
         assert!(
-            findings.iter().any(|f| f.rule == "hbs/unused-resource" && f.message.contains("app")),
+            findings
+                .iter()
+                .any(|f| f.rule == "hbs/unused-resource" && f.message.contains("app")),
             "Unused resource should produce hbs/unused-resource warning"
         );
     }

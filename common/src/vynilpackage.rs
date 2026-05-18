@@ -1088,7 +1088,9 @@ resources:
     fn test_migration_chain_selects_waypoint_when_below_minimum() {
         // v3 requires min v2 — current v1 cannot reach v3 directly → must go through v2
         let chain = vec![
-            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion(
+                "2.0.0".into(),
+            )]),
             make_pkg("2.0.0", vec![]),
         ];
         assert_eq!(select_from(&chain, "1.0.0").as_deref(), Some("2.0.0"));
@@ -1097,7 +1099,9 @@ resources:
     #[test]
     fn test_migration_chain_selects_final_once_waypoint_installed() {
         let chain = vec![
-            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion(
+                "2.0.0".into(),
+            )]),
             make_pkg("2.0.0", vec![]),
         ];
         assert_eq!(select_from(&chain, "2.0.0").as_deref(), Some("3.0.0"));
@@ -1108,7 +1112,9 @@ resources:
         // Empty current version → Semver::parse("") fails → is_min_version_ok returns true
         // → first package in list is selected (the latest)
         let chain = vec![
-            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion(
+                "2.0.0".into(),
+            )]),
             make_pkg("2.0.0", vec![]),
         ];
         assert_eq!(select_from(&chain, "").as_deref(), Some("3.0.0"));
@@ -1118,8 +1124,12 @@ resources:
     fn test_migration_chain_three_hops_step_by_step() {
         // v4(min=v3) → v3(min=v2) → v2(no constraint)
         let chain = vec![
-            make_pkg("4.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("3.0.0".into())]),
-            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("4.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion(
+                "3.0.0".into(),
+            )]),
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion(
+                "2.0.0".into(),
+            )]),
             make_pkg("2.0.0", vec![]),
         ];
         assert_eq!(select_from(&chain, "1.0.0").as_deref(), Some("2.0.0")); // step 1
@@ -1131,7 +1141,9 @@ resources:
     fn test_migration_chain_already_above_minimum_picks_latest() {
         // current v2.5.0 is already above v2.0.0 → go straight to v3
         let chain = vec![
-            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion(
+                "2.0.0".into(),
+            )]),
             make_pkg("2.0.0", vec![]),
         ];
         assert_eq!(select_from(&chain, "2.5.0").as_deref(), Some("3.0.0"));

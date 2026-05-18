@@ -58,15 +58,26 @@ impl Reconciler for JukeBox {
                 return Ok(Action::requeue(Duration::from_secs(60)));
             }
             if !is_job_terminal(&job) {
-                tracing::info!("JukeBox {} scan job is still running, requeuing in 1 minute", self.name_any());
+                tracing::info!(
+                    "JukeBox {} scan job is still running, requeuing in 1 minute",
+                    self.name_any()
+                );
                 return Ok(Action::requeue(Duration::from_secs(60)));
             }
             // Job is terminal: update cache only once per completion, tracked via annotation
-            let completion_time = job.status.as_ref()
+            let completion_time = job
+                .status
+                .as_ref()
                 .and_then(|s| s.completion_time.as_ref())
                 .map(|t| t.0.to_string());
-            let already_processed = completion_time.as_deref()
-                .map(|ct| self.annotations().get(LAST_SCAN_TIME_ANNOTATION).map(|v| v == ct).unwrap_or(false))
+            let already_processed = completion_time
+                .as_deref()
+                .map(|ct| {
+                    self.annotations()
+                        .get(LAST_SCAN_TIME_ANNOTATION)
+                        .map(|v| v == ct)
+                        .unwrap_or(false)
+                })
                 .unwrap_or(false);
             if !already_processed {
                 match JukeBox::list().await {
@@ -79,11 +90,15 @@ impl Reconciler for JukeBox {
                         "metadata": {"annotations": {"vynil.solidite.fr/last-scan-time": ct}}
                     }));
                     if let Err(e) = jbs.patch(&self.name_any(), &PatchParams::default(), &patch).await {
-                        tracing::warn!("Setting {} on JukeBox {} failed: {e}", LAST_SCAN_TIME_ANNOTATION, self.name_any());
+                        tracing::warn!(
+                            "Setting {} on JukeBox {} failed: {e}",
+                            LAST_SCAN_TIME_ANNOTATION,
+                            self.name_any()
+                        );
                     }
                 }
             }
-            // Fall through: maintain CronJob and handle force-scan annotation below
+            // Fall through: maintain CronJob and create/upsert scan job below
         }
 
         let mut context = ctx.base_context.clone();
@@ -112,22 +127,19 @@ impl Reconciler for JukeBox {
             .await
             .map_err(Error::KubeError)?;
 
-        // Support job deletion annotation to force reinstall
+        // force-scan: processed here (fall-through) so it works whether a terminal job exists
+        // or no job at all; deferred naturally when job is running (guard returns early above)
         if self.annotations().contains_key("vynil.solidite.fr/force-scan") {
-            // remove the annotation
             let stms = Api::<JukeBox>::all(client.clone());
-            let pp = PatchParams::default();
             let patch = Patch::Json::<()>(
                 serde_json::from_value(serde_json::json!([
                     {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
                 ]))
                 .unwrap(),
             );
-            let _patched = stms
-                .patch(&self.name_any(), &pp, &patch)
+            stms.patch(&self.name_any(), &PatchParams::default(), &patch)
                 .await
                 .map_err(Error::KubeError)?;
-            // delete the job if exist
             let job = job_api.get_metadata_opt(&job_name).await;
             if job.is_ok() && job.unwrap().is_some() {
                 match job_api.delete(&job_name, &DeleteParams::foreground()).await {
@@ -143,7 +155,7 @@ impl Reconciler for JukeBox {
                         }
                     }
                     Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
-                };
+                }
             }
         }
 
@@ -213,8 +225,12 @@ impl Reconciler for JukeBox {
 
 fn is_job_terminal(job: &Job) -> bool {
     let Some(status) = &job.status else { return false };
-    let Some(conditions) = &status.conditions else { return false };
-    conditions.iter().any(|c| c.status == "True" && (c.type_ == "Complete" || c.type_ == "Failed"))
+    let Some(conditions) = &status.conditions else {
+        return false;
+    };
+    conditions
+        .iter()
+        .any(|c| c.status == "True" && (c.type_ == "Complete" || c.type_ == "Failed"))
 }
 
 #[must_use]
