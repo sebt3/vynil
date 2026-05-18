@@ -188,10 +188,9 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::MinimumPreviousVersion(prev) => {
-                //TODO: implement MinimumPreviousVersion
-                tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
-                Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
+            VynilPackageRequirement::MinimumPreviousVersion(_) => {
+                // Guaranteed satisfied by is_min_version_ok() at package-selection time.
+                Ok((true, String::new(), 15 * 60))
             }
             VynilPackageRequirement::SystemService(svc) => {
                 let lst = ServiceInstance::get_all_services_names().await?;
@@ -293,10 +292,9 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::MinimumPreviousVersion(prev) => {
-                //TODO: implement MinimumPreviousVersion
-                tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
-                Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
+            VynilPackageRequirement::MinimumPreviousVersion(_) => {
+                // Guaranteed satisfied by is_min_version_ok() at package-selection time.
+                Ok((true, String::new(), 15 * 60))
             }
             VynilPackageRequirement::SystemService(svc) => {
                 let lst = ServiceInstance::get_all_services_names().await?;
@@ -376,10 +374,9 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::MinimumPreviousVersion(prev) => {
-                //TODO: implement MinimumPreviousVersion
-                tracing::warn!("MinimumPreviousVersion Requirement is a TODO");
-                Ok((true, format!("Minimum {prev} version is not available"), 15 * 60))
+            VynilPackageRequirement::MinimumPreviousVersion(_) => {
+                // Guaranteed satisfied by is_min_version_ok() at package-selection time.
+                Ok((true, String::new(), 15 * 60))
             }
             VynilPackageRequirement::SystemService(svc) => {
                 let lst = ServiceInstance::get_all_services_names().await?;
@@ -1055,5 +1052,88 @@ resources:
     fn test_read_package_yaml_missing_file() {
         let result = read_package_yaml(&PathBuf::from("/nonexistent/path/pkg.yaml"));
         assert!(result.is_err());
+    }
+
+    // ── Migration chain selection (mirrors the .find() logic in instance_common) ──
+
+    fn make_pkg(tag: &str, requirements: Vec<VynilPackageRequirement>) -> VynilPackage {
+        VynilPackage {
+            registry: "docker.io".into(),
+            image: "test/image".into(),
+            tag: tag.into(),
+            metadata: VynilPackageMeta {
+                name: "test".into(),
+                category: "cat".into(),
+                description: "".into(),
+                app_version: None,
+                usage: VynilPackageType::Tenant,
+                features: vec![],
+                backup_affinity: None,
+            },
+            requirements,
+            recommandations: None,
+            options: None,
+            value_script: None,
+        }
+    }
+
+    fn select_from(packages: &[VynilPackage], current: &str) -> Option<String> {
+        packages
+            .iter()
+            .find(|p| p.is_min_version_ok(current.to_string()))
+            .map(|p| p.tag.clone())
+    }
+
+    #[test]
+    fn test_migration_chain_selects_waypoint_when_below_minimum() {
+        // v3 requires min v2 — current v1 cannot reach v3 directly → must go through v2
+        let chain = vec![
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("2.0.0", vec![]),
+        ];
+        assert_eq!(select_from(&chain, "1.0.0").as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn test_migration_chain_selects_final_once_waypoint_installed() {
+        let chain = vec![
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("2.0.0", vec![]),
+        ];
+        assert_eq!(select_from(&chain, "2.0.0").as_deref(), Some("3.0.0"));
+    }
+
+    #[test]
+    fn test_migration_chain_fresh_install_picks_latest() {
+        // Empty current version → Semver::parse("") fails → is_min_version_ok returns true
+        // → first package in list is selected (the latest)
+        let chain = vec![
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("2.0.0", vec![]),
+        ];
+        assert_eq!(select_from(&chain, "").as_deref(), Some("3.0.0"));
+    }
+
+    #[test]
+    fn test_migration_chain_three_hops_step_by_step() {
+        // v4(min=v3) → v3(min=v2) → v2(no constraint)
+        let chain = vec![
+            make_pkg("4.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("3.0.0".into())]),
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("2.0.0", vec![]),
+        ];
+        assert_eq!(select_from(&chain, "1.0.0").as_deref(), Some("2.0.0")); // step 1
+        assert_eq!(select_from(&chain, "2.0.0").as_deref(), Some("3.0.0")); // step 2
+        assert_eq!(select_from(&chain, "3.0.0").as_deref(), Some("4.0.0")); // step 3
+    }
+
+    #[test]
+    fn test_migration_chain_already_above_minimum_picks_latest() {
+        // current v2.5.0 is already above v2.0.0 → go straight to v3
+        let chain = vec![
+            make_pkg("3.0.0", vec![VynilPackageRequirement::MinimumPreviousVersion("2.0.0".into())]),
+            make_pkg("2.0.0", vec![]),
+        ];
+        assert_eq!(select_from(&chain, "2.5.0").as_deref(), Some("3.0.0"));
     }
 }
