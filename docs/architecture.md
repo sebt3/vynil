@@ -49,6 +49,7 @@ Sous-commandes principales :
 - `{system,service,tenant} {install,delete,reconfigure,backup,restore}` — opérations d'instance
 - `crdgen` — génération des manifestes CRD
 - `box`, `template`, `run` — utilitaires
+- `box file-scan` — scan standalone vers fichiers (sans K8s)
 
 ---
 
@@ -58,13 +59,13 @@ Toutes dans le groupe `vynil.solidite.fr/v1`.
 
 ### JukeBox (cluster-scoped)
 
-Source de packages Vynil. Contient une définition de source (liste OCI, projet Harbor, ou
-script) et un planning de scan (cron). Le statut stocke la liste des packages disponibles
-(waypoints d'upgrade).
+Source de packages Vynil. Contient une définition de source (liste OCI, projet Harbor, script,
+URL HTTP ou bucket S3) et un planning de scan (cron). Le statut stocke la liste des packages
+disponibles (waypoints d'upgrade).
 
 ```
 spec:
-  source:  List | Harbor | Script
+  source:  List | Harbor | Script | Http | S3
   maturity: stable | beta | alpha
   pull_secret: <nom du secret imagePull>
   schedule: <expression cron>
@@ -72,6 +73,11 @@ spec:
 status:
   packages: [VynilPackage]   ← cache des packages scannés
 ```
+
+Types de source :
+- `List` / `Harbor` / `Script` : scan direct des registres OCI
+- `Http` : URL vers un cache de packages pré-calculés ; auth Basic ou Bearer via Secret
+- `S3` : bucket S3/MinIO/OVH avec prefix optionnel ; credentials via Secret ou IAM role
 
 ### TenantInstance / ServiceInstance (namespaced)
 
@@ -140,8 +146,10 @@ Le contenu de l'image contient les scripts Rhai du cycle de vie du package.
 ```
 JukeBox CRD
     → (cron) Job agent "scan.rhai"
-        → liste les tags OCI (par registre ou Harbor)
+        → sources OCI (List/Harbor/Script) : liste les tags OCI
+        → sources Http/S3 : télécharge index.yaml + fichiers packages depuis le cache
         → filtre : semver valide + maturité + version Vynil compatible
+        → filtre partiel si annotation force-scan=<category>[/<name>] présente
         → conserve les waypoints d'upgrade (1 version par "époque" de MinimumPreviousVersion)
         → met à jour JukeBox.status.packages
 ```
@@ -149,6 +157,21 @@ JukeBox CRD
 Les waypoints permettent une mise à jour progressive sans stocker toutes les versions.
 Exemple : versions disponibles [4.0(min:3.0), 3.5(min:2.0), 3.0(min:2.0), 2.5, 1.5]
 → stocke [4.0, 3.5, 2.5, 1.5]
+
+### Scan standalone (file-scan)
+
+```
+agent box file-scan
+    → lit une spec JukeBox YAML locale (source + pull_secret fichier)
+    → scanne les registres OCI sans connexion K8s
+    → calcule les waypoints pour 3 niveaux de maturité et stocke l'union
+    → produit <cache_dir>/index.yaml + <cache_dir>/<category>_<name>.yaml
+    [upload vers HTTP/S3]
+JukeBox source Http/S3
+    → télécharge index.yaml + fichiers packages
+    → applique filtre maturity + recalcule waypoints
+    → met à jour JukeBox.status.packages (identique aux sources OCI)
+```
 
 ### Réconciliation d'une instance
 
@@ -175,6 +198,14 @@ Instance CRD (TenantInstance / ServiceInstance / SystemInstance)
 |---|---|---|
 | `vynil.solidite.fr/suspend` | `"true"` | Suspend la réconciliation jusqu'à suppression de l'annotation. Le controller requeue normalement (15 min) mais ne fait rien. |
 | `vynil.solidite.fr/force-reinstall` | présente | Force la réinstallation : supprime le Job existant avant de le recréer, puis retire l'annotation automatiquement. |
+
+### Annotations de contrôle sur les JukeBox
+
+| Annotation | Valeur | Comportement |
+|---|---|---|
+| `vynil.solidite.fr/force-scan` | `"true"` (ou présente sans valeur) | Scan complet de tous les packages |
+| `vynil.solidite.fr/force-scan` | `"<category>"` | Scan partiel de toute la catégorie |
+| `vynil.solidite.fr/force-scan` | `"<category>/<name>"` | Scan partiel d'un seul package |
 
 ### Suppression d'une instance (finalizer)
 
@@ -291,6 +322,7 @@ Ces tests servent de filet de régression lors des mises à jour de la version R
 | `AGENT_ACCOUNT` | `vynil-agent` | ServiceAccount des Jobs |
 | `AGENT_LOG_LEVEL` | `info` | Niveau de log |
 | `TENANT_LABEL` | `vynil.solidite.fr/tenant` | Clé du label tenant |
+| `SCAN_PACKAGE` | (absent) | Filtre partiel pour `box scan` et `box file-scan` |
 
 ---
 
