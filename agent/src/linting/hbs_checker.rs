@@ -343,13 +343,15 @@ impl<'a> HbsChecker<'a> {
     }
 
     pub fn scan_rhai_for_resources(&mut self, source: &str) {
-        for part in source.split("context.resources.").skip(1) {
-            let key: String = part
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            if !key.is_empty() {
-                self.used_resources.insert(key);
+        for prefix in &["context.resources.", "context.instance.resources."] {
+            for part in source.split(prefix).skip(1) {
+                let key: String = part
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !key.is_empty() {
+                    self.used_resources.insert(key);
+                }
             }
         }
     }
@@ -1442,6 +1444,20 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.rule == "hbs/unused-resource"),
             "Resource used in Rhai should not produce warning"
+        );
+    }
+
+    #[test]
+    fn rhai_context_instance_resources_suppresses_unused_resource_warning() {
+        let pkg = Box::leak(Box::new(create_pkg_with_resources()));
+        let mut checker = make_checker(pkg);
+
+        checker.scan_rhai_for_resources("let r = context.instance.resources.app;");
+        let findings = checker.finalize();
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unused-resource"),
+            "Resource used via context.instance.resources in Rhai should not produce warning"
         );
     }
 }
