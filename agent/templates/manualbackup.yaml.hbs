@@ -33,5 +33,14 @@ kind: Job
 metadata:
   name: '{{instance.appslug}}-backups'
   labels: {{json_to_str (selector_from_ctx this comp="backup")}}
+  annotations:
+    ignore-check.kube-linter.io/env-value-from: "backup-settings secret is provisioned at runtime by the operator"
+    ignore-check.kube-linter.io/no-liveness-probe: "Job containers do not need liveness probes"
+    ignore-check.kube-linter.io/no-readiness-probe: "Job containers do not need readiness probes"
+    ignore-check.kube-linter.io/no-read-only-root-fs: "Backup writes to /backup volume and requires writable container fs"
+    ignore-check.kube-linter.io/non-isolated-pod: "Ephemeral backup pods do not require NetworkPolicy isolation"
+    ignore-check.kube-linter.io/priority-class-name: "vynil-backup is a priority class provisioned by the operator"
+    ignore-check.kube-linter.io/read-secret-from-env-var: "DB credentials must be env vars for backup scripts"
+    ignore-check.kube-linter.io/run-as-non-root: "Backup requires root for CHOWN/FOWNER filesystem operations"
 spec:
   template: {{> backup.yaml}}

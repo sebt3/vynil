@@ -37,7 +37,7 @@ spec:
         - DAC_READ_SEARCH
   volumes: {{json_to_str volumes}}
   serviceAccountName: {{service_account}}
-  restartPolicy: Never
+  restartPolicy: OnFailure
   priorityClassName: vynil-backup
   securityContext:
     runAsGroup: 0
