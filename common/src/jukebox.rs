@@ -26,6 +26,25 @@ pub enum JukeBoxDef {
     Harbor { registry: String, project: String },
     /// Custom script that produce the image list
     Script(String),
+    /// HTTP server hosting an index.yaml package cache
+    Http {
+        /// Base URL containing index.yaml
+        url: String,
+        /// K8s Opaque secret: keys `username`+`password` (Basic) or `token` (Bearer)
+        secret: Option<String>,
+    },
+    /// S3 bucket hosting a package cache
+    S3 {
+        bucket: String,
+        region: String,
+        /// Prefix in the bucket (e.g. "vynil/packages/")
+        prefix: Option<String>,
+        /// S3-compatible endpoint (MinIO, OVH, etc.)
+        endpoint: Option<String>,
+        /// K8s Opaque secret: keys `access_key_id` and `secret_access_key`
+        /// Absent = IAM role / instance profile
+        secret: Option<String>,
+    },
 }
 impl Default for JukeBoxDef {
     fn default() -> Self {
@@ -424,6 +443,45 @@ pub fn jukebox_rhai_register(engine: &mut Engine) {
 mod tests {
     use super::*;
     use crate::vynilpackage::{VynilPackageMeta, VynilPackageType};
+
+    #[test]
+    fn jukebox_def_http_serde_roundtrip() {
+        let val = JukeBoxDef::Http {
+            url: "https://example.com/cache".to_string(),
+            secret: None,
+        };
+        let json = serde_json::to_string(&val).unwrap();
+        assert!(json.contains("\"http\""));
+        assert!(json.contains("https://example.com/cache"));
+        let back: JukeBoxDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, val);
+    }
+
+    #[test]
+    fn jukebox_def_s3_serde_roundtrip() {
+        let val = JukeBoxDef::S3 {
+            bucket: "my-bucket".to_string(),
+            region: "eu-west-1".to_string(),
+            prefix: Some("vynil/".to_string()),
+            endpoint: None,
+            secret: None,
+        };
+        let json = serde_json::to_string(&val).unwrap();
+        assert!(json.contains("\"s3\""));
+        let back: JukeBoxDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, val);
+    }
+
+    #[test]
+    fn jukebox_def_http_yaml_roundtrip() {
+        let val = JukeBoxDef::Http {
+            url: "https://example.com/cache".to_string(),
+            secret: None,
+        };
+        let yaml = serde_yaml::to_string(&val).unwrap();
+        let back: JukeBoxDef = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back, val);
+    }
 
     fn make_pkg(category: &str, name: &str) -> VynilPackage {
         VynilPackage {

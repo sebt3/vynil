@@ -67,11 +67,49 @@ spec:
                     - project
                     - registry
                     type: object
+                  http:
+                    description: HTTP server hosting an index.yaml package cache
+                    properties:
+                      secret:
+                        description: 'K8s Opaque secret: keys `username`+`password` (Basic) or `token` (Bearer)'
+                        nullable: true
+                        type: string
+                      url:
+                        description: Base URL containing index.yaml
+                        type: string
+                    required:
+                    - url
+                    type: object
                   list:
                     description: List of oci images
                     items:
                       type: string
                     type: array
+                  s3:
+                    description: S3 bucket hosting a package cache
+                    properties:
+                      bucket:
+                        type: string
+                      endpoint:
+                        description: S3-compatible endpoint (MinIO, OVH, etc.)
+                        nullable: true
+                        type: string
+                      prefix:
+                        description: Prefix in the bucket (e.g. "vynil/packages/")
+                        nullable: true
+                        type: string
+                      region:
+                        type: string
+                      secret:
+                        description: |-
+                          K8s Opaque secret: keys `access_key_id` and `secret_access_key`
+                          Absent = IAM role / instance profile
+                        nullable: true
+                        type: string
+                    required:
+                    - bucket
+                    - region
+                    type: object
                   script:
                     description: Custom script that produce the image list
                     type: string
