@@ -134,11 +134,26 @@ try {
 
     let found = [];
     for image in list {
-        let auth = if use_auth {secret::get_auth_from(spec.pull_secret, args.namespace, image.registry);} else {#{user: "", pass: ""}};
+        let auth = if !use_auth {
+            #{user: "", pass: ""}
+        } else if file_scan {
+            get_auth_from_file(spec.pull_secret, image.registry)
+        } else {
+            secret::get_auth_from(spec.pull_secret, args.namespace, image.registry)
+        };
         log_info(`Scanning ${image.registry}/${image.repository}`);
         let reg = new_registry(image.registry, auth.user, auth.pass);
         let got_tags = reg.list_tags(image.repository);
-        found += scan_image_with_maturity(image, reg, got_tags, spec.maturity);
+        let image_found = if file_scan {
+            union_packages([
+                scan_image_with_maturity(image, reg, got_tags, "stable"),
+                scan_image_with_maturity(image, reg, got_tags, "beta"),
+                scan_image_with_maturity(image, reg, got_tags, "alpha"),
+            ])
+        } else {
+            scan_image_with_maturity(image, reg, got_tags, spec.maturity)
+        };
+        found += image_found;
     }
 
     if scan_filter != () {

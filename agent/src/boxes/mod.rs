@@ -1,3 +1,4 @@
+mod file_scan;
 mod scan;
 use clap::{Parser, Subcommand};
 use std::process;
@@ -12,6 +13,8 @@ pub struct Parameters {
 pub enum Commands {
     /// Update a jukebox
     Scan(scan::Parameters),
+    /// Scan standalone vers fichiers (sans K8s)
+    FileScan(file_scan::Parameters),
 }
 
 pub async fn run(cmd: &Parameters) {
@@ -19,6 +22,10 @@ pub async fn run(cmd: &Parameters) {
     match &cmd.command {
         Commands::Scan(args) => scan::run(args).await.unwrap_or_else(|e| {
             tracing::error!("Scanning JukeBox failed with: {e:}");
+            process::exit(1)
+        }),
+        Commands::FileScan(args) => file_scan::run(args).await.unwrap_or_else(|e| {
+            tracing::error!("File scan failed with: {e:}");
             process::exit(1)
         }),
     }
