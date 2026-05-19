@@ -130,6 +130,7 @@ pub mod instanceservice;
 pub mod instancesystem;
 pub mod instancetenant;
 pub mod jukebox;
+pub mod jukebox_file;
 pub mod k8sgeneric;
 pub mod k8sraw;
 pub mod k8sworkload;

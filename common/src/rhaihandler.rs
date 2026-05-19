@@ -13,6 +13,7 @@ use crate::{
     instancesystem::system_rhai_register,
     instancetenant::tenant_rhai_register,
     jukebox::jukebox_rhai_register,
+    jukebox_file::file_jukebox_rhai_register,
     k8sgeneric::k8sgeneric_rhai_register,
     k8smock::{k8smock_rhai_register, oci_mock_rhai_register},
     k8sraw::k8sraw_rhai_register,
@@ -174,6 +175,13 @@ impl Script {
         oci_rhai_register(&mut script.engine);
         shell_rhai_register(&mut script.engine);
         script.add_common();
+        script
+    }
+
+    pub fn new_file_scan(resolver_path: Vec<String>) -> Script {
+        let mut script = Self::new_core(resolver_path);
+        http_rhai_register(&mut script.engine);
+        file_jukebox_rhai_register(&mut script.engine);
         script
     }
 
