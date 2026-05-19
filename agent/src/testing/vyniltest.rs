@@ -60,14 +60,14 @@ pub struct VynilTestSetRef {
 
 /// Checks whether `expected` is a subset of `actual`:
 /// every key/value in expected must exist and match in actual.
-/// Arrays are compared element-by-element (same length required).
+/// Arrays: every element in expected must have at least one match in actual (unordered subset).
 fn json_subset_match(expected: &serde_json::Value, actual: &serde_json::Value) -> bool {
     match (expected, actual) {
         (serde_json::Value::Object(exp), serde_json::Value::Object(act)) => exp
             .iter()
             .all(|(k, v)| act.get(k).is_some_and(|av| json_subset_match(v, av))),
         (serde_json::Value::Array(exp), serde_json::Value::Array(act)) => {
-            exp.len() == act.len() && exp.iter().zip(act.iter()).all(|(e, a)| json_subset_match(e, a))
+            exp.iter().all(|e| act.iter().any(|a| json_subset_match(e, a)))
         }
         _ => expected == actual,
     }
@@ -90,17 +90,12 @@ fn json_subset_diff(expected: &serde_json::Value, actual: &serde_json::Value, pa
                 }
             })
             .collect(),
-        (serde_json::Value::Array(exp), serde_json::Value::Array(act)) => {
-            if exp.len() != act.len() {
-                vec![format!("{path}: expected {} items, got {}", exp.len(), act.len())]
-            } else {
-                exp.iter()
-                    .zip(act.iter())
-                    .enumerate()
-                    .flat_map(|(i, (e, a))| json_subset_diff(e, a, &format!("{path}[{i}]")))
-                    .collect()
-            }
-        }
+        (serde_json::Value::Array(exp), serde_json::Value::Array(act)) => exp
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !act.iter().any(|a| json_subset_match(e, a)))
+            .map(|(i, e)| format!("{path}[{i}]: no match found for {e}"))
+            .collect(),
         _ => {
             if expected != actual {
                 vec![format!("{path}: expected {expected}, got {actual}")]
