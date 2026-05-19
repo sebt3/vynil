@@ -91,6 +91,9 @@ fn union_packages(sets) {
     result
 }
 
+let scan_filter = if "filter" in args.keys() && args.filter != () { args.filter } else { () };
+let file_scan   = "file_scan" in args.keys() && args.file_scan == true;
+
 let spec = box.spec;
 let use_auth = "pull_secret" in spec.keys() && spec.pull_secret!="" && spec.pull_secret!=();
 try {
@@ -106,6 +109,29 @@ try {
         let reg = tmp.shift();
         #{registry: reg, repository: tmp.reduce(|sum| if sum=="" {this} else {`${sum}/${this}`}, "")}
     });
+
+    let list = if scan_filter == () {
+        list
+    } else {
+        let filter_parts = scan_filter.split("/");
+        let filter_cat   = filter_parts[0];
+        let filter_name  = if filter_parts.len() > 1 { filter_parts[1] } else { () };
+        let status_pkgs = [];
+        try { status_pkgs = box.status.packages; } catch(e) {}
+        let matched = status_pkgs
+            .filter(|p|
+                p.metadata.category == filter_cat &&
+                (filter_name == () || p.metadata.name == filter_name)
+            )
+            .map(|p| #{registry: p.registry, repository: p.image});
+        let seen = #{}; let deduped = [];
+        for m in matched {
+            let k = `${m.registry}/${m.repository}`;
+            if k in seen {} else { seen[k] = true; deduped.push(m); }
+        }
+        if deduped.len() > 0 { deduped } else { list }
+    };
+
     let found = [];
     for image in list {
         let auth = if use_auth {secret::get_auth_from(spec.pull_secret, args.namespace, image.registry);} else {#{user: "", pass: ""}};
@@ -114,7 +140,12 @@ try {
         let got_tags = reg.list_tags(image.repository);
         found += scan_image_with_maturity(image, reg, got_tags, spec.maturity);
     }
-    let tmp = box.set_status_updated(found);
+
+    if scan_filter != () {
+        let tmp = box.set_status_packages_merge(scan_filter, found);
+    } else {
+        let tmp = box.set_status_updated(found);
+    }
 } catch(e) {
     if type_of(e) == "string" {
         log_warn(e);

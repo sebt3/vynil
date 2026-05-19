@@ -14,7 +14,7 @@ use crate::{
     instancetenant::tenant_rhai_register,
     jukebox::jukebox_rhai_register,
     k8sgeneric::k8sgeneric_rhai_register,
-    k8smock::k8smock_rhai_register,
+    k8smock::{k8smock_rhai_register, oci_mock_rhai_register},
     k8sraw::k8sraw_rhai_register,
     k8sworkload::k8sworkload_rhai_register,
     ocihandler::oci_rhai_register,
@@ -197,6 +197,7 @@ impl Script {
         created_objects: std::sync::Arc<std::sync::Mutex<Vec<Dynamic>>>,
     ) -> Script {
         let mut script = Self::new_core(resolver_path);
+        oci_mock_rhai_register(&mut script.engine);
         httpmock_rhai_register(&mut script.engine, http_mocks);
         k8smock_rhai_register(&mut script.engine, k8s_mocks, created_objects);
         script

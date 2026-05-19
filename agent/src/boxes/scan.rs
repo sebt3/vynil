@@ -25,6 +25,9 @@ pub struct Parameters {
         default_value = "./agent/scripts"
     )]
     script_dir: PathBuf,
+    /// Filtre partiel : "<category>" ou "<category>/<package_name>"
+    #[arg(short = 'f', long = "filter", env = "SCAN_PACKAGE", value_name = "SCAN_PACKAGE")]
+    filter: Option<String>,
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {

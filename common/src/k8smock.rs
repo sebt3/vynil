@@ -1023,6 +1023,11 @@ impl K8sJukeBoxMock {
         Ok(self.clone())
     }
 
+    pub fn set_status_packages_merge(&mut self, _filter: String, packages: Dynamic) -> RhaiRes<Self> {
+        self.set_status_field("packages", packages);
+        Ok(self.clone())
+    }
+
     pub fn set_status_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
@@ -1327,10 +1332,36 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
         .register_fn("get_jukebox", get_jb)
         .register_fn("list_jukebox", list_jb)
         .register_fn("set_status_updated", K8sJukeBoxMock::set_status_updated)
+        .register_fn("set_status_packages_merge", K8sJukeBoxMock::set_status_packages_merge)
         .register_fn("set_status_failed", K8sJukeBoxMock::set_status_failed)
         .register_get("metadata", K8sJukeBoxMock::get_metadata)
         .register_get("spec", K8sJukeBoxMock::get_spec)
         .register_get("status", K8sJukeBoxMock::get_status);
+}
+
+// ── OCI Registry mock ────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug)]
+pub struct OciRegistryMock;
+
+impl OciRegistryMock {
+    pub fn list_tags(&mut self, _repository: String) -> RhaiRes<Dynamic> {
+        Ok(Dynamic::from_array(vec![]))
+    }
+
+    pub fn get_manifest(&mut self, _repository: String, _tag: String) -> RhaiRes<Dynamic> {
+        let mut map = rhai::Map::new();
+        map.insert("annotations".into(), Dynamic::from_map(rhai::Map::new()));
+        Ok(Dynamic::from_map(map))
+    }
+}
+
+pub fn oci_mock_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<OciRegistryMock>("OciRegistryMock")
+        .register_fn("new_registry", |_: String, _: String, _: String| OciRegistryMock)
+        .register_fn("list_tags", OciRegistryMock::list_tags)
+        .register_fn("get_manifest", OciRegistryMock::get_manifest);
 }
 
 #[cfg(test)]
