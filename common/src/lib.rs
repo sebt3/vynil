@@ -136,6 +136,7 @@ pub mod k8sraw;
 pub mod k8sworkload;
 pub mod ocihandler;
 pub mod passwordhandler;
+pub mod s3handler;
 pub mod rhaihandler;
 mod semverhandler;
 pub mod shellhandler;

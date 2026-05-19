@@ -20,6 +20,7 @@ use crate::{
     k8sworkload::k8sworkload_rhai_register,
     ocihandler::oci_rhai_register,
     passwordhandler::password_rhai_register,
+    s3handler::s3_rhai_register,
     rhai_err,
     semverhandler::semver_rhai_register,
     shellhandler::shell_rhai_register,
@@ -181,6 +182,7 @@ impl Script {
     pub fn new_file_scan(resolver_path: Vec<String>) -> Script {
         let mut script = Self::new_core(resolver_path);
         http_rhai_register(&mut script.engine);
+        s3_rhai_register(&mut script.engine);
         file_jukebox_rhai_register(&mut script.engine);
         script
     }
@@ -188,6 +190,7 @@ impl Script {
     pub fn new(resolver_path: Vec<String>) -> Script {
         let mut script = Self::new_core(resolver_path);
         http_rhai_register(&mut script.engine);
+        s3_rhai_register(&mut script.engine);
         service_rhai_register(&mut script.engine);
         system_rhai_register(&mut script.engine);
         tenant_rhai_register(&mut script.engine);
