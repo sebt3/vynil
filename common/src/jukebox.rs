@@ -331,6 +331,80 @@ impl JukeBox {
         block_in_place(|| Handle::current().block_on(async move { self.set_status_failed(reason).await }))
             .map_err(rhai_err)
     }
+
+    pub async fn set_status_packages_merge(
+        &mut self,
+        filter: String,
+        packages: Vec<VynilPackage>,
+    ) -> Result<Self> {
+        let client = get_client_async().await;
+        let generation = self.metadata.generation.unwrap_or(1);
+
+        let (filter_category, filter_name): (String, Option<String>) =
+            if let Some(pos) = filter.find('/') {
+                (filter[..pos].to_string(), Some(filter[pos + 1..].to_string()))
+            } else {
+                (filter.clone(), None)
+            };
+
+        let existing = self
+            .status
+            .as_ref()
+            .map(|s| s.packages.clone())
+            .unwrap_or_default();
+        let merged = filter_packages(existing, &filter_category, filter_name.as_deref(), packages);
+
+        let conditions = vec![
+            ApplicationCondition::updated_ok(generation),
+            ApplicationCondition::ready_ok(generation),
+        ];
+        let result = self
+            .patch_status(client.clone(), json!({
+                "conditions": conditions,
+                "packages": merged,
+            }))
+            .await?;
+
+        self.send_event(client, Event {
+            type_: EventType::Normal,
+            reason: "ScanSucceed".to_string(),
+            note: Some(format!("Partial scan updated filter: {}", filter)),
+            action: "Scan".to_string(),
+            secondary: None,
+        })
+        .await?;
+        Ok(result)
+    }
+
+    pub fn rhai_set_status_packages_merge(
+        &mut self,
+        filter: String,
+        list: Dynamic,
+    ) -> RhaiRes<Self> {
+        block_in_place(|| {
+            Handle::current().block_on(async move {
+                let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
+                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
+                self.set_status_packages_merge(filter, lst).await
+            })
+        })
+        .map_err(rhai_err)
+    }
+}
+
+fn filter_packages(
+    mut existing: Vec<VynilPackage>,
+    filter_category: &str,
+    filter_name: Option<&str>,
+    new_packages: Vec<VynilPackage>,
+) -> Vec<VynilPackage> {
+    existing.retain(|p| {
+        let cat_match = p.metadata.category == filter_category;
+        let name_match = filter_name.map(|n| p.metadata.name == n).unwrap_or(true);
+        !(cat_match && name_match)
+    });
+    existing.extend(new_packages);
+    existing
 }
 
 pub fn jukebox_rhai_register(engine: &mut Engine) {
@@ -340,7 +414,74 @@ pub fn jukebox_rhai_register(engine: &mut Engine) {
         .register_fn("list_jukebox", JukeBox::rhai_list)
         .register_fn("set_status_updated", JukeBox::rhai_set_status_updated)
         .register_fn("set_status_failed", JukeBox::rhai_set_status_failed)
+        .register_fn("set_status_packages_merge", JukeBox::rhai_set_status_packages_merge)
         .register_get("metadata", JukeBox::get_metadata)
         .register_get("spec", JukeBox::get_spec)
         .register_get("status", JukeBox::get_status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vynilpackage::{VynilPackageMeta, VynilPackageType};
+
+    fn make_pkg(category: &str, name: &str) -> VynilPackage {
+        VynilPackage {
+            registry: String::new(),
+            image: String::new(),
+            tag: String::new(),
+            metadata: VynilPackageMeta {
+                name: name.to_string(),
+                category: category.to_string(),
+                description: String::new(),
+                app_version: None,
+                usage: VynilPackageType::default(),
+                features: vec![],
+                backup_affinity: None,
+            },
+            requirements: vec![],
+            recommandations: None,
+            options: None,
+            value_script: None,
+        }
+    }
+
+    fn initial_packages() -> Vec<VynilPackage> {
+        vec![
+            make_pkg("db", "pg"),
+            make_pkg("db", "mysql"),
+            make_pkg("monitoring", "prom"),
+        ]
+    }
+
+    #[test]
+    fn filter_by_category_removes_all_matching() {
+        let result = filter_packages(initial_packages(), "db", None, vec![make_pkg("db", "pg")]);
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().any(|p| p.metadata.category == "monitoring" && p.metadata.name == "prom"));
+        assert!(result.iter().any(|p| p.metadata.category == "db" && p.metadata.name == "pg"));
+        assert!(!result.iter().any(|p| p.metadata.name == "mysql"));
+    }
+
+    #[test]
+    fn filter_by_category_name_removes_only_matching() {
+        let result = filter_packages(initial_packages(), "db", Some("pg"), vec![make_pkg("db", "pg")]);
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().any(|p| p.metadata.name == "mysql"));
+        assert!(result.iter().any(|p| p.metadata.name == "prom"));
+    }
+
+    #[test]
+    fn filter_no_match_appends_new_packages() {
+        let result = filter_packages(initial_packages(), "storage", None, vec![make_pkg("storage", "ceph")]);
+        assert_eq!(result.len(), 4);
+        assert!(result.iter().any(|p| p.metadata.name == "ceph"));
+    }
+
+    #[test]
+    fn filter_empty_existing_returns_new_packages() {
+        let result = filter_packages(vec![], "db", None, vec![make_pkg("db", "pg")]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].metadata.name, "pg");
+    }
 }
