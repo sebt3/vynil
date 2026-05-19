@@ -210,18 +210,88 @@ pub async fn verify_tag_in_registry(
     }
 }
 
+pub fn get_auth_from_file(path: String, registry: String) -> RhaiRes<Dynamic> {
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| rhai_err(Error::Stdio(e)))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| rhai_err(Error::SerializationError(e)))?;
+    let auth_b64 = json["auths"][&registry]["auth"]
+        .as_str()
+        .unwrap_or_default();
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(auth_b64)
+        .unwrap_or_default();
+    let user_pass = String::from_utf8(decoded).unwrap_or_default();
+    let mut parts = user_pass.splitn(2, ':');
+    let user = parts.next().unwrap_or_default().to_string();
+    let pass = parts.next().unwrap_or_default().to_string();
+    let mut map = Map::new();
+    map.insert("user".into(), user.into());
+    map.insert("pass".into(), pass.into());
+    Ok(Dynamic::from_map(map))
+}
+
 pub fn oci_rhai_register(engine: &mut Engine) {
     engine
         .register_type_with_name::<Registry>("Registry")
         .register_fn("new_registry", Registry::new)
         .register_fn("push_image", Registry::push_image)
         .register_fn("list_tags", Registry::rhai_list_tags)
-        .register_fn("get_manifest", Registry::get_manifest);
+        .register_fn("get_manifest", Registry::get_manifest)
+        .register_fn("get_auth_from_file", get_auth_from_file);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_docker_config(path: &std::path::Path, registry: &str, auth_b64: &str) {
+        let content = serde_json::json!({
+            "auths": { registry: { "auth": auth_b64 } }
+        })
+        .to_string();
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn get_auth_from_file_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // "user:pass" en base64
+        write_docker_config(&path, "docker.io", "dXNlcjpwYXNz");
+        let result = get_auth_from_file(path.to_string_lossy().to_string(), "docker.io".to_string());
+        let map = result.unwrap().cast::<Map>();
+        assert_eq!(map["user"].clone().cast::<String>(), "user");
+        assert_eq!(map["pass"].clone().cast::<String>(), "pass");
+    }
+
+    #[test]
+    fn get_auth_from_file_registry_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        write_docker_config(&path, "docker.io", "dXNlcjpwYXNz");
+        let result = get_auth_from_file(path.to_string_lossy().to_string(), "ghcr.io".to_string());
+        let map = result.unwrap().cast::<Map>();
+        assert_eq!(map["user"].clone().cast::<String>(), "");
+        assert_eq!(map["pass"].clone().cast::<String>(), "");
+    }
+
+    #[test]
+    fn get_auth_from_file_not_found() {
+        let result = get_auth_from_file("/nonexistent/path/config.json".to_string(), "docker.io".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn get_auth_from_file_empty_auth() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        write_docker_config(&path, "docker.io", "");
+        let result = get_auth_from_file(path.to_string_lossy().to_string(), "docker.io".to_string());
+        let map = result.unwrap().cast::<Map>();
+        assert_eq!(map["user"].clone().cast::<String>(), "");
+        assert_eq!(map["pass"].clone().cast::<String>(), "");
+    }
     use http::{Request, Response, StatusCode};
     use kube::client::Body;
     use std::pin::pin;
