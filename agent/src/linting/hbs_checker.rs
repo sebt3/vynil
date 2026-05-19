@@ -343,7 +343,7 @@ impl<'a> HbsChecker<'a> {
     }
 
     pub fn scan_rhai_for_resources(&mut self, source: &str) {
-        for prefix in &["context.resources.", "context.instance.resources."] {
+        for prefix in &["context.instance.resources."] {
             for part in source.split(prefix).skip(1) {
                 let key: String = part
                     .chars()
