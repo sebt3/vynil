@@ -720,7 +720,7 @@ dependencies = [
  "object_store",
  "oci-client",
  "openapiv3",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regex",
  "reqwest 0.12.28",
  "rhai",
