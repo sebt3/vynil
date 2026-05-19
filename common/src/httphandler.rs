@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{Error, Error::*, RhaiRes, get_client_name};
+use crate::{Error, Error::*, RhaiRes, get_client_name, rhai_err};
 use actix_web::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Certificate, Client, Response};
@@ -8,6 +8,7 @@ use rhai::{Dynamic, Engine, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use serde_yaml;
 use tokio::runtime::Handle;
 use tracing::*;
 
@@ -738,6 +739,53 @@ impl RestClient {
     }
 }
 
+pub fn http_get_yaml(url: String, auth_type: String, credential: String) -> RhaiRes<Dynamic> {
+    tokio::task::block_in_place(|| {
+        Handle::current().block_on(async move {
+            let mut headers = reqwest::header::HeaderMap::new();
+            match auth_type.as_str() {
+                "bearer" => {
+                    headers.insert(
+                        reqwest::header::AUTHORIZATION,
+                        format!("Bearer {}", credential).parse().unwrap(),
+                    );
+                }
+                "basic" => {
+                    let encoded = STANDARD.encode(&credential);
+                    headers.insert(
+                        reqwest::header::AUTHORIZATION,
+                        format!("Basic {}", encoded).parse().unwrap(),
+                    );
+                }
+                _ => {}
+            }
+            let client = reqwest::Client::builder()
+                .default_headers(headers)
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .map_err(|e| Error::Other(e.to_string()))?;
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(Error::ReqwestError)?;
+            if !response.status().is_success() {
+                return Err(Error::Other(format!(
+                    "SCAN-HTTP-001: HTTP {} for {}",
+                    response.status(),
+                    url
+                )));
+            }
+            let body = response.text().await.map_err(Error::ReqwestError)?;
+            let value: serde_yaml::Value =
+                serde_yaml::from_str(&body).map_err(|e| Error::YamlError(e.to_string()))?;
+            let json = serde_json::to_string(&value).map_err(Error::SerializationError)?;
+            serde_json::from_str::<Dynamic>(&json).map_err(Error::SerializationError)
+        })
+    })
+    .map_err(rhai_err)
+}
+
 pub fn http_rhai_register(engine: &mut Engine) {
     engine
         .register_type_with_name::<RestClient>("RestClient")
@@ -755,5 +803,91 @@ pub fn http_rhai_register(engine: &mut Engine) {
         .register_fn("delete", RestClient::rhai_delete)
         .register_fn("patch", RestClient::rhai_patch)
         .register_fn("post", RestClient::rhai_post)
-        .register_fn("put", RestClient::rhai_put);
+        .register_fn("put", RestClient::rhai_put)
+        .register_fn("http_get_yaml", http_get_yaml);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_get_yaml_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/index.yaml"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("packages:\n  - name: test\n"),
+            )
+            .mount(&server)
+            .await;
+
+        let result = http_get_yaml(
+            format!("{}/index.yaml", server.uri()),
+            String::new(),
+            String::new(),
+        );
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        let d = result.unwrap();
+        assert!(d.is_map(), "expected map Dynamic");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_get_yaml_404() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/missing.yaml"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = http_get_yaml(
+            format!("{}/missing.yaml", server.uri()),
+            String::new(),
+            String::new(),
+        );
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("SCAN-HTTP-001"), "error should contain SCAN-HTTP-001: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_get_yaml_bearer() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/index.yaml"))
+            .and(header("authorization", "Bearer token123"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("key: value\n"))
+            .mount(&server)
+            .await;
+
+        let result = http_get_yaml(
+            format!("{}/index.yaml", server.uri()),
+            "bearer".to_string(),
+            "token123".to_string(),
+        );
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_get_yaml_basic() {
+        let server = MockServer::start().await;
+        // base64("user:pass") = "dXNlcjpwYXNz"
+        Mock::given(method("GET"))
+            .and(path("/index.yaml"))
+            .and(header("authorization", "Basic dXNlcjpwYXNz"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("key: value\n"))
+            .mount(&server)
+            .await;
+
+        let result = http_get_yaml(
+            format!("{}/index.yaml", server.uri()),
+            "basic".to_string(),
+            "user:pass".to_string(),
+        );
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
 }

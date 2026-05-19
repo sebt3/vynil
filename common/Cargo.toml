@@ -47,6 +47,7 @@ wildmatch = "2.6.1"
 [dev-dependencies]
 tower-test = "0.4.0"
 tempfile = "3"
+wiremock = "0.6"
 
 [lib]
 name = "common"
