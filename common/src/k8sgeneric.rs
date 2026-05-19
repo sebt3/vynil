@@ -777,6 +777,9 @@ impl K8sGeneric {
     ) -> Result<DynamicObject> {
         if let Some(api) = self.api.clone() {
             let mut handle = patch.clone();
+            if !handle.contains_key("metadata") || !handle["metadata"].is_object() {
+                handle.insert("metadata".to_string(), json!({}));
+            }
             if let Some(labels) = get_labels() {
                 if !handle["metadata"].as_object().unwrap().contains_key("labels") {
                     handle["metadata"]
@@ -856,6 +859,9 @@ impl K8sGeneric {
     ) -> Result<DynamicObject> {
         if let Some(api) = self.api.clone() {
             let mut handle = patch.clone();
+            if !handle.contains_key("metadata") || !handle["metadata"].is_object() {
+                handle.insert("metadata".to_string(), json!({}));
+            }
             if let Some(labels) = get_labels() {
                 if !handle["metadata"].as_object().unwrap().contains_key("labels") {
                     handle["metadata"]
