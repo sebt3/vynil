@@ -37,6 +37,10 @@ spec:
           value: {{ log_level }}
         - name: RUST_LOG
           value: info,controller=info,agent=info
+        {{#if package_filter}}
+        - name: SCAN_PACKAGE
+          value: {{ package_filter }}
+        {{/if}}
         resources:
           limits:
             cpu: 1000m

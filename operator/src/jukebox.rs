@@ -129,7 +129,7 @@ impl Reconciler for JukeBox {
 
         // force-scan: processed here (fall-through) so it works whether a terminal job exists
         // or no job at all; deferred naturally when job is running (guard returns early above)
-        if self.annotations().contains_key("vynil.solidite.fr/force-scan") {
+        if let Some(filter_value) = self.annotations().get("vynil.solidite.fr/force-scan").cloned() {
             let stms = Api::<JukeBox>::all(client.clone());
             let patch = Patch::Json::<()>(
                 serde_json::from_value(serde_json::json!([
@@ -157,6 +157,7 @@ impl Reconciler for JukeBox {
                     Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
                 }
             }
+            inject_package_filter(&mut context, &filter_value);
         }
 
         // Create the Job
@@ -223,6 +224,15 @@ impl Reconciler for JukeBox {
     }
 }
 
+fn inject_package_filter(context: &mut Value, filter_value: &str) {
+    if filter_value != "true" && !filter_value.is_empty() {
+        context
+            .as_object_mut()
+            .unwrap()
+            .insert("package_filter".to_string(), filter_value.to_string().into());
+    }
+}
+
 fn is_job_terminal(job: &Job) -> bool {
     let Some(status) = &job.status else { return false };
     let Some(conditions) = &status.conditions else {
@@ -242,4 +252,38 @@ pub fn error_policy(dist: Arc<JukeBox>, error: &Error, ctx: Arc<Context>) -> Act
     );
     ctx.metrics.jukebox.reconcile_failure(&dist, error);
     Action::requeue(Duration::from_secs(5 * 60))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inject_package_filter;
+    use serde_json::json;
+
+    #[test]
+    fn partial_filter_injects_package_filter() {
+        let mut ctx = json!({});
+        inject_package_filter(&mut ctx, "database/postgresql");
+        assert_eq!(ctx["package_filter"], "database/postgresql");
+    }
+
+    #[test]
+    fn true_value_does_not_inject_package_filter() {
+        let mut ctx = json!({});
+        inject_package_filter(&mut ctx, "true");
+        assert!(ctx.get("package_filter").is_none());
+    }
+
+    #[test]
+    fn empty_value_does_not_inject_package_filter() {
+        let mut ctx = json!({});
+        inject_package_filter(&mut ctx, "");
+        assert!(ctx.get("package_filter").is_none());
+    }
+
+    #[test]
+    fn category_only_filter_injects_package_filter() {
+        let mut ctx = json!({});
+        inject_package_filter(&mut ctx, "database");
+        assert_eq!(ctx["package_filter"], "database");
+    }
 }
