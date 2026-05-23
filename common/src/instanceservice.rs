@@ -1,4 +1,4 @@
-use crate::{Error, Published, Result, RhaiRes, context::get_client_async, rhai_err};
+use crate::{Error, Published, Result, RhaiRes, context::get_client_async, rhai_err, ttl_cache::TtlCache};
 use chrono::{DateTime, Utc};
 use kube::{
     CustomResource, Resource, ResourceExt,
@@ -177,22 +177,31 @@ impl ServiceInstance {
     }
 
     pub async fn get_all_services_names() -> Result<Vec<String>> {
-        let client = get_client_async().await;
-        let lp = ListParams::default();
-        let all_instances = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            Api::<Self>::all(client).list(&lp),
-        )
-        .await
-        .map_err(|_| Error::Other("E_LIST_SERVICES_TIMEOUT: get_all_services_names exceeded 30s".into()))?
-        .map_err(Error::KubeError)?;
+        lazy_static::lazy_static! {
+            static ref CACHE: TtlCache<Vec<String>> = TtlCache::new(std::time::Duration::from_secs(30));
+        }
+        CACHE
+            .get_or_refresh(|| async {
+                let client = get_client_async().await;
+                let lp = ListParams::default();
+                let all_instances = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    Api::<ServiceInstance>::all(client).list(&lp),
+                )
+                .await
+                .map_err(|_| {
+                    Error::Other("E_LIST_SERVICES_TIMEOUT: get_all_services_names exceeded 30s".into())
+                })?
+                .map_err(Error::KubeError)?;
 
-        let mut list: Vec<String> = all_instances
-            .iter()
-            .flat_map(|i| i.get_services().iter().map(|s| s.key.clone()).collect::<Vec<_>>())
-            .collect();
-        list.sort();
-        Ok(list)
+                let mut list: Vec<String> = all_instances
+                    .iter()
+                    .flat_map(|i| i.get_services().iter().map(|s| s.key.clone()).collect::<Vec<_>>())
+                    .collect();
+                list.sort();
+                Ok(list)
+            })
+            .await
     }
 
     pub fn rhai_list_services_names() -> RhaiRes<Vec<String>> {
