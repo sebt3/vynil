@@ -359,12 +359,11 @@ impl JukeBox {
         let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
 
-        let (filter_category, filter_name): (String, Option<String>) =
-            if let Some(pos) = filter.find('/') {
-                (filter[..pos].to_string(), Some(filter[pos + 1..].to_string()))
-            } else {
-                (filter.clone(), None)
-            };
+        let (filter_category, filter_name): (String, Option<String>) = if let Some(pos) = filter.find('/') {
+            (filter[..pos].to_string(), Some(filter[pos + 1..].to_string()))
+        } else {
+            (filter.clone(), None)
+        };
 
         let existing = self
             .status
@@ -378,10 +377,13 @@ impl JukeBox {
             ApplicationCondition::ready_ok(generation),
         ];
         let result = self
-            .patch_status(client.clone(), json!({
-                "conditions": conditions,
-                "packages": merged,
-            }))
+            .patch_status(
+                client.clone(),
+                json!({
+                    "conditions": conditions,
+                    "packages": merged,
+                }),
+            )
             .await?;
 
         self.send_event(client, Event {
@@ -395,11 +397,7 @@ impl JukeBox {
         Ok(result)
     }
 
-    pub fn rhai_set_status_packages_merge(
-        &mut self,
-        filter: String,
-        list: Dynamic,
-    ) -> RhaiRes<Self> {
+    pub fn rhai_set_status_packages_merge(&mut self, filter: String, list: Dynamic) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move {
                 let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
@@ -433,7 +431,10 @@ pub fn jukebox_rhai_register(engine: &mut Engine) {
         .register_fn("list_jukebox", JukeBox::rhai_list)
         .register_fn("set_status_updated", JukeBox::rhai_set_status_updated)
         .register_fn("set_status_failed", JukeBox::rhai_set_status_failed)
-        .register_fn("set_status_packages_merge", JukeBox::rhai_set_status_packages_merge)
+        .register_fn(
+            "set_status_packages_merge",
+            JukeBox::rhai_set_status_packages_merge,
+        )
         .register_get("metadata", JukeBox::get_metadata)
         .register_get("spec", JukeBox::get_spec)
         .register_get("status", JukeBox::get_status);
@@ -516,8 +517,16 @@ mod tests {
     fn filter_by_category_removes_all_matching() {
         let result = filter_packages(initial_packages(), "db", None, vec![make_pkg("db", "pg")]);
         assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|p| p.metadata.category == "monitoring" && p.metadata.name == "prom"));
-        assert!(result.iter().any(|p| p.metadata.category == "db" && p.metadata.name == "pg"));
+        assert!(
+            result
+                .iter()
+                .any(|p| p.metadata.category == "monitoring" && p.metadata.name == "prom")
+        );
+        assert!(
+            result
+                .iter()
+                .any(|p| p.metadata.category == "db" && p.metadata.name == "pg")
+        );
         assert!(!result.iter().any(|p| p.metadata.name == "mysql"));
     }
 
@@ -531,7 +540,9 @@ mod tests {
 
     #[test]
     fn filter_no_match_appends_new_packages() {
-        let result = filter_packages(initial_packages(), "storage", None, vec![make_pkg("storage", "ceph")]);
+        let result = filter_packages(initial_packages(), "storage", None, vec![make_pkg(
+            "storage", "ceph",
+        )]);
         assert_eq!(result.len(), 4);
         assert!(result.iter().any(|p| p.metadata.name == "ceph"));
     }

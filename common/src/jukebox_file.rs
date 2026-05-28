@@ -1,8 +1,4 @@
-use crate::{
-    Error, Result, RhaiRes, rhai_err,
-    jukebox::JukeBoxDef,
-    vynilpackage::VynilPackage,
-};
+use crate::{Error, Result, RhaiRes, jukebox::JukeBoxDef, rhai_err, vynilpackage::VynilPackage};
 use rhai::{Dynamic, Engine};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
@@ -65,8 +61,8 @@ impl FileJukeBox {
             let path = self.cache_dir.join(&entry.file);
             if path.exists() {
                 let pkg_content = std::fs::read_to_string(&path).map_err(Error::Stdio)?;
-                let pkgs: Vec<VynilPackage> = serde_yaml::from_str(&pkg_content)
-                    .map_err(|e| Error::YamlError(e.to_string()))?;
+                let pkgs: Vec<VynilPackage> =
+                    serde_yaml::from_str(&pkg_content).map_err(|e| Error::YamlError(e.to_string()))?;
                 all.extend(pkgs);
             }
         }
@@ -96,7 +92,11 @@ impl FileJukeBox {
             let yaml = serde_yaml::to_string(pkgs).map_err(|e| Error::YamlError(e.to_string()))?;
             std::fs::write(&pkg_path, yaml).map_err(Error::Stdio)?;
 
-            if !index.packages.iter().any(|e| e.category == *category && e.name == *name) {
+            if !index
+                .packages
+                .iter()
+                .any(|e| e.category == *category && e.name == *name)
+            {
                 index.packages.push(CacheIndexEntry {
                     category: category.clone(),
                     name: name.clone(),
@@ -105,8 +105,7 @@ impl FileJukeBox {
             }
         }
 
-        let index_yaml =
-            serde_yaml::to_string(&index).map_err(|e| Error::YamlError(e.to_string()))?;
+        let index_yaml = serde_yaml::to_string(&index).map_err(|e| Error::YamlError(e.to_string()))?;
         std::fs::write(&index_path, index_yaml).map_err(Error::Stdio)?;
 
         let _ = filter;
@@ -121,11 +120,7 @@ impl FileJukeBox {
         Ok(self.clone())
     }
 
-    pub fn rhai_set_status_packages_merge(
-        &mut self,
-        filter: String,
-        list: Dynamic,
-    ) -> RhaiRes<FileJukeBox> {
+    pub fn rhai_set_status_packages_merge(&mut self, filter: String, list: Dynamic) -> RhaiRes<FileJukeBox> {
         let v = serde_json::to_string(&list).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         let packages: Vec<VynilPackage> =
             serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))?;
@@ -219,7 +214,10 @@ mod tests {
     fn read_all_from_cache_returns_packages() {
         let dir = TempDir::new().unwrap();
         let fb = make_box(&dir);
-        let pkgs = vec![make_pkg("database", "postgresql"), make_pkg("monitoring", "prometheus")];
+        let pkgs = vec![
+            make_pkg("database", "postgresql"),
+            make_pkg("monitoring", "prometheus"),
+        ];
         fb.write_to_cache(&pkgs, None).unwrap();
 
         let result = fb.read_all_from_cache().unwrap();

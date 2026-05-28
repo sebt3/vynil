@@ -41,14 +41,8 @@ pub fn s3_get_yaml(
             let store = build_store(&bucket, &region, &endpoint, &access_key, &secret_key)?;
             let full_key = format!("{}{}", prefix, key);
             let path = Path::from(full_key.as_str());
-            let result = store
-                .get(&path)
-                .await
-                .map_err(|e| Error::Other(e.to_string()))?;
-            let bytes = result
-                .bytes()
-                .await
-                .map_err(|e| Error::Other(e.to_string()))?;
+            let result = store.get(&path).await.map_err(|e| Error::Other(e.to_string()))?;
+            let bytes = result.bytes().await.map_err(|e| Error::Other(e.to_string()))?;
             let body = String::from_utf8(bytes.to_vec()).map_err(Error::UTF8)?;
             let value: serde_yaml::Value =
                 serde_yaml::from_str(&body).map_err(|e| Error::YamlError(e.to_string()))?;
@@ -97,10 +91,7 @@ mod tests {
     async fn setup_store_with_yaml(key: &str, yaml: &str) -> InMemory {
         let store = InMemory::new();
         store
-            .put(
-                &Path::from(key),
-                PutPayload::from(yaml.as_bytes().to_vec()),
-            )
+            .put(&Path::from(key), PutPayload::from(yaml.as_bytes().to_vec()))
             .await
             .unwrap();
         store
@@ -131,10 +122,7 @@ mod tests {
         let store = InMemory::new();
         for key in &["prefix/a.yaml", "prefix/b.yaml", "prefix/c.yaml"] {
             store
-                .put(
-                    &Path::from(*key),
-                    PutPayload::from(b"key: val".to_vec()),
-                )
+                .put(&Path::from(*key), PutPayload::from(b"key: val".to_vec()))
                 .await
                 .unwrap();
         }
