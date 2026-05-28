@@ -123,6 +123,7 @@ pub mod hasheshandlers;
 pub mod httphandler;
 pub mod httpmock;
 pub mod k8smock;
+pub mod ttl_cache;
 #[macro_use]
 pub mod instance_macros;
 pub mod globhandler;
