@@ -1438,7 +1438,7 @@ mod tests {
         let pkg = Box::leak(Box::new(create_pkg_with_resources()));
         let mut checker = make_checker(pkg);
 
-        checker.scan_rhai_for_resources("let r = context.resources.app;");
+        checker.scan_rhai_for_resources("let r = context.instance.resources.app;");
         let findings = checker.finalize();
 
         assert!(

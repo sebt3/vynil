@@ -1,7 +1,7 @@
 use rand::{
     distr::{Distribution, uniform::Uniform, weighted::WeightedIndex},
-    rngs::ThreadRng,
     rng,
+    rngs::ThreadRng,
 };
 use rhai::Engine;
 
