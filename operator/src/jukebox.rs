@@ -127,19 +127,11 @@ impl Reconciler for JukeBox {
             .await
             .map_err(Error::KubeError)?;
 
-        // force-scan: processed here (fall-through) so it works whether a terminal job exists
-        // or no job at all; deferred naturally when job is running (guard returns early above)
-        if let Some(filter_value) = self.annotations().get("vynil.solidite.fr/force-scan").cloned() {
-            let stms = Api::<JukeBox>::all(client.clone());
-            let patch = Patch::Json::<()>(
-                serde_json::from_value(serde_json::json!([
-                    {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
-                ]))
-                .unwrap(),
-            );
-            stms.patch(&self.name_any(), &PatchParams::default(), &patch)
-                .await
-                .map_err(Error::KubeError)?;
+        // force-scan: delete existing job and inject package filter
+        // Annotation is removed ONLY after successful job creation, so that on failure
+        // the next reconcile retry will still see the annotation and recreate with SCAN_PACKAGE.
+        let force_scan = self.annotations().get("vynil.solidite.fr/force-scan").cloned();
+        if let Some(ref filter_value) = force_scan {
             let job = job_api.get_metadata_opt(&job_name).await;
             if job.is_ok() && job.unwrap().is_some() {
                 match job_api.delete(&job_name, &DeleteParams::foreground()).await {
@@ -157,7 +149,7 @@ impl Reconciler for JukeBox {
                     Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
                 }
             }
-            inject_package_filter(&mut context, &filter_value);
+            inject_package_filter(&mut context, filter_value);
         }
 
         // Create the Job
@@ -194,6 +186,20 @@ impl Reconciler for JukeBox {
                     .map_err(Error::KubeError)?
             }
         };
+
+        // Remove force-scan annotation only after successful job creation
+        if force_scan.is_some() {
+            let stms = Api::<JukeBox>::all(client.clone());
+            let patch = Patch::Json::<()>(
+                serde_json::from_value(serde_json::json!([
+                    {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
+                ]))
+                .unwrap(),
+            );
+            stms.patch(&self.name_any(), &PatchParams::default(), &patch)
+                .await
+                .map_err(Error::KubeError)?;
+        }
         tracing::debug!("Reconcilling JukeBox {} Done", self.name_any());
         Ok(Action::requeue(Duration::from_secs(15 * 60)))
     }
