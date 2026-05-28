@@ -85,21 +85,21 @@ pub async fn run(args: &Parameters) -> Result<()> {
     set_box(context.clone());
     rhai.ctx.set_value("box", context.clone());
     rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
-    if let Some(JukeBoxDef::Http { secret, .. }) = &context.spec.source {
-        if let Some(secret_name) = secret {
-            let client = common::context::get_client_async().await;
-            let (auth_type, credential) = resolve_http_secret(secret_name, &args.namespace, &client).await?;
-            rhai.ctx.set_value("http_auth_type", auth_type);
-            rhai.ctx.set_value("http_credential", credential);
-        }
+    if let Some(JukeBoxDef::Http { secret, .. }) = &context.spec.source
+        && let Some(secret_name) = secret
+    {
+        let client = common::context::get_client_async().await;
+        let (auth_type, credential) = resolve_http_secret(secret_name, &args.namespace, &client).await?;
+        rhai.ctx.set_value("http_auth_type", auth_type);
+        rhai.ctx.set_value("http_credential", credential);
     }
-    if let Some(JukeBoxDef::S3 { secret, .. }) = &context.spec.source {
-        if let Some(secret_name) = secret {
-            let client = common::context::get_client_async().await;
-            let (access_key, secret_key) = resolve_s3_secret(secret_name, &args.namespace, &client).await?;
-            rhai.ctx.set_value("s3_access_key", access_key);
-            rhai.ctx.set_value("s3_secret_key", secret_key);
-        }
+    if let Some(JukeBoxDef::S3 { secret, .. }) = &context.spec.source
+        && let Some(secret_name) = secret
+    {
+        let client = common::context::get_client_async().await;
+        let (access_key, secret_key) = resolve_s3_secret(secret_name, &args.namespace, &client).await?;
+        rhai.ctx.set_value("s3_access_key", access_key);
+        rhai.ctx.set_value("s3_secret_key", secret_key);
     }
     let _ = rhai.run_file(&PathBuf::from(format!(
         "{}/boxes/scan.rhai",

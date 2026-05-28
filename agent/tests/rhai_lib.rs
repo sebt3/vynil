@@ -129,7 +129,7 @@ fn storage_class_selector_for_singletons_empty_list() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -236,7 +236,7 @@ fn storage_class_enrich_adds_capabilities_and_modes() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn storage_class_enrich_unknown_provisioner() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn storage_class_enrich_block_volumemode_duplication() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 // ===== wait.rhai tests =====
@@ -329,7 +329,7 @@ fn wait_installs_filters_instances() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn wait_workload_filters_workloads() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn wait_vital_handles_multiple_types() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn wait_job_filters_jobs() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -455,7 +455,7 @@ fn wait_all_chains_functions() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 // ===== install_from_dir.rhai tests =====
@@ -576,14 +576,12 @@ fn install_from_dir_respects_namespace_parameter() {
     let created_objs = created.lock().unwrap();
     assert_eq!(created_objs.len(), 2);
     for obj in created_objs.iter() {
-        if let Ok(map) = obj.as_map_ref() {
-            if let Some(meta) = map.get("metadata") {
-                if let Ok(meta_map) = meta.as_map_ref() {
-                    if let Some(ns) = meta_map.get("namespace") {
-                        assert_eq!(ns.to_string(), "forced-ns");
-                    }
-                }
-            }
+        if let Ok(map) = obj.as_map_ref()
+            && let Some(meta) = map.get("metadata")
+            && let Ok(meta_map) = meta.as_map_ref()
+            && let Some(ns) = meta_map.get("namespace")
+        {
+            assert_eq!(ns.to_string(), "forced-ns");
         }
     }
 }
@@ -622,7 +620,7 @@ fn install_from_dir_respects_ordering() {
         ))
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 // ===== gen_package.rhai tests =====
@@ -659,9 +657,8 @@ fn gen_package_replace_returns_modified_string() {
 
     // This should be true if .replace() properly updates the value
     // Currently may be false if the bug exists (pattern: v.replace(...); v without assignment)
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "replace_label_values must update label values using .replace() with assignment"
     );
 }
@@ -701,9 +698,8 @@ fn gen_package_clean_metadata_removes_helm_annotations() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "clean_metadata must remove Helm and checksum annotations but keep custom ones"
     );
 }
@@ -733,9 +729,8 @@ fn gen_package_clean_metadata_empty_annotations() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "clean_metadata must remove annotations key if all entries are Helm-related"
     );
 }
@@ -773,9 +768,8 @@ fn gen_package_replace_volumes_handles_configmap_and_pvc() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "replace_volumes must update configMap and persistentVolumeClaim names"
     );
 }
@@ -828,9 +822,8 @@ fn gen_package_replace_containers_handles_env_configmap_refs() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "replace_containers must update configMapRef names in env, envFrom, and valueFrom"
     );
 }
@@ -877,9 +870,8 @@ fn gen_package_replace_containers_handles_secret_refs() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "replace_containers must update secretRef names in valueFrom and envFrom"
     );
 }
@@ -912,9 +904,8 @@ fn gen_package_replace_image_pull_secrets() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "replace_image_pull_secrets must update matching secret names"
     );
 }
@@ -943,9 +934,8 @@ fn gen_package_clean_annotations_backward_compat() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "clean_annotations must remove Helm annotations without name parameter"
     );
 }
@@ -976,9 +966,8 @@ fn backup_context_from_args_filters_empty_strings() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "backup_context must filter empty strings from split lists"
     );
 }
@@ -1002,9 +991,8 @@ fn backup_context_reduce_builds_space_separated_list() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "backup_context reduce pattern must build space-separated lists"
     );
 }
@@ -1026,9 +1014,8 @@ fn backup_context_reduce_handles_empty_list() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "backup_context reduce on empty list must return unit"
     );
 }
@@ -1069,11 +1056,7 @@ fn resolv_service_get_from_key_finds_service() {
         )
         .unwrap();
 
-    assert_eq!(
-        result.as_bool().unwrap(),
-        true,
-        "get_from_key must find service by key"
-    );
+    assert!(result.as_bool().unwrap(), "get_from_key must find service by key");
 }
 
 #[test]
@@ -1100,9 +1083,8 @@ fn resolv_service_get_from_key_returns_unit_when_not_found() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "get_from_key must return unit when key not found"
     );
 }
@@ -1143,9 +1125,8 @@ fn resolv_service_get_from_package_finds_by_package_name() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "get_from_package must find service by nested package.name"
     );
 }
@@ -1190,9 +1171,8 @@ fn resolv_service_service_glob_filters_and_maps() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "service_glob must filter by glob pattern and return array"
     );
 }
@@ -1226,9 +1206,8 @@ fn resolv_service_get_from_key_with_array_of_names() {
         )
         .unwrap();
 
-    assert_eq!(
+    assert!(
         result.as_bool().unwrap(),
-        true,
         "get_from_key must handle array of names and return first match"
     );
 }
@@ -1645,7 +1624,7 @@ fn package_yaml_properties_improve_leaf_defaults_all_children_compute_parent_def
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -1676,7 +1655,7 @@ fn package_yaml_properties_improve_leaf_defaults_partial_children_compute_partia
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -1705,7 +1684,7 @@ fn package_yaml_properties_improve_leaf_defaults_no_children_default_means_no_pa
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -1734,7 +1713,7 @@ fn package_yaml_properties_improve_existing_parent_default_not_overwritten() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }
 
 #[test]
@@ -1770,5 +1749,5 @@ fn package_yaml_properties_improve_leaf_defaults_cascade_multiple_levels() {
         )
         .unwrap();
 
-    assert_eq!(result.as_bool().unwrap(), true);
+    assert!(result.as_bool().unwrap());
 }

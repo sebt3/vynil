@@ -81,9 +81,8 @@ fn service_context_builds_context_from_instance() {
         "context::run() should not error: {:?}",
         result.err()
     );
-    assert_eq!(
+    assert!(
         result.unwrap().as_bool().unwrap(),
-        true,
         "context::run() should return a map"
     );
 }
@@ -163,9 +162,8 @@ fn service_install_context_has_expected_fields() {
     );
 
     assert!(result.is_ok(), "context field checks should not error");
-    assert_eq!(
+    assert!(
         result.unwrap().as_bool().unwrap(),
-        true,
         "context::run() should return a context with all expected fields"
     );
 }
