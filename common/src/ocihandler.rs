@@ -211,13 +211,10 @@ pub async fn verify_tag_in_registry(
 }
 
 pub fn get_auth_from_file(path: String, registry: String) -> RhaiRes<Dynamic> {
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| rhai_err(Error::Stdio(e)))?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| rhai_err(Error::SerializationError(e)))?;
-    let auth_b64 = json["auths"][&registry]["auth"]
-        .as_str()
-        .unwrap_or_default();
+    let content = std::fs::read_to_string(&path).map_err(|e| rhai_err(Error::Stdio(e)))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| rhai_err(Error::SerializationError(e)))?;
+    let auth_b64 = json["auths"][&registry]["auth"].as_str().unwrap_or_default();
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(auth_b64)
         .unwrap_or_default();
@@ -278,7 +275,10 @@ mod tests {
 
     #[test]
     fn get_auth_from_file_not_found() {
-        let result = get_auth_from_file("/nonexistent/path/config.json".to_string(), "docker.io".to_string());
+        let result = get_auth_from_file(
+            "/nonexistent/path/config.json".to_string(),
+            "docker.io".to_string(),
+        );
         assert!(result.is_err());
     }
 

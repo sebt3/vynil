@@ -8,17 +8,16 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
-const INDEX_ONE_ENTRY: &str =
-    "packages:\n  - category: db\n    name: pg\n    file: db_pg.yaml\n";
+const INDEX_ONE_ENTRY: &str = "packages:\n  - category: db\n    name: pg\n    file: db_pg.yaml\n";
 
-const INDEX_TWO_ENTRIES: &str =
-    "packages:\n  - category: db\n    name: pg\n    file: db_pg.yaml\n  - category: monitoring\n    name: prom\n    file: monitoring_prom.yaml\n";
+const INDEX_TWO_ENTRIES: &str = "packages:\n  - category: db\n    name: pg\n    file: db_pg.yaml\n  - category: monitoring\n    name: prom\n    file: monitoring_prom.yaml\n";
 
-const DB_PG_PACKAGES: &str =
-    "- registry: docker.io\n  image: myrepo/pg\n  tag: \"1.0.0\"\n  metadata:\n    name: pg\n    category: db\n    description: PostgreSQL\n    type: service\n    features: []\n  requirements: []\n";
+const DB_PG_PACKAGES: &str = "- registry: docker.io\n  image: myrepo/pg\n  tag: \"1.0.0\"\n  metadata:\n    name: pg\n    category: db\n    description: PostgreSQL\n    type: service\n    features: []\n  requirements: []\n";
 
 fn make_http_scan_script() -> (Script, Arc<Mutex<Vec<Dynamic>>>) {
     let base = env!("CARGO_MANIFEST_DIR");
@@ -43,7 +42,9 @@ fn build_http_jukebox_mock(url: &str) -> K8sJukeBoxMock {
             "schedule": "0 * * * *"
         }
     });
-    K8sJukeBoxMock { obj: serde_json::from_str(&serde_json::to_string(&json).unwrap()).unwrap() }
+    K8sJukeBoxMock {
+        obj: serde_json::from_str(&serde_json::to_string(&json).unwrap()).unwrap(),
+    }
 }
 
 fn run_http_scan(script: &mut Script, url: &str, filter: Option<&str>) -> common::Result<Dynamic> {
@@ -86,11 +87,7 @@ async fn scan_http_source_finds_package() {
         "expected 1 package found via Http source"
     );
     let pkg_tag = script.eval(r#"box.status.packages[0].tag"#).unwrap();
-    assert_eq!(
-        pkg_tag.into_string().unwrap(),
-        "1.0.0",
-        "expected tag 1.0.0"
-    );
+    assert_eq!(pkg_tag.into_string().unwrap(), "1.0.0", "expected tag 1.0.0");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -40,6 +40,7 @@ metadata:
     ignore-check.kube-linter.io/non-isolated-pod: "Ephemeral backup pods do not require NetworkPolicy isolation"
     ignore-check.kube-linter.io/priority-class-name: "vynil-backup is a priority class provisioned by the operator"
     ignore-check.kube-linter.io/read-secret-from-env-var: "DB credentials must be env vars for backup scripts"
+    ignore-check.kube-linter.io/env-var-secret: "Backup env vars named *secret* are required by restic and DB backup scripts"
     ignore-check.kube-linter.io/run-as-non-root: "Backup requires root for CHOWN/FOWNER filesystem operations"
 spec:
   concurrencyPolicy: Forbid

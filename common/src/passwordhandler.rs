@@ -1,7 +1,7 @@
 use rand::{
-    RngCore,
     distr::{Distribution, uniform::Uniform, weighted::WeightedIndex},
     rng,
+    rngs::ThreadRng,
 };
 use rhai::Engine;
 
@@ -19,7 +19,7 @@ const SYMBOLS: &[char] = &[
 ];
 
 pub struct Passwords {
-    rng: Box<dyn RngCore>,
+    rng: ThreadRng,
 }
 impl Default for Passwords {
     fn default() -> Self {
@@ -30,7 +30,7 @@ impl Default for Passwords {
 impl Passwords {
     #[must_use]
     pub fn new() -> Passwords {
-        Passwords { rng: Box::new(rng()) }
+        Passwords { rng: rng() }
     }
 
     pub fn generate(&mut self, length: i64, alpha: u32, numbers: u32, symbols: u32) -> String {

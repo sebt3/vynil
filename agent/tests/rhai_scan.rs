@@ -9,10 +9,7 @@ fn make_scan_script(k8s_mocks: Vec<Dynamic>) -> (Script, Arc<Mutex<Vec<Dynamic>>
     let base = env!("CARGO_MANIFEST_DIR");
     let created = Arc::new(Mutex::new(vec![]));
     let script = Script::new_mock(
-        vec![
-            format!("{base}/scripts/boxes"),
-            format!("{base}/scripts/lib"),
-        ],
+        vec![format!("{base}/scripts/boxes"), format!("{base}/scripts/lib")],
         vec![],
         k8s_mocks,
         created.clone(),
@@ -65,7 +62,9 @@ fn build_jukebox_mock_obj() -> Dynamic {
 }
 
 fn build_jukebox_mock() -> K8sJukeBoxMock {
-    K8sJukeBoxMock { obj: build_jukebox_mock_obj() }
+    K8sJukeBoxMock {
+        obj: build_jukebox_mock_obj(),
+    }
 }
 
 fn run_scan(filter: Option<&str>) -> common::Result<Dynamic> {
@@ -106,7 +105,10 @@ fn scan_filter_selects_only_matching_image() {
         deduped.len() == 1 && deduped[0].repository == "myrepo/pg"
         "#,
     );
-    assert!(result.unwrap().as_bool().unwrap(), "filter 'db/pg' should select only myrepo/pg");
+    assert!(
+        result.unwrap().as_bool().unwrap(),
+        "filter 'db/pg' should select only myrepo/pg"
+    );
 }
 
 #[test]
@@ -134,7 +136,10 @@ fn scan_filter_category_selects_all_matching_images() {
         deduped.len() == 2
         "#,
     );
-    assert!(result.unwrap().as_bool().unwrap(), "filter 'db' should select both db images");
+    assert!(
+        result.unwrap().as_bool().unwrap(),
+        "filter 'db' should select both db images"
+    );
 }
 
 #[test]

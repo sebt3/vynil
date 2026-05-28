@@ -33,15 +33,16 @@ pub struct Parameters {
     )]
     script_dir: PathBuf,
     /// Filtre partiel : "<category>" ou "<category>/<package_name>"
-    #[arg(short = 'f', long = "filter", env = "SCAN_PACKAGE", value_name = "SCAN_PACKAGE")]
+    #[arg(
+        short = 'f',
+        long = "filter",
+        env = "SCAN_PACKAGE",
+        value_name = "SCAN_PACKAGE"
+    )]
     filter: Option<String>,
 }
 
-async fn resolve_http_secret(
-    name: &str,
-    namespace: &str,
-    client: &kube::Client,
-) -> Result<(String, String)> {
+async fn resolve_http_secret(name: &str, namespace: &str, client: &kube::Client) -> Result<(String, String)> {
     let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
     let secret = api.get(name).await.map_err(Error::KubeError)?;
     let data = secret.data.unwrap_or_default();
@@ -60,11 +61,7 @@ async fn resolve_http_secret(
     Ok(("basic".to_string(), format!("{}:{}", user, pass)))
 }
 
-async fn resolve_s3_secret(
-    name: &str,
-    namespace: &str,
-    client: &kube::Client,
-) -> Result<(String, String)> {
+async fn resolve_s3_secret(name: &str, namespace: &str, client: &kube::Client) -> Result<(String, String)> {
     let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
     let secret = api.get(name).await.map_err(Error::KubeError)?;
     let data = secret.data.unwrap_or_default();
@@ -88,23 +85,21 @@ pub async fn run(args: &Parameters) -> Result<()> {
     set_box(context.clone());
     rhai.ctx.set_value("box", context.clone());
     rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
-    if let Some(JukeBoxDef::Http { secret, .. }) = &context.spec.source {
-        if let Some(secret_name) = secret {
-            let client = common::context::get_client_async().await;
-            let (auth_type, credential) =
-                resolve_http_secret(secret_name, &args.namespace, &client).await?;
-            rhai.ctx.set_value("http_auth_type", auth_type);
-            rhai.ctx.set_value("http_credential", credential);
-        }
+    if let Some(JukeBoxDef::Http { secret, .. }) = &context.spec.source
+        && let Some(secret_name) = secret
+    {
+        let client = common::context::get_client_async().await;
+        let (auth_type, credential) = resolve_http_secret(secret_name, &args.namespace, &client).await?;
+        rhai.ctx.set_value("http_auth_type", auth_type);
+        rhai.ctx.set_value("http_credential", credential);
     }
-    if let Some(JukeBoxDef::S3 { secret, .. }) = &context.spec.source {
-        if let Some(secret_name) = secret {
-            let client = common::context::get_client_async().await;
-            let (access_key, secret_key) =
-                resolve_s3_secret(secret_name, &args.namespace, &client).await?;
-            rhai.ctx.set_value("s3_access_key", access_key);
-            rhai.ctx.set_value("s3_secret_key", secret_key);
-        }
+    if let Some(JukeBoxDef::S3 { secret, .. }) = &context.spec.source
+        && let Some(secret_name) = secret
+    {
+        let client = common::context::get_client_async().await;
+        let (access_key, secret_key) = resolve_s3_secret(secret_name, &args.namespace, &client).await?;
+        rhai.ctx.set_value("s3_access_key", access_key);
+        rhai.ctx.set_value("s3_secret_key", secret_key);
     }
     let _ = rhai.run_file(&PathBuf::from(format!(
         "{}/boxes/scan.rhai",
@@ -250,9 +245,7 @@ mod tests {
         });
 
         let client = kube::Client::new(mock_service, "test-ns");
-        let (access_key, secret_key) = resolve_s3_secret("s3-secret", "test-ns", &client)
-            .await
-            .unwrap();
+        let (access_key, secret_key) = resolve_s3_secret("s3-secret", "test-ns", &client).await.unwrap();
 
         assert_eq!(access_key, "AKID1234");
         assert_eq!(secret_key, "SECRET5678");
@@ -277,9 +270,7 @@ mod tests {
         });
 
         let client = kube::Client::new(mock_service, "test-ns");
-        let (access_key, secret_key) = resolve_s3_secret("s3-secret", "test-ns", &client)
-            .await
-            .unwrap();
+        let (access_key, secret_key) = resolve_s3_secret("s3-secret", "test-ns", &client).await.unwrap();
 
         assert_eq!(access_key, "");
         assert_eq!(secret_key, "");
