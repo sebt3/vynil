@@ -5,6 +5,8 @@ fn from_args(context) {
     context["secret_list"] = get_env("SECRET_LIST").split(" ").filter(|x| x!="");
     context["pg_list"] = get_env("PG_LIST").split(" ").filter(|x| x!="");
     context["mysql_list"] = get_env("MYSQL_LIST").split(" ").filter(|x| x!="");
+    context["mongo_list"] = get_env("MONGO_LIST").split(" ").filter(|x| x!="");
+    context["redis_list"] = get_env("REDIS_LIST").split(" ").filter(|x| x!="");
     context["restic_tags"] = get_env("RESTIC_TAGS");
     context["snapshot"] = get_env("RESTIC_SNAPSHOT");
     context["max_dayly"] = get_env("RESTIC_MAX_DAYLY");
@@ -40,8 +42,6 @@ fn from_args(context) {
 }
 
 fn run(instance, context, use_init_from) {
-    // TODO: Prepare MongoDB backup
-    // TODO: Prepare Redis backup
     let secret_name = "backup-settings";
     let sub_path = `${context.instance.namespace}/${context.instance.appslug}`;
     if use_init_from {
@@ -159,6 +159,8 @@ fn run(instance, context, use_init_from) {
     context["backup_affinity"] = context.instance["package"].backup_affinity;
     let pgs = [];
     let mysqls = [];
+    let mongos = [];
+    let redises = [];
     let secrets = [];
     for v in instance.status.vitals {
         let name = v.name;
@@ -320,6 +322,164 @@ fn run(instance, context, use_init_from) {
                     _ => log_warn(json_encode(e))
                 }
             }
+        } else if v.kind == "MongoDBCommunity" {
+            if name.is_empty() {
+                name = "mongodb";
+            }
+            try {
+                let mongodb = k8s_resource("MongoDBCommunity", context.instance.namespace).get(v.name);
+                let users = mongodb.spec?.users;
+                if users != () && users.len() > 0 {
+                    let username = users[0].name;
+                    let conn_secret = `${v.name}-${username}`;
+                    mongos += name;
+                    context["envs"] += #{
+                        name: `${name}_username`,
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: conn_secret,
+                                key: "username"
+                            }
+                        }
+                    };
+                    context["envs"] += #{
+                        name: `${name}_password`,
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: conn_secret,
+                                key: "password"
+                            }
+                        }
+                    };
+                    context["envs"] += #{
+                        name: `${name}_host`,
+                        value: `${v.name}-svc.${context.instance.namespace}.svc`
+                    };
+                    context["envs"] += #{
+                        name: `${name}_dbname`,
+                        value: "*"
+                    };
+                }
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
+        } else if v.kind == "Dragonfly" {
+            if name.is_empty() {
+                name = "dragonfly";
+            }
+            try {
+                let df = k8s_resource("Dragonfly", context.instance.namespace).get(v.name);
+                let sname = df.spec?.authentication?.passwordFromSecret?.name;
+                let skey  = df.spec?.authentication?.passwordFromSecret?.key ?? "password";
+                if sname != () {
+                    redises += name;
+                    context["envs"] += #{
+                        name: `${name}_password`,
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: sname,
+                                key: skey
+                            }
+                        }
+                    };
+                    context["envs"] += #{
+                        name: `${name}_host`,
+                        value: `${v.name}.${context.instance.namespace}.svc`
+                    };
+                    context["envs"] += #{
+                        name: `${name}_kind`,
+                        value: "Dragonfly"
+                    };
+                    context["envs"] += #{
+                        name: `${name}_sts`,
+                        value: v.name
+                    };
+                }
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
+        } else if v.kind == "RedisCluster" {
+            if name.is_empty() {
+                name = "redis";
+            }
+            try {
+                let rc = k8s_resource("RedisCluster", context.instance.namespace).get(v.name);
+                let sname = rc.spec?.kubernetesConfig?.redisSecret?.name;
+                let skey  = rc.spec?.kubernetesConfig?.redisSecret?.key ?? "password";
+                if sname != () {
+                    redises += name;
+                    context["envs"] += #{
+                        name: `${name}_password`,
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: sname,
+                                key: skey
+                            }
+                        }
+                    };
+                    context["envs"] += #{
+                        name: `${name}_host`,
+                        value: `${v.name}-leader.${context.instance.namespace}.svc`
+                    };
+                    context["envs"] += #{
+                        name: `${name}_kind`,
+                        value: "RedisCluster"
+                    };
+                    context["envs"] += #{
+                        name: `${name}_sts`,
+                        value: `${v.name}-leader`
+                    };
+                }
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
+        } else if v.kind == "RedisSentinel" {
+            if name.is_empty() {
+                name = "redis";
+            }
+            try {
+                let rs = k8s_resource("RedisSentinel", context.instance.namespace).get(v.name);
+                let sname = rs.spec?.kubernetesConfig?.redisSecret?.name;
+                let skey  = rs.spec?.kubernetesConfig?.redisSecret?.key ?? "password";
+                if sname != () {
+                    redises += name;
+                    context["envs"] += #{
+                        name: `${name}_password`,
+                        valueFrom: #{
+                            secretKeyRef: #{
+                                name: sname,
+                                key: skey
+                            }
+                        }
+                    };
+                    context["envs"] += #{
+                        name: `${name}_host`,
+                        value: `${v.name}-master.${context.instance.namespace}.svc`
+                    };
+                    context["envs"] += #{
+                        name: `${name}_kind`,
+                        value: "RedisSentinel"
+                    };
+                    context["envs"] += #{
+                        name: `${name}_sts`,
+                        value: `${v.name}-master`
+                    };
+                }
+            } catch (e) {
+                switch type_of(e) {
+                    "string" => log_warn(e),
+                    _ => log_warn(json_encode(e))
+                }
+            }
         }
     }
     let deploy = [];
@@ -355,6 +515,18 @@ fn run(instance, context, use_init_from) {
         context["envs"] += #{
             name: `MYSQL_LIST`,
             value: mysqls.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` })
+        };
+    }
+    if mongos.len() > 0 {
+        context["envs"] += #{
+            name: `MONGO_LIST`,
+            value: mongos.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` })
+        };
+    }
+    if redises.len() > 0 {
+        context["envs"] += #{
+            name: `REDIS_LIST`,
+            value: redises.reduce(|sum, v| if sum.type_of() == "()" { v } else { `${sum} ${v}` })
         };
     }
     if secrets.len() > 0 {

@@ -29,7 +29,8 @@ FROM docker.io/debian:${DEBIAN_VERSION}-slim AS middle
 ARG HELM_VERSION=v4.1.4
 ARG KUBECTL_VERSION=v1.34.4
 ARG TF_VERSION=1.11.6
-ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client-17 mariadb-client-compat restic"
+ARG MONGODB_TOOLS_VERSION=100.12.2
+ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client-17 mariadb-client-compat restic redis-tools"
 # hadolint ignore=DL3008,DL4006,SC2035
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
@@ -39,13 +40,15 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && mkdir -p /package /etc/vynil /work /nonexistent/.ssh \
  && HOME=/nonexistent git config --global --add safe.directory /work \
  && chown -R nobody:nogroup /package /etc/vynil /work /nonexistent \
- && case "$(uname -m)" in arm) ARCHITECTURE=arm;; armv8*|aarch64*) ARCHITECTURE=arm64;; x86_64|i686|*) ARCHITECTURE=amd64;; esac \
+ && case "$(uname -m)" in arm) ARCHITECTURE=arm; MONGO_ARCH=arm64;; armv8*|aarch64*) ARCHITECTURE=arm64; MONGO_ARCH=arm64;; x86_64|i686|*) ARCHITECTURE=amd64; MONGO_ARCH=x86_64;; esac \
  && curl -sL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCHITECTURE}/kubectl" -o /usr/local/bin/kubectl \
  && echo "$(curl -sL "https://dl.k8s.io/${KUBECTL_VERSION}/bin/linux/${ARCHITECTURE}/kubectl.sha256") /usr/local/bin/kubectl" | sha256sum --check \
  && curl -sL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCHITECTURE}.tar.gz" |tar --wildcards -C /usr/local/bin/ --strip-components=1 -xzf - */helm \
  && curl -sL "https://github.com/opentofu/opentofu/releases/download/v${TF_VERSION}/tofu_${TF_VERSION}_linux_${ARCHITECTURE}.tar.gz" |tar -C /usr/local/bin/ -xzf - tofu \
+ && curl -sL "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-${MONGO_ARCH}-${MONGODB_TOOLS_VERSION}.tgz" \
+    |tar --wildcards -C /usr/local/bin/ --strip-components=2 -xzf - '*/bin/mongodump' '*/bin/mongorestore' \
  && ln -sf /usr/local/bin/tofu /usr/local/bin/terraform \
- && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/tofu \
+ && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/tofu /usr/local/bin/mongodump /usr/local/bin/mongorestore \
  && mkdir -p /var/lib/vynil/keys /nonexistent \
  && chown -R nobody:nogroup /var/lib/vynil /nonexistent \
  && chmod 770 /var/lib/vynil /nonexistent \
