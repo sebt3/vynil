@@ -1,8 +1,8 @@
 use common::{
-    jukebox_file::{FileJukeBox, FileScanSpec, file_jukebox_rhai_register},
-    jukebox::JukeBoxDef,
-    k8smock::oci_mock_rhai_register,
     httpmock::httpmock_rhai_register,
+    jukebox::JukeBoxDef,
+    jukebox_file::{FileJukeBox, FileScanSpec, file_jukebox_rhai_register},
+    k8smock::oci_mock_rhai_register,
     rhaihandler::Script,
 };
 use std::path::PathBuf;
@@ -74,7 +74,9 @@ fn file_scan_creates_index_yaml() {
         }),
     );
 
-    let _ = script.run_file(&PathBuf::from(format!("{base}/scripts/boxes/scan.rhai"))).unwrap();
+    let _ = script
+        .run_file(&PathBuf::from(format!("{base}/scripts/boxes/scan.rhai")))
+        .unwrap();
 
     assert!(
         cache_dir.path().join("index.yaml").exists(),

@@ -1332,7 +1332,10 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
         .register_fn("get_jukebox", get_jb)
         .register_fn("list_jukebox", list_jb)
         .register_fn("set_status_updated", K8sJukeBoxMock::set_status_updated)
-        .register_fn("set_status_packages_merge", K8sJukeBoxMock::set_status_packages_merge)
+        .register_fn(
+            "set_status_packages_merge",
+            K8sJukeBoxMock::set_status_packages_merge,
+        )
         .register_fn("set_status_failed", K8sJukeBoxMock::set_status_failed)
         .register_get("metadata", K8sJukeBoxMock::get_metadata)
         .register_get("spec", K8sJukeBoxMock::get_spec)

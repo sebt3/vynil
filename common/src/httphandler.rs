@@ -764,11 +764,7 @@ pub fn http_get_yaml(url: String, auth_type: String, credential: String) -> Rhai
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
                 .map_err(|e| Error::Other(e.to_string()))?;
-            let response = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(Error::ReqwestError)?;
+            let response = client.get(&url).send().await.map_err(Error::ReqwestError)?;
             if !response.status().is_success() {
                 return Err(Error::Other(format!(
                     "SCAN-HTTP-001: HTTP {} for {}",
@@ -810,18 +806,17 @@ pub fn http_rhai_register(engine: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_http_get_yaml_ok() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/index.yaml"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("packages:\n  - name: test\n"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string("packages:\n  - name: test\n"))
             .mount(&server)
             .await;
 
@@ -851,7 +846,10 @@ mod tests {
         );
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
-        assert!(err.contains("SCAN-HTTP-001"), "error should contain SCAN-HTTP-001: {err}");
+        assert!(
+            err.contains("SCAN-HTTP-001"),
+            "error should contain SCAN-HTTP-001: {err}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
