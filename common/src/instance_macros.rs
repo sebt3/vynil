@@ -1186,8 +1186,8 @@ macro_rules! impl_instance_befores {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
                 let mut conditions: Vec<ApplicationCondition> =
-                    self.get_conditions_excluding(vec![ConditionsType::OtherApplied]);
-                conditions.push(ApplicationCondition::other_ok(generation));
+                    self.get_conditions_excluding(vec![ConditionsType::PostApplied]);
+                conditions.push(ApplicationCondition::post_ok(generation));
                 let result = self
                     .patch_status(
                         client.clone(),
@@ -1213,7 +1213,7 @@ macro_rules! impl_instance_befores {
                 let generation = self.metadata.generation.unwrap_or(1);
                 let mut conditions: Vec<ApplicationCondition> = self.get_conditions_excluding(vec![
                     ConditionsType::AgentStarted,
-                    ConditionsType::OtherApplied,
+                    ConditionsType::PostApplied,
                     ConditionsType::Installed,
                 ]);
                 conditions.push(ApplicationCondition::post_ko(&reason, generation));
