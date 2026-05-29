@@ -682,24 +682,49 @@ impl<'a> HelperWalker<'a> {
             && let PathSeg::Named(first) = &segs[0]
             && !first.starts_with('@')
             && !KNOWN_HBS_ROOTS.contains(&first.as_str())
-            && let Some(level) = self.config.resolve_level(
+        {
+            // Specific check: `context.<known_root>` is a common mistake — the `context.` prefix
+            // used in Rhai scripts is not available in HBS templates.
+            if first == "context"
+                && let PathSeg::Named(second) = &segs[1]
+                && KNOWN_HBS_ROOTS.contains(&second.as_str())
+                && let Some(level) = self.config.resolve_level(
+                    "hbs/context-prefix",
+                    &self.file,
+                    LintLevel::Error,
+                    self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                )
+            {
+                self.findings.push(LintFinding {
+                    rule: "hbs/context-prefix".to_string(),
+                    level,
+                    file: self.file.clone(),
+                    line,
+                    message: format!(
+                        "Use `{second}` instead of `context.{second}`; the `context.` prefix is not valid in templates",
+                    ),
+                });
+                return;
+            }
+
+            if let Some(level) = self.config.resolve_level(
                 "hbs/unknown-root-variable",
                 &self.file,
                 LintLevel::Warn,
                 self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
-            )
-        {
-            self.findings.push(LintFinding {
-                rule: "hbs/unknown-root-variable".to_string(),
-                level,
-                file: self.file.clone(),
-                line,
-                message: format!(
-                    "Unknown root variable `{}` in template path — expected one of: {}",
-                    first,
-                    KNOWN_HBS_ROOTS.join(", ")
-                ),
-            });
+            ) {
+                self.findings.push(LintFinding {
+                    rule: "hbs/unknown-root-variable".to_string(),
+                    level,
+                    file: self.file.clone(),
+                    line,
+                    message: format!(
+                        "Unknown root variable `{}` in template path — expected one of: {}",
+                        first,
+                        KNOWN_HBS_ROOTS.join(", ")
+                    ),
+                });
+            }
         }
     }
 
@@ -1003,6 +1028,60 @@ mod tests {
         assert!(
             findings.iter().any(|f| f.rule == "hbs/unknown-root-variable"),
             "Expected hbs/unknown-root-variable for 'ins_bug_tance'"
+        );
+    }
+
+    #[test]
+    fn context_tenant_prefix_produces_error() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = "{{context.tenant.name}}";
+        let findings = test
+            .checker
+            .check_file(Path::new("posts/RestEndPoint_test.yaml.hbs"), source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "hbs/context-prefix" && f.level == LintLevel::Error),
+            "Expected hbs/context-prefix error for 'context.tenant'"
+        );
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/unknown-root-variable"),
+            "hbs/unknown-root-variable should not also fire when hbs/context-prefix does"
+        );
+    }
+
+    #[test]
+    fn context_instance_prefix_produces_error() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = "{{context.instance.appslug}}";
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "hbs/context-prefix"),
+            "Expected hbs/context-prefix for 'context.instance'"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "hbs/context-prefix" && f.message.contains("instance")),
+            "Error message should mention 'instance' as the correct root"
+        );
+    }
+
+    #[test]
+    fn context_unknown_field_produces_generic_warning() {
+        let mut test = TestChecker::new(vec![], vec![]);
+        let source = "{{context.something_unknown.foo}}";
+        let findings = test.checker.check_file(Path::new("test.hbs"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "hbs/unknown-root-variable"),
+            "context.<unknown> should still produce hbs/unknown-root-variable"
+        );
+        assert!(
+            !findings.iter().any(|f| f.rule == "hbs/context-prefix"),
+            "hbs/context-prefix should not fire when second segment is not a known root"
         );
     }
 

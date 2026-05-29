@@ -1,0 +1,64 @@
+---
+name: Test Docker Builds
+
+on:
+  push:
+    paths:
+      - agent/Dockerfile
+      - operator/Dockerfile
+  pull_request:
+    paths:
+      - agent/Dockerfile
+      - operator/Dockerfile
+
+jobs:
+  changes:
+    name: Detect changed Dockerfiles
+    runs-on: ubuntu-latest
+    outputs:
+      agent: ${{ steps.filter.outputs.agent }}
+      operator: ${{ steps.filter.outputs.operator }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            agent:
+              - agent/Dockerfile
+            operator:
+              - operator/Dockerfile
+
+  docker-build-agent:
+    name: Docker Build Agent
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build the Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./agent/Dockerfile
+          platforms: linux/amd64
+          push: false
+
+  docker-build-operator:
+    name: Docker Build Operator
+    needs: changes
+    if: needs.changes.outputs.operator == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Docker Setup Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build the Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./operator/Dockerfile
+          platforms: linux/amd64
+          push: false
