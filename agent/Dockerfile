@@ -40,12 +40,12 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && mkdir -p /package /etc/vynil /work /nonexistent/.ssh \
  && HOME=/nonexistent git config --global --add safe.directory /work \
  && chown -R nobody:nogroup /package /etc/vynil /work /nonexistent \
- && case "$(uname -m)" in arm) ARCHITECTURE=arm; MONGO_ARCH=arm64;; armv8*|aarch64*) ARCHITECTURE=arm64; MONGO_ARCH=arm64;; x86_64|i686|*) ARCHITECTURE=amd64; MONGO_ARCH=x86_64;; esac \
+ && case "$(uname -m)" in arm) ARCHITECTURE=arm; MONGO_DIST=ubuntu2004-arm64;; armv8*|aarch64*) ARCHITECTURE=arm64; MONGO_DIST=ubuntu2004-arm64;; x86_64|i686|*) ARCHITECTURE=amd64; MONGO_DIST=debian12-x86_64;; esac \
  && curl -sL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCHITECTURE}/kubectl" -o /usr/local/bin/kubectl \
  && echo "$(curl -sL "https://dl.k8s.io/${KUBECTL_VERSION}/bin/linux/${ARCHITECTURE}/kubectl.sha256") /usr/local/bin/kubectl" | sha256sum --check \
  && curl -sL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCHITECTURE}.tar.gz" |tar --wildcards -C /usr/local/bin/ --strip-components=1 -xzf - */helm \
  && curl -sL "https://github.com/opentofu/opentofu/releases/download/v${TF_VERSION}/tofu_${TF_VERSION}_linux_${ARCHITECTURE}.tar.gz" |tar -C /usr/local/bin/ -xzf - tofu \
- && curl -sL "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-${MONGO_ARCH}-${MONGODB_TOOLS_VERSION}.tgz" \
+ && curl -sL "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-${MONGO_DIST}-${MONGODB_TOOLS_VERSION}.tgz" \
     |tar --wildcards -C /usr/local/bin/ --strip-components=2 -xzf - '*/bin/mongodump' '*/bin/mongorestore' \
  && ln -sf /usr/local/bin/tofu /usr/local/bin/terraform \
  && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/tofu /usr/local/bin/mongodump /usr/local/bin/mongorestore \
