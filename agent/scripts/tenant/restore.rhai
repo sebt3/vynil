@@ -43,6 +43,22 @@ fn run(args) {
     } else {
         import_run("restore_mysql", context);
     }
+    if is_file(`${args.package_dir}/scripts/restore_mongodb.sh`) {
+        let rc = shell_run(`${context.package_dir}/scripts/restore_mongodb.sh`);
+        if rc != 0 {
+            throw `${context.package_dir}/scripts/restore_mongodb.sh FAILED returning ${rc}`;
+        }
+    } else {
+        import_run("restore_mongodb", context);
+    }
+    if is_file(`${args.package_dir}/scripts/restore_redis.sh`) {
+        let rc = shell_run(`${context.package_dir}/scripts/restore_redis.sh`);
+        if rc != 0 {
+            throw `${context.package_dir}/scripts/restore_redis.sh FAILED returning ${rc}`;
+        }
+    } else {
+        import_run("restore_redis", context);
+    }
     import_run("maintenance_stop", context);
     import_run("restore_post", context);
 }
