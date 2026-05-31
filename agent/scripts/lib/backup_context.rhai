@@ -330,8 +330,7 @@ fn run(instance, context, use_init_from) {
                 let mongodb = k8s_resource("MongoDBCommunity", context.instance.namespace).get(v.name);
                 let users = mongodb.spec?.users;
                 if users != () && users.len() > 0 {
-                    let username = users[0].name;
-                    let conn_secret = `${v.name}-${username}`;
+                    let conn_secret = users[0].connectionStringSecretName;
                     mongos += name;
                     context["envs"] += #{
                         name: `${name}_username`,

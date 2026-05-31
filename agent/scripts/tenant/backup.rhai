@@ -45,6 +45,22 @@ fn run(args) {
         } else {
             import_run("backup_prepare_mysql", context);
         }
+        if is_file(`${args.package_dir}/scripts/backup_prepare_mongodb.sh`) {
+            let rc = shell_run(`export RESTIC_REPOSITORY="${context.s3_url}";${context.package_dir}/scripts/backup_prepare_mongodb.sh`);
+            if rc != 0 {
+                throw `${context.package_dir}/scripts/backup_prepare_mongodb.sh FAILED returning ${rc}`;
+            }
+        } else {
+            import_run("backup_prepare_mongodb", context);
+        }
+        if is_file(`${args.package_dir}/scripts/backup_prepare_redis.sh`) {
+            let rc = shell_run(`export RESTIC_REPOSITORY="${context.s3_url}";${context.package_dir}/scripts/backup_prepare_redis.sh`);
+            if rc != 0 {
+                throw `${context.package_dir}/scripts/backup_prepare_redis.sh FAILED returning ${rc}`;
+            }
+        } else {
+            import_run("backup_prepare_redis", context);
+        }
     }
     if is_file(`${args.package_dir}/scripts/backup_before.sh`) {
         let rc = shell_run(`export RESTIC_REPOSITORY="${context.s3_url}";${context.package_dir}/scripts/backup_before.sh`);
