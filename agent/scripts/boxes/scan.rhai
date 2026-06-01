@@ -1,4 +1,5 @@
 import "scan_harbor" as harbor;
+import "scan_gitlab" as gitlab;
 import "secret_dockerconfigjson" as secret;
 
 fn maturity_filter(str, maturity) {
@@ -183,6 +184,8 @@ try {
     } else {
         let images_list = if "harbor" in spec.source.keys() {
                 harbor::list_repository(spec, args.namespace)
+            } else if "gitlab" in spec.source.keys() {
+                gitlab::list_repository(spec, args.namespace)
             } else if "script" in spec.source.keys() {
                 eval(spec.source.script)
             } else {
