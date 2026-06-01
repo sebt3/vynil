@@ -24,6 +24,15 @@ pub enum JukeBoxDef {
     List(Vec<String>),
     /// Harbor project to list image from
     Harbor { registry: String, project: String },
+    /// GitLab Container Registry project to list images from
+    Gitlab {
+        /// GitLab instance API URL (e.g. https://gitlab.example.com)
+        url: String,
+        /// OCI registry URL (e.g. registry.gitlab.example.com)
+        registry: String,
+        /// Project path with namespace (e.g. my-group/my-project)
+        project: String,
+    },
     /// Custom script that produce the image list
     Script(String),
     /// HTTP server hosting an index.yaml package cache
