@@ -56,6 +56,23 @@ spec:
                 description: Source type
                 nullable: true
                 properties:
+                  gitlab:
+                    description: GitLab Container Registry project to list images from
+                    properties:
+                      project:
+                        description: Project path with namespace (e.g. my-group/my-project)
+                        type: string
+                      registry:
+                        description: OCI registry URL (e.g. registry.gitlab.example.com)
+                        type: string
+                      url:
+                        description: GitLab instance API URL (e.g. https://gitlab.example.com)
+                        type: string
+                    required:
+                    - project
+                    - registry
+                    - url
+                    type: object
                   harbor:
                     description: Harbor project to list image from
                     properties:

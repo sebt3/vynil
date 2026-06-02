@@ -12,8 +12,8 @@ JukeBox (spec.source.gitlab)
 ```
 
 Contrairement à Harbor où `registry` = host API = host OCI, GitLab dissocie les deux :
-- **`url`** : sert exclusivement aux appels API (`/api/v4/...`) — ex: `https://gitlab.example.com`
-- **`registry`** : sert au push/pull OCI — ex: `registry.gitlab.example.com`
+- **`url`** : sert exclusivement aux appels API (`/api/v4/...`) — ex: `https://gitlab.com`
+- **`registry`** : sert au push/pull OCI — ex: `registry.gitlab.com`
 
 ---
 
@@ -51,7 +51,7 @@ Le `CI_JOB_TOKEN` est scopé au job, n'expire pas à gérer et n'a pas besoin d'
 
 ### 3. Scan et pull dans le cluster (JukeBox / instances)
 
-Utiliser un **Deploy Token** read-only stocké en secret Kubernetes de type `dockerconfigjson`.
+Utiliser un **Project Access Token** (ou Deploy Token) read-only stocké en secret Kubernetes de type `dockerconfigjson`.
 
 #### Scopes requis
 
@@ -65,11 +65,20 @@ Utiliser un **Deploy Token** read-only stocké en secret Kubernetes de type `doc
 > Sans `read_api`, l'appel retourne HTTP 403.
 > Ce scope est disponible sur les deploy tokens depuis **GitLab 13.9**.
 
-#### Création du deploy token
+#### Rôle minimum requis (Project Access Token)
+
+L'API `/api/v4/projects/:id/registry/repositories` exige au minimum le rôle **Reporter**.
+Un token créé avec le rôle **Guest** retourne HTTP 403 même avec les scopes corrects.
+
+> ⚠️ Pour les **Project Access Tokens** (`glpat-…`), le rôle est choisi à la création.
+> Pour les **Deploy Tokens**, la restriction s'applique aussi : créer avec rôle ≥ Reporter.
+
+#### Création du project access token
 
 ```
-GitLab → Project → Settings → Repository → Deploy tokens
+GitLab → Project → Settings → Access Tokens
   Name   : vynil-scan-pull
+  Role   : Reporter        ← minimum requis
   Scopes : ✅ read_registry  ✅ read_api
 ```
 
@@ -108,11 +117,14 @@ Le script `agent/scripts/lib/scan_gitlab.rhai` :
 
 1. Lit le `pull_secret` (dockerconfigjson) → extrait `user:pass`
 2. Utilise `pass` comme Bearer token pour l'API REST GitLab
-3. `GET {url}/api/v4/projects/{encoded_project}/registry/repositories?per_page=20`
-   - Le project path est URL-encodé (`/` → `%2F`)
+3. Résout le project path en ID numérique via `GET {url}/api/v4/projects?search={name}`
+   et filtre sur `path_with_namespace == project`
+   > Note : l'URL-encoding (`/` → `%2F`) dans le path HTTP est silencieusement décodé par
+   > le client HTTP (reqwest/url-crate), ce qui donnait HTTP 404. L'ID numérique contourne ce bug.
+4. `GET {url}/api/v4/projects/{id}/registry/repositories?per_page=20`
    - La pagination est pilotée par le header `X-Total-Pages`
-4. Retourne la liste des `location` (ex: `registry.gitlab.example.com/my-group/my-project/my-image`)
-5. Le scan principal (`scan.rhai`) prend le relais : OCI list_tags + lecture des annotations
+5. Retourne la liste des `location` (ex: `registry.gitlab.com/my-group/my-project/my-image`)
+6. Le scan principal (`scan.rhai`) prend le relais : OCI list_tags + lecture des annotations
 
 ---
 
@@ -137,9 +149,10 @@ Identique au pull Harbor : le `pull_secret` (dockerconfigjson) est lu, les crede
 
 | # | Point                                | Détail                                                              |
 |---|--------------------------------------|---------------------------------------------------------------------|
-| 1 | Deploy token scope `read_api`        | Obligatoire pour le scan — `read_registry` seul ne suffit pas      |
-| 2 | Deux URLs distinctes                 | `url` (API) ≠ `registry` (OCI) pour les instances self-hosted      |
-| 3 | PAT lié à un user                    | Préférer project bot token en prod pour le Makefile                 |
-| 4 | CI_JOB_TOKEN cross-project           | Nécessite l'activation du token allowlist sur le projet cible       |
-| 5 | Encodage du project path             | `/` → `%2F` dans l'URL API — géré automatiquement par scan_gitlab.rhai |
-| 6 | GitLab 13.9 minimum                  | Scope `read_api` sur deploy token disponible depuis cette version   |
+| 1 | Scope `read_api` requis              | Obligatoire pour le scan — `read_registry` seul retourne HTTP 403  |
+| 2 | Rôle **Reporter** minimum            | Un token avec rôle Guest retourne HTTP 403 même avec les bons scopes |
+| 3 | Deux URLs distinctes                 | `url` (API) ≠ `registry` (OCI) pour les instances self-hosted      |
+| 4 | PAT lié à un user                    | Préférer project access token en prod pour le Makefile              |
+| 5 | CI_JOB_TOKEN cross-project           | Nécessite l'activation du token allowlist sur le projet cible       |
+| 6 | ID numérique vs path encodé          | `%2F` décodé par reqwest → scan utilise l'ID numérique GitLab      |
+| 7 | GitLab 13.9 minimum                  | Scope `read_api` sur deploy token disponible depuis cette version   |

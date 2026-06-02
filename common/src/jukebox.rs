@@ -26,9 +26,9 @@ pub enum JukeBoxDef {
     Harbor { registry: String, project: String },
     /// GitLab Container Registry project to list images from
     Gitlab {
-        /// GitLab instance API URL (e.g. https://gitlab.example.com)
+        /// GitLab instance API URL (e.g. https://gitlab.com)
         url: String,
-        /// OCI registry URL (e.g. registry.gitlab.example.com)
+        /// OCI registry URL (e.g. registry.gitlab.com)
         registry: String,
         /// Project path with namespace (e.g. my-group/my-project)
         project: String,
@@ -298,11 +298,17 @@ impl JukeBox {
         {
             conditions.push(ApplicationCondition::ready_ko(generation));
         }
+        let existing_packages = self
+            .status
+            .as_ref()
+            .map(|s| s.packages.clone())
+            .unwrap_or_default();
         let result = self
             .patch_status(
                 client.clone(),
                 json!({
                     "conditions": conditions,
+                    "packages": existing_packages,
                 }),
             )
             .await?;
