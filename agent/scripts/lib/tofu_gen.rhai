@@ -1,4 +1,9 @@
 import "tofu" as tf;
+fn has_tofu_files(path) {
+    if !is_dir(path) { return false; }
+    let generated = ["00_vynil_vars.tf", "00_vynil_locals.tf"];
+    read_dir(path).any(|f| glob(basename(f), "*.tf") && !generated.contains(basename(f)))
+}
 fn gen_files(context) {
     gen_provider(`${context.package_dir}/tofu`);
     gen_locals(context);
@@ -49,30 +54,46 @@ fn gen_locals(context) {
 }`);
 }
 
+fn cached_version(namespace, name) {
+    let base = `/nonexistent/.terraform.d/plugins/registry.opentofu.org/${namespace}/${name}`;
+    if !is_dir(base) { return ""; }
+    let entries = read_dir(base);
+    if entries.len() == 0 { return ""; }
+    basename(entries[0])
+}
+fn provider_constraint(namespace, name, fallback) {
+    let ver = cached_version(namespace, name);
+    if ver != "" { `= ${ver}` } else { fallback }
+}
 fn gen_provider(path) {
     if ! is_file(`${path}/providers.tf`) {
-        file_write(`${path}/providers.tf`, "terraform {\n\
-  required_providers {\n\
-    kubernetes = {\n\
-        source = \"hashicorp/kubernetes\"\n\
-        version = \"~> 2.20.0\"\n\
-    }\n\
-    kubectl = {\n\
-        source = \"gavinbunney/kubectl\"\n\
-        version = \"~> 1.14.0\"\n\
-    }\n\
-  }\n\
-}\n\
-provider \"kubernetes\" {\n\
-    host = \"https://kubernetes.default.svc\"\n\
-    token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"\n\
-    cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"\n\
-}\n\
-provider \"kubectl\" {\n\
-    host = \"https://kubernetes.default.svc\"\n\
-    token = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}\"\n\
-    cluster_ca_certificate = \"${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}\"\n\
-    load_config_file       = false\n\
-}");
+        let k8s_ver     = provider_constraint("hashicorp",   "kubernetes", "~> 2.34.0");
+        let kubectl_ver = provider_constraint("gavinbunney", "kubectl",    "~> 1.16.0");
+        // HCL ${file(...)} syntax stored in variables to avoid Rhai interpolation conflicts
+        let sa_token = "${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}";
+        let sa_cert  = "${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}";
+        file_write(`${path}/providers.tf`, `terraform {
+  required_providers {
+    kubernetes = {
+        source  = "hashicorp/kubernetes"
+        version = "${k8s_ver}"
+    }
+    kubectl = {
+        source  = "gavinbunney/kubectl"
+        version = "${kubectl_ver}"
+    }
+  }
+}
+provider "kubernetes" {
+    host                   = "https://kubernetes.default.svc"
+    token                  = "${sa_token}"
+    cluster_ca_certificate = "${sa_cert}"
+}
+provider "kubectl" {
+    host                   = "https://kubernetes.default.svc"
+    token                  = "${sa_token}"
+    cluster_ca_certificate = "${sa_cert}"
+    load_config_file       = false
+}`);
     }
 }

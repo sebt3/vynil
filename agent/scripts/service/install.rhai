@@ -1,3 +1,4 @@
+import "tofu_gen" as tfg;
 fn run(instance, context) {
     let ctx = import_run("install_pre", instance, context);
     if type_of(ctx) == "map" {
@@ -26,7 +27,7 @@ fn run(instance, context) {
         }
         instance = get_service_instance(instance.metadata.namespace, instance.metadata.name);
     }
-    if is_dir(`${context.package_dir}/tofu`) {
+    if tfg::has_tofu_files(`${context.package_dir}/tofu`) {
         context = import_run("install_tofu", instance, context);
         if type_of(ctx) == "map" {
             context = ctx;
