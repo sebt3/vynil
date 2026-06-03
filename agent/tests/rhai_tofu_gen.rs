@@ -85,7 +85,7 @@ fn has_tofu_files_returns_true_for_user_tf_file() {
 }
 
 #[test]
-fn has_tofu_files_returns_true_for_providers_tf() {
+fn has_tofu_files_returns_false_for_providers_tf_only() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("providers.tf"), "terraform {}").unwrap();
     let path = dir.path().to_str().unwrap().to_string();
@@ -99,7 +99,32 @@ fn has_tofu_files_returns_true_for_providers_tf() {
         "#
         ))
         .unwrap();
-    assert!(result.as_bool().unwrap(), "user providers.tf should return true");
+    assert!(
+        !result.as_bool().unwrap(),
+        "providers.tf is generated — should not count as user file"
+    );
+}
+
+#[test]
+fn has_tofu_files_returns_true_when_providers_tf_and_user_file_coexist() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("providers.tf"), "terraform {}").unwrap();
+    fs::write(dir.path().join("main.tf"), "# user resource").unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(&format!(
+            r#"
+            import "tofu_gen" as tg;
+            tg::has_tofu_files("{path}")
+        "#
+        ))
+        .unwrap();
+    assert!(
+        result.as_bool().unwrap(),
+        "main.tf is a user file — should return true"
+    );
 }
 
 #[test]
@@ -182,10 +207,10 @@ fn gen_provider_creates_providers_tf_with_fallback_versions() {
 }
 
 #[test]
-fn gen_provider_does_not_overwrite_existing_providers_tf() {
+fn gen_provider_overwrites_existing_providers_tf() {
     let dir = tempfile::tempdir().unwrap();
-    let custom = "# my custom providers";
-    fs::write(dir.path().join("providers.tf"), custom).unwrap();
+    let stale = "# stale old content with ~> 1.14.0";
+    fs::write(dir.path().join("providers.tf"), stale).unwrap();
     let path = dir.path().to_str().unwrap().to_string();
 
     let mut rhai = make_lib_script();
@@ -199,7 +224,11 @@ fn gen_provider_does_not_overwrite_existing_providers_tf() {
         .unwrap();
 
     let content = fs::read_to_string(dir.path().join("providers.tf")).unwrap();
-    assert_eq!(content, custom, "existing providers.tf must not be overwritten");
+    assert_ne!(content, stale, "stale providers.tf must be replaced");
+    assert!(
+        content.contains("hashicorp/kubernetes"),
+        "regenerated file must declare kubernetes provider"
+    );
 }
 
 // ── provider_constraint ───────────────────────────────────────────────────────

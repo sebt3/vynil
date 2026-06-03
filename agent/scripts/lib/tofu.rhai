@@ -40,7 +40,15 @@ fn get_tf_type(item, optional) {
 }
 
 fn run_init(path) {
-    let rc = shell_run(`cd ${path};tofu init`);
+    let cfg = `provider_installation {
+  filesystem_mirror {
+    path    = "/nonexistent/.terraform.d/plugins"
+    include = ["*/*"]
+  }
+  direct {}
+}`;
+    file_write(`${path}/.tofurc`, cfg);
+    let rc = shell_run(`cd ${path};TF_CLI_CONFIG_FILE=.tofurc tofu init`);
     if rc != 0 {
         throw "tofu init failed";
     }

@@ -1,7 +1,7 @@
 import "tofu" as tf;
 fn has_tofu_files(path) {
     if !is_dir(path) { return false; }
-    let generated = ["00_vynil_vars.tf", "00_vynil_locals.tf"];
+    let generated = ["00_vynil_vars.tf", "00_vynil_locals.tf", "providers.tf"];
     for f in read_dir(path) {
         let b = basename(f);
         if glob(b, "*.tf") && !generated.contains(b) { return true; }
@@ -70,13 +70,12 @@ fn provider_constraint(namespace, name, fallback) {
     if ver != "" { `= ${ver}` } else { fallback }
 }
 fn gen_provider(path) {
-    if ! is_file(`${path}/providers.tf`) {
-        let k8s_ver     = provider_constraint("hashicorp",   "kubernetes", "~> 2.34.0");
-        let kubectl_ver = provider_constraint("gavinbunney", "kubectl",    "~> 1.16.0");
-        // HCL ${file(...)} syntax stored in variables to avoid Rhai interpolation conflicts
-        let sa_token = "${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}";
-        let sa_cert  = "${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}";
-        file_write(`${path}/providers.tf`, `terraform {
+    let k8s_ver     = provider_constraint("hashicorp",   "kubernetes", "~> 2.34.0");
+    let kubectl_ver = provider_constraint("gavinbunney", "kubectl",    "~> 1.16.0");
+    // HCL ${file(...)} syntax stored in variables to avoid Rhai interpolation conflicts
+    let sa_token = "${file(\"/run/secrets/kubernetes.io/serviceaccount/token\")}";
+    let sa_cert  = "${file(\"/run/secrets/kubernetes.io/serviceaccount/ca.crt\")}";
+    file_write(`${path}/providers.tf`, `terraform {
   required_providers {
     kubernetes = {
         source  = "hashicorp/kubernetes"
@@ -99,5 +98,4 @@ provider "kubectl" {
     cluster_ca_certificate = "${sa_cert}"
     load_config_file       = false
 }`);
-    }
 }
