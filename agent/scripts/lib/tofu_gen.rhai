@@ -2,7 +2,11 @@ import "tofu" as tf;
 fn has_tofu_files(path) {
     if !is_dir(path) { return false; }
     let generated = ["00_vynil_vars.tf", "00_vynil_locals.tf"];
-    read_dir(path).any(|f| glob(basename(f), "*.tf") && !generated.contains(basename(f)))
+    for f in read_dir(path) {
+        let b = basename(f);
+        if glob(b, "*.tf") && !generated.contains(b) { return true; }
+    }
+    false
 }
 fn gen_files(context) {
     gen_provider(`${context.package_dir}/tofu`);
