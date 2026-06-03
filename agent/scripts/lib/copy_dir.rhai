@@ -7,7 +7,7 @@ fn dir_exts(src, dst, exts, recursiv) {
                 file_copy(item, dst+"/"+base);
             }
         } else if recursiv && is_dir(item) {
-            copy_dir_exts(src+"/"+base, dst+"/"+base, exts, recursiv);
+            dir_exts(src+"/"+base, dst+"/"+base, exts, recursiv);
         }
     }
 }
@@ -19,7 +19,7 @@ fn dir_all(src, dst, recursiv) {
         if is_file(item) {
             file_copy(item, dst+"/"+base);
         } else if recursiv && is_dir(item) {
-            copy_dir_all(src+"/"+base, dst+"/"+base, recursiv);
+            dir_all(src+"/"+base, dst+"/"+base, recursiv);
         }
     }
 }
