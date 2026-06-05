@@ -1535,6 +1535,419 @@ fn gen_package_apply_selector_expressions_replaces_markers_in_file() {
     );
 }
 
+// ===== gen_crd_yaml — yamllint header tests =====
+
+#[test]
+fn gen_crd_yaml_writes_yamllint_header() {
+    let mut rhai = make_lib_script();
+    let tmp_path = format!(
+        "{}/tests/tmp/gen_crd_yaml_header.yaml",
+        env!("CARGO_MANIFEST_DIR")
+    );
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let data = #{{
+            apiVersion: "apiextensions.k8s.io/v1",
+            kind: "CustomResourceDefinition",
+            metadata: #{{ name: "foos.example.com" }},
+            spec: #{{ group: "example.com" }}
+        }};
+
+        gen::gen_crd_yaml("{tmp}", data);
+    "#,
+            tmp = tmp_path
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(&tmp_path).unwrap();
+    let _ = std::fs::remove_file(&tmp_path);
+
+    assert!(
+        content.starts_with("# yamllint disable rule:line-length\n"),
+        "gen_crd_yaml doit débuter par le commentaire yamllint"
+    );
+    assert!(
+        content.contains("---\n"),
+        "gen_crd_yaml doit contenir le séparateur YAML"
+    );
+}
+
+#[test]
+fn gen_yaml_does_not_write_yamllint_header() {
+    let mut rhai = make_lib_script();
+    let tmp_path = format!("{}/tests/tmp/gen_yaml_no_header.yaml", env!("CARGO_MANIFEST_DIR"));
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let data = #{{ kind: "ConfigMap", metadata: #{{ name: "my-config" }} }};
+
+        gen::gen_yaml("{tmp}", data);
+    "#,
+            tmp = tmp_path
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(&tmp_path).unwrap();
+    let _ = std::fs::remove_file(&tmp_path);
+
+    assert!(
+        !content.contains("yamllint"),
+        "gen_yaml ne doit pas ajouter le commentaire yamllint"
+    );
+}
+
+#[test]
+fn gen_system_crd_without_webhook_has_yamllint_header() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_crd", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let docs = [#{{
+            apiVersion: "apiextensions.k8s.io/v1",
+            kind: "CustomResourceDefinition",
+            metadata: #{{ name: "foos.example.com" }},
+            spec: #{{ group: "example.com" }}
+        }}];
+
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let crd_path = format!("{}/get_crds/foos.example.com.yaml", tmp_dir);
+    let content = std::fs::read_to_string(&crd_path).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        content.starts_with("# yamllint disable rule:line-length\n"),
+        "gen_system doit ajouter le header yamllint dans les fichiers CRD sans webhook"
+    );
+}
+
+#[test]
+fn gen_system_crd_with_webhook_has_yamllint_header() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_crd_webhook", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let docs = [#{{
+            apiVersion: "apiextensions.k8s.io/v1",
+            kind: "CustomResourceDefinition",
+            metadata: #{{ name: "bars.example.com" }},
+            spec: #{{
+                group: "example.com",
+                conversion: #{{
+                    strategy: "Webhook",
+                    webhook: #{{
+                        clientConfig: #{{
+                            service: #{{ name: "my-release-webhook", namespace: "default" }}
+                        }}
+                    }}
+                }}
+            }}
+        }}];
+
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let crd_path = format!("{}/get_crds/bars.example.com.yaml.hbs", tmp_dir);
+    let content = std::fs::read_to_string(&crd_path).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        content.starts_with("# yamllint disable rule:line-length\n"),
+        "gen_system doit ajouter le header yamllint dans les fichiers CRD avec webhook"
+    );
+}
+
+#[test]
+fn gen_service_crd_without_webhook_has_yamllint_header() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_service_crd", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let docs = [#{{
+            apiVersion: "apiextensions.k8s.io/v1",
+            kind: "CustomResourceDefinition",
+            metadata: #{{ name: "widgets.example.com" }},
+            spec: #{{ group: "example.com" }}
+        }}];
+
+        gen::gen_service("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let crd_path = format!("{}/get_crds/widgets.example.com.yaml", tmp_dir);
+    let content = std::fs::read_to_string(&crd_path).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        content.starts_with("# yamllint disable rule:line-length\n"),
+        "gen_service doit ajouter le header yamllint dans les fichiers CRD sans webhook"
+    );
+}
+
+// ===== gen_package — suppression des labels metadata =====
+
+#[test]
+fn gen_package_clean_metadata_removes_labels() {
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let metadata = #{
+            name: "my-release",
+            labels: #{
+                "app.kubernetes.io/name": "myapp",
+                "app.kubernetes.io/managed-by": "Helm",
+                "helm.sh/chart": "myapp-1.0"
+            }
+        };
+
+        let cleaned = gen::clean_metadata(metadata, "my-release");
+
+        !("labels" in cleaned)
+    "#,
+        )
+        .unwrap();
+
+    assert!(
+        result.as_bool().unwrap(),
+        "clean_metadata doit supprimer les labels du metadata"
+    );
+}
+
+#[test]
+fn gen_system_non_crd_has_no_metadata_labels() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_no_labels", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let docs = [#{{
+            apiVersion: "rbac.authorization.k8s.io/v1",
+            kind: "ClusterRole",
+            metadata: #{{
+                name: "my-release-viewer",
+                labels: #{{
+                    "app.kubernetes.io/name": "my-release",
+                    "app.kubernetes.io/managed-by": "Helm"
+                }}
+            }},
+            rules: []
+        }}];
+
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let obj_path = format!("{}/get_systems/ClusterRole_my-release-viewer.yaml.hbs", tmp_dir);
+    let content = std::fs::read_to_string(&obj_path).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !content.contains("app.kubernetes.io/name"),
+        "gen_system ne doit pas inclure les labels dans le metadata du ClusterRole"
+    );
+    assert!(
+        !content.contains("app.kubernetes.io/managed-by"),
+        "gen_system ne doit pas inclure app.kubernetes.io/managed-by"
+    );
+}
+
+#[test]
+fn gen_system_deployment_metadata_has_no_labels_key() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_deploy_no_labels", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{
+                name: "my-release",
+                labels: #{{
+                    "app.kubernetes.io/name": "my-release",
+                    "app.kubernetes.io/instance": "my-release"
+                }}
+            }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "my-release" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "my-release" }} }},
+                    spec: #{{ containers: [#{{ name: "app", image: "nginx:1.0" }}] }}
+                }}
+            }}
+        }}];
+
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let obj_path = format!("{}/get_systems/Deployment_my-release.yaml.hbs", tmp_dir);
+    let content = std::fs::read_to_string(&obj_path).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    // Le metadata top-level ne doit pas avoir de labels
+    // (le template.metadata.labels est remplacé par l'expression HBS — OK)
+    let lines: Vec<&str> = content.lines().collect();
+    let mut in_top_metadata = false;
+    let mut in_spec = false;
+    for line in &lines {
+        if line.starts_with("kind:") {
+            in_top_metadata = false;
+        }
+        if line.starts_with("metadata:") && !in_spec {
+            in_top_metadata = true;
+        }
+        if line.starts_with("spec:") {
+            in_top_metadata = false;
+            in_spec = true;
+        }
+        if in_top_metadata && line.trim_start().starts_with("labels:") {
+            panic!("Le metadata top-level du Deployment contient 'labels:' — doit être supprimé");
+        }
+    }
+}
+
+#[test]
+fn gen_tenant_objects_have_no_metadata_labels() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_tenant_no_labels", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+
+        let docs = [
+            #{{
+                apiVersion: "v1",
+                kind: "ConfigMap",
+                metadata: #{{
+                    name: "my-release-config",
+                    labels: #{{
+                        "app.kubernetes.io/name": "my-release",
+                        "app.kubernetes.io/managed-by": "Helm",
+                        "helm.sh/chart": "mychart-1.0"
+                    }}
+                }},
+                data: #{{ key: "value" }}
+            }},
+            #{{
+                apiVersion: "apps/v1",
+                kind: "Deployment",
+                metadata: #{{
+                    name: "my-release",
+                    labels: #{{
+                        "app.kubernetes.io/name": "my-release",
+                        "app.kubernetes.io/instance": "my-release"
+                    }}
+                }},
+                spec: #{{
+                    selector: #{{ matchLabels: #{{ app: "my-release" }} }},
+                    template: #{{
+                        metadata: #{{ labels: #{{ app: "my-release" }} }},
+                        spec: #{{ containers: [#{{ name: "app", image: "nginx:1.0" }}] }}
+                    }}
+                }}
+            }}
+        ];
+
+        gen::gen_tenant("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let cm_path = format!("{}/get_others/ConfigMap_my-release-config.yaml.hbs", tmp_dir);
+    let cm_content = std::fs::read_to_string(&cm_path).unwrap();
+
+    let deploy_path = format!("{}/get_scalables/Deployment_my-release.yaml.hbs", tmp_dir);
+    let deploy_content = std::fs::read_to_string(&deploy_path).unwrap();
+
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !cm_content.contains("app.kubernetes.io/managed-by"),
+        "gen_tenant ConfigMap ne doit pas avoir de labels dans le metadata"
+    );
+    assert!(
+        !cm_content.contains("helm.sh/chart"),
+        "gen_tenant ConfigMap ne doit pas avoir helm.sh/chart dans le metadata"
+    );
+
+    // Le Deployment : metadata top-level sans labels
+    let deploy_lines: Vec<&str> = deploy_content.lines().collect();
+    let mut in_top_metadata = false;
+    let mut in_spec = false;
+    for line in &deploy_lines {
+        if line.starts_with("kind:") {
+            in_top_metadata = false;
+        }
+        if line.starts_with("metadata:") && !in_spec {
+            in_top_metadata = true;
+        }
+        if line.starts_with("spec:") {
+            in_top_metadata = false;
+            in_spec = true;
+        }
+        if in_top_metadata && line.trim_start().starts_with("labels:") {
+            panic!("gen_tenant Deployment metadata top-level contient 'labels:' — doit être supprimé");
+        }
+    }
+}
+
 // ===== backup_context — patterns replace() non couverts =====
 
 #[test]

@@ -63,10 +63,10 @@ spec:
                         description: Project path with namespace (e.g. my-group/my-project)
                         type: string
                       registry:
-                        description: OCI registry URL (e.g. registry.gitlab.example.com)
+                        description: OCI registry URL (e.g. registry.gitlab.com)
                         type: string
                       url:
-                        description: GitLab instance API URL (e.g. https://gitlab.example.com)
+                        description: GitLab instance API URL (e.g. https://gitlab.com)
                         type: string
                     required:
                     - project
