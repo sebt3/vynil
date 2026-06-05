@@ -2,6 +2,11 @@ fn gen_yaml(path, data) {
     file_write(path, `---
 ${yaml_encode(data)}`);
 }
+fn gen_crd_yaml(path, data) {
+    file_write(path, `# yamllint disable rule:line-length
+---
+${yaml_encode(data)}`);
+}
 fn gen_yaml_if(path, type, data) {
     file_write(path, `{{#if (ctx_have_crd this "${type}")}}
 ---
@@ -44,9 +49,8 @@ fn clean_metadata(metadata, name) {
             metadata.remove("annotations");
         }
     }
-    // Replace name in label values
-    if "labels" in metadata && metadata.labels != () {
-        metadata.labels = replace_label_values(metadata.labels, name);
+    if "labels" in metadata {
+        metadata.remove("labels");
     }
     metadata
 }
@@ -741,9 +745,6 @@ fn find_comp_for_svc_labels(analysis, sm_selector) {
 // Set marker strings in workload doc for selector/label fields
 fn apply_workload_selectors(doc, comp) {
     let marker = `SELECTOR_COMP_${comp}`;
-    if "metadata" in doc && doc.metadata != () {
-        doc.metadata.labels = "LABELS_FROM_CTX";
-    }
     if "spec" in doc && doc.spec != () {
         if "selector" in doc.spec && doc.spec.selector != () && "matchLabels" in doc.spec.selector {
             doc.spec.selector.matchLabels = marker;
@@ -767,9 +768,6 @@ fn apply_workload_selectors(doc, comp) {
 
 // Set marker strings in a Service doc
 fn apply_svc_selectors(doc, comp) {
-    if "metadata" in doc && doc.metadata != () {
-        doc.metadata.labels = "LABELS_FROM_CTX";
-    }
     if "spec" in doc && doc.spec != () && "selector" in doc.spec {
         doc.spec.selector = `SELECTOR_COMP_${comp}`;
     }
@@ -808,9 +806,9 @@ fn gen_system(path, docs, name) {
                         doc.spec.conversion.webhook.clientConfig.service.name.replace(name, "{{instance.appslug}}");
                         doc.spec.conversion.webhook.clientConfig.service.namespace = "{{instance.namespace}}";
                     }
-                    gen_yaml(`${path}/get_crds/${doc.metadata.name}.yaml.hbs`, doc);
+                    gen_crd_yaml(`${path}/get_crds/${doc.metadata.name}.yaml.hbs`, doc);
                 } else {
-                    gen_yaml(`${path}/get_crds/${doc.metadata.name}.yaml`, doc);
+                    gen_crd_yaml(`${path}/get_crds/${doc.metadata.name}.yaml`, doc);
                 }
             } else if doc.kind != () && doc.kind != "Namespace" {
                 create_dir(`${path}/get_systems`);
@@ -863,7 +861,6 @@ fn gen_system(path, docs, name) {
                         res_comp = find_comp_for_svc_labels(analysis, doc.spec.selector.matchLabels);
                         if res_comp != "" {
                             doc.spec.selector.matchLabels = `SELECTOR_COMP_${res_comp}`;
-                            doc.metadata.labels = "LABELS_FROM_CTX";
                         }
                     }
                     gen_yaml_if(fp, "servicemonitors.monitoring.coreos.com", doc);
@@ -951,19 +948,16 @@ fn gen_tenant(path, docs, name) {
                     res_comp = find_comp_for_selector(analysis, doc.spec.selector.matchLabels);
                     if res_comp != "" {
                         doc.spec.selector.matchLabels = `SELECTOR_COMP_${res_comp}`;
-                        doc.metadata.labels = "LABELS_FROM_CTX";
                     }
                 } else if doc.kind == "NetworkPolicy" && "spec" in doc && doc.spec != () && "podSelector" in doc.spec && doc.spec.podSelector != () && "matchLabels" in doc.spec.podSelector && doc.spec.podSelector.matchLabels != () {
                     res_comp = find_comp_for_selector(analysis, doc.spec.podSelector.matchLabels);
                     if res_comp != "" {
                         doc.spec.podSelector.matchLabels = `SELECTOR_COMP_${res_comp}`;
-                        doc.metadata.labels = "LABELS_FROM_CTX";
                     }
                 } else if doc.kind == "ServiceMonitor" && "spec" in doc && doc.spec != () && "selector" in doc.spec && doc.spec.selector != () && "matchLabels" in doc.spec.selector && doc.spec.selector.matchLabels != () {
                     res_comp = find_comp_for_svc_labels(analysis, doc.spec.selector.matchLabels);
                     if res_comp != "" {
                         doc.spec.selector.matchLabels = `SELECTOR_COMP_${res_comp}`;
-                        doc.metadata.labels = "LABELS_FROM_CTX";
                     }
                 }
 
@@ -1022,9 +1016,9 @@ fn gen_service(path, docs, name) {
                         doc.spec.conversion.webhook.clientConfig.service.name.replace(name, "{{instance.appslug}}");
                         doc.spec.conversion.webhook.clientConfig.service.namespace = "{{instance.namespace}}";
                     }
-                    gen_yaml(`${path}/get_crds/${doc.metadata.name}.yaml.hbs`, doc);
+                    gen_crd_yaml(`${path}/get_crds/${doc.metadata.name}.yaml.hbs`, doc);
                 } else {
-                    gen_yaml(`${path}/get_crds/${doc.metadata.name}.yaml`, doc);
+                    gen_crd_yaml(`${path}/get_crds/${doc.metadata.name}.yaml`, doc);
                 }
             } else if ["Namespace"].contains(doc.kind) {
                 create_dir(`${path}/get_systems`);
@@ -1066,19 +1060,16 @@ fn gen_service(path, docs, name) {
                     res_comp = find_comp_for_selector(analysis, doc.spec.selector.matchLabels);
                     if res_comp != "" {
                         doc.spec.selector.matchLabels = `SELECTOR_COMP_${res_comp}`;
-                        doc.metadata.labels = "LABELS_FROM_CTX";
                     }
                 } else if doc.kind == "NetworkPolicy" && "spec" in doc && doc.spec != () && "podSelector" in doc.spec && doc.spec.podSelector != () && "matchLabels" in doc.spec.podSelector && doc.spec.podSelector.matchLabels != () {
                     res_comp = find_comp_for_selector(analysis, doc.spec.podSelector.matchLabels);
                     if res_comp != "" {
                         doc.spec.podSelector.matchLabels = `SELECTOR_COMP_${res_comp}`;
-                        doc.metadata.labels = "LABELS_FROM_CTX";
                     }
                 } else if doc.kind == "ServiceMonitor" && "spec" in doc && doc.spec != () && "selector" in doc.spec && doc.spec.selector != () && "matchLabels" in doc.spec.selector && doc.spec.selector.matchLabels != () {
                     res_comp = find_comp_for_svc_labels(analysis, doc.spec.selector.matchLabels);
                     if res_comp != "" {
                         doc.spec.selector.matchLabels = `SELECTOR_COMP_${res_comp}`;
-                        doc.metadata.labels = "LABELS_FROM_CTX";
                     }
                 }
 
