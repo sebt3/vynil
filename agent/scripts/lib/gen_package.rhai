@@ -53,6 +53,25 @@ fn apply_namespace_to_generated(path, ns) {
     }
 }
 
+// Replace every remaining occurrence of the release-name placeholder with {{instance.appslug}}.
+// Catches annotation values and other string fields not covered by structural replacements.
+fn apply_name_in_dir(dir_path, name) {
+    if !is_dir(dir_path) { return; }
+    for file in read_dir(dir_path) {
+        if is_file(file) {
+            let content = file_read(file);
+            content.replace(name, "{{instance.appslug}}");
+            file_write(file, content);
+        }
+    }
+}
+fn apply_name_to_generated(path, name) {
+    if name == () || name == "" { return; }
+    for dir in ["get_crds", "get_systems", "get_scalables", "get_others", "get_vitals"] {
+        apply_name_in_dir(`${path}/${dir}`, name);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Image and resource extraction from containers
 // ---------------------------------------------------------------------------
@@ -1224,7 +1243,22 @@ fn gen_system(path, docs, name) {
                 } else if doc.kind == "PrometheusRule" {
                     gen_yaml_if(`${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`, "prometheusrules.monitoring.coreos.com", doc);
                 } else {
-                    gen_yaml(`${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`, doc);
+                    // NetworkPolicy and PodDisruptionBudget: replace podSelector/spec.selector matchLabels
+                    let res_comp = "";
+                    if doc.kind == "NetworkPolicy" && "spec" in doc && doc.spec != () && "podSelector" in doc.spec && doc.spec.podSelector != () && "matchLabels" in doc.spec.podSelector && doc.spec.podSelector.matchLabels != () {
+                        res_comp = find_comp_for_selector(analysis, doc.spec.podSelector.matchLabels);
+                        if res_comp != "" {
+                            doc.spec.podSelector.matchLabels = `SELECTOR_COMP_${res_comp}`;
+                        }
+                    } else if doc.kind == "PodDisruptionBudget" && "spec" in doc && doc.spec != () && "selector" in doc.spec && doc.spec.selector != () && "matchLabels" in doc.spec.selector && doc.spec.selector.matchLabels != () {
+                        res_comp = find_comp_for_selector(analysis, doc.spec.selector.matchLabels);
+                        if res_comp != "" {
+                            doc.spec.selector.matchLabels = `SELECTOR_COMP_${res_comp}`;
+                        }
+                    }
+                    let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
+                    gen_yaml(fp, doc);
+                    if res_comp != "" { apply_selector_expressions(fp, res_comp); }
                 }
             }
         }
@@ -1238,6 +1272,7 @@ fn gen_system(path, docs) {
 }
 fn gen_system(path, docs, name, ns) {
     gen_system(path, docs, name);
+    apply_name_to_generated(path, name);
     apply_namespace_to_generated(path, ns);
 }
 
@@ -1369,6 +1404,7 @@ fn gen_tenant(path, docs) {
 }
 fn gen_tenant(path, docs, name, ns) {
     gen_tenant(path, docs, name);
+    apply_name_to_generated(path, name);
     apply_namespace_to_generated(path, ns);
 }
 
@@ -1509,5 +1545,6 @@ fn gen_service(path, docs) {
 }
 fn gen_service(path, docs, name, ns) {
     gen_service(path, docs, name);
+    apply_name_to_generated(path, name);
     apply_namespace_to_generated(path, ns);
 }
