@@ -2539,6 +2539,171 @@ fn gen_tenant_objects_have_no_metadata_labels() {
     }
 }
 
+// ===== gen_package — namespace placeholder et remplacement =====
+
+#[test]
+fn namespace_placeholder_is_kubernetes_valid() {
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        gen::namespace_placeholder()
+    "#,
+        )
+        .unwrap();
+
+    let s = result.to_string();
+    assert!(!s.is_empty(), "namespace_placeholder ne doit pas être vide");
+    assert!(
+        s.len() <= 63,
+        "namespace_placeholder doit faire au max 63 caractères, got: {s}"
+    );
+    assert!(
+        s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+        "namespace_placeholder doit contenir uniquement [a-z0-9-], got: {s}"
+    );
+    assert!(
+        s.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false),
+        "namespace_placeholder doit commencer par une lettre minuscule, got: {s}"
+    );
+    assert!(
+        s.chars()
+            .last()
+            .map(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            .unwrap_or(false),
+        "namespace_placeholder doit terminer par une lettre ou chiffre, got: {s}"
+    );
+}
+
+#[test]
+fn gen_system_namespace_replaced_in_clusterrole_name() {
+    // ClusterRole dont le nom contient le namespace placeholder (vynil-apps) :
+    // après gen_system avec 4ème arg, "vynil-apps" doit devenir "{{instance.namespace}}"
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_ns_replace", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "rbac.authorization.k8s.io/v1",
+            kind: "ClusterRole",
+            metadata: #{{ name: "traefik-vynil-apps" }},
+            rules: []
+        }}];
+        gen::gen_system("{dir}", docs, "traefik", "vynil-apps");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs_content = std::fs::read_to_string(format!(
+        "{}/get_systems/ClusterRole_traefik-vynil-apps.yaml.hbs",
+        tmp_dir
+    ))
+    .unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        hbs_content.contains("instance.namespace"),
+        "le namespace placeholder doit être remplacé par {{{{instance.namespace}}}}, got: {hbs_content}"
+    );
+    assert!(
+        !hbs_content.contains("vynil-apps"),
+        "vynil-apps ne doit plus apparaître dans le template généré, got: {hbs_content}"
+    );
+}
+
+#[test]
+fn gen_system_namespace_not_replaced_without_param() {
+    // Compat descendante : gen_system à 3 args ne remplace pas le namespace
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_no_ns_param", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "rbac.authorization.k8s.io/v1",
+            kind: "ClusterRole",
+            metadata: #{{ name: "traefik-vynil-apps" }},
+            rules: []
+        }}];
+        gen::gen_system("{dir}", docs, "traefik");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs_content = std::fs::read_to_string(format!(
+        "{}/get_systems/ClusterRole_traefik-vynil-apps.yaml.hbs",
+        tmp_dir
+    ))
+    .unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        hbs_content.contains("vynil-apps"),
+        "sans paramètre namespace, le placeholder doit rester dans le template, got: {hbs_content}"
+    );
+}
+
+#[test]
+fn gen_tenant_namespace_replaced_in_generated_files() {
+    // gen_tenant avec 4ème arg namespace : les occurrences dans les fichiers générés
+    // doivent être remplacées par {{instance.namespace}}
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_tenant_ns_replace", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: apps\n  type: tenant\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "rbac.authorization.k8s.io/v1",
+            kind: "Role",
+            metadata: #{{ name: "myapp-vynil-ns" }},
+            rules: []
+        }}];
+        gen::gen_tenant("{dir}", docs, "myapp", "vynil-ns");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs_content =
+        std::fs::read_to_string(format!("{}/get_others/Role_myapp-vynil-ns.yaml.hbs", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        hbs_content.contains("instance.namespace"),
+        "gen_tenant doit remplacer le namespace placeholder par {{{{instance.namespace}}}}, got: {hbs_content}"
+    );
+    assert!(
+        !hbs_content.contains("vynil-ns"),
+        "vynil-ns ne doit plus apparaître dans le template généré par gen_tenant, got: {hbs_content}"
+    );
+}
+
 // ===== backup_context — patterns replace() non couverts =====
 
 #[test]
