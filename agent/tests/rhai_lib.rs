@@ -1718,6 +1718,281 @@ fn gen_service_crd_without_webhook_has_yamllint_header() {
     );
 }
 
+// ===== gen_package — extraction images et resources =====
+
+#[test]
+fn parse_image_extracts_registry_repo_tag() {
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        let p = gen::parse_image("docker.io/traefik:v3.7.1");
+        p.registry == "docker.io" && p.repository == "traefik" && p.tag == "v3.7.1"
+    "#,
+        )
+        .unwrap();
+    assert!(
+        result.as_bool().unwrap(),
+        "parse_image doit extraire registry/repository/tag"
+    );
+}
+
+#[test]
+fn parse_image_no_registry_uses_empty_string() {
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        let p = gen::parse_image("traefik:v3.7.1");
+        p.registry == "" && p.repository == "traefik" && p.tag == "v3.7.1"
+    "#,
+        )
+        .unwrap();
+    assert!(
+        result.as_bool().unwrap(),
+        "parse_image sans registry doit laisser registry vide"
+    );
+}
+
+#[test]
+fn parse_image_quay_registry_with_path() {
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        let p = gen::parse_image("quay.io/jetstack/cert-manager-acmesolver:v1.20.2");
+        p.registry == "quay.io" && p.repository == "jetstack/cert-manager-acmesolver" && p.tag == "v1.20.2"
+    "#,
+        )
+        .unwrap();
+    assert!(
+        result.as_bool().unwrap(),
+        "parse_image doit gérer quay.io avec chemin d'image"
+    );
+}
+
+#[test]
+fn gen_system_deployment_extracts_image_to_package_yaml() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_extract_images", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: my-release\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "my-release" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "my-release" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "my-release" }} }},
+                    spec: #{{
+                        containers: [#{{
+                            name: "traefik",
+                            image: "docker.io/traefik:v3.7.1",
+                            resources: #{{
+                                requests: #{{ cpu: "20m", memory: "128Mi" }},
+                                limits: #{{ cpu: "1000m", memory: "256Mi" }}
+                            }}
+                        }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let hbs_content =
+        std::fs::read_to_string(format!("{}/get_systems/Deployment_my-release.yaml.hbs", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        pkg_content.contains("docker.io"),
+        "package.yaml doit contenir le registry docker.io extrait"
+    );
+    assert!(
+        pkg_content.contains("traefik"),
+        "package.yaml doit contenir l'image traefik"
+    );
+    assert!(
+        pkg_content.contains("128Mi"),
+        "package.yaml doit contenir les resources extraites"
+    );
+    assert!(
+        hbs_content.contains("image_from_ctx"),
+        "le template HBS doit référencer image_from_ctx"
+    );
+    assert!(
+        hbs_content.contains("resources_from_ctx"),
+        "le template HBS doit référencer resources_from_ctx"
+    );
+}
+
+#[test]
+fn gen_system_deployment_extracts_image_from_args() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_extract_args_image", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: cert-manager\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "cert-manager" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "cert-manager" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "cert-manager" }} }},
+                    spec: #{{
+                        containers: [#{{
+                            name: "cert-manager-controller",
+                            image: "quay.io/jetstack/cert-manager-controller:v1.20.2",
+                            args: [
+                                "--leader-elect=true",
+                                "--acme-http01-solver-image=quay.io/jetstack/cert-manager-acmesolver:v1.20.2"
+                            ]
+                        }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "cert-manager");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let hbs_content = std::fs::read_to_string(format!(
+        "{}/get_systems/Deployment_cert-manager.yaml.hbs",
+        tmp_dir
+    ))
+    .unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        pkg_content.contains("cert-manager-acmesolver"),
+        "package.yaml doit contenir l'image extraite des args"
+    );
+    assert!(
+        hbs_content.contains("image_from_ctx"),
+        "le template HBS doit référencer image_from_ctx pour l'image principale"
+    );
+    assert!(
+        hbs_content.contains("acme-http01-solver-image="),
+        "le template HBS doit conserver le flag --acme-http01-solver-image"
+    );
+}
+
+#[test]
+fn gen_system_overwrites_existing_images_on_regeneration() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_overwrite", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: my-release\n  category: core\n  type: system\nimages:\n  traefik:\n    registry: docker.io\n    repository: traefik\n    tag: v3.6.0\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "my-release" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "my-release" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "my-release" }} }},
+                    spec: #{{
+                        containers: [#{{ name: "traefik", image: "docker.io/traefik:v3.7.1" }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        pkg_content.contains("v3.7.1"),
+        "gen_system doit écraser l'entrée images existante avec la nouvelle version"
+    );
+}
+
+#[test]
+fn gen_system_keeps_existing_resources_when_container_has_none() {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_keep_resources", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    // package.yaml already has resources for "traefik"
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: my-release\n  category: core\n  type: system\nresources:\n  traefik:\n    requests:\n      cpu: 20m\n      memory: 128Mi\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        // Container has an image but NO resources defined
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "my-release" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "my-release" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "my-release" }} }},
+                    spec: #{{
+                        containers: [#{{ name: "traefik", image: "docker.io/traefik:v3.7.1" }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        pkg_content.contains("128Mi"),
+        "les resources existantes doivent être conservées si le container n'en définit pas"
+    );
+}
+
 // ===== gen_package — suppression des labels metadata =====
 
 #[test]
