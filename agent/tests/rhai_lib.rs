@@ -3186,8 +3186,10 @@ fn placeholder_is_kubernetes_valid() {
 
 #[test]
 fn gen_system_namespace_replaced_in_clusterrole_name() {
-    // ClusterRole dont le nom contient le namespace placeholder (vynil-apps) :
-    // après gen_system avec 4ème arg, "vynil-apps" doit devenir "{{instance.namespace}}"
+    // Traefik génère ClusterRole nommé {release}-traefik-{ns}.
+    // gen_system(4-arg) doit :
+    //   1. produire un nom de fichier STABLE sans l'UUID ns → ClusterRole_traefik.yaml.hbs
+    //   2. remplacer le placeholder ns dans le contenu par {{instance.namespace}}
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
     let tmp_dir = format!("{}/tests/tmp/gen_system_ns_replace", base);
@@ -3203,17 +3205,18 @@ fn gen_system_namespace_replaced_in_clusterrole_name() {
         let docs = [#{{
             apiVersion: "rbac.authorization.k8s.io/v1",
             kind: "ClusterRole",
-            metadata: #{{ name: "traefik-vynil-apps" }},
+            metadata: #{{ name: "vrel1234-traefik-vns5678" }},
             rules: []
         }}];
-        gen::gen_system("{dir}", docs, "traefik", "vynil-apps");
+        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
     "#,
             dir = tmp_dir
         ))
         .unwrap();
 
+    // Nom stable : strip préfixe UUID release + strip suffixe UUID ns → "traefik"
     let hbs_content =
-        std::fs::read_to_string(format!("{}/get_systems/ClusterRole_vynil-apps.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{}/get_systems/ClusterRole_traefik.yaml.hbs", tmp_dir)).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -3221,8 +3224,8 @@ fn gen_system_namespace_replaced_in_clusterrole_name() {
         "le namespace placeholder doit être remplacé par {{{{instance.namespace}}}}, got: {hbs_content}"
     );
     assert!(
-        !hbs_content.contains("vynil-apps"),
-        "vynil-apps ne doit plus apparaître dans le template généré, got: {hbs_content}"
+        !hbs_content.contains("vns5678"),
+        "l'UUID namespace ne doit plus apparaître dans le template généré, got: {hbs_content}"
     );
 }
 
@@ -3265,8 +3268,8 @@ fn gen_system_namespace_not_replaced_without_param() {
 
 #[test]
 fn gen_tenant_namespace_replaced_in_generated_files() {
-    // gen_tenant avec 4ème arg namespace : les occurrences dans les fichiers générés
-    // doivent être remplacées par {{instance.namespace}}
+    // gen_tenant(4-arg) : le nom de fichier doit être stable (sans UUID ns)
+    // et le contenu doit remplacer l'UUID ns par {{instance.namespace}}.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
     let tmp_dir = format!("{}/tests/tmp/gen_tenant_ns_replace", base);
@@ -3282,18 +3285,17 @@ fn gen_tenant_namespace_replaced_in_generated_files() {
         let docs = [#{{
             apiVersion: "rbac.authorization.k8s.io/v1",
             kind: "Role",
-            metadata: #{{ name: "myapp-vynil-ns" }},
+            metadata: #{{ name: "vrel1234-myapp-vns5678" }},
             rules: []
         }}];
-        gen::gen_tenant("{dir}", docs, "myapp", "vynil-ns");
+        gen::gen_tenant("{dir}", docs, "vrel1234", "vns5678");
     "#,
             dir = tmp_dir
         ))
         .unwrap();
 
-    let hbs_content =
-        // "myapp-vynil-ns" → strip "myapp-" prefix → "vynil-ns"
-        std::fs::read_to_string(format!("{}/get_others/Role_vynil-ns.yaml.hbs", tmp_dir)).unwrap();
+    // Nom stable : strip préfixe UUID release + strip suffixe UUID ns → "myapp"
+    let hbs_content = std::fs::read_to_string(format!("{}/get_others/Role_myapp.yaml.hbs", tmp_dir)).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -3301,8 +3303,8 @@ fn gen_tenant_namespace_replaced_in_generated_files() {
         "gen_tenant doit remplacer le namespace placeholder par {{{{instance.namespace}}}}, got: {hbs_content}"
     );
     assert!(
-        !hbs_content.contains("vynil-ns"),
-        "vynil-ns ne doit plus apparaître dans le template généré par gen_tenant, got: {hbs_content}"
+        !hbs_content.contains("vns5678"),
+        "l'UUID namespace ne doit plus apparaître dans le template généré par gen_tenant, got: {hbs_content}"
     );
 }
 
@@ -3625,4 +3627,233 @@ fn apply_dedup_to_generated_noop_when_pkg_name_unit() {
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert_eq!(result, content, "pkg_name () doit laisser le fichier intact");
+}
+
+// ===== clean_file_name — nettoyage du placeholder namespace dans le nom de fichier =====
+
+#[test]
+fn clean_file_name_strips_ns_placeholder_from_filename() {
+    // Traefik génère ClusterRole nommé {release}-traefik-{ns}.
+    // Après strip du préfixe release, il reste "traefik-{ns}" dans le nom de fichier.
+    // La variante 3-arg doit supprimer ce suffixe ns pour des noms stables.
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        gen::clean_file_name("vrel1234-traefik-vns5678", "vrel1234", "vns5678")
+    "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result.to_string(),
+        "traefik",
+        "clean_file_name doit supprimer le suffixe ns après avoir stripé le préfixe release"
+    );
+}
+
+#[test]
+fn clean_file_name_strips_ns_in_middle_of_filename() {
+    // Cas où le ns est au milieu : {release}-component-{ns}-suffix → component-suffix
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        gen::clean_file_name("vrel1234-component-vns5678-suffix", "vrel1234", "vns5678")
+    "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result.to_string(),
+        "component-suffix",
+        "clean_file_name doit supprimer le ns en position intermédiaire"
+    );
+}
+
+#[test]
+fn clean_file_name_without_ns_behaves_as_before() {
+    // La variante 2-arg (sans ns) conserve le comportement existant.
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        gen::clean_file_name("vrel1234-traefik-vns5678", "vrel1234")
+    "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result.to_string(),
+        "traefik-vns5678",
+        "sans ns, clean_file_name ne doit pas modifier le suffixe ns"
+    );
+}
+
+// ===== gen_system — nettoyage ns dans les noms cluster-scoped =====
+
+#[test]
+fn gen_system_clusterrole_name_has_no_double_namespace() {
+    // Traefik génère ClusterRole nommé {release}-traefik-{ns}.
+    // Après gen_system(4-arg), le metadata.name du ClusterRole doit être
+    // {{instance.namespace}}-{{instance.appslug}} sans doublon de namespace.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_no_double_ns");
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "rbac.authorization.k8s.io/v1",
+            kind: "ClusterRole",
+            metadata: #{{ name: "vrel1234-traefik-vns5678" }},
+            rules: []
+        }}];
+        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content =
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/ClusterRole_traefik.yaml.hbs")).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        content.contains("'{{instance.namespace}}-{{instance.appslug}}'"),
+        "ClusterRole doit avoir exactement {{{{instance.namespace}}}}-{{{{instance.appslug}}}}, got:\n{content}"
+    );
+    assert!(
+        !content.contains("{{instance.namespace}}-{{instance.appslug}}-{{instance.namespace}}"),
+        "ClusterRole ne doit pas avoir {{{{instance.namespace}}}} en doublon, got:\n{content}"
+    );
+}
+
+#[test]
+fn gen_system_clusterrolebinding_rolref_matches_clusterrole_name() {
+    // Le roleRef.name du ClusterRoleBinding doit correspondre exactement
+    // au metadata.name du ClusterRole référencé.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_roleref_match");
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [
+            #{{
+                apiVersion: "rbac.authorization.k8s.io/v1",
+                kind: "ClusterRole",
+                metadata: #{{ name: "vrel1234-traefik-vns5678" }},
+                rules: []
+            }},
+            #{{
+                apiVersion: "rbac.authorization.k8s.io/v1",
+                kind: "ClusterRoleBinding",
+                metadata: #{{ name: "vrel1234-traefik-vns5678" }},
+                roleRef: #{{ apiGroup: "rbac.authorization.k8s.io", kind: "ClusterRole", name: "vrel1234-traefik-vns5678" }},
+                subjects: [#{{ kind: "ServiceAccount", name: "vrel1234-traefik", namespace: "vns5678" }}]
+            }}
+        ];
+        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let crole =
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/ClusterRole_traefik.yaml.hbs")).unwrap();
+    let crb = std::fs::read_to_string(format!(
+        "{tmp_dir}/get_systems/ClusterRoleBinding_traefik.yaml.hbs"
+    ))
+    .unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    // Les deux doivent avoir le même nom sans doublon de namespace
+    assert!(
+        crole.contains("'{{instance.namespace}}-{{instance.appslug}}'"),
+        "ClusterRole metadata.name incorrect, got:\n{crole}"
+    );
+    assert!(
+        crb.contains("'{{instance.namespace}}-{{instance.appslug}}'"),
+        "ClusterRoleBinding roleRef.name doit matcher ClusterRole, got:\n{crb}"
+    );
+}
+
+#[test]
+fn gen_system_env_configmap_filename_is_stable() {
+    // Un Deployment avec des env vars génère un ConfigMap dans get_others.
+    // Le nom du fichier doit être stable (sans UUID release).
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_env_cm");
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "vrel1234-traefik" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "vrel1234-traefik" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "vrel1234-traefik" }} }},
+                    spec: #{{
+                        serviceAccountName: "vrel1234-traefik",
+                        containers: [#{{
+                            name: "vrel1234-traefik",
+                            image: "docker.io/traefik:v3.0",
+                            env: [
+                                #{{ name: "LOG_LEVEL", value: "INFO" }},
+                                #{{ name: "PORT", value: "8080" }}
+                            ]
+                        }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    // Le ConfigMap doit être nommé sans UUID : ConfigMap_traefik-envs.yaml.hbs
+    let exists =
+        std::path::Path::new(&format!("{tmp_dir}/get_others/ConfigMap_traefik-envs.yaml.hbs")).exists();
+    let uuid_exists = std::fs::read_dir(format!("{tmp_dir}/get_others"))
+        .map(|d| {
+            d.filter_map(|e| e.ok()).any(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name.contains("vrel1234") || name.contains("vns5678")
+            })
+        })
+        .unwrap_or(false);
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        exists,
+        "ConfigMap_traefik-envs.yaml.hbs doit exister avec un nom stable"
+    );
+    assert!(
+        !uuid_exists,
+        "aucun fichier dans get_others ne doit contenir l'UUID release ou namespace"
+    );
 }
