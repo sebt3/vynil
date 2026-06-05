@@ -172,33 +172,102 @@ fn apply_image_resource_expressions(filepath, images_keys, resources_keys) {
 
 // Update package.yaml with extracted images and resources (always overwrites existing entries).
 //
-// Encoding strategy:
-// - yaml_decode_ordered (rust_yaml RoundTrip): reads in document order, which is preserved
-//   for existing scalar updates.  Inserting a plain Rhai map value (no round-trip metadata)
-//   as a NEW nested map entry triggers a corruption in dump_str because round-trip and
-//   non-round-trip nodes are mixed.  To work around this we serialise and re-parse each
-//   new entry through yaml_decode_ordered so it carries the expected metadata before
-//   being inserted.
+// Pure string approach: never re-parse the file through yaml_decode_ordered.
+// rust_yaml RoundTrip mode stores per-node span metadata. Block scalars (>, |, >-, |-)
+// carry special metadata that makes dump_str produce corrupted output whenever any node
+// without that metadata is inserted. String manipulation avoids the issue entirely.
 fn update_package_yaml_images_resources(path, images, resources) {
     if images.len() == 0 && resources.len() == 0 { return; }
     let pkg_path = `${path}/package.yaml`;
     if !is_file(pkg_path) { return; }
-    let pkg = yaml_decode_ordered(file_read(pkg_path));
+
+    let nl = "\n";
+
+    // Build new images section text
+    let images_text = "";
     if images.len() > 0 {
-        if type_of(pkg["images"]) != "map" { pkg["images"] = yaml_decode_ordered("{}"); }
+        images_text = "images:";
         for k in images.keys() {
-            // Re-parse via yaml_decode_ordered so the inserted value carries round-trip metadata
-            pkg["images"][k] = yaml_decode_ordered(yaml_encode(images[k]));
+            let img = images[k];
+            images_text = `${images_text}${nl}  ${k}:`;
+            images_text = `${images_text}${nl}    registry: ${img["registry"]}`;
+            images_text = `${images_text}${nl}    repository: ${img["repository"]}`;
+            if type_of(img["tag"]) == "string" && img["tag"] != "" {
+                images_text = `${images_text}${nl}    tag: ${img["tag"]}`;
+            }
         }
     }
+
+    // Build new resources section text
+    let resources_text = "";
     if resources.len() > 0 {
-        if type_of(pkg["resources"]) != "map" { pkg["resources"] = yaml_decode_ordered("{}"); }
+        resources_text = "resources:";
         for k in resources.keys() {
-            pkg["resources"][k] = yaml_decode_ordered(yaml_encode(resources[k]));
+            let res = resources[k];
+            resources_text = `${resources_text}${nl}  ${k}:`;
+            for phase in ["requests", "limits"] {
+                if type_of(res[phase]) == "map" {
+                    resources_text = `${resources_text}${nl}    ${phase}:`;
+                    for field in res[phase].keys() {
+                        resources_text = `${resources_text}${nl}      ${field}: ${res[phase][field]}`;
+                    }
+                }
+            }
         }
     }
-    file_write(pkg_path, `---
-${yaml_encode_ordered(pkg)}`);
+
+    // Read original file and rebuild line by line, replacing existing sections
+    let original = file_read(pkg_path);
+    let lines = original.split(nl);
+    let new_lines = [];
+    let in_section = false;
+    let images_written = false;
+    let resources_written = false;
+
+    for line in lines {
+        // Top-level key: no leading whitespace, not empty, not comment, not list item
+        let is_top = line.len() > 0 && !line.starts_with(" ") && !line.starts_with("\t")
+                  && !line.starts_with("#") && !line.starts_with("-");
+        if is_top {
+            if line.starts_with("images:") {
+                if images_text != "" {
+                    // Replace section with new content; skip original header and children
+                    in_section = true;
+                    new_lines.push(images_text);
+                    images_written = true;
+                    continue;
+                }
+                // No new images: keep original section as-is
+                in_section = false;
+            } else if line.starts_with("resources:") {
+                if resources_text != "" {
+                    in_section = true;
+                    new_lines.push(resources_text);
+                    resources_written = true;
+                    continue;
+                }
+                in_section = false;
+            } else {
+                in_section = false;
+            }
+        }
+        if in_section { continue; }
+        new_lines.push(line);
+    }
+
+    // Append sections not found in original
+    if !images_written && images_text != "" { new_lines.push(images_text); }
+    if !resources_written && resources_text != "" { new_lines.push(resources_text); }
+
+    // Join lines preserving original line endings
+    let content = new_lines.reduce(|acc, x| if acc == "" { x } else { `${acc}${nl}${x}` }, "");
+
+    // Ensure document separator
+    if !content.starts_with("---") {
+        content = `---${nl}${content}`;
+    }
+
+    file_write(pkg_path, content);
 }
 
 // ---------------------------------------------------------------------------

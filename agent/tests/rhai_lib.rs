@@ -1829,8 +1829,8 @@ fn update_package_yaml_preserves_metadata_structure() {
     let tmp_dir = format!("{}/tests/tmp/pkg_yaml_metadata", base);
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
-    // Simulate the user's real package.yaml with features as block sequence
-    let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  type: system\n  category: core\n  features:\n  - upgrade\n  - auto_config\n  app_version: 40.2.0\nrequirements: []\n";
+    // Exact structure from user's real file including "description: >" folded block scalar
+    let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  type: system\n  category: core\n  description: >\n    Traefik is a modern HTTP reverse proxy and load balancer made\n    to deploy microservices with ease.\n  features:\n  - upgrade\n  - auto_config\n  app_version: 40.2.0\nrequirements: []\n";
     std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
 
     let _ = rhai
@@ -1873,6 +1873,102 @@ fn update_package_yaml_preserves_metadata_structure() {
     assert!(
         content.contains("40.2.0"),
         "la valeur de app_version doit être préservée"
+    );
+}
+
+fn run_block_scalar_test(scalar_header: &str, scalar_body: &str) {
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let safe_name = scalar_header
+        .replace('>', "gt")
+        .replace('|', "pipe")
+        .replace('-', "strip")
+        .replace(' ', "");
+    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_scalar_{}", base, safe_name);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = format!(
+        "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  description: {}\n{}\n  app_version: 40.2.0\nrequirements: []\n",
+        scalar_header, scalar_body
+    );
+    std::fs::write(format!("{}/package.yaml", tmp_dir), &pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "traefik" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "traefik" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "traefik" }} }},
+                    spec: #{{ containers: [#{{ name: "traefik", image: "docker.io/traefik:v3.7.1" }}] }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "traefik");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(content.starts_with("---\n"), "doit commencer par ---");
+    assert!(!content.contains("? ["), "pas de clé complexe YAML");
+    assert!(
+        content.contains("app_version"),
+        "app_version doit rester présent (scalar: {})",
+        scalar_header
+    );
+    assert!(
+        content.contains("40.2.0"),
+        "valeur app_version préservée (scalar: {})",
+        scalar_header
+    );
+    // requirements must be top-level (not inside metadata)
+    let req_pos = content.find("\nrequirements:").unwrap_or(usize::MAX);
+    let meta_pos = content.find("\nmetadata:").unwrap_or(0);
+    assert!(
+        req_pos > meta_pos,
+        "requirements doit être top-level, pas imbriqué dans metadata (scalar: {})",
+        scalar_header
+    );
+}
+
+#[test]
+fn update_package_yaml_folded_scalar_gt_not_corrupted() {
+    run_block_scalar_test(
+        ">",
+        "    Traefik is a modern HTTP reverse proxy.\n    Second line.",
+    );
+}
+
+#[test]
+fn update_package_yaml_literal_scalar_pipe_not_corrupted() {
+    run_block_scalar_test(
+        "|",
+        "    Traefik is a modern HTTP reverse proxy.\n    Second line.",
+    );
+}
+
+#[test]
+fn update_package_yaml_folded_strip_scalar_gt_dash_not_corrupted() {
+    run_block_scalar_test(
+        ">-",
+        "    Traefik is a modern HTTP reverse proxy.\n    Second line.",
+    );
+}
+
+#[test]
+fn update_package_yaml_literal_strip_scalar_pipe_dash_not_corrupted() {
+    run_block_scalar_test(
+        "|-",
+        "    Traefik is a modern HTTP reverse proxy.\n    Second line.",
     );
 }
 
