@@ -1718,6 +1718,65 @@ fn gen_service_crd_without_webhook_has_yamllint_header() {
     );
 }
 
+#[test]
+fn gen_system_crd_has_no_helm_labels_or_annotations() {
+    // Les CRDs doivent passer par clean_metadata : labels Helm supprimés,
+    // annotations Helm supprimées, seules les annotations non-Helm conservées.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_crd_no_labels", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apiextensions.k8s.io/v1",
+            kind: "CustomResourceDefinition",
+            metadata: #{{
+                name: "foos.example.com",
+                labels: #{{
+                    "app": "my-release",
+                    "app.kubernetes.io/managed-by": "Helm",
+                    "app.kubernetes.io/instance": "v7aeab500",
+                    "helm.sh/chart": "mychart-1.0"
+                }},
+                annotations: #{{
+                    "helm.sh/chart": "mychart-1.0",
+                    "helm.sh/resource-policy": "keep",
+                    "checksum/config": "abc123"
+                }}
+            }},
+            spec: #{{ group: "example.com" }}
+        }}];
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{}/get_crds/foos.example.com.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !content.contains("labels:"),
+        "les labels doivent être supprimés des CRDs, got:\n{content}"
+    );
+    assert!(
+        !content.contains("helm.sh/chart"),
+        "helm.sh/chart doit être supprimé des CRDs, got:\n{content}"
+    );
+    assert!(
+        !content.contains("checksum/"),
+        "les checksums doivent être supprimés des CRDs, got:\n{content}"
+    );
+    assert!(
+        content.contains("helm.sh/resource-policy"),
+        "helm.sh/resource-policy doit être conservé (annotation non-Helm), got:\n{content}"
+    );
+}
+
 // ===== update_package_yaml — ordering and correctness =====
 
 #[test]
