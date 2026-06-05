@@ -2603,6 +2603,69 @@ fn gen_system_networkpolicy_uses_selector_expression() {
 }
 
 #[test]
+fn gen_system_tsc_matchlabels_replaced_with_selector_expression() {
+    // Les topologySpreadConstraints.labelSelector.matchLabels doivent être remplacés
+    // par l'expression selector_from_ctx, pas laisser les labels bruts.
+    // Bug : tsc.labelSelector.matchLabels = marker (2 niveaux sur copie) ne persiste pas.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_tsc_selector", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "v3fdf80f5-controller" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ "app.kubernetes.io/instance": "v3fdf80f5" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ "app.kubernetes.io/instance": "v3fdf80f5" }} }},
+                    spec: #{{
+                        containers: [#{{ name: "controller", image: "nginx:1.0" }}],
+                        topologySpreadConstraints: [#{{
+                            maxSkew: 1,
+                            topologyKey: "kubernetes.io/hostname",
+                            whenUnsatisfiable: "ScheduleAnyway",
+                            labelSelector: #{{
+                                matchLabels: #{{ "app.kubernetes.io/instance": "v3fdf80f5" }}
+                            }}
+                        }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "v3fdf80f5");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs =
+        std::fs::read_to_string(format!("{}/get_systems/Deployment_controller.yaml.hbs", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        hbs.contains("selector_from_ctx"),
+        "topologySpreadConstraints.labelSelector.matchLabels doit utiliser selector_from_ctx, got:\n{hbs}"
+    );
+    assert!(
+        !hbs.contains("v3fdf80f5"),
+        "le placeholder ne doit plus apparaître dans les TSC, got:\n{hbs}"
+    );
+    assert!(
+        !hbs.contains("app.kubernetes.io/instance:"),
+        "les labels bruts ne doivent pas rester dans les TSC matchLabels, got:\n{hbs}"
+    );
+}
+
+#[test]
 fn gen_system_image_key_strips_release_name_prefix() {
     // La clé image dans package.yaml et le template ne doit pas contenir le placeholder.
     // Helm nomme les conteneurs <release>-<component> ; la clé doit être juste <component>.

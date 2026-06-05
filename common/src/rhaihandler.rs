@@ -163,7 +163,8 @@ impl Script {
             resolver.push(FileModuleResolver::new_with_path(path));
         }
         script.engine.set_module_resolver(resolver);
-        script.engine.set_max_expr_depths(128, 64);
+        script.engine.set_max_expr_depths(256, 128);
+        script.engine.set_max_call_levels(512);
         common_rhai_register(&mut script.engine);
         chrono_rhai_register(&mut script.engine);
         hashes_rhai_register(&mut script.engine);
