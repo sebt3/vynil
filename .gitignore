@@ -5,3 +5,5 @@ CLAUDE.md
 .kydah/
 .tasks/
 docs/conception/
+agent/tests/tmp/*
+!agent/tests/tmp/.gitkeep
