@@ -1135,7 +1135,7 @@ fn apply_selector_expressions(filepath, comp) {
     let content = file_read(filepath);
     let sel_marker = `SELECTOR_COMP_${comp}`;
     let sel_expr = `{{json_to_str (selector_from_ctx this comp="${comp}")}}`;
-    let lbl_expr = "{{json_to_str (labels_from_ctx this)}}";
+    let lbl_expr = `{{json_to_str (labels_from_ctx this comp="${comp}")}}`;
     // Unquoted markers (yaml_encode normally won't quote these safe strings)
     content.replace(sel_marker, sel_expr);
     content.replace("LABELS_FROM_CTX", lbl_expr);

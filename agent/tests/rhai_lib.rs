@@ -2666,6 +2666,52 @@ fn gen_system_tsc_matchlabels_replaced_with_selector_expression() {
 }
 
 #[test]
+fn gen_system_pod_template_labels_include_comp_for_selector_match() {
+    // Le pod template labels doit utiliser labels_from_ctx this comp="<comp>"
+    // pour que le Deployment selector (qui inclut app.kubernetes.io/component)
+    // puisse matcher les pods → sinon kube-linter mismatching-selector.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_labels_comp", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "v3fdf80f5-controller" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ "app.kubernetes.io/component": "controller", "app.kubernetes.io/instance": "v3fdf80f5" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ "app.kubernetes.io/component": "controller", "app.kubernetes.io/instance": "v3fdf80f5" }} }},
+                    spec: #{{ containers: [#{{ name: "controller", image: "nginx:1.0" }}] }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "v3fdf80f5");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs =
+        std::fs::read_to_string(format!("{}/get_systems/Deployment_controller.yaml.hbs", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    // Le pod template labels doit passer comp pour matcher le selector
+    assert!(
+        hbs.contains(r#"labels_from_ctx this comp="app""#),
+        "pod template labels doit utiliser labels_from_ctx avec comp pour matcher le selector, got:\n{hbs}"
+    );
+}
+
+#[test]
 fn gen_system_image_key_strips_release_name_prefix() {
     // La clé image dans package.yaml et le template ne doit pas contenir le placeholder.
     // Helm nomme les conteneurs <release>-<component> ; la clé doit être juste <component>.
