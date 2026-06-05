@@ -2474,6 +2474,135 @@ fn gen_system_args_replace_release_name_with_appslug() {
 }
 
 #[test]
+fn gen_system_release_name_replaced_in_annotation_values() {
+    // Les valeurs d'annotations arbitraires (ex: cert-manager.io/inject-ca-from-secret)
+    // contenant le release name placeholder doivent être remplacées par {{instance.appslug}}.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_annotation_release", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: cert-manager\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "admissionregistration.k8s.io/v1",
+            kind: "MutatingWebhookConfiguration",
+            metadata: #{{
+                name: "v3fdf80f5-cert-manager-webhook",
+                annotations: #{{
+                    "cert-manager.io/inject-ca-from-secret": "v56abc12/v3fdf80f5-cert-manager-webhook-ca"
+                }}
+            }},
+            webhooks: [#{{
+                name: "webhook.cert-manager.io",
+                clientConfig: #{{
+                    service: #{{ name: "v3fdf80f5-cert-manager-webhook", namespace: "v56abc12", path: "/mutate" }}
+                }},
+                admissionReviewVersions: ["v1"],
+                sideEffects: "None"
+            }}]
+        }}];
+        gen::gen_system("{dir}", docs, "v3fdf80f5", "v56abc12");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs = std::fs::read_to_string(format!(
+        "{}/get_systems/MutatingWebhookConfiguration_cert-manager-webhook.yaml.hbs",
+        tmp_dir
+    ))
+    .unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !hbs.contains("v3fdf80f5"),
+        "le release name placeholder ne doit plus apparaître dans les annotations, got:\n{hbs}"
+    );
+    assert!(
+        !hbs.contains("v56abc12"),
+        "le namespace placeholder ne doit plus apparaître, got:\n{hbs}"
+    );
+    assert!(
+        hbs.contains("instance.appslug"),
+        "{{instance.appslug}} doit remplacer le release name dans les annotations, got:\n{hbs}"
+    );
+}
+
+#[test]
+fn gen_system_networkpolicy_uses_selector_expression() {
+    // Dans gen_system, le NetworkPolicy doit remplacer podSelector.matchLabels
+    // par l'expression selector_from_ctx, pas laisser les labels Helm bruts.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_netpol_selector", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [
+            #{{
+                apiVersion: "apps/v1",
+                kind: "Deployment",
+                metadata: #{{ name: "v3fdf80f5-controller" }},
+                spec: #{{
+                    selector: #{{ matchLabels: #{{ "app.kubernetes.io/component": "controller", "app.kubernetes.io/instance": "v3fdf80f5" }} }},
+                    template: #{{
+                        metadata: #{{ labels: #{{ "app.kubernetes.io/component": "controller", "app.kubernetes.io/instance": "v3fdf80f5" }} }},
+                        spec: #{{ containers: [#{{ name: "controller", image: "nginx:1.0" }}] }}
+                    }}
+                }}
+            }},
+            #{{
+                apiVersion: "networking.k8s.io/v1",
+                kind: "NetworkPolicy",
+                metadata: #{{ name: "v3fdf80f5-allow-egress" }},
+                spec: #{{
+                    podSelector: #{{
+                        matchLabels: #{{ "app.kubernetes.io/component": "controller", "app.kubernetes.io/instance": "v3fdf80f5" }}
+                    }},
+                    policyTypes: ["Egress"]
+                }}
+            }}
+        ];
+        gen::gen_system("{dir}", docs, "v3fdf80f5");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs = std::fs::read_to_string(format!(
+        "{}/get_systems/NetworkPolicy_allow-egress.yaml.hbs",
+        tmp_dir
+    ))
+    .unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        hbs.contains("selector_from_ctx"),
+        "podSelector.matchLabels doit utiliser selector_from_ctx, got:\n{hbs}"
+    );
+    assert!(
+        !hbs.contains("v3fdf80f5"),
+        "le placeholder ne doit plus apparaître dans le NetworkPolicy, got:\n{hbs}"
+    );
+    assert!(
+        !hbs.contains("app.kubernetes.io/instance"),
+        "les labels Helm bruts ne doivent pas rester dans podSelector, got:\n{hbs}"
+    );
+}
+
+#[test]
 fn gen_system_image_key_strips_release_name_prefix() {
     // La clé image dans package.yaml et le template ne doit pas contenir le placeholder.
     // Helm nomme les conteneurs <release>-<component> ; la clé doit être juste <component>.
