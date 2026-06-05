@@ -2133,7 +2133,7 @@ fn gen_system_deployment_extracts_image_to_package_yaml() {
 
     let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
     let hbs_content =
-        std::fs::read_to_string(format!("{}/get_systems/Deployment_my-release.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{}/get_systems/Deployment_app.yaml.hbs", tmp_dir)).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2200,11 +2200,8 @@ fn gen_system_deployment_extracts_image_from_args() {
         .unwrap();
 
     let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
-    let hbs_content = std::fs::read_to_string(format!(
-        "{}/get_systems/Deployment_cert-manager.yaml.hbs",
-        tmp_dir
-    ))
-    .unwrap();
+    let hbs_content =
+        std::fs::read_to_string(format!("{}/get_systems/Deployment_app.yaml.hbs", tmp_dir)).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2309,6 +2306,219 @@ fn gen_system_keeps_existing_resources_when_container_has_none() {
     );
 }
 
+// ===== gen_package — side effects du placeholder comme release name =====
+
+#[test]
+fn gen_system_filename_does_not_contain_release_name_placeholder() {
+    // doc_name doit être capturé APRÈS le replace() pour que le nom de fichier
+    // ne contienne pas le placeholder du release name.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_filename_placeholder", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "v3fdf80f5-traefik" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "v3fdf80f5-traefik" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "v3fdf80f5-traefik" }} }},
+                    spec: #{{
+                        containers: [#{{ name: "v3fdf80f5-traefik", image: "ghcr.io/traefik/traefik:v3.7.1" }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "v3fdf80f5");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let systems_dir = format!("{}/get_systems", tmp_dir);
+    let files: Vec<_> = std::fs::read_dir(&systems_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !files.iter().any(|f| f.contains("v3fdf80f5")),
+        "le nom de fichier ne doit pas contenir le placeholder du release name, got: {files:?}"
+    );
+}
+
+#[test]
+fn gen_system_args_replace_release_name_with_appslug() {
+    // Les valeurs d'args Helm contenant le release name doivent avoir
+    // le placeholder remplacé par {{instance.appslug}}.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_args_release", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "v3fdf80f5-traefik" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "v3fdf80f5-traefik" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "v3fdf80f5-traefik" }} }},
+                    spec: #{{
+                        containers: [#{{
+                            name: "v3fdf80f5-traefik",
+                            image: "ghcr.io/traefik/traefik:v3.7.1",
+                            args: [
+                                "--providers.kubernetesingress.ingressendpoint.publishedservice=v3abc/v3fdf80f5-traefik",
+                                "--providers.kubernetesgateway.statusaddress.service.name=v3fdf80f5-traefik"
+                            ]
+                        }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "v3fdf80f5");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let hbs =
+        std::fs::read_to_string(format!("{}/get_systems/Deployment_traefik.yaml.hbs", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !hbs.contains("v3fdf80f5"),
+        "le placeholder du release name ne doit pas apparaître dans les args générés, got:\n{hbs}"
+    );
+    assert!(
+        hbs.contains("instance.appslug"),
+        "les args doivent référencer instance.appslug, got:\n{hbs}"
+    );
+}
+
+#[test]
+fn gen_system_image_key_strips_release_name_prefix() {
+    // La clé image dans package.yaml et le template ne doit pas contenir le placeholder.
+    // Helm nomme les conteneurs <release>-<component> ; la clé doit être juste <component>.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_img_key", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "v3fdf80f5-traefik" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "v3fdf80f5-traefik" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "v3fdf80f5-traefik" }} }},
+                    spec: #{{
+                        containers: [#{{
+                            name: "v3fdf80f5-traefik",
+                            image: "ghcr.io/traefik/traefik:v3.7.1"
+                        }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "v3fdf80f5");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let pkg = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let hbs =
+        std::fs::read_to_string(format!("{}/get_systems/Deployment_traefik.yaml.hbs", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !pkg.contains("v3fdf80f5"),
+        "package.yaml ne doit pas contenir le placeholder dans les clés images, got:\n{pkg}"
+    );
+    assert!(
+        !hbs.contains("v3fdf80f5"),
+        "le template ne doit pas contenir le placeholder dans la clé image_from_ctx, got:\n{hbs}"
+    );
+}
+
+#[test]
+fn gen_system_file_name_strips_release_prefix_to_component() {
+    // Quand doc_name = "my-release-controller", le fichier généré doit être
+    // "Deployment_controller.yaml.hbs" (prefix strippé, pas le fallback "app").
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/gen_system_strip_prefix", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "my-release-controller" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "my-release-controller" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "my-release-controller" }} }},
+                    spec: #{{ containers: [#{{ name: "controller", image: "nginx:1.0" }}] }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "my-release");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let systems_dir = format!("{}/get_systems", tmp_dir);
+    let files: Vec<_> = std::fs::read_dir(&systems_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        files.iter().any(|f| f == "Deployment_controller.yaml.hbs"),
+        "le préfixe 'my-release-' doit être strippé pour donner 'controller', got: {files:?}"
+    );
+    assert!(
+        !files.iter().any(|f| f.contains("my-release")),
+        "le release name ne doit plus apparaître dans les noms de fichiers, got: {files:?}"
+    );
+}
+
 // ===== gen_package — suppression des labels metadata =====
 
 #[test]
@@ -2372,7 +2582,7 @@ fn gen_system_non_crd_has_no_metadata_labels() {
         ))
         .unwrap();
 
-    let obj_path = format!("{}/get_systems/ClusterRole_my-release-viewer.yaml.hbs", tmp_dir);
+    let obj_path = format!("{}/get_systems/ClusterRole_viewer.yaml.hbs", tmp_dir);
     let content = std::fs::read_to_string(&obj_path).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
@@ -2423,7 +2633,8 @@ fn gen_system_deployment_metadata_has_no_labels_key() {
         ))
         .unwrap();
 
-    let obj_path = format!("{}/get_systems/Deployment_my-release.yaml.hbs", tmp_dir);
+    // doc_name == release_name → clean_file_name retourne "app" (fallback)
+    let obj_path = format!("{}/get_systems/Deployment_app.yaml.hbs", tmp_dir);
     let content = std::fs::read_to_string(&obj_path).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
@@ -2501,10 +2712,12 @@ fn gen_tenant_objects_have_no_metadata_labels() {
         ))
         .unwrap();
 
-    let cm_path = format!("{}/get_others/ConfigMap_my-release-config.yaml.hbs", tmp_dir);
+    // "my-release-config" → strip "my-release-" prefix → "config"
+    let cm_path = format!("{}/get_others/ConfigMap_config.yaml.hbs", tmp_dir);
     let cm_content = std::fs::read_to_string(&cm_path).unwrap();
 
-    let deploy_path = format!("{}/get_scalables/Deployment_my-release.yaml.hbs", tmp_dir);
+    // "my-release" == release_name → fallback "app"
+    let deploy_path = format!("{}/get_scalables/Deployment_app.yaml.hbs", tmp_dir);
     let deploy_content = std::fs::read_to_string(&deploy_path).unwrap();
 
     std::fs::remove_dir_all(&tmp_dir).unwrap();
@@ -2670,11 +2883,8 @@ fn gen_system_namespace_replaced_in_clusterrole_name() {
         ))
         .unwrap();
 
-    let hbs_content = std::fs::read_to_string(format!(
-        "{}/get_systems/ClusterRole_traefik-vynil-apps.yaml.hbs",
-        tmp_dir
-    ))
-    .unwrap();
+    let hbs_content =
+        std::fs::read_to_string(format!("{}/get_systems/ClusterRole_vynil-apps.yaml.hbs", tmp_dir)).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2714,11 +2924,8 @@ fn gen_system_namespace_not_replaced_without_param() {
         ))
         .unwrap();
 
-    let hbs_content = std::fs::read_to_string(format!(
-        "{}/get_systems/ClusterRole_traefik-vynil-apps.yaml.hbs",
-        tmp_dir
-    ))
-    .unwrap();
+    let hbs_content =
+        std::fs::read_to_string(format!("{}/get_systems/ClusterRole_vynil-apps.yaml.hbs", tmp_dir)).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2756,7 +2963,8 @@ fn gen_tenant_namespace_replaced_in_generated_files() {
         .unwrap();
 
     let hbs_content =
-        std::fs::read_to_string(format!("{}/get_others/Role_myapp-vynil-ns.yaml.hbs", tmp_dir)).unwrap();
+        // "myapp-vynil-ns" → strip "myapp-" prefix → "vynil-ns"
+        std::fs::read_to_string(format!("{}/get_others/Role_vynil-ns.yaml.hbs", tmp_dir)).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(

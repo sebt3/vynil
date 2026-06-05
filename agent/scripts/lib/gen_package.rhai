@@ -91,21 +91,42 @@ fn parse_image(image_str) {
     #{registry: registry, repository: repository, tag: tag}
 }
 
-fn make_img_key(name) {
-    let k = `${name}`;
+fn make_img_key(release_name, container_name) {
+    let k = `${container_name}`;
     k.replace(" ", "-");
     k.replace("/", "-");
+    // Strip the release-name prefix so image keys don't embed the placeholder
+    let prefix = `${release_name}-`;
+    if k.starts_with(prefix) {
+        k.replace(prefix, "");
+    } else if k == release_name {
+        k = "app";
+    }
+    if k == "" { k = "app"; }
     k
+}
+
+// Strip the release name prefix from a doc name for use in file paths.
+// "v3fdf80f5-traefik" + "v3fdf80f5" → "traefik"
+fn clean_file_name(doc_name, release_name) {
+    let prefix = `${release_name}-`;
+    if doc_name.starts_with(prefix) {
+        doc_name.replace(prefix, "");
+    } else if doc_name == release_name {
+        doc_name = "app";
+    }
+    if doc_name == "" { doc_name = "app"; }
+    doc_name
 }
 
 // Extract images and resources from a container list.
 // Returns #{containers, images, resources}.
-fn extract_images_resources_from_containers(containers, prefix) {
+fn extract_images_resources_from_containers(containers, prefix, release_name) {
     let images = #{};
     let resources = #{};
     let result = [];
     for c in containers {
-        let c_name = if "name" in c && c.name != () { make_img_key(`${c.name}`) } else { "app" };
+        let c_name = if "name" in c && c.name != () { make_img_key(release_name, `${c.name}`) } else { "app" };
         let key = if prefix != "" { `${prefix}-${c_name}` } else { c_name };
         if "image" in c && c.image != () && type_of(c.image) == "string" {
             let parsed = parse_image(c.image);
@@ -128,7 +149,8 @@ fn extract_images_resources_from_containers(containers, prefix) {
                         let flag = parts[0];
                         let img_str = parts[1];
                         let flag_parts = flag.split("--");
-                        let arg_key = make_img_key(if flag_parts.len() >= 2 { flag_parts[1] } else { flag });
+                        // Flag names (--acme-http01-solver-image) don't carry the release prefix
+                        let arg_key = make_img_key("", if flag_parts.len() >= 2 { flag_parts[1] } else { flag });
                         let parsed = parse_image(img_str);
                         images[arg_key] = #{registry: parsed.registry, repository: parsed.repository};
                         if parsed.tag != () { images[arg_key].tag = parsed.tag; }
@@ -145,7 +167,7 @@ fn extract_images_resources_from_containers(containers, prefix) {
 }
 
 // Extract images/resources from a workload (Deployment/StatefulSet/Job…).
-fn extract_workload_images_resources(doc) {
+fn extract_workload_images_resources(doc, release_name) {
     let images = #{};
     let resources = #{};
     if "spec" in doc && doc.spec != () && "template" in doc.spec && doc.spec.template != ()
@@ -154,7 +176,7 @@ fn extract_workload_images_resources(doc) {
         for field in ["containers", "initContainers"] {
             if field in spec && spec[field] != () {
                 let prefix = if field == "initContainers" { "init" } else { "" };
-                let extr = extract_images_resources_from_containers(spec[field], prefix);
+                let extr = extract_images_resources_from_containers(spec[field], prefix, release_name);
                 spec[field] = extr.containers;
                 for k in extr.images.keys() { images[k] = extr.images[k]; }
                 for k in extr.resources.keys() { resources[k] = extr.resources[k]; }
@@ -166,7 +188,7 @@ fn extract_workload_images_resources(doc) {
 }
 
 // Extract images/resources from a CronJob.
-fn extract_cronjob_images_resources(doc) {
+fn extract_cronjob_images_resources(doc, release_name) {
     let images = #{};
     let resources = #{};
     if "spec" in doc && doc.spec != () && "jobTemplate" in doc.spec && doc.spec.jobTemplate != ()
@@ -177,7 +199,7 @@ fn extract_cronjob_images_resources(doc) {
         for field in ["containers", "initContainers"] {
             if field in spec && spec[field] != () {
                 let prefix = if field == "initContainers" { "init" } else { "" };
-                let extr = extract_images_resources_from_containers(spec[field], prefix);
+                let extr = extract_images_resources_from_containers(spec[field], prefix, release_name);
                 spec[field] = extr.containers;
                 for k in extr.images.keys() { images[k] = extr.images[k]; }
                 for k in extr.resources.keys() { resources[k] = extr.resources[k]; }
@@ -416,6 +438,10 @@ fn replace_volumes(volumes, name) {
 fn replace_containers(containers, name) {
     let result = [];
     for c in containers {
+        // Strip release-name prefix from container name (e.g. "v3fdf80f5-traefik" → "traefik")
+        if "name" in c && c.name != () {
+            c.name = clean_file_name(`${c.name}`, name);
+        }
         if "envFrom" in c && c.envFrom != () {
             let ef_list = [];
             for ef in c.envFrom {
@@ -448,6 +474,16 @@ fn replace_containers(containers, name) {
                 env_list.push(e);
             }
             c.env = env_list;
+        }
+        // Replace release name in all arg values (not just --*-image= ones)
+        if "args" in c && c.args != () {
+            let new_args = [];
+            for arg in c.args {
+                let a = `${arg}`;
+                a.replace(name, "{{instance.appslug}}");
+                new_args.push(a);
+            }
+            c.args = new_args;
         }
         result.push(c);
     }
@@ -1107,7 +1143,8 @@ fn gen_system(path, docs, name) {
                 }
             } else if doc.kind != () && doc.kind != "Namespace" {
                 create_dir(`${path}/get_systems`);
-                let doc_name = doc.metadata.name;
+                let doc_name = doc.metadata.name;   // original — used for analysis lookups
+                let file_name = clean_file_name(`${doc_name}`, name);  // sanitized for file path
                 if doc.kind == "ClusterRoleBinding" || doc.kind == "ClusterRole" || doc.kind == "ValidatingWebhookConfiguration" || doc.kind == "MutatingWebhookConfiguration" || doc.kind == "APIService" {
                     doc.metadata.name.replace(name, "{{instance.namespace}}-{{instance.appslug}}");
                 } else {
@@ -1128,52 +1165,52 @@ fn gen_system(path, docs, name) {
                     doc.spec.service.namespace = "{{instance.namespace}}";
                 }
                 if ["Deployment", "ReplicaSet", "StatefulSet", "DaemonSet"].contains(doc.kind) {
-                    let extr = extract_workload_images_resources(doc);
+                    let extr = extract_workload_images_resources(doc, name);
                     doc = extr.doc;
                     for k in extr.images.keys() { all_images[k] = extr.images[k]; }
                     for k in extr.resources.keys() { all_resources[k] = extr.resources[k]; }
                     doc = replace_workload(path, doc_name, doc, name);
                     let comp = if doc_name in analysis.comp_map { analysis.comp_map[doc_name] } else { "" };
                     if comp != "" { doc = apply_workload_selectors(doc, comp); }
-                    let fp = `${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml(fp, doc);
                     if extr.images.len() > 0 || extr.resources.len() > 0 {
                         apply_image_resource_expressions(fp, extr.images.keys(), extr.resources.keys());
                     }
                     if comp != "" { apply_selector_expressions(fp, comp); }
                 } else if doc.kind == "Job" {
-                    let extr = extract_workload_images_resources(doc);
+                    let extr = extract_workload_images_resources(doc, name);
                     doc = extr.doc;
                     for k in extr.images.keys() { all_images[k] = extr.images[k]; }
                     for k in extr.resources.keys() { all_resources[k] = extr.resources[k]; }
                     doc = replace_job(path, doc_name, doc, name);
-                    let fp = `${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml(fp, doc);
                     if extr.images.len() > 0 || extr.resources.len() > 0 {
                         apply_image_resource_expressions(fp, extr.images.keys(), extr.resources.keys());
                     }
                 } else if doc.kind == "CronJob" {
-                    let extr = extract_cronjob_images_resources(doc);
+                    let extr = extract_cronjob_images_resources(doc, name);
                     doc = extr.doc;
                     for k in extr.images.keys() { all_images[k] = extr.images[k]; }
                     for k in extr.resources.keys() { all_resources[k] = extr.resources[k]; }
                     doc = replace_cronjob(path, doc_name, doc, name);
-                    let fp = `${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml(fp, doc);
                     if extr.images.len() > 0 || extr.resources.len() > 0 {
                         apply_image_resource_expressions(fp, extr.images.keys(), extr.resources.keys());
                     }
                 } else if doc.kind == "HorizontalPodAutoscaler" && "scaleTargetRef" in doc.spec && doc.spec.scaleTargetRef != () {
                     doc.spec.scaleTargetRef.name.replace(name, "{{instance.appslug}}");
-                    gen_yaml(`${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`, doc);
+                    gen_yaml(`${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`, doc);
                 } else if doc.kind == "Service" && doc_name in analysis.svc_comp_map {
                     let comp = analysis.svc_comp_map[doc_name];
                     doc = apply_svc_selectors(doc, comp);
-                    let fp = `${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml(fp, doc);
                     apply_selector_expressions(fp, comp);
                 } else if doc.kind == "ServiceMonitor" {
-                    let fp = `${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
                     let res_comp = "";
                     if "spec" in doc && doc.spec != () && "selector" in doc.spec && doc.spec.selector != () && "matchLabels" in doc.spec.selector && doc.spec.selector.matchLabels != () {
                         res_comp = find_comp_for_svc_labels(analysis, doc.spec.selector.matchLabels);
@@ -1184,9 +1221,9 @@ fn gen_system(path, docs, name) {
                     gen_yaml_if(fp, "servicemonitors.monitoring.coreos.com", doc);
                     if res_comp != "" { apply_selector_expressions(fp, res_comp); }
                 } else if doc.kind == "PrometheusRule" {
-                    gen_yaml_if(`${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`, "prometheusrules.monitoring.coreos.com", doc);
+                    gen_yaml_if(`${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`, "prometheusrules.monitoring.coreos.com", doc);
                 } else {
-                    gen_yaml(`${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`, doc);
+                    gen_yaml(`${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`, doc);
                 }
             }
         }
@@ -1214,6 +1251,7 @@ fn gen_tenant(path, docs, name) {
         let all_resources = #{};
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
+            let file_name = clean_file_name(`${doc_name}`, name);
             doc.metadata.name.replace(name, "{{instance.appslug}}");
             if "namespace" in doc.metadata {
                 doc.metadata.remove("namespace");
@@ -1221,17 +1259,17 @@ fn gen_tenant(path, docs, name) {
             doc.metadata = clean_metadata(doc.metadata, name);
             if ["PersistentVolumeClaim"].contains(doc.kind) {
                 create_dir(`${path}/get_vitals`);
-                gen_yaml(`${path}/get_vitals/${doc.kind}_${doc_name}.yaml.hbs`, doc);
+                gen_yaml(`${path}/get_vitals/${doc.kind}_${file_name}.yaml.hbs`, doc);
             } else if ["Deployment", "ReplicaSet", "StatefulSet", "DaemonSet"].contains(doc.kind) {
                 create_dir(`${path}/get_scalables`);
-                let extr = extract_workload_images_resources(doc);
+                let extr = extract_workload_images_resources(doc, name);
                 doc = extr.doc;
                 for k in extr.images.keys() { all_images[k] = extr.images[k]; }
                 for k in extr.resources.keys() { all_resources[k] = extr.resources[k]; }
                 doc = replace_workload(path, doc_name, doc, name);
                 let comp = if doc_name in analysis.comp_map { analysis.comp_map[doc_name] } else { "" };
                 if comp != "" { doc = apply_workload_selectors(doc, comp); }
-                let fp = `${path}/get_scalables/${doc.kind}_${doc_name}.yaml.hbs`;
+                let fp = `${path}/get_scalables/${doc.kind}_${file_name}.yaml.hbs`;
                 gen_yaml(fp, doc);
                 if extr.images.len() > 0 || extr.resources.len() > 0 {
                     apply_image_resource_expressions(fp, extr.images.keys(), extr.resources.keys());
@@ -1249,7 +1287,7 @@ fn gen_tenant(path, docs, name) {
                     doc.spec.service.name.replace(name, "{{instance.appslug}}");
                     doc.spec.service.namespace = "{{instance.namespace}}";
                 }
-                gen_yaml(`${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`, doc);
+                gen_yaml(`${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`, doc);
             } else {
                 create_dir(`${path}/get_others`);
                 if doc.kind == "RoleBinding" {
@@ -1257,14 +1295,14 @@ fn gen_tenant(path, docs, name) {
                 }
                 let img_extr = #{images: #{}, resources: #{}};
                 if doc.kind == "Job" {
-                    img_extr = extract_workload_images_resources(doc);
+                    img_extr = extract_workload_images_resources(doc, name);
                     doc = img_extr.doc;
                     for k in img_extr.images.keys() { all_images[k] = img_extr.images[k]; }
                     for k in img_extr.resources.keys() { all_resources[k] = img_extr.resources[k]; }
                     doc = replace_job(path, doc_name, doc, name);
                 }
                 if doc.kind == "CronJob" {
-                    img_extr = extract_cronjob_images_resources(doc);
+                    img_extr = extract_cronjob_images_resources(doc, name);
                     doc = img_extr.doc;
                     for k in img_extr.images.keys() { all_images[k] = img_extr.images[k]; }
                     for k in img_extr.resources.keys() { all_resources[k] = img_extr.resources[k]; }
@@ -1303,15 +1341,15 @@ fn gen_tenant(path, docs, name) {
                 }
 
                 if doc.kind == "ServiceMonitor" {
-                    let fp = `${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml_if(fp, "servicemonitors.monitoring.coreos.com", doc);
                     if res_comp != "" { apply_selector_expressions(fp, res_comp); }
                 } else if doc.kind == "PrometheusRule" {
-                    gen_yaml_if(`${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`, "prometheusrules.monitoring.coreos.com", doc);
+                    gen_yaml_if(`${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`, "prometheusrules.monitoring.coreos.com", doc);
                 } else if doc.kind == "Certificate" {
-                    gen_yaml_if(`${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`, "certificates.cert-manager.io", doc);
+                    gen_yaml_if(`${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`, "certificates.cert-manager.io", doc);
                 } else {
-                    let fp = `${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml(fp, doc);
                     if img_extr.images.len() > 0 || img_extr.resources.len() > 0 {
                         apply_image_resource_expressions(fp, img_extr.images.keys(), img_extr.resources.keys());
@@ -1344,6 +1382,7 @@ fn gen_service(path, docs, name) {
         let all_resources = #{};
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
+            let file_name = clean_file_name(`${doc_name}`, name);
             doc.metadata.name.replace(name, "{{instance.appslug}}");
             if "namespace" in doc.metadata {
                 doc.metadata.remove("namespace");
@@ -1351,17 +1390,17 @@ fn gen_service(path, docs, name) {
             doc.metadata = clean_metadata(doc.metadata, name);
             if ["PersistentVolumeClaim"].contains(doc.kind) {
                 create_dir(`${path}/get_vitals`);
-                gen_yaml(`${path}/get_vitals/${doc.kind}_${doc_name}.yaml.hbs`, doc);
+                gen_yaml(`${path}/get_vitals/${doc.kind}_${file_name}.yaml.hbs`, doc);
             } else if ["Deployment", "ReplicaSet", "StatefulSet", "DaemonSet"].contains(doc.kind) {
                 create_dir(`${path}/get_scalables`);
-                let extr = extract_workload_images_resources(doc);
+                let extr = extract_workload_images_resources(doc, name);
                 doc = extr.doc;
                 for k in extr.images.keys() { all_images[k] = extr.images[k]; }
                 for k in extr.resources.keys() { all_resources[k] = extr.resources[k]; }
                 doc = replace_workload(path, doc_name, doc, name);
                 let comp = if doc_name in analysis.comp_map { analysis.comp_map[doc_name] } else { "" };
                 if comp != "" { doc = apply_workload_selectors(doc, comp); }
-                let fp = `${path}/get_scalables/${doc.kind}_${doc_name}.yaml.hbs`;
+                let fp = `${path}/get_scalables/${doc.kind}_${file_name}.yaml.hbs`;
                 gen_yaml(fp, doc);
                 if extr.images.len() > 0 || extr.resources.len() > 0 {
                     apply_image_resource_expressions(fp, extr.images.keys(), extr.resources.keys());
@@ -1380,7 +1419,7 @@ fn gen_service(path, docs, name) {
                 }
             } else if ["Namespace"].contains(doc.kind) {
                 create_dir(`${path}/get_systems`);
-                gen_yaml(`${path}/get_systems/${doc.kind}_${doc_name}.yaml.hbs`, doc);
+                gen_yaml(`${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`, doc);
             } else {
                 create_dir(`${path}/get_others`);
                 if doc.kind == "RoleBinding" || doc.kind == "ClusterRoleBinding" {
@@ -1395,14 +1434,14 @@ fn gen_service(path, docs, name) {
                 }
                 let img_extr = #{images: #{}, resources: #{}};
                 if doc.kind == "Job" {
-                    img_extr = extract_workload_images_resources(doc);
+                    img_extr = extract_workload_images_resources(doc, name);
                     doc = img_extr.doc;
                     for k in img_extr.images.keys() { all_images[k] = img_extr.images[k]; }
                     for k in img_extr.resources.keys() { all_resources[k] = img_extr.resources[k]; }
                     doc = replace_job(path, doc_name, doc, name);
                 }
                 if doc.kind == "CronJob" {
-                    img_extr = extract_cronjob_images_resources(doc);
+                    img_extr = extract_cronjob_images_resources(doc, name);
                     doc = img_extr.doc;
                     for k in img_extr.images.keys() { all_images[k] = img_extr.images[k]; }
                     for k in img_extr.resources.keys() { all_resources[k] = img_extr.resources[k]; }
@@ -1441,15 +1480,15 @@ fn gen_service(path, docs, name) {
                 }
 
                 if doc.kind == "ServiceMonitor" {
-                    let fp = `${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml_if(fp, "servicemonitors.monitoring.coreos.com", doc);
                     if res_comp != "" { apply_selector_expressions(fp, res_comp); }
                 } else if doc.kind == "PrometheusRule" {
-                    gen_yaml_if(`${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`, "prometheusrules.monitoring.coreos.com", doc);
+                    gen_yaml_if(`${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`, "prometheusrules.monitoring.coreos.com", doc);
                 } else if doc.kind == "Certificate" {
-                    gen_yaml_if(`${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`, "certificates.cert-manager.io", doc);
+                    gen_yaml_if(`${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`, "certificates.cert-manager.io", doc);
                 } else {
-                    let fp = `${path}/get_others/${doc.kind}_${doc_name}.yaml.hbs`;
+                    let fp = `${path}/get_others/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml(fp, doc);
                     if img_extr.images.len() > 0 || img_extr.resources.len() > 0 {
                         apply_image_resource_expressions(fp, img_extr.images.keys(), img_extr.resources.keys());
