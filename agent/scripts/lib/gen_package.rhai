@@ -1097,18 +1097,26 @@ fn apply_workload_selectors(doc, comp) {
         if "selector" in doc.spec && doc.spec.selector != () && "matchLabels" in doc.spec.selector {
             doc.spec.selector.matchLabels = marker;
         }
-        if "template" in doc.spec && doc.spec.template != () && "metadata" in doc.spec.template && doc.spec.template.metadata != () {
-            doc.spec.template.metadata.labels = "LABELS_FROM_CTX";
-        }
-        if "topologySpreadConstraints" in doc.spec && doc.spec.topologySpreadConstraints != () {
-            let tscs = [];
-            for tsc in doc.spec.topologySpreadConstraints {
-                if "labelSelector" in tsc && tsc.labelSelector != () && "matchLabels" in tsc.labelSelector {
-                    tsc.labelSelector.matchLabels = marker;
-                }
-                tscs.push(tsc);
+        if "template" in doc.spec && doc.spec.template != () {
+            if "metadata" in doc.spec.template && doc.spec.template.metadata != () {
+                doc.spec.template.metadata.labels = "LABELS_FROM_CTX";
             }
-            doc.spec.topologySpreadConstraints = tscs;
+            // TSC vit dans le pod spec (spec.template.spec), pas dans le workload spec (spec).
+            // Extraire le pod_spec pour éviter les problèmes d'assignation profonde.
+            if "spec" in doc.spec.template && doc.spec.template.spec != () {
+                let pod_spec = doc.spec.template.spec;
+                if "topologySpreadConstraints" in pod_spec && pod_spec.topologySpreadConstraints != () {
+                    let tscs = [];
+                    for tsc in pod_spec.topologySpreadConstraints {
+                        if "labelSelector" in tsc && tsc.labelSelector != () && "matchLabels" in tsc.labelSelector {
+                            tsc.labelSelector = #{matchLabels: marker};
+                        }
+                        tscs.push(tsc);
+                    }
+                    pod_spec.topologySpreadConstraints = tscs;
+                }
+                doc.spec.template.spec = pod_spec;
+            }
         }
     }
     doc
