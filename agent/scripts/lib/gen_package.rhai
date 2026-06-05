@@ -1132,6 +1132,7 @@ fn gen_system(path, docs, name) {
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map") {
             if doc.kind == "CustomResourceDefinition" {
                 create_dir(`${path}/get_crds`);
+                doc.metadata = clean_metadata(doc.metadata, name);
                 if "conversion" in doc.spec && doc.spec.conversion != () {
                     if "webhook" in doc.spec.conversion && doc.spec.conversion.webhook != () {
                         doc.spec.conversion.webhook.clientConfig.service.name.replace(name, "{{instance.appslug}}");
@@ -1408,6 +1409,7 @@ fn gen_service(path, docs, name) {
                 if comp != "" { apply_selector_expressions(fp, comp); }
             } else if doc.kind == "CustomResourceDefinition" {
                 create_dir(`${path}/get_crds`);
+                doc.metadata = clean_metadata(doc.metadata, name);
                 if "conversion" in doc.spec && doc.spec.conversion != () {
                     if "webhook" in doc.spec.conversion && doc.spec.conversion.webhook != () {
                         doc.spec.conversion.webhook.clientConfig.service.name.replace(name, "{{instance.appslug}}");
