@@ -1718,6 +1718,226 @@ fn gen_service_crd_without_webhook_has_yamllint_header() {
     );
 }
 
+// ===== update_package_yaml — ordering and correctness =====
+
+#[test]
+fn update_package_yaml_starts_with_document_separator() {
+    // Verify the rewritten package.yaml starts with "---"
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_separator", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  type: system\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "myapp" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "myapp" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "myapp" }} }},
+                    spec: #{{ containers: [#{{ name: "app", image: "docker.io/myapp:v1.0" }}] }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "myapp");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        content.starts_with("---\n"),
+        "package.yaml doit commencer par '---'"
+    );
+}
+
+#[test]
+fn update_package_yaml_preserves_top_level_key_order() {
+    // Verify that existing top-level keys stay in their original order after update.
+    // Specifically: apiVersion, kind, metadata, requirements, images, resources
+    // must appear in that order and NOT be moved inside metadata.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_key_order", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    // package.yaml with top-level keys in a specific order
+    let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  type: system\nrequirements: []\nimages:\n  existing:\n    registry: docker.io\n    repository: existing\nresources: {}\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "myapp" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "myapp" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "myapp" }} }},
+                    spec: #{{ containers: [#{{ name: "app", image: "docker.io/myapp:v1.0" }}] }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "myapp");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    // requirements must appear BEFORE images and NOT inside metadata
+    let req_pos = content.find("\nrequirements:").unwrap_or(usize::MAX);
+    let img_pos = content.find("\nimages:").unwrap_or(usize::MAX);
+    let metadata_pos = content.find("\nmetadata:").unwrap_or(usize::MAX);
+
+    assert!(
+        req_pos > metadata_pos,
+        "requirements doit être au niveau top-level (après metadata:), pas à l'intérieur"
+    );
+    assert!(
+        req_pos < img_pos,
+        "requirements doit apparaître avant images dans l'ordre original"
+    );
+    // Verify no complex key corruption (? [...] : ...)
+    assert!(
+        !content.contains("? ["),
+        "package.yaml ne doit pas contenir de clés complexes YAML (? [...])"
+    );
+}
+
+#[test]
+fn update_package_yaml_preserves_metadata_structure() {
+    // Verify that metadata fields (including features array and app_version) are not corrupted.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_metadata", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    // Simulate the user's real package.yaml with features as block sequence
+    let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  type: system\n  category: core\n  features:\n  - upgrade\n  - auto_config\n  app_version: 40.2.0\nrequirements: []\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "traefik" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "traefik" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "traefik" }} }},
+                    spec: #{{ containers: [#{{ name: "traefik", image: "docker.io/traefik:v3.7.1" }}] }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "traefik");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !content.contains("? ["),
+        "les features ne doivent pas être encodées comme clé complexe YAML"
+    );
+    assert!(
+        content.contains("app_version"),
+        "app_version doit rester dans metadata"
+    );
+    assert!(
+        content.contains("upgrade"),
+        "les items de features doivent rester présents"
+    );
+    assert!(
+        content.contains("40.2.0"),
+        "la valeur de app_version doit être préservée"
+    );
+}
+
+#[test]
+fn update_package_yaml_colon_in_key_name_not_corrupted() {
+    // Regression: a key containing ":" (e.g. "recommandations:") must not be corrupted
+    // or moved inside metadata after the update.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_colon_key", base);
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    // Exact structure from the user's file (including the quirky "recommandations:" key)
+    let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  type: system\n  features:\n  - upgrade\n  - auto_config\n  app_version: 40.2.0\nrequirements: []\n\"recommandations:\": []\n";
+    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "traefik" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "traefik" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "traefik" }} }},
+                    spec: #{{ containers: [#{{ name: "traefik", image: "docker.io/traefik:v3.7.1" }}] }}
+                }}
+            }}
+        }}];
+        gen::gen_system("{dir}", docs, "traefik");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        content.starts_with("---\n"),
+        "package.yaml doit commencer par '---'"
+    );
+    assert!(
+        !content.contains("? ["),
+        "features ne doit pas être encodée comme clé complexe YAML"
+    );
+    // requirements and recommandations must be top-level (appear after metadata block)
+    let metadata_end = content
+        .find("\nrequirements:")
+        .unwrap_or_else(|| panic!("requirements doit être présent dans le fichier"));
+    let metadata_start = content.find("\nmetadata:").unwrap_or(0);
+    assert!(
+        metadata_end > metadata_start,
+        "requirements doit être au niveau top-level, pas imbriqué dans metadata"
+    );
+    assert!(content.contains("app_version"), "app_version doit rester présent");
+    assert!(
+        content.contains("40.2.0"),
+        "la valeur de app_version doit être préservée"
+    );
+}
+
 // ===== gen_package — extraction images et resources =====
 
 #[test]

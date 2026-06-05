@@ -171,24 +171,34 @@ fn apply_image_resource_expressions(filepath, images_keys, resources_keys) {
 }
 
 // Update package.yaml with extracted images and resources (always overwrites existing entries).
+//
+// Encoding strategy:
+// - yaml_decode_ordered (rust_yaml RoundTrip): reads in document order, which is preserved
+//   for existing scalar updates.  Inserting a plain Rhai map value (no round-trip metadata)
+//   as a NEW nested map entry triggers a corruption in dump_str because round-trip and
+//   non-round-trip nodes are mixed.  To work around this we serialise and re-parse each
+//   new entry through yaml_decode_ordered so it carries the expected metadata before
+//   being inserted.
 fn update_package_yaml_images_resources(path, images, resources) {
     if images.len() == 0 && resources.len() == 0 { return; }
     let pkg_path = `${path}/package.yaml`;
     if !is_file(pkg_path) { return; }
     let pkg = yaml_decode_ordered(file_read(pkg_path));
     if images.len() > 0 {
-        if type_of(pkg["images"]) != "map" { pkg["images"] = #{}; }
+        if type_of(pkg["images"]) != "map" { pkg["images"] = yaml_decode_ordered("{}"); }
         for k in images.keys() {
-            pkg["images"][k] = images[k];
+            // Re-parse via yaml_decode_ordered so the inserted value carries round-trip metadata
+            pkg["images"][k] = yaml_decode_ordered(yaml_encode(images[k]));
         }
     }
     if resources.len() > 0 {
-        if type_of(pkg["resources"]) != "map" { pkg["resources"] = #{}; }
+        if type_of(pkg["resources"]) != "map" { pkg["resources"] = yaml_decode_ordered("{}"); }
         for k in resources.keys() {
-            pkg["resources"][k] = resources[k];
+            pkg["resources"][k] = yaml_decode_ordered(yaml_encode(resources[k]));
         }
     }
-    file_write(pkg_path, yaml_encode_ordered(pkg));
+    file_write(pkg_path, `---
+${yaml_encode_ordered(pkg)}`);
 }
 
 // ---------------------------------------------------------------------------
