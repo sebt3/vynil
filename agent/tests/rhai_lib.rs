@@ -1278,7 +1278,7 @@ fn gen_package_replace_binding_updates_subject_name() {
 
 #[test]
 fn gen_package_replace_binding_updates_role_ref_name() {
-    // replace_binding line 448: doc.roleRef.name.replace(name, "{{instance.appslug}}")
+    // replace_binding (RoleBinding) : roleRef pointe un Role → pas de préfixe namespace
     let mut rhai = make_lib_script();
     let result = rhai
         .eval(
@@ -1289,7 +1289,7 @@ fn gen_package_replace_binding_updates_role_ref_name() {
             subjects: [],
             roleRef: #{
                 name: "old-release-role",
-                kind: "ClusterRole",
+                kind: "Role",
                 apiGroup: "rbac.authorization.k8s.io"
             }
         };
@@ -1303,7 +1303,39 @@ fn gen_package_replace_binding_updates_role_ref_name() {
     assert_eq!(
         result.to_string(),
         "{{instance.appslug}}-role",
-        "replace_binding doit remplacer le nom du roleRef via .replace()"
+        "replace_binding doit utiliser appslug seul pour le roleRef (RoleBinding)"
+    );
+}
+
+#[test]
+fn gen_package_replace_cluster_binding_uses_namespace_prefix_in_role_ref() {
+    // replace_cluster_binding (ClusterRoleBinding) : roleRef doit matcher le metadata.name
+    // du ClusterRole qui est préfixé par {{instance.namespace}}-{{instance.appslug}}.
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let doc = #{
+            subjects: [],
+            roleRef: #{
+                name: "old-release-cert-manager-cainjector",
+                kind: "ClusterRole",
+                apiGroup: "rbac.authorization.k8s.io"
+            }
+        };
+
+        let replaced = gen::replace_cluster_binding(doc, "old-release");
+        replaced.roleRef.name
+    "#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.to_string(),
+        "{{instance.namespace}}-{{instance.appslug}}-cert-manager-cainjector",
+        "replace_cluster_binding doit préfixer le roleRef avec namespace+appslug"
     );
 }
 
@@ -3489,4 +3521,108 @@ fn package_yaml_properties_improve_leaf_defaults_cascade_multiple_levels() {
         .unwrap();
 
     assert!(result.as_bool().unwrap());
+}
+
+// ===== apply_dedup_to_generated — déduplication globale du suffixe pkg_name =====
+
+#[test]
+fn apply_dedup_to_generated_removes_redundant_pkg_suffix_in_all_fields() {
+    // Vérifie que apply_dedup_to_generated traite TOUS les champs d'un fichier généré :
+    // metadata.name, roleRef, subjects, serviceAccountName, args dynamiques, etc.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/apply_dedup_test");
+    let systems_dir = format!("{tmp_dir}/get_systems");
+    std::fs::create_dir_all(&systems_dir).unwrap();
+
+    let content = "\
+---
+metadata:
+  name: 'mynamespace-{{instance.appslug}}-cert-manager-controller'
+roleRef:
+  name: '{{instance.appslug}}-cert-manager-controller'
+subjects:
+- name: '{{instance.appslug}}-cert-manager'
+  namespace: mynamespace
+spec:
+  template:
+    spec:
+      serviceAccountName: '{{instance.appslug}}-cert-manager'
+      containers:
+      - args:
+        - --leader-election-namespace={{instance.appslug}}-cert-manager
+";
+    std::fs::write(format!("{systems_dir}/ClusterRoleBinding_test.yaml.hbs"), content).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{dir}", "cert-manager");"#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{systems_dir}/ClusterRoleBinding_test.yaml.hbs")).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !result.contains("{{instance.appslug}}-cert-manager"),
+        "apply_dedup doit supprimer tous les doublons appslug-pkg_name, got:\n{result}"
+    );
+    assert!(
+        result.contains("{{instance.appslug}}-controller"),
+        "apply_dedup doit préserver le suffixe après pkg_name, got:\n{result}"
+    );
+}
+
+#[test]
+fn apply_dedup_to_generated_no_change_when_no_redundancy() {
+    // Un fichier sans doublon ne doit pas être modifié.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/apply_dedup_no_change");
+    let systems_dir = format!("{tmp_dir}/get_systems");
+    std::fs::create_dir_all(&systems_dir).unwrap();
+
+    let content = "---\nmetadata:\n  name: '{{instance.appslug}}-other-role'\n";
+    std::fs::write(format!("{systems_dir}/ClusterRole_test.yaml.hbs"), content).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{dir}", "cert-manager");"#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{systems_dir}/ClusterRole_test.yaml.hbs")).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert_eq!(
+        result, content,
+        "sans doublon le fichier ne doit pas être modifié"
+    );
+}
+
+#[test]
+fn apply_dedup_to_generated_noop_when_pkg_name_unit() {
+    // pkg_name () → aucun fichier modifié.
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/apply_dedup_noop");
+    let systems_dir = format!("{tmp_dir}/get_systems");
+    std::fs::create_dir_all(&systems_dir).unwrap();
+
+    let content = "---\nname: '{{instance.appslug}}-cert-manager-edit'\n";
+    std::fs::write(format!("{systems_dir}/file.yaml.hbs"), content).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{dir}", ());"#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let result = std::fs::read_to_string(format!("{systems_dir}/file.yaml.hbs")).unwrap();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert_eq!(result, content, "pkg_name () doit laisser le fichier intact");
 }
