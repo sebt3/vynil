@@ -15,10 +15,11 @@ ${yaml_encode(data)}
 `);
 }
 
-// Generate a kubernetes-valid random namespace placeholder (vXXXXXXXX).
-// Call this before `helm template --namespace=<result>` and pass the same
-// string as 4th argument to gen_system / gen_tenant / gen_service.
-fn namespace_placeholder() {
+// Generate a kubernetes-valid random placeholder string (vXXXXXXXX).
+// Use as Helm release name AND --namespace= value so every occurrence in the
+// generated templates can be reliably replaced with {{instance.appslug}} or
+// {{instance.namespace}} without false positives.
+fn placeholder() {
     try {
         let r = shell_output("cat /proc/sys/kernel/random/uuid");
         let parts = r.trim().split("-");

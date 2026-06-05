@@ -2542,38 +2542,38 @@ fn gen_tenant_objects_have_no_metadata_labels() {
 // ===== gen_package — namespace placeholder et remplacement =====
 
 #[test]
-fn namespace_placeholder_is_kubernetes_valid() {
+fn placeholder_is_kubernetes_valid() {
     let mut rhai = make_lib_script();
     let result = rhai
         .eval(
             r#"
         import "gen_package" as gen;
-        gen::namespace_placeholder()
+        gen::placeholder()
     "#,
         )
         .unwrap();
 
     let s = result.to_string();
-    assert!(!s.is_empty(), "namespace_placeholder ne doit pas être vide");
+    assert!(!s.is_empty(), "placeholder ne doit pas être vide");
     assert!(
         s.len() <= 63,
-        "namespace_placeholder doit faire au max 63 caractères, got: {s}"
+        "placeholder doit faire au max 63 caractères, got: {s}"
     );
     assert!(
         s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
-        "namespace_placeholder doit contenir uniquement [a-z0-9-], got: {s}"
+        "placeholder doit contenir uniquement [a-z0-9-], got: {s}"
     );
     assert!(
         s.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false),
-        "namespace_placeholder doit commencer par une lettre minuscule, got: {s}"
+        "placeholder doit commencer par une lettre minuscule, got: {s}"
     );
     assert!(
         s.chars()
             .last()
             .map(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
             .unwrap_or(false),
-        "namespace_placeholder doit terminer par une lettre ou chiffre, got: {s}"
+        "placeholder doit terminer par une lettre ou chiffre, got: {s}"
     );
 }
 
