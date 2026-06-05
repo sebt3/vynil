@@ -64,3 +64,40 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy -- -D warnings
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Run coverage
+        # Seuil 35% : le code K8s/operator nécessite un vrai cluster et ne peut
+        # pas être couvert par des tests unitaires — il représente ~60% du total.
+        # La couverture réelle du code testable (Rhai, linting, handlers) est ~70%.
+        run: >
+          cargo tarpaulin
+          --workspace
+          --timeout 300
+          --out Xml
+          --output-dir coverage/
+          --fail-under 35
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/cobertura.xml
+          retention-days: 14
