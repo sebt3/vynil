@@ -132,11 +132,20 @@ fn make_img_key(release_name, container_name) {
 // Strip the release name prefix from a doc name for use in file paths.
 // "v3fdf80f5-traefik" + "v3fdf80f5" → "traefik"
 fn clean_file_name(doc_name, release_name) {
+    clean_file_name(doc_name, release_name, ())
+}
+fn clean_file_name(doc_name, release_name, ns) {
     let prefix = `${release_name}-`;
     if doc_name.starts_with(prefix) {
         doc_name.replace(prefix, "");
     } else if doc_name == release_name {
         doc_name = "app";
+    }
+    // Strip the namespace placeholder so file names are stable across regenerations.
+    if ns != () && ns != "" {
+        doc_name.replace(`-${ns}`, "");
+        doc_name.replace(ns, "");
+        while doc_name.contains("--") { doc_name.replace("--", "-"); }
     }
     if doc_name == "" { doc_name = "app"; }
     doc_name
@@ -675,8 +684,9 @@ fn extract_env_configmap(path, doc_name, doc, name) {
         metadata: #{name: cm_name},
         data: env_data,
     };
+    let cm_file_name = clean_file_name(doc_name, name);
     create_dir(`${path}/get_others`);
-    gen_yaml(`${path}/get_others/ConfigMap_${doc_name}-envs.yaml.hbs`, cm);
+    gen_yaml(`${path}/get_others/ConfigMap_${cm_file_name}-envs.yaml.hbs`, cm);
 
     // Update containers: remove plain envs, prepend envFrom reference
     let spec = doc.spec.template.spec;
@@ -1165,7 +1175,7 @@ fn apply_selector_expressions(filepath, comp) {
 // gen_system
 // ---------------------------------------------------------------------------
 
-fn gen_system(path, docs, name) {
+fn gen_system_core(path, docs, name, ns) {
     if name != () {
         let analysis = build_analysis(docs, name);
         let all_images = #{};
@@ -1186,9 +1196,14 @@ fn gen_system(path, docs, name) {
             } else if doc.kind != () && doc.kind != "Namespace" {
                 create_dir(`${path}/get_systems`);
                 let doc_name = doc.metadata.name;   // original — used for analysis lookups
-                let file_name = clean_file_name(`${doc_name}`, name);  // sanitized for file path
+                let file_name = clean_file_name(`${doc_name}`, name, ns);  // sanitized for file path
                 if doc.kind == "ClusterRoleBinding" || doc.kind == "ClusterRole" || doc.kind == "ValidatingWebhookConfiguration" || doc.kind == "MutatingWebhookConfiguration" || doc.kind == "APIService" {
                     doc.metadata.name.replace(name, "{{instance.namespace}}-{{instance.appslug}}");
+                    // Strip ns placeholder: il est déjà dans le préfixe {{instance.namespace}}-
+                    if ns != () && ns != "" {
+                        doc.metadata.name.replace(`-${ns}`, "");
+                        doc.metadata.name.replace(ns, "");
+                    }
                 } else {
                     doc.metadata.name.replace(name, "{{instance.appslug}}");
                 }
@@ -1198,6 +1213,11 @@ fn gen_system(path, docs, name) {
                 doc.metadata = clean_metadata(doc.metadata, name);
                 if doc.kind == "ClusterRoleBinding" {
                     doc = replace_cluster_binding(doc, name);
+                    // Aligner le roleRef sur le même nettoyage ns
+                    if ns != () && ns != "" && "roleRef" in doc && doc.roleRef != () {
+                        doc.roleRef.name.replace(`-${ns}`, "");
+                        doc.roleRef.name.replace(ns, "");
+                    }
                 } else if doc.kind == "RoleBinding" {
                     doc = replace_binding(doc, name);
                 }
@@ -1289,14 +1309,17 @@ fn gen_system(path, docs, name) {
         update_package_yaml_images_resources(path, all_images, all_resources);
     }
 }
+fn gen_system(path, docs, name) {
+    gen_system_core(path, docs, name, ());
+}
 fn gen_system(path, docs) {
     let yaml = yaml_decode(file_read(path+"/package.yaml"));
     let name = if type_of(yaml["metadata"]) == "map" {yaml["metadata"]["name"]} else {()};
-    gen_system(path, docs, name);
+    gen_system_core(path, docs, name, ());
     apply_dedup_to_generated(path, name);
 }
 fn gen_system(path, docs, name, ns) {
-    gen_system(path, docs, name);
+    gen_system_core(path, docs, name, ns);
     apply_name_to_generated(path, name);
     apply_namespace_to_generated(path, ns);
     apply_dedup_to_generated(path, read_pkg_name(path));
@@ -1306,14 +1329,14 @@ fn gen_system(path, docs, name, ns) {
 // gen_tenant
 // ---------------------------------------------------------------------------
 
-fn gen_tenant(path, docs, name) {
+fn gen_tenant_core(path, docs, name, ns) {
     if name != () {
         let analysis = build_analysis(docs, name);
         let all_images = #{};
         let all_resources = #{};
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
-            let file_name = clean_file_name(`${doc_name}`, name);
+            let file_name = clean_file_name(`${doc_name}`, name, ns);
             doc.metadata.name.replace(name, "{{instance.appslug}}");
             if "namespace" in doc.metadata {
                 doc.metadata.remove("namespace");
@@ -1423,14 +1446,17 @@ fn gen_tenant(path, docs, name) {
         update_package_yaml_images_resources(path, all_images, all_resources);
     }
 }
+fn gen_tenant(path, docs, name) {
+    gen_tenant_core(path, docs, name, ());
+}
 fn gen_tenant(path, docs) {
     let yaml = yaml_decode(file_read(path+"/package.yaml"));
     let name = if type_of(yaml["metadata"]) == "map" {yaml["metadata"]["name"]} else {()};
-    gen_tenant(path, docs, name);
+    gen_tenant_core(path, docs, name, ());
     apply_dedup_to_generated(path, name);
 }
 fn gen_tenant(path, docs, name, ns) {
-    gen_tenant(path, docs, name);
+    gen_tenant_core(path, docs, name, ns);
     apply_name_to_generated(path, name);
     apply_namespace_to_generated(path, ns);
     apply_dedup_to_generated(path, read_pkg_name(path));
@@ -1440,14 +1466,14 @@ fn gen_tenant(path, docs, name, ns) {
 // gen_service
 // ---------------------------------------------------------------------------
 
-fn gen_service(path, docs, name) {
+fn gen_service_core(path, docs, name, ns) {
     if name != () {
         let analysis = build_analysis(docs, name);
         let all_images = #{};
         let all_resources = #{};
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
-            let file_name = clean_file_name(`${doc_name}`, name);
+            let file_name = clean_file_name(`${doc_name}`, name, ns);
             doc.metadata.name.replace(name, "{{instance.appslug}}");
             if "namespace" in doc.metadata {
                 doc.metadata.remove("namespace");
@@ -1566,14 +1592,17 @@ fn gen_service(path, docs, name) {
         update_package_yaml_images_resources(path, all_images, all_resources);
     }
 }
+fn gen_service(path, docs, name) {
+    gen_service_core(path, docs, name, ());
+}
 fn gen_service(path, docs) {
     let yaml = yaml_decode(file_read(path+"/package.yaml"));
     let name = if type_of(yaml["metadata"]) == "map" {yaml["metadata"]["name"]} else {()};
-    gen_service(path, docs, name);
+    gen_service_core(path, docs, name, ());
     apply_dedup_to_generated(path, name);
 }
 fn gen_service(path, docs, name, ns) {
-    gen_service(path, docs, name);
+    gen_service_core(path, docs, name, ns);
     apply_name_to_generated(path, name);
     apply_namespace_to_generated(path, ns);
     apply_dedup_to_generated(path, read_pkg_name(path));

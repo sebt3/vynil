@@ -1,0 +1,43 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Package
+metadata:
+  type: system
+  category: core
+  name: traefik
+  description: >
+     Traefik is a modern HTTP reverse proxy and load balancer made
+     to deploy microservices with ease.
+  features:
+  - upgrade
+  - auto_config
+  app_version: 40.2.0
+requirements: []
+recommandations:: []
+images:
+  traefik:
+    registry: docker.io
+    repository: traefik
+    tag: v3.7.1
+resources:
+  controller:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 256Mi
+  webhook:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 256Mi
+  cainjector:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 256Mi

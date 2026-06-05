@@ -1,0 +1,134 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    configmap.reloader.stakater.com/reload: '{{instance.appslug}}-file-provider,{{instance.appslug}}-envs'
+  name: '{{instance.appslug}}'
+spec:
+  minReadySeconds: 0
+  replicas: 1
+  selector:
+    matchLabels: {{json_to_str (selector_from_ctx this comp="app")}}
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: '9100'
+        prometheus.io/scrape: 'true'
+      labels: {{json_to_str (labels_from_ctx this comp="app")}}
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - args:
+        - --entryPoints.metrics.address=:9100/tcp
+        - --entryPoints.traefik.address=:8080/tcp
+        - --entryPoints.web.address=:8000/tcp
+        - --entryPoints.websecure.address=:8443/tcp
+        - --api.dashboard=true
+        - --ping=true
+        - --metrics.prometheus=true
+        - --metrics.prometheus.entrypoint=metrics
+        - --providers.kubernetescrd
+        - --providers.kubernetescrd.allowEmptyServices=true
+        - --providers.kubernetesingress
+        - --providers.kubernetesingress.allowEmptyServices=true
+        - --providers.kubernetesingress.ingressendpoint.publishedservice={{instance.namespace}}/{{instance.appslug}}
+        - --providers.kubernetesgateway
+        - --providers.kubernetesgateway.statusaddress.service.name={{instance.appslug}}
+        - --providers.kubernetesgateway.statusaddress.service.namespace={{instance.namespace}}
+        - --providers.file.directory=/etc/traefik/dynamic
+        - --providers.file.watch=true
+        - --entryPoints.websecure.http.tls=true
+        - --log.level=INFO
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        envFrom:
+        - configMapRef:
+            name: '{{instance.appslug}}-envs'
+        image: {{image_from_ctx this "traefik"}}
+        imagePullPolicy: IfNotPresent
+        lifecycle: null
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /ping
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 2
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 2
+        name: traefik
+        ports:
+        - containerPort: 9100
+          name: metrics
+          protocol: TCP
+        - containerPort: 8080
+          name: traefik
+          protocol: TCP
+        - containerPort: 8000
+          name: web
+          protocol: TCP
+        - containerPort: 8443
+          name: websecure
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 1
+          httpGet:
+            path: /ping
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 2
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 2
+        resources: null
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /data
+          name: data
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /etc/traefik/dynamic
+          name: traefik-extra-config
+      hostNetwork: false
+      securityContext:
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: '{{instance.appslug}}'
+      terminationGracePeriodSeconds: 60
+      topologySpreadConstraints:
+      - labelSelector:
+          matchLabels: {{json_to_str (selector_from_ctx this comp="app")}}
+        maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+      volumes:
+      - emptyDir: {}
+        name: data
+      - emptyDir: {}
+        name: tmp
+      - configMap:
+          name: '{{instance.appslug}}-file-provider'
+        name: traefik-extra-config
