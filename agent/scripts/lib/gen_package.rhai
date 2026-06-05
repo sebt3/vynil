@@ -20,14 +20,16 @@ ${yaml_encode(data)}
 // generated templates can be reliably replaced with {{instance.appslug}} or
 // {{instance.namespace}} without false positives.
 fn placeholder() {
+    let result = "vnsplaceholder";
     try {
-        let r = shell_output("cat /proc/sys/kernel/random/uuid");
-        let parts = r.trim().split("-");
+        let r = shell_output("cat /proc/sys/kernel/random/uuid 2>/dev/null");
+        r.trim();                              // mute r en place, ne pas chaîner (retourne ())
+        let parts = r.split("-");
         if parts.len() >= 1 && parts[0].len() >= 4 {
-            return `v${parts[0].to_lower()}`;
+            result = `v${parts[0]}`;           // UUID déjà en minuscules
         }
     } catch(e) {}
-    "vnsplaceholder"
+    result
 }
 
 // Replace every occurrence of `ns` with {{instance.namespace}} in all files

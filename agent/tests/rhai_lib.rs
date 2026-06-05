@@ -2542,6 +2542,71 @@ fn gen_tenant_objects_have_no_metadata_labels() {
 // ===== gen_package — namespace placeholder et remplacement =====
 
 #[test]
+fn rhai_trim_mutates_in_place_returns_unit() {
+    // trim() mute la chaîne en place et retourne () — NE PAS chaîner avec .split() etc.
+    // Pattern correct : r.trim(); let parts = r.split("-");
+    // Pattern faux   : let parts = r.trim().split("-");  ← split() appelé sur ()
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        let s = "  hello world  ";
+        let ret = s.trim();       // mute s, retourne ()
+        `s=${s}|ret_is_unit=${type_of(ret) == "()"}`
+    "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result.to_string(),
+        "s=hello world|ret_is_unit=true",
+        "trim() doit muter en place et retourner ()"
+    );
+}
+
+#[test]
+fn rhai_return_inside_try_exits_function() {
+    // Vérifie que `return` dans un bloc try ne se fait pas attraper par catch(e) {}
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        fn test_fn() {
+            try {
+                return "from_try";
+            } catch(e) {}
+            "from_fallback"
+        }
+        test_fn()
+    "#,
+        )
+        .unwrap();
+    assert_eq!(
+        result.to_string(),
+        "from_try",
+        "return dans un try ne doit pas être attrapé par catch"
+    );
+}
+
+#[test]
+fn placeholder_returns_random_value_not_fallback() {
+    // Vérifie que placeholder() génère une vraie valeur aléatoire, pas le fallback statique
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+        gen::placeholder()
+    "#,
+        )
+        .unwrap();
+    let s = result.to_string();
+    assert_ne!(
+        s, "vnsplaceholder",
+        "placeholder doit retourner une valeur aléatoire, pas le fallback statique"
+    );
+}
+
+#[test]
 fn placeholder_is_kubernetes_valid() {
     let mut rhai = make_lib_script();
     let result = rhai
