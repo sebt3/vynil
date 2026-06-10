@@ -815,6 +815,18 @@ fn check_wrong_api_mode(file: &Path, ast: &AST) -> Vec<LintFinding> {
     findings
 }
 
+/// Extract the leftmost property name from a Rhai dot-chain RHS.
+///
+/// Rhai compiles `a.b.c` right-associatively as `Dot(Variable(a), Dot(Property(b), Property(c)))`,
+/// so the first property accessed on `a` is the `lhs` of the nested `Dot`, not a direct child.
+fn first_property_in_dot_chain(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Property(prop_data, _) => Some(&prop_data.2),
+        Expr::Dot(inner_data, _, _) => first_property_in_dot_chain(&inner_data.lhs),
+        _ => None,
+    }
+}
+
 fn check_wrong_package_type(ast: &AST, file: &Path, pkg: &VynilPackageSource) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
@@ -828,16 +840,44 @@ fn check_wrong_package_type(ast: &AST, file: &Path, pkg: &VynilPackageSource) ->
     }
 
     ast.walk(&mut |nodes: &[ASTNode]| {
-        if let Some(ASTNode::Expr(Expr::Variable(var_data, _, pos))) = nodes.last() {
-            let (_, name, _, _) = &**var_data;
-            if *name == "tenant" {
-                findings.push(LintFinding {
-                    rule: "rhai/wrong-package-type".to_string(),
-                    level: LintLevel::Warn,
-                    file: file.to_path_buf(),
-                    line: pos.line(),
-                    message: "System packages cannot access tenant context".to_string(),
-                });
+        if let Some(ASTNode::Expr(expr)) = nodes.last() {
+            match expr {
+                Expr::Variable(var_data, _, pos) => {
+                    let (_, name, _, _) = &**var_data;
+                    if *name == "tenant" {
+                        findings.push(LintFinding {
+                            rule: "rhai/wrong-package-type".to_string(),
+                            level: LintLevel::Warn,
+                            file: file.to_path_buf(),
+                            line: pos.line(),
+                            message: "System packages cannot access tenant context".to_string(),
+                        });
+                    }
+                }
+                Expr::Dot(data, _, _) => {
+                    if let Expr::Variable(var_data, _, _) = &data.lhs {
+                        let (_, var_name, _, _) = &**var_data;
+                        if *var_name == "context" {
+                            // In Rhai's AST, `context.namespace.ha` is right-associative:
+                            // Dot(Variable("context"), Dot(Property("namespace"), Property("ha")))
+                            // So the first property is the leftmost node of the rhs chain.
+                            if let Some(prop) = first_property_in_dot_chain(&data.rhs)
+                                && (prop == "namespace" || prop == "tenant")
+                            {
+                                findings.push(LintFinding {
+                                    rule: "rhai/wrong-package-type".to_string(),
+                                    level: LintLevel::Warn,
+                                    file: file.to_path_buf(),
+                                    line: data.rhs.position().line(),
+                                    message: format!(
+                                        "System packages cannot access context.{prop} (not available for type:system)",
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         true
@@ -1689,6 +1729,60 @@ mod tests {
         assert!(
             !findings.iter().any(|f| f.rule == "rhai/k8s-resource-plural"),
             "No warning expected for singular kind"
+        );
+    }
+
+    #[test]
+    fn context_namespace_access_in_system_package_warns() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = r#"fn run(instance, context) {
+    let replicas = if context.namespace.ha { 2 } else { 1 };
+}"#;
+        let findings = checker.check_file(&PathBuf::from("scripts/install.rhai"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "rhai/wrong-package-type"),
+            "Expected rhai/wrong-package-type finding for context.namespace access in system package"
+        );
+    }
+
+    #[test]
+    fn context_tenant_access_in_system_package_warns() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = r#"fn run(instance, context) {
+    let name = context.tenant.name;
+}"#;
+        let findings = checker.check_file(&PathBuf::from("scripts/install.rhai"), source);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "rhai/wrong-package-type"),
+            "Expected rhai/wrong-package-type finding for context.tenant access in system package"
+        );
+    }
+
+    #[test]
+    fn context_cluster_access_in_system_package_no_warn() {
+        let base_dir = get_fixture_dir("rhai-checks");
+        let pkg = read_package_yaml(&base_dir.join("package.yaml")).expect("Failed to load package");
+        let config = LintConfig::default();
+        let mut checker = RhaiChecker::new(&base_dir, &base_dir, None, &pkg, &config);
+
+        let source = r#"fn run(instance, context) {
+    let replicas = if context.cluster.ha { 2 } else { 1 };
+}"#;
+        let findings = checker.check_file(&PathBuf::from("scripts/install.rhai"), source);
+
+        assert!(
+            !findings.iter().any(|f| f.rule == "rhai/wrong-package-type"),
+            "context.cluster is valid in system packages, should not warn"
         );
     }
 }

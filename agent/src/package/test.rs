@@ -143,8 +143,15 @@ pub async fn run(args: &Parameters) -> Result<()> {
         for t in handler.list_tests() {
             println!("{t}");
         }
+        return Ok(());
     }
 
+    if !handler.results.all_passed() {
+        return Err(common::Error::TestFailure(
+            handler.results.total_failed(),
+            handler.results.total_asserts(),
+        ));
+    }
 
     Ok(())
 }

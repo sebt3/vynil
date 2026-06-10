@@ -139,3 +139,92 @@ impl Default for TestResultCollector {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::VynilAssertResult;
+
+    fn passing_assert(name: &str) -> VynilAssertResult {
+        VynilAssertResult {
+            name: name.to_string(),
+            description: None,
+            passed: true,
+            message: "ok".to_string(),
+        }
+    }
+
+    fn failing_assert(name: &str) -> VynilAssertResult {
+        VynilAssertResult {
+            name: name.to_string(),
+            description: None,
+            passed: false,
+            message: "no match".to_string(),
+        }
+    }
+
+    #[test]
+    fn all_passed_empty_collector() {
+        let c = TestResultCollector::new();
+        assert!(c.all_passed());
+    }
+
+    #[test]
+    fn all_passed_when_all_asserts_pass() {
+        let mut c = TestResultCollector::new();
+        c.add(
+            "t1".to_string(),
+            vec![passing_assert("a"), passing_assert("b")],
+            std::time::Duration::ZERO,
+        );
+        assert!(c.all_passed());
+    }
+
+    #[test]
+    fn all_passed_false_when_one_assert_fails() {
+        let mut c = TestResultCollector::new();
+        c.add(
+            "t1".to_string(),
+            vec![passing_assert("a"), failing_assert("b")],
+            std::time::Duration::ZERO,
+        );
+        assert!(!c.all_passed());
+    }
+
+    #[test]
+    fn all_passed_false_when_all_asserts_fail() {
+        let mut c = TestResultCollector::new();
+        c.add(
+            "t1".to_string(),
+            vec![failing_assert("a"), failing_assert("b")],
+            std::time::Duration::ZERO,
+        );
+        assert!(!c.all_passed());
+    }
+
+    #[test]
+    fn total_failed_counts_only_failed() {
+        let mut c = TestResultCollector::new();
+        c.add(
+            "t1".to_string(),
+            vec![passing_assert("a"), failing_assert("b"), failing_assert("c")],
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(c.total_failed(), 2);
+        assert_eq!(c.total_passed(), 1);
+    }
+
+    #[test]
+    fn to_text_contains_results_summary() {
+        let mut c = TestResultCollector::new();
+        c.add(
+            "t1".to_string(),
+            vec![passing_assert("a"), failing_assert("b")],
+            std::time::Duration::ZERO,
+        );
+        let text = c.to_text();
+        assert!(text.contains("Results:"));
+        assert!(text.contains("1 passed"));
+        assert!(text.contains("1 failed"));
+    }
+}

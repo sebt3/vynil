@@ -85,6 +85,9 @@ pub enum Error {
     #[error("ParseIntError {0}")]
     ParseInt(#[from] std::num::ParseIntError),
 
+    #[error("Tests failed: {0} failed out of {1} assertions")]
+    TestFailure(usize, usize),
+
     /*
         #[error("Ed25519 encode public key error {0}")]
         Ed25519EncodePublicError(#[from] ed25519_dalek::pkcs8::spki::Error),
