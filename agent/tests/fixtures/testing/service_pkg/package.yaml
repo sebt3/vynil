@@ -1,0 +1,18 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Package
+metadata:
+  type: service
+  category: test
+  name: my-service-app
+  description: Test service package
+  features: []
+  app_version: "1.0.0"
+requirements: []
+options:
+  common_name:
+    type: string
+    default: "default.example.com"
+  replicas:
+    type: integer
+    default: 1

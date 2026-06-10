@@ -1,0 +1,18 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Package
+metadata:
+  type: tenant
+  category: test
+  name: my-tenant-app
+  description: Test tenant package
+  features: []
+  app_version: "1.0.0"
+requirements: []
+options:
+  common_name:
+    type: string
+    default: "default.example.com"
+  replicas:
+    type: integer
+    default: 1

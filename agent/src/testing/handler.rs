@@ -17,6 +17,108 @@ use std::{
 
 const API_VERSION: &str = "vinyl.solidite.fr/v1beta1";
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_path(rel: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/testing")
+            .join(rel)
+    }
+
+    fn make_handler(pkg_rel: &str) -> TestHandler {
+        let pkg_dir = fixture_path(pkg_rel);
+        // script_dir, config_dir, template_dir don't need to exist for get_templated_test
+        let dummy = pkg_dir.clone();
+        TestHandler::new(pkg_dir, dummy.clone(), dummy.clone(), dummy.clone(), None).unwrap()
+    }
+
+    fn selector_name(t: &VynilTest, assert_name: &str) -> Option<String> {
+        t.asserts
+            .as_ref()?
+            .iter()
+            .find(|a| a.name == assert_name)?
+            .selector
+            .name
+            .clone()
+    }
+
+    fn k8s_mock_kinds(t: &VynilTest) -> Vec<String> {
+        t.mocks
+            .as_ref()
+            .and_then(|m| m.kubernetes.as_ref())
+            .map(|list| {
+                list.iter()
+                    .filter_map(|d| {
+                        let json: serde_json::Value =
+                            serde_json::from_str(&serde_json::to_string(d).ok()?).ok()?;
+                        json.get("kind")?.as_str().map(String::from)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    // Issue 1 — tenant.name should resolve to instance.namespace for tenant packages
+    #[test]
+    fn test_tenant_name_falls_back_to_namespace() {
+        let handler = make_handler("tenant_pkg");
+        let test = handler.get_templated_test("tenant-context-test").unwrap();
+        assert_eq!(
+            selector_name(&test, "tenant-name-resolves"),
+            Some("my-tenant-ns-config".to_string())
+        );
+    }
+
+    // Issue 1 — explicit tenant override in instance is used
+    #[test]
+    fn test_tenant_name_explicit_override() {
+        let handler = make_handler("tenant_pkg");
+        let test = handler.get_templated_test("tenant-override-test").unwrap();
+        assert_eq!(
+            selector_name(&test, "explicit-tenant-name"),
+            Some("explicit-tenant-config".to_string())
+        );
+    }
+
+    // Issue 2 — values.xxx should resolve to package defaults
+    #[test]
+    fn test_values_uses_package_defaults() {
+        let handler = make_handler("tenant_pkg");
+        let test = handler.get_templated_test("tenant-context-test").unwrap();
+        assert_eq!(
+            selector_name(&test, "values-common-name-resolves"),
+            Some("cm-default.example.com".to_string())
+        );
+        assert_eq!(
+            selector_name(&test, "defaults-replicas-resolves"),
+            Some("cm-1".to_string())
+        );
+    }
+
+    // Issue 2 — values.xxx merges instance options over defaults
+    #[test]
+    fn test_values_merges_instance_options() {
+        let handler = make_handler("tenant_pkg");
+        let test = handler.get_templated_test("tenant-override-test").unwrap();
+        assert_eq!(
+            selector_name(&test, "values-override-resolves"),
+            Some("cm-custom.example.com".to_string())
+        );
+    }
+
+    // Issue 3 — nodes in instance generates Node mock objects
+    #[test]
+    fn test_nodes_override_injects_node_mocks() {
+        let handler = make_handler("service_pkg");
+        let test = handler.get_templated_test("nodes-override-test").unwrap();
+        let kinds = k8s_mock_kinds(&test);
+        let node_count = kinds.iter().filter(|k| k.as_str() == "Node").count();
+        assert_eq!(node_count, 2, "expected 2 Node mocks, got {node_count}");
+    }
+}
+
 // ── Templating helpers (private) ────────────────────────────────────────────
 
 /// Recursively templates all string keys and string values inside a serde_json::Value.
@@ -124,6 +226,36 @@ fn build_var_context(ts: &VynilTestSet, ts_ref: &VynilTestSetRef) -> serde_json:
         }
     }
     serde_json::Value::Object(var)
+}
+
+/// Extracts the `default` value from each entry in `package.options`.
+fn compute_defaults(package: &VynilPackageSource) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(options) = &package.options {
+        for (key, def) in options {
+            if let Some(default_val) = def.as_object().and_then(|o| o.get("default")) {
+                map.insert(key.clone(), default_val.clone());
+            }
+        }
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Merges `defaults` with `instance_options`, instance values taking priority.
+fn merge_values(
+    defaults: &serde_json::Value,
+    instance_options: Option<&BTreeMap<String, serde_json::Value>>,
+) -> serde_json::Value {
+    let Some(opts) = instance_options else {
+        return defaults.clone();
+    };
+    let mut values = defaults.clone();
+    if let serde_json::Value::Object(ref mut m) = values {
+        for (k, v) in opts {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    values
 }
 
 /// Templates mocks/asserts from a source, appending to the collectors.
@@ -282,21 +414,47 @@ impl TestHandler {
 
         let mut hbs = HandleBars::new();
 
-        // Build base context: package + instance (with appslug)
+        // Build base context: package + instance (with appslug) + defaults + values + tenant
         let slug = appslug(&package.metadata.name, &test.instance.name);
         let mut inst = serde_json::to_value(&test.instance)?
             .as_object()
             .cloned()
             .unwrap_or_default();
         inst.insert("appslug".to_string(), serde_json::Value::String(slug));
+
+        let defaults = compute_defaults(package);
+        let values = merge_values(&defaults, test.instance.options.as_ref());
+        let tenant_name = test
+            .instance
+            .tenant
+            .clone()
+            .unwrap_or_else(|| test.instance.namespace.clone());
+
         let base_ctx = serde_json::json!({
             "package": serde_json::to_value(package)?,
             "instance": serde_json::Value::Object(inst),
+            "defaults": defaults,
+            "values": values,
+            "tenant": { "name": tenant_name },
         });
 
         let mut k8s_mocks: Vec<Dynamic> = Vec::new();
         let mut http_mocks: Vec<HttpMockItem> = Vec::new();
         let mut asserts: Vec<VynilAssert> = Vec::new();
+
+        // Inject Node mocks if nodes override is specified (controls context.cluster.ha)
+        if let Some(nodes) = &test.instance.nodes {
+            for node_name in nodes {
+                let node_obj = serde_json::json!({
+                    "apiVersion": "v1",
+                    "kind": "Node",
+                    "metadata": { "name": node_name },
+                });
+                if let Ok(d) = serde_json::from_str::<Dynamic>(&serde_json::to_string(&node_obj).unwrap()) {
+                    k8s_mocks.push(d);
+                }
+            }
+        }
 
         // Template test's own mocks/asserts with base context
         collect_templated(

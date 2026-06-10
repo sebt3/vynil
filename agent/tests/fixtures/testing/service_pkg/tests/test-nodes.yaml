@@ -1,0 +1,16 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Test
+metadata:
+  name: nodes-override-test
+instance:
+  name: my-svc
+  namespace: my-ns
+  nodes:
+    - master01
+    - worker01
+asserts:
+  - name: some-object
+    selector:
+      kind: ConfigMap
+    matcher: any

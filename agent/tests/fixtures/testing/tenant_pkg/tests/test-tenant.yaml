@@ -1,0 +1,24 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Test
+metadata:
+  name: tenant-context-test
+instance:
+  name: my-app
+  namespace: my-tenant-ns
+asserts:
+  - name: tenant-name-resolves
+    selector:
+      kind: ConfigMap
+      name: "{{tenant.name}}-config"
+    matcher: any
+  - name: values-common-name-resolves
+    selector:
+      kind: ConfigMap
+      name: "cm-{{values.common_name}}"
+    matcher: any
+  - name: defaults-replicas-resolves
+    selector:
+      kind: ConfigMap
+      name: "cm-{{defaults.replicas}}"
+    matcher: any

@@ -47,6 +47,10 @@ pub struct VynilTestInstance {
     pub name: String,
     pub namespace: String,
     pub options: Option<BTreeMap<String, serde_json::Value>>,
+    /// Override tenant name for tenant packages (defaults to namespace)
+    pub tenant: Option<String>,
+    /// Inject Node mock objects; controls context.cluster.ha in the Rhai scripts
+    pub nodes: Option<Vec<String>>,
 }
 
 #[allow(non_snake_case)]
