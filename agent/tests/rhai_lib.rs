@@ -1752,8 +1752,9 @@ fn gen_service_crd_without_webhook_has_yamllint_header() {
 
 #[test]
 fn gen_system_crd_has_no_helm_labels_or_annotations() {
-    // Les CRDs doivent passer par clean_metadata : labels Helm supprimés,
-    // annotations Helm supprimées, seules les annotations non-Helm conservées.
+    // Les CRDs doivent passer par clean_metadata : labels supprimés,
+    // toutes les annotations helm.sh/* supprimées, checksums supprimés,
+    // seules les annotations non-helm.sh conservées.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
     let tmp_dir = format!("{}/tests/tmp/gen_system_crd_no_labels", base);
@@ -1777,7 +1778,8 @@ fn gen_system_crd_has_no_helm_labels_or_annotations() {
                 annotations: #{{
                     "helm.sh/chart": "mychart-1.0",
                     "helm.sh/resource-policy": "keep",
-                    "checksum/config": "abc123"
+                    "checksum/config": "abc123",
+                    "custom.io/desc": "preserved"
                 }}
             }},
             spec: #{{ group: "example.com" }}
@@ -1804,8 +1806,12 @@ fn gen_system_crd_has_no_helm_labels_or_annotations() {
         "les checksums doivent être supprimés des CRDs, got:\n{content}"
     );
     assert!(
-        content.contains("helm.sh/resource-policy"),
-        "helm.sh/resource-policy doit être conservé (annotation non-Helm), got:\n{content}"
+        !content.contains("helm.sh/resource-policy"),
+        "helm.sh/resource-policy doit être supprimé (toutes annotations helm.sh/* supprimées), got:\n{content}"
+    );
+    assert!(
+        content.contains("custom.io/desc"),
+        "les annotations non-helm.sh doivent être conservées, got:\n{content}"
     );
 }
 
@@ -3855,5 +3861,164 @@ fn gen_system_env_configmap_filename_is_stable() {
     assert!(
         !uuid_exists,
         "aucun fichier dans get_others ne doit contenir l'UUID release ou namespace"
+    );
+}
+
+// ===== Issue #6 — noms dupliqués quand le nom upstream contient déjà le package name =====
+
+#[test]
+fn gen_system_no_duplicate_appslug_when_upstream_name_prefixed() {
+    // Quand l'upstream a déjà un namePrefix égal au nom du package (ex: kustomize namePrefix),
+    // le nom généré ne doit PAS dupliquer {{instance.appslug}}.
+    // Cas: ServiceAccount "reloader-reloader" avec pkg_name="reloader"
+    // Attendu: name={{instance.appslug}} et NON {{instance.appslug}}-{{instance.appslug}}
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_no_dup_appslug");
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: reloader\n  category: core\n  type: system\n";
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "v1",
+            kind: "ServiceAccount",
+            metadata: #{{ name: "reloader-reloader" }}
+        }}];
+        gen::gen_system("{dir}", docs, "reloader");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{tmp_dir}/get_systems/ServiceAccount_app.yaml.hbs"))
+        .unwrap_or_else(|_| {
+            std::fs::read_dir(format!("{tmp_dir}/get_systems"))
+                .ok()
+                .and_then(|d| {
+                    d.filter_map(|e| e.ok())
+                        .find(|e| e.file_name().to_string_lossy().contains("ServiceAccount"))
+                        .and_then(|e| std::fs::read_to_string(e.path()).ok())
+                })
+                .unwrap_or_default()
+        });
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !content.contains("{{instance.appslug}}-{{instance.appslug}}"),
+        "le nom ne doit pas dupliquer {{instance.appslug}}, got:\n{content}"
+    );
+    assert!(
+        content.contains("{{instance.appslug}}"),
+        "le nom doit contenir {{instance.appslug}}, got:\n{content}"
+    );
+}
+
+#[test]
+fn gen_system_clusterrole_no_duplicate_when_upstream_prefixed() {
+    // Quand une ClusterRole upstream porte déjà le nom du package en préfixe
+    // (ex: "reloader-reloader-role"), le nom généré ne doit pas doubler les placeholders.
+    // Attendu: {{instance.namespace}}-{{instance.appslug}}-role
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_no_dup_clusterrole");
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: reloader\n  category: core\n  type: system\n";
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [
+            #{{
+                apiVersion: "rbac.authorization.k8s.io/v1",
+                kind: "ClusterRole",
+                metadata: #{{ name: "reloader-reloader-role" }},
+                rules: []
+            }},
+            #{{
+                apiVersion: "rbac.authorization.k8s.io/v1",
+                kind: "ClusterRoleBinding",
+                metadata: #{{ name: "reloader-reloader-role" }},
+                roleRef: #{{
+                    apiGroup: "rbac.authorization.k8s.io",
+                    kind: "ClusterRole",
+                    name: "reloader-reloader-role"
+                }},
+                subjects: []
+            }}
+        ];
+        gen::gen_system("{dir}", docs, "reloader");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    let cr_files: Vec<_> = std::fs::read_dir(format!("{tmp_dir}/get_systems"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains("ClusterRole"))
+        .collect();
+
+    let crole_content = cr_files
+        .iter()
+        .find(|e| !e.file_name().to_string_lossy().contains("Binding"))
+        .and_then(|e| std::fs::read_to_string(e.path()).ok())
+        .unwrap_or_default();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
+    assert!(
+        !crole_content.contains(
+            "{{instance.namespace}}-{{instance.appslug}}-{{instance.namespace}}-{{instance.appslug}}"
+        ),
+        "le nom ClusterRole ne doit pas doubler namespace+appslug, got:\n{crole_content}"
+    );
+    assert!(
+        crole_content.contains("{{instance.namespace}}-{{instance.appslug}}"),
+        "le nom ClusterRole doit contenir namespace-appslug, got:\n{crole_content}"
+    );
+}
+
+#[test]
+fn clean_metadata_removes_all_helm_sh_annotations() {
+    // Toutes les annotations dont la clé contient "helm.sh" doivent être supprimées,
+    // y compris helm.sh/resource-policy (non listée dans l'ancienne liste statique).
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "gen_package" as gen;
+
+        let metadata = #{
+            name: "my-release",
+            annotations: #{
+                "helm.sh/chart": "myapp-1.0",
+                "helm.sh/resource-policy": "keep",
+                "meta.helm.sh/release-name": "my-release",
+                "custom.io/desc": "custom value"
+            }
+        };
+
+        let cleaned = gen::clean_metadata(metadata, "my-release");
+
+        let has_helm_chart = "helm.sh/chart" in cleaned.annotations;
+        let has_resource_policy = "helm.sh/resource-policy" in cleaned.annotations;
+        let has_meta_helm = "meta.helm.sh/release-name" in cleaned.annotations;
+        let has_custom = "custom.io/desc" in cleaned.annotations;
+
+        !has_helm_chart && !has_resource_policy && !has_meta_helm && has_custom
+    "#,
+        )
+        .unwrap();
+
+    assert!(
+        result.as_bool().unwrap(),
+        "clean_metadata doit supprimer TOUTES les annotations contenant 'helm.sh', y compris resource-policy"
     );
 }

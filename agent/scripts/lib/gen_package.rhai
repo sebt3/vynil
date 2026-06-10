@@ -32,6 +32,20 @@ fn placeholder() {
     result
 }
 
+// Replace only the first occurrence of `from` in `s` with `to`.
+// Uses split() to reconstruct: first_part + to + rest_joined_with_from.
+fn replace_first(s, from, to) {
+    if !s.contains(from) { return s; }
+    let parts = s.split(from);
+    if parts.len() <= 1 { return s; }
+    let first = parts[0];
+    let tail_parts = [];
+    let i = 0;
+    for p in parts { if i > 0 { tail_parts.push(p); } i += 1; }
+    let tail = tail_parts.reduce(|acc, x| if acc == "" { x } else { `${acc}${from}${x}` }, "");
+    `${first}${to}${tail}`
+}
+
 // Generic text-level replacement across all files of a generated sub-directory.
 fn apply_replace_in_dir(dir_path, from, to) {
     if !is_dir(dir_path) { return; }
@@ -382,13 +396,7 @@ fn replace_label_values(labels, name) {
 fn clean_metadata(metadata, name) {
     // Clean Helm-specific annotations
     if "annotations" in metadata && metadata.annotations != () {
-        let helm_keys = ["helm.sh/chart", "meta.helm.sh/release-name", "meta.helm.sh/release-namespace"];
-        for k in helm_keys {
-            if k in metadata.annotations {
-                metadata.annotations.remove(k);
-            }
-        }
-        let to_remove = metadata.annotations.keys().filter(|k| k.contains("checksum/"));
+        let to_remove = metadata.annotations.keys().filter(|k| k.contains("helm.sh") || k.contains("checksum/"));
         for k in to_remove {
             metadata.annotations.remove(k);
         }
@@ -405,13 +413,7 @@ fn clean_metadata(metadata, name) {
 // Kept for backward compat (called without name in some paths)
 fn clean_annotations(metadata) {
     if "annotations" in metadata && metadata.annotations != () {
-        let helm_keys = ["helm.sh/chart", "meta.helm.sh/release-name", "meta.helm.sh/release-namespace"];
-        for k in helm_keys {
-            if k in metadata.annotations {
-                metadata.annotations.remove(k);
-            }
-        }
-        let to_remove = metadata.annotations.keys().filter(|k| k.contains("checksum/"));
+        let to_remove = metadata.annotations.keys().filter(|k| k.contains("helm.sh") || k.contains("checksum/"));
         for k in to_remove {
             metadata.annotations.remove(k);
         }
@@ -1198,14 +1200,14 @@ fn gen_system_core(path, docs, name, ns) {
                 let doc_name = doc.metadata.name;   // original — used for analysis lookups
                 let file_name = clean_file_name(`${doc_name}`, name, ns);  // sanitized for file path
                 if doc.kind == "ClusterRoleBinding" || doc.kind == "ClusterRole" || doc.kind == "ValidatingWebhookConfiguration" || doc.kind == "MutatingWebhookConfiguration" || doc.kind == "APIService" {
-                    doc.metadata.name.replace(name, "{{instance.namespace}}-{{instance.appslug}}");
+                    doc.metadata.name = replace_first(`${doc.metadata.name}`, name, "{{instance.namespace}}-{{instance.appslug}}");
                     // Strip ns placeholder: il est déjà dans le préfixe {{instance.namespace}}-
                     if ns != () && ns != "" {
                         doc.metadata.name.replace(`-${ns}`, "");
                         doc.metadata.name.replace(ns, "");
                     }
                 } else {
-                    doc.metadata.name.replace(name, "{{instance.appslug}}");
+                    doc.metadata.name = replace_first(`${doc.metadata.name}`, name, "{{instance.appslug}}");
                 }
                 if "namespace" in doc.metadata {
                     doc.metadata.remove("namespace");
@@ -1337,7 +1339,7 @@ fn gen_tenant_core(path, docs, name, ns) {
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
             let file_name = clean_file_name(`${doc_name}`, name, ns);
-            doc.metadata.name.replace(name, "{{instance.appslug}}");
+            doc.metadata.name = replace_first(`${doc.metadata.name}`, name, "{{instance.appslug}}");
             if "namespace" in doc.metadata {
                 doc.metadata.remove("namespace");
             }
@@ -1474,7 +1476,7 @@ fn gen_service_core(path, docs, name, ns) {
         for doc in docs.filter(|obj| type_of(obj) == "map" && obj.keys().contains("kind") && obj.keys().contains("metadata") && type_of(obj.metadata) == "map" && obj.kind != ()) {
             let doc_name = doc.metadata.name;
             let file_name = clean_file_name(`${doc_name}`, name, ns);
-            doc.metadata.name.replace(name, "{{instance.appslug}}");
+            doc.metadata.name = replace_first(`${doc.metadata.name}`, name, "{{instance.appslug}}");
             if "namespace" in doc.metadata {
                 doc.metadata.remove("namespace");
             }
