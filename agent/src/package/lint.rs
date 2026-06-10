@@ -442,6 +442,18 @@ fn check_options(
                 message: format!("Option '{}': no description provided", key),
             });
         }
+        if obj.get("type").and_then(|t| t.as_str()) == Some("object") && obj.contains_key("properties") {
+            collector.add(crate::linting::LintFinding {
+                rule: "package/object-properties-unsupported".to_string(),
+                level: crate::linting::LintLevel::Warn,
+                file: manifest.clone(),
+                line,
+                message: format!(
+                    "Option '{}': nested 'properties' sub-schema is not supported for type:object; use a flat 'default:' map at the option root instead",
+                    key
+                ),
+            });
+        }
     }
 }
 
@@ -833,5 +845,70 @@ mod tests {
         let mut collector = crate::linting::LintResultCollector::new();
         check_manifest_fields(&package, std::path::Path::new(""), &mut collector);
         assert!(collector.has_errors());
+    }
+
+    #[test]
+    fn check_options_object_with_nested_properties_warns() {
+        let mut package = make_valid_package();
+        let mut options = std::collections::BTreeMap::new();
+        options.insert(
+            "solver_settings".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "description": "Solver settings",
+                "properties": {
+                    "ingress_class": { "type": "string", "default": "traefik" }
+                }
+            }),
+        );
+        package.options = Some(options);
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_options(&package, std::path::Path::new(""), &mut collector);
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(
+            text.contains("solver_settings"),
+            "warning must mention the option key"
+        );
+        assert!(text.contains("properties"), "warning must mention 'properties'");
+    }
+
+    #[test]
+    fn check_options_object_with_flat_default_passes() {
+        let mut package = make_valid_package();
+        let mut options = std::collections::BTreeMap::new();
+        options.insert(
+            "solver_settings".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "description": "Solver settings",
+                "default": { "ingress_class": "traefik" }
+            }),
+        );
+        package.options = Some(options);
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_options(&package, std::path::Path::new(""), &mut collector);
+        assert!(!collector.has_errors());
+        let text = collector.to_text(crate::linting::LintLevel::Info);
+        assert!(
+            !text.contains("properties"),
+            "no warning expected for valid flat default"
+        );
+    }
+
+    #[test]
+    fn check_options_non_object_with_properties_key_no_extra_warn() {
+        let mut package = make_valid_package();
+        let mut options = std::collections::BTreeMap::new();
+        options.insert(
+            "my_schema".to_string(),
+            serde_json::json!({
+                "type": "string",
+                "description": "A string, not an object"
+            }),
+        );
+        package.options = Some(options);
+        let mut collector = crate::linting::LintResultCollector::new();
+        check_options(&package, std::path::Path::new(""), &mut collector);
+        assert!(!collector.has_errors());
     }
 }
