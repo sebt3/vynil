@@ -166,6 +166,65 @@ fn scan_branch_full_when_no_filter() {
     assert_eq!(result.unwrap().into_string().unwrap(), "full");
 }
 
+// ── security_filter — TDD ────────────────────────────────────────────────
+
+fn build_jukebox_http_mock() -> K8sJukeBoxMock {
+    let json = serde_json::json!({
+        "kind": "JukeBox",
+        "metadata": {"name": "test-box"},
+        "spec": {
+            "source": {"http": {"url": "http://test.local/packages"}},
+            "maturity": "stable",
+            "schedule": "0 * * * *"
+        },
+        "status": {"conditions": [], "packages": []}
+    });
+    K8sJukeBoxMock {
+        obj: serde_json::from_str(&serde_json::to_string(&json).unwrap()).unwrap(),
+    }
+}
+
+#[test]
+fn security_filter_cosign_and_trivy_tags_no_error_log() {
+    // Old code calls log_error() for every non-semver tag (cosign, trivy, etc.).
+    // New code must silently return false for tags that do not start with a digit or 'v'.
+    // HTTP source path is used so that security_filter is called on p.tag via
+    // compute_waypoints_from_packages — no registry method mocking needed.
+    // Fails on old code (log_error throws); passes on new code (silent filter).
+    let base = env!("CARGO_MANIFEST_DIR");
+    let (mut script, _) = make_scan_script(vec![]);
+
+    script.add_code(
+        r#"
+        fn log_error(msg) { throw `unexpected error log: ${msg}`; }
+        fn http_get_yaml(url, auth_type, credential) {
+            if url.contains("index.yaml") {
+                #{ packages: [#{ category: "test", name: "pkg", file: "pkg.yaml" }] }
+            } else {
+                [
+                    #{ tag: "sha256-deadbeef.sig", registry: "r.io", image: "test/img",
+                       metadata: #{}, requirements: [] },
+                    #{ tag: "trivy--apps-foo", registry: "r.io", image: "test/img",
+                       metadata: #{}, requirements: [] },
+                    #{ tag: "1.2.3", registry: "r.io", image: "test/img",
+                       metadata: #{}, requirements: [] }
+                ]
+            }
+        }
+        "#,
+    );
+    script.ctx.set_value("box", build_jukebox_http_mock());
+    let args = serde_json::json!({"namespace": "test-ns"});
+    script.set_dynamic("args", &args);
+
+    let result = script.run_file(&PathBuf::from(format!("{base}/scripts/boxes/scan.rhai")));
+    assert!(
+        result.is_ok(),
+        "Expected no error log for cosign/trivy tags: {:?}",
+        result.err()
+    );
+}
+
 // ── Intégration — scan.rhai complet ──────────────────────────────────────
 
 #[test]

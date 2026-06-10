@@ -2,18 +2,13 @@ import "copy_dir" as copy;
 import "package_yaml" as pck;
 
 fn security_filter(v) {
-    try{
-        let x = semver_from(v);
-        return true
-    }catch(e){
-        log_error(v);
-        if type_of(e) == "string" {
-            log_warn(e);
-        } else {
-            log_warn(json_encode(e));
-        }
+    if v.len() == 0 { return false; }
+    let c = v.sub_string(0, 1);
+    if c != "v" && (c < "0" || c > "9") { return false; }
+    try { semver_from(v); return true } catch(e) {
+        log_warn(`skipping non-semver tag ${v}`);
     }
-    return false
+    false
 }
 
 fn improve_package(src, dest) {
