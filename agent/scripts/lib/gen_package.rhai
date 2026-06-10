@@ -885,6 +885,9 @@ fn replace_ingress(doc, name) {
 // ---------------------------------------------------------------------------
 
 fn replace_workload(path, doc_name, doc, name) {
+    replace_workload(path, doc_name, doc, name, true)
+}
+fn replace_workload(path, doc_name, doc, name, extract_envs) {
     doc.metadata = clean_metadata(doc.metadata, name);
 
     if "template" in doc.spec && doc.spec.template != () {
@@ -918,7 +921,9 @@ fn replace_workload(path, doc_name, doc, name) {
         }
     }
 
-    doc = extract_env_configmap(path, doc_name, doc, name);
+    if extract_envs {
+        doc = extract_env_configmap(path, doc_name, doc, name);
+    }
 
     if "template" in doc.spec && doc.spec.template != () && "spec" in doc.spec.template {
         doc.metadata = add_reloader_annotations(doc.metadata, doc.spec.template.spec);
@@ -931,12 +936,17 @@ fn replace_workload(path, doc_name, doc, name) {
 // ---------------------------------------------------------------------------
 
 fn replace_job(path, doc_name, doc, name) {
+    replace_job(path, doc_name, doc, name, true)
+}
+fn replace_job(path, doc_name, doc, name, extract_envs) {
     doc.metadata = clean_metadata(doc.metadata, name);
     if "template" in doc.spec && doc.spec.template != () {
         doc.spec.template = replace_pod_template(doc.spec.template, name);
         doc.spec.template.spec = add_security_contexts(doc.spec.template.spec);
     }
-    doc = extract_env_configmap(path, doc_name, doc, name);
+    if extract_envs {
+        doc = extract_env_configmap(path, doc_name, doc, name);
+    }
     if "template" in doc.spec && doc.spec.template != () && "spec" in doc.spec.template {
         doc.metadata = add_reloader_annotations(doc.metadata, doc.spec.template.spec);
     }
@@ -1233,7 +1243,7 @@ fn gen_system_core(path, docs, name, ns) {
                     doc = extr.doc;
                     for k in extr.images.keys() { all_images[k] = extr.images[k]; }
                     for k in extr.resources.keys() { all_resources[k] = extr.resources[k]; }
-                    doc = replace_workload(path, doc_name, doc, name);
+                    doc = replace_workload(path, doc_name, doc, name, false);
                     let comp = if doc_name in analysis.comp_map { analysis.comp_map[doc_name] } else { "" };
                     if comp != "" { doc = apply_workload_selectors(doc, comp); }
                     let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
@@ -1247,7 +1257,7 @@ fn gen_system_core(path, docs, name, ns) {
                     doc = extr.doc;
                     for k in extr.images.keys() { all_images[k] = extr.images[k]; }
                     for k in extr.resources.keys() { all_resources[k] = extr.resources[k]; }
-                    doc = replace_job(path, doc_name, doc, name);
+                    doc = replace_job(path, doc_name, doc, name, false);
                     let fp = `${path}/get_systems/${doc.kind}_${file_name}.yaml.hbs`;
                     gen_yaml(fp, doc);
                     if extr.images.len() > 0 || extr.resources.len() > 0 {

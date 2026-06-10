@@ -3792,12 +3792,13 @@ fn gen_system_clusterrolebinding_rolref_matches_clusterrole_name() {
 }
 
 #[test]
-fn gen_system_env_configmap_filename_is_stable() {
-    // Un Deployment avec des env vars génère un ConfigMap dans get_others.
-    // Le nom du fichier doit être stable (sans UUID release).
+fn gen_system_deployment_no_env_extraction() {
+    // Pour un package system, les env vars plain-value des Deployments ne doivent
+    // PAS être extraites dans un ConfigMap : Helm ne le fait pas par défaut,
+    // et vynil n'autorise pas get_others dans un package system.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{base}/tests/tmp/gen_system_env_cm");
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_no_env_cm");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
@@ -3835,25 +3836,66 @@ fn gen_system_env_configmap_filename_is_stable() {
         ))
         .unwrap();
 
-    // Le ConfigMap doit être nommé sans UUID : ConfigMap_traefik-envs.yaml.hbs
-    let exists =
-        std::path::Path::new(&format!("{tmp_dir}/get_others/ConfigMap_traefik-envs.yaml.hbs")).exists();
-    let uuid_exists = std::fs::read_dir(format!("{tmp_dir}/get_others"))
-        .map(|d| {
-            d.filter_map(|e| e.ok()).any(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                name.contains("vrel1234") || name.contains("vns5678")
-            })
-        })
-        .unwrap_or(false);
+    // Aucun get_others ne doit être créé par gen_system
+    let others_cm_exists = std::path::Path::new(&format!("{tmp_dir}/get_others")).exists();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
-        exists,
-        "ConfigMap_traefik-envs.yaml.hbs doit exister avec un nom stable"
+        !others_cm_exists,
+        "gen_system ne doit pas créer get_others : les env vars restent inline dans le Deployment"
     );
+}
+
+#[test]
+fn gen_tenant_deployment_extracts_env_to_configmap() {
+    // Pour un package tenant, les env vars plain-value des Deployments doivent
+    // être extraites dans un ConfigMap dans get_others (comportement Helm-like).
+    let mut rhai = make_lib_script();
+    let base = env!("CARGO_MANIFEST_DIR");
+    let tmp_dir = format!("{base}/tests/tmp/gen_tenant_env_cm");
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+
+    let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: apps\n  type: tenant\n";
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
+
+    let _ = rhai
+        .eval(&format!(
+            r#"
+        import "gen_package" as gen;
+        let docs = [#{{
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: #{{ name: "myapp" }},
+            spec: #{{
+                selector: #{{ matchLabels: #{{ app: "myapp" }} }},
+                template: #{{
+                    metadata: #{{ labels: #{{ app: "myapp" }} }},
+                    spec: #{{
+                        containers: [#{{
+                            name: "myapp",
+                            image: "docker.io/myapp:v1.0",
+                            env: [
+                                #{{ name: "LOG_LEVEL", value: "INFO" }},
+                                #{{ name: "PORT", value: "8080" }}
+                            ]
+                        }}]
+                    }}
+                }}
+            }}
+        }}];
+        gen::gen_tenant("{dir}", docs, "myapp");
+    "#,
+            dir = tmp_dir
+        ))
+        .unwrap();
+
+    // clean_file_name("myapp", "myapp") → "app" (doc_name == release_name → fallback)
+    let cm_exists =
+        std::path::Path::new(&format!("{tmp_dir}/get_others/ConfigMap_app-envs.yaml.hbs")).exists();
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+
     assert!(
-        !uuid_exists,
-        "aucun fichier dans get_others ne doit contenir l'UUID release ou namespace"
+        cm_exists,
+        "gen_tenant doit extraire les env vars dans get_others/ConfigMap_app-envs.yaml.hbs"
     );
 }
