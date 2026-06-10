@@ -98,7 +98,10 @@ fn run(args) {
     if valid.value_script != () && valid.value_script != "" {
         annotations["fr.solidite.vynil.value_script"] = json_encode(valid.value_script);
     }
-    reg.push_image(args.temp, args.repository, version.to_string(), annotations);
     let str_ver = version.to_string();
+    let digest = reg.push_image(args.temp, args.repository, str_ver, annotations);
+    if args.signing_key != () && args.signing_key != "" {
+        reg.sign_image(args.repository, str_ver, digest, args.signing_key);
+    }
     print(`${args.repository} version ${str_ver} uploaded`);
 }

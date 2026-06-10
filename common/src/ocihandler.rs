@@ -6,7 +6,7 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::{Client as KubeClient, api::Api};
 pub use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
-use rhai::{Dynamic, Engine};
+use rhai::{Dynamic, Engine, ImmutableString};
 use std::{collections::BTreeMap, path::PathBuf};
 use tar::{Archive, Builder};
 use tokio::{runtime::Handle, task::block_in_place};
@@ -35,7 +35,7 @@ impl Registry {
         repository: String,
         tag: String,
         annotations: Map,
-    ) -> RhaiRes<()> {
+    ) -> RhaiRes<ImmutableString> {
         let client = Client::new(client::ClientConfig::default());
         let reference = Reference::with_tag(self.registry.clone(), repository, tag);
         let mut values: BTreeMap<String, String> = BTreeMap::new();
@@ -83,7 +83,7 @@ impl Registry {
         let layers = vec![layer];
         let mut manifest = manifest::OciImageManifest::build(&layers, &config, Some(values));
         manifest.media_type = Some(manifest::OCI_IMAGE_MEDIA_TYPE.to_string());
-        block_in_place(|| {
+        let push_response = block_in_place(|| {
             Handle::current().block_on(async move {
                 client
                     .push(&reference, &layers, config, &self.auth.clone(), Some(manifest))
@@ -91,7 +91,39 @@ impl Registry {
             })
         })
         .map_err(|e| rhai_err(Error::OCIDistrib(e)))?;
-        Ok(())
+        // manifest_url is "sha256:<hex>" or a full URL ending with "sha256:<hex>"
+        let manifest_url = push_response.manifest_url;
+        let digest: ImmutableString = if let Some(idx) = manifest_url.rfind("sha256:") {
+            manifest_url[idx..].to_string()
+        } else {
+            manifest_url
+        }
+        .into();
+        Ok(digest)
+    }
+
+    pub fn sign_image(
+        &mut self,
+        repository: String,
+        tag: String,
+        digest: String,
+        key_path: String,
+    ) -> RhaiRes<()> {
+        if key_path.is_empty() {
+            return Ok(());
+        }
+        let image_ref = format!("{}/{}:{}@{}", self.registry, repository, tag, digest);
+        let status = std::process::Command::new("cosign")
+            .args(["sign", "--yes", "--key", &key_path, &image_ref])
+            .status()
+            .map_err(|e| rhai_err(Error::Stdio(e)))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(rhai_err(Error::Other(format!(
+                "cosign sign failed for {image_ref}"
+            ))))
+        }
     }
 
     pub fn pull_image(&mut self, dest_dir: &PathBuf, repository: String, tag: String) -> Result<()> {
@@ -233,6 +265,7 @@ pub fn oci_rhai_register(engine: &mut Engine) {
         .register_type_with_name::<Registry>("Registry")
         .register_fn("new_registry", Registry::new)
         .register_fn("push_image", Registry::push_image)
+        .register_fn("sign_image", Registry::sign_image)
         .register_fn("list_tags", Registry::rhai_list_tags)
         .register_fn("get_manifest", Registry::get_manifest)
         .register_fn("get_auth_from_file", get_auth_from_file);
@@ -292,6 +325,28 @@ mod tests {
         assert_eq!(map["user"].clone().cast::<String>(), "");
         assert_eq!(map["pass"].clone().cast::<String>(), "");
     }
+    #[test]
+    fn sign_image_empty_key_returns_ok() {
+        let mut reg = Registry::new("r.io".into(), "u".into(), "p".into());
+        let result = reg.sign_image("repo/img".into(), "1.0.0".into(), "sha256:abc".into(), "".into());
+        assert!(result.is_ok(), "Empty key must be a no-op");
+    }
+
+    #[test]
+    fn sign_image_cosign_not_found_returns_error() {
+        // When cosign binary is missing or key does not exist, sign_image returns Err.
+        // We provide a non-existent key path; cosign will exit non-zero.
+        // If cosign is not installed, the Stdio error also satisfies is_err().
+        let mut reg = Registry::new("r.io".into(), "u".into(), "p".into());
+        let result = reg.sign_image(
+            "repo/img".into(),
+            "1.0.0".into(),
+            "sha256:abc".into(),
+            "/nonexistent/key.pem".into(),
+        );
+        assert!(result.is_err(), "Non-existent key must produce an error");
+    }
+
     use http::{Request, Response, StatusCode};
     use kube::client::Body;
     use std::pin::pin;

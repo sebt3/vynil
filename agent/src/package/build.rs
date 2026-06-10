@@ -96,6 +96,15 @@ pub struct Parameters {
         default_value = "./agent/scripts"
     )]
     script_dir: PathBuf,
+    /// Path to Cosign signing key (PEM). If empty, signing is skipped.
+    #[arg(
+        short = 'k',
+        long = "signing-key",
+        env = "SIGNING_KEY",
+        value_name = "SIGNING_KEY",
+        default_value = ""
+    )]
+    signing_key: String,
 }
 
 pub async fn run(args: &Parameters) -> Result<()> {
