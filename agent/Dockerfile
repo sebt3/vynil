@@ -30,6 +30,7 @@ ARG HELM_VERSION=v4.1.4
 ARG KUBECTL_VERSION=v1.34.4
 ARG TF_VERSION=1.11.6
 ARG MONGODB_TOOLS_VERSION=100.12.2
+ARG COSIGN_VERSION=v2.4.1
 ARG DEB_PACKAGES="git jq curl tar gzip unzip openssl openssh-client ca-certificates postgresql-client-17 mariadb-client-compat restic redis-tools"
 # hadolint ignore=DL3008,DL4006,SC2035
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
@@ -48,7 +49,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
  && curl -sL "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-${MONGO_DIST}-${MONGODB_TOOLS_VERSION}.tgz" \
     |tar --wildcards -C /usr/local/bin/ --strip-components=2 -xzf - '*/bin/mongodump' '*/bin/mongorestore' \
  && ln -sf /usr/local/bin/tofu /usr/local/bin/terraform \
- && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/tofu /usr/local/bin/mongodump /usr/local/bin/mongorestore \
+ && curl -sL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCHITECTURE}" -o /usr/local/bin/cosign \
+ && chmod 755 /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/tofu /usr/local/bin/mongodump /usr/local/bin/mongorestore /usr/local/bin/cosign \
  && mkdir -p /var/lib/vynil/keys /nonexistent \
  && chown -R nobody:nogroup /var/lib/vynil /nonexistent \
  && chmod 770 /var/lib/vynil /nonexistent \

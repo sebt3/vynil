@@ -1,7 +1,9 @@
 PROJECT    ?= sebt3
 VARIANT    ?=
+TAG_REMOTE := $(shell git remote | grep -q '^upstream$$' && echo upstream || echo origin)
+LATEST_TAG := $(shell git ls-remote --tags $(TAG_REMOTE) 2>/dev/null | grep -v '\^{}' | awk -F/ '{print $$3}' | sort -V | tail -1)
+NEXT_PATCH := $(shell echo $(LATEST_TAG) | awk -F. '{print $$1"."$$2"."$$3+1}')
 VERSION    := $(shell cargo run --bin agent -- version 2>/dev/null)
-NEXT_PATCH := $(shell echo $(VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}')
 REGISTRY   := docker.io/$(PROJECT)
 TAG         = $(if $(VARIANT),$(NEXT_PATCH)-$(VARIANT),$(VERSION))
 MATURITY    = $(if $(VARIANT),$(VARIANT),stable)
@@ -24,7 +26,7 @@ define ensure-image
 endef
 
 .PHONY: all help
-.PHONY: generate-crd generate crd fmt precommit
+.PHONY: generate-crd generate crd fmt precommit bump-version
 .PHONY: agent-dev agent agent-alpha agent-beta
 .PHONY: operator operator-alpha operator-beta
 .PHONY: box deploy
@@ -78,27 +80,36 @@ precommit:
 	cargo +nightly fmt
 	cargo test
 
+bump-version:
+	@current=$$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/'); \
+	if [ "$$current" = "$(NEXT_PATCH)" ]; then \
+		echo "Cargo.toml already at $(NEXT_PATCH), nothing to do."; \
+	else \
+		echo "Bumping Cargo.toml $$current → $(NEXT_PATCH)"; \
+		sed -i 's/^version = "[0-9]*\.[0-9]*\.[0-9]*"/version = "$(NEXT_PATCH)"/' Cargo.toml; \
+	fi
+
 # ── Images ───────────────────────────────────────────────────────────────────
 
-agent-dev:
-	$(call img-build-push,agent,$(VERSION)-dev)
+agent-dev: bump-version
+	$(call img-build-push,agent,$(NEXT_PATCH)-dev)
 
 agent:
 	$(call img-build-push,agent,$(VERSION))
 
-agent-alpha:
+agent-alpha: bump-version
 	$(call img-build-push,agent,$(NEXT_PATCH)-alpha)
 
-agent-beta:
+agent-beta: bump-version
 	$(call img-build-push,agent,$(NEXT_PATCH)-beta)
 
 operator:
 	$(call img-build-push,operator,$(VERSION))
 
-operator-alpha:
+operator-alpha: bump-version
 	$(call img-build-push,operator,$(NEXT_PATCH)-alpha)
 
-operator-beta:
+operator-beta: bump-version
 	$(call img-build-push,operator,$(NEXT_PATCH)-beta)
 
 # ── Box ──────────────────────────────────────────────────────────────────────
