@@ -39,12 +39,25 @@ mais l'objet persiste. Les logs de l'opérateur bouclent sur :
 FinalizerError(CleanupFailed(Other("This install have child but the package cannot be found")))
 ```
 
-**Cause** : le paquet a été republié avec un **`type` différent** de celui utilisé à
-l'installation (cas réel : un paquet `tenant` devenu `service`). La sélection de paquet du
-cleanup filtre sur le type ; comme l'instance a des enfants (`status.have_child()` vrai),
-l'absence de paquet correspondant lève une erreur dure et le finalizer n'est jamais retiré.
-Voir l'analyse complète et le correctif dans
-[issue #12](https://git.kydah.fr/shuss/vynil/issues/12).
+**Cause immédiate** : aucune révision du paquet avec le **`type` attendu** par l'instance
+n'est disponible dans le catalogue (cas réel : un paquet `tenant` republié `service`).
+Comme l'instance a des enfants (`status.have_child()` vrai), l'absence de paquet lève une
+erreur dure et le finalizer n'est jamais retiré.
+
+**Causes amont** — c'est en général l'enchaînement de deux problèmes côté registre/scan
+qui crée cette situation :
+
+- une **purge trop agressive** du registre a supprimé la dernière révision de l'ancien
+  type (voir [Maintenance du registre](../jukebox/registry-maintenance.md)) ;
+- le **scan** ne descend l'historique des tags que jusqu'au premier waypoint et n'expose
+  donc pas une ancienne révision d'un autre type, même si elle existe encore.
+
+**Pourquoi pas de delete « status seul » automatique** : les listes du `status` permettent
+de supprimer ce que l'agent a créé directement, mais pas ce que le paquet a créé
+*indirectement* (volumes d'opérateurs tiers…) — ce nettoyage vit dans les hooks `delete_*`
+de l'image du paquet. Un delete sans image laisse des résidus ; il ne peut être qu'une
+action **explicitement demandée** par l'opérateur humain, pas un fallback automatique.
+Voir l'analyse complète dans [issue #12](https://git.kydah.fr/shuss/vynil/issues/12).
 
 **Déblocage immédiat** (⚠️ laisse les objets enfants orphelins, à nettoyer manuellement) :
 
@@ -54,8 +67,9 @@ kubectl -n <ns> patch <kind> <name> --type=json \
 # puis supprimer à la main les objets listés dans l'ancien status (vitals/scalables/others…)
 ```
 
-**Correctif de fond** : relâcher la sélection de paquet pour le cleanup (le `status` suffit à
-piloter la suppression). Suivi dans l'issue #12.
+**Correctifs de fond** (suivis dans l'issue #12) : purge et scan conscients du `type` de
+paquet, plus une annotation opt-in pour autoriser un delete dégradé sans image quand le
+paquet a réellement disparu.
 
 ## Désinstallation lente (~10 min) sur échec
 

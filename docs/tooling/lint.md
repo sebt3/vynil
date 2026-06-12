@@ -71,6 +71,8 @@ Désactiver une règle sur une seule ligne :
 - Rhai : `// vynil-lint-disable rhai/unused-variable`
 - Handlebars : `{{!-- vynil-lint-disable hbs/unknown-helper --}}`
 
+Support du mode block (enable/disable)
+
 ## Codes de sortie
 
 | Code | Signification |

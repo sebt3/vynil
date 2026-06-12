@@ -33,6 +33,11 @@ Le type détermine aussi quel CRD pilote l'installation (`SystemInstance` /
 > ⚠️ Le `type` d'un paquet peut changer entre deux publications (ex. un paquet
 > historiquement `tenant` republié en `service`). C'est un cas réel qui a un impact sur la
 > désinstallation — voir [Dépannage](operations/troubleshooting.md).
+> C'est cependant très fortement déconseillé : c'est un cas limite qui peut survenir
+> pendant la maturation ou le développement d'un paquet. Si un changement de type est
+> inévitable, traitez-le comme une migration et assurez-vous que la dernière révision de
+> l'ancien type reste disponible dans le registre — voir
+> [Maintenance du registre](jukebox/registry-maintenance.md).
 
 ### Catégorie (`category`)
 
@@ -102,8 +107,12 @@ enregistre les objets créés dans le `status` de l'instance par catégorie :
 | `posts` | actions finales | 6 | en premier |
 
 L'agent récupère l'instance à jour entre chaque phase. La **désinstallation** procède dans
-l'ordre inverse et s'appuie sur ces listes du `status` — c'est pourquoi le `status` est la
-source de vérité du nettoyage.
+l'ordre inverse et s'appuie sur ces listes du `status` pour savoir *quoi* supprimer. Le
+`status` ne suffit cependant pas à lui seul : les **hooks de delete** embarqués dans
+l'image du paquet restent indispensables pour nettoyer les ressources créées
+*indirectement* (par exemple les volumes créés par un opérateur tiers, qui ne portent pas
+les marqueurs d'appartenance de l'instance). Voir
+[Cycle de vie d'un paquet](packages/lifecycle.md).
 
 > La présence d'au moins un enfant (`status.have_child()`) signale qu'une instance a
 > réellement déployé quelque chose ; la logique de cleanup en tient compte.

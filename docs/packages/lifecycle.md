@@ -51,9 +51,14 @@ Chaque sous-script (`delete_others`, `delete_vitals`, …) itère sur `instance.
 récupère chaque objet via `k8s_resource(...)`, le supprime et attend sa disparition
 (`wait_deleted`, timeout 5 min). Les erreurs `NotFound` sont tolérées.
 
-> C'est la raison pour laquelle le `status` est la source de vérité du nettoyage : même si
-> le contenu du paquet change, la désinstallation sait quoi détruire tant qu'elle dispose
-> du `status`. Voir la limite tenant→service dans [Dépannage](../operations/troubleshooting.md).
+> Le `status` est la source de vérité de *ce qui a été créé directement* : même si le
+> contenu du paquet change, la désinstallation sait quoi détruire tant qu'elle dispose du
+> `status`. Mais le `status` seul ne suffit **pas** à garantir un nettoyage complet : les
+> hooks `delete_*` du paquet (voir ci-dessous) suppriment les ressources créées
+> *indirectement* — typiquement par un opérateur tiers piloté par le paquet — qui ne
+> portent pas les marqueurs d'appartenance de l'instance. Un delete sans l'image du paquet
+> (donc sans ses hooks) est par nature *best-effort* et laisse potentiellement des résidus.
+> Voir la limite tenant→service dans [Dépannage](../operations/troubleshooting.md).
 
 ## Points d'extension (hooks)
 
@@ -62,12 +67,37 @@ le paquet dans `scripts/` :
 
 - `install_pre.rhai`, `install_post.rhai`
 - `install_befores_pre.rhai`, `install_befores_post.rhai`, … (idem vitals/others/scalables/posts)
+- `install_<phase>_add.rhai` — ajoute des objets à une phase en plus des templates
 - `delete_pre.rhai`, `delete_post.rhai`, et les `delete_<phase>_pre/post`
+- `context_extra.rhai` — enrichit le contexte avec des valeurs **dérivées** avant tout
+  rendu (le résultat est exposé sous `context.extra`)
 - `context.rhai` / `context_tenant.rhai` / `context_service.rhai` — construisent le contexte
   d'exécution (variables disponibles aux templates et scripts)
 
 Un hook reçoit `(instance, context[, args])` et peut renvoyer une `map` pour enrichir le
 `context` retourné aux phases suivantes.
+
+### Patterns de hooks éprouvés
+
+Quelques usages récurrents observés dans des paquets en production :
+
+- **`context_extra.rhai` comme unique lieu de calcul** : nombre de réplicas dérivé du mode
+  HA du namespace, sélection de classe de stockage, activation conditionnelle d'une
+  fonctionnalité selon la présence d'un CRD (`context.cluster.crds.contains(...)`),
+  découverte de services fournis par d'autres paquets (`resolv_service`). Les templates
+  restent ainsi purement déclaratifs.
+- **`delete_vitals_pre.rhai` pour préparer la destruction** : par exemple repasser une
+  base de données répliquée en mono-réplica (en patchant la ressource de l'opérateur
+  tiers) avant de détruire les volumes, pour éviter des blocages de quorum.
+- **`delete_vitals_post.rhai` pour purger l'indirect** : supprimer explicitement les PVC
+  créés par un StatefulSet ou un opérateur tiers (qui n'appartiennent pas à l'instance au
+  sens des marqueurs Vynil), puis attendre leur disparition (`wait_deleted`). Sans ce
+  hook, une désinstallation laisserait ces volumes orphelins.
+- **`install_<phase>_add.rhai` pour les objets non templatisables** : objets dont la liste
+  dépend d'une option (un PVC par élément d'une liste, par exemple).
+
+Ces patterns montrent pourquoi l'image du paquet est nécessaire au delete : seuls ses
+hooks savent défaire ce que l'installation a provoqué indirectement.
 
 ## Autres opérations
 

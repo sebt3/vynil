@@ -30,6 +30,7 @@ Notes :
 - [Build & signature](docs/build-signing.md): Push OCI + signature Cosign optionnelle au build.
 - [Sources de JukeBox](docs/jukebox/sources.md): list, harbor, gitlab, script, http, s3 ; maturité et waypoints.
 - [GitLab Container Registry](docs/jukebox/gitlab-registry.md): Intégration GitLab (url API vs registry OCI), stratégies de tokens.
+- [Maintenance du registre](docs/jukebox/registry-maintenance.md): Purge des images de paquets — règles de rétention (maturité, waypoints, type de paquet), cohérence scan/purge.
 - [Référence CLI de l'agent](docs/cli.md): Sous-commandes package/box/system/service/tenant/template/run/crdgen, flags, codes de sortie.
 - [Lint d'un paquet](docs/tooling/lint.md): agent package lint, vérifications structure/hbs/rhai, .vynil-lint.yaml.
 - [Tests de paquet](docs/tooling/test.md): agent package test avec mocks, tests de régression Rhai internes.
