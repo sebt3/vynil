@@ -16,3 +16,8 @@ options:
   replicas:
     type: integer
     default: 1
+  ingress:
+    type: object
+    default:
+      class: "nginx"
+      host: "default.local"

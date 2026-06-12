@@ -9,6 +9,8 @@ instance:
   tenant: "explicit-tenant"
   options:
     common_name: "custom.example.com"
+    ingress:
+      host: "custom.local"
 asserts:
   - name: explicit-tenant-name
     selector:
@@ -19,4 +21,9 @@ asserts:
     selector:
       kind: ConfigMap
       name: "cm-{{values.common_name}}"
+    matcher: any
+  - name: values-nested-merge
+    selector:
+      kind: ConfigMap
+      name: "cm-{{values.ingress.class}}-{{values.ingress.host}}"
     matcher: any

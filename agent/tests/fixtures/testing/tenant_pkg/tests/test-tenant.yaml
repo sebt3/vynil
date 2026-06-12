@@ -22,3 +22,8 @@ asserts:
       kind: ConfigMap
       name: "cm-{{defaults.replicas}}"
     matcher: any
+  - name: tenant-namespaces-resolves
+    selector:
+      kind: ConfigMap
+      name: "ns-{{tenant.namespaces.[0]}}-config"
+    matcher: any
