@@ -59,7 +59,7 @@ cycle de vie.
 - **Installer Vynil** → [Installation](installation.md)
 - **Comprendre le moteur** → [Architecture](architecture.md) et [Réconciliation](reconciliation.md)
 - **Écrire un paquet** → [Format d'un paquet](packages/format.md), [Cycle de vie](packages/lifecycle.md), [Génération](gen-package.md)
-- **Publier des paquets** → [Sources de JukeBox](jukebox/sources.md), [Build & signature](build-signing.md)
+- **Publier des paquets** → [Sources de JukeBox](jukebox/sources.md), [Build & signature](build-signing.md), [Maintenance du registre](jukebox/registry-maintenance.md)
 - **Outiller** → [Référence CLI de l'agent](cli.md), [Lint](tooling/lint.md), [Tests de paquet](tooling/test.md)
 - **Exploiter** → [Sécurité & modèle de menace](operations/security.md), [Dépannage](operations/troubleshooting.md), [Référence](operations/reference.md)
 
@@ -70,7 +70,10 @@ Un index lisible par machine est disponible à la racine du dépôt :
 description, au format [llmstxt.org](https://llmstxt.org). Toutes les pages sont du
 Markdown brut, directement consommable.
 
-## Licence et état
+## Licence, état et crédits
 
 BSD-3-Clause. Projet en développement actif (workspace en version `0.7.7`). Fork :
 `sebt3/vynil`.
+
+Documentation rédigée et maintenue par les mainteneurs, à partir du code et du
+retour d'expérience d'exploitation de distributions Vynil en production.

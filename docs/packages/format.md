@@ -53,6 +53,7 @@ resources:                  # requests/limits par conteneur
     requests: { cpu: 100m, memory: 128Mi }
     limits:   { cpu: 1000m, memory: 256Mi }
 requirements: []            # dépendances et prérequis
+recommandations: []         # dépendances optionnelles déclenchant une mise à jour au changement (ex. monitoring)
 options:                    # schéma des paramètres configurables
   replicas:
     type: integer

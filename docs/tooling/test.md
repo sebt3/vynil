@@ -45,6 +45,19 @@ Le répertoire `tests/` doit exister, sinon l'agent renvoie `MissingTestDirector
 > d'assertions, surcharge cluster/tenant) — voir les issues du dépôt si un comportement
 > attendu manque.
 
+### Bonnes pratiques
+
+- **Tests prévisibles** : ne pas asserter sur des champs dépendants de la version amont
+  (tags d'images de conteneurs, `app_version`) — ils casseraient à chaque
+  `agent package update`. Asserter plutôt sur la structure, les noms et les valeurs
+  dérivées des options.
+- **Un jeu de test par posture** : un `default.yaml` minimal, puis des jeux dédiés aux
+  variantes significatives (HA activé, option majeure activée…), plutôt qu'un test unique
+  qui mélange tout.
+- **Utiliser les placeholders de contexte** (`{{instance.appslug}}`,
+  `{{instance.namespace}}`) dans les valeurs attendues, pour que les tests restent valides
+  quel que soit le nom de l'instance.
+
 ## Tests de régression internes (`agent/tests/rhai_*.rs`)
 
 La suite Rust exécute les scripts Rhai *de l'agent* (pas ceux d'un paquet) avec un moteur

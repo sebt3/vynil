@@ -44,7 +44,7 @@ agent package test  -p <package-dir>
                    [--testsets-dir <dir>]
                    [--format text|json]
                    [--junit-output-filename <file>]
-                   [--template-output-filename <file>]   # pour un test unique
+                   [--template-output-filename <file>]   # pour un test uniquement => usage yamllint, kubelinter, ....
 ```
 
 Le répertoire `<package-dir>/tests` doit exister (sinon erreur `MissingTestDirectory`).
