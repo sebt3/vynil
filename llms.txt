@@ -20,12 +20,14 @@ Notes :
 
 - [Accueil](docs/index.md): Vue d'ensemble, philosophie, positionnement vs Helm/OLM, modèle en trois objets.
 - [Concepts](docs/concepts.md): Vocabulaire — paquet, type, JukeBox, instance, enfants/phases, agent vs opérateur.
+- [Construire une distribution](docs/distribution.md): Opiniâtreté du packaging, bootstrap (pré-config cluster) vs paquet tenant (pré-config utilisateur), CI, guide opérateur-ou-paquet, box amont.
 - [Installation](docs/installation.md): Déploiement de l'opérateur, ajout d'une source, install/désinstall d'un paquet.
 - [Architecture](docs/architecture.md): Workspace Rust (common/operator/agent), CRDs, flux, trait InstanceKind, métriques.
 - [Réconciliation & cycle de vie](docs/reconciliation.md): Scan de JukeBox, do_reconcile, phases d'install, do_cleanup, gestion d'erreur.
 - [Référence des CRD](docs/crds.md): JukeBox, SystemInstance, ServiceInstance, TenantInstance, conditions, annotations de contrôle.
 - [Format d'un paquet](docs/packages/format.md): Répertoire source, package.yaml, requirements, options, annotations OCI.
 - [Cycle de vie d'un paquet](docs/packages/lifecycle.md): Orchestration Rhai, phases befores/vitals/tofu/others/scalables/posts, hooks, backup/restore.
+- [Le paquet OCI](docs/packages/portability.md): Immutabilité, auditabilité, développement sous-traitable, air-gap, reconstruction PRA.
 - [Génération de paquets](docs/gen-package.md): gen_system/gen_tenant/gen_service depuis Helm/manifestes, update.rhai, helpers HBS.
 - [Build & signature](docs/build-signing.md): Push OCI + signature Cosign optionnelle au build.
 - [Sources de JukeBox](docs/jukebox/sources.md): list, harbor, gitlab, script, http, s3 ; maturité et waypoints.
