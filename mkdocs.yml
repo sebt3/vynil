@@ -42,6 +42,7 @@ nav:
   - Accueil: index.md
   - Concepts: concepts.md
   - Installation: installation.md
+  - Construire une distribution: distribution.md
   - Architecture:
       - Vue d'ensemble: architecture.md
       - Réconciliation & cycle de vie: reconciliation.md
@@ -49,11 +50,13 @@ nav:
   - Paquets:
       - Format: packages/format.md
       - Cycle de vie: packages/lifecycle.md
+      - Le paquet OCI (audit, air-gap): packages/portability.md
       - Génération: gen-package.md
       - Build & signature: build-signing.md
   - JukeBox:
       - Sources: jukebox/sources.md
       - GitLab Container Registry: jukebox/gitlab-registry.md
+      - Maintenance du registre: jukebox/registry-maintenance.md
   - Outillage:
       - Référence CLI: cli.md
       - Lint: tooling/lint.md

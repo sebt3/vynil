@@ -40,6 +40,26 @@ installer une application simple (phpMyAdmin), une application avec état et sau
 (une base de données) ou un composant cluster unique (kube-virt) sans exiger un opérateur
 dédié par application.
 
+La valeur ajoutée est l'**opiniâtreté** : un paquet Vynil fige les décisions d'intégration
+(ressources, stockage, réseau, sécurité, dépendances) qu'un chart générique laisse à la
+charge de chaque utilisateur — voir
+[Construire une distribution](distribution.md). Le format paquet = image OCI apporte le
+reste : immutabilité, auditabilité, air-gap —
+voir [Le paquet OCI](packages/portability.md).
+
+## Cas d'usage
+
+Vynil est un cadre générique : le même moteur couvre des usages très différents.
+
+| Cas d'usage | En quelques mots |
+|---|---|
+| **Distribution communautaire** | Reproduire l'écosystème d'une distribution Linux (à la Debian) dans Kubernetes : un catalogue intégré, maintenu par une communauté. |
+| **Distribution d'entreprise** | Une plateforme interne intégrée à l'écosystème existant (SSO, stockage, réseau, conformité) ; les équipes consomment des paquets pré-intégrés. |
+| **Orchestration SaaS** | Le client commande son tenant et ses options dans l'interface du produit ; le produit crée des `TenantInstance` et Vynil déploie et maintient. Le produit lui-même peut être distribué comme paquet Vynil. |
+| **Orchestration d'infrastructure cloud** | La phase OpenTofu des paquets pilote des ressources hors cluster (DNS, buckets, bases managées…) dans le même cycle de vie. |
+| **Platform-as-a-Service depuis Kubernetes** | Définir une plateforme self-service (dans l'esprit de Crossplane, sans sa prolifération de CRDs) : les capacités sont des paquets, la surface utilisateur des instances. |
+| **Packaging amont** | Un projet open-source publie directement sa propre box — le « paquet officiel » du projet, signé par l'amont, consommé via une simple JukeBox supplémentaire. |
+
 ## Le modèle mental en trois objets
 
 | Objet | Portée | Rôle |
@@ -58,6 +78,7 @@ cycle de vie.
 - **Découvrir le modèle** → [Concepts](concepts.md)
 - **Installer Vynil** → [Installation](installation.md)
 - **Comprendre le moteur** → [Architecture](architecture.md) et [Réconciliation](reconciliation.md)
+- **Construire une distribution** → [Distribution](distribution.md), [Le paquet OCI](packages/portability.md)
 - **Écrire un paquet** → [Format d'un paquet](packages/format.md), [Cycle de vie](packages/lifecycle.md), [Génération](gen-package.md)
 - **Publier des paquets** → [Sources de JukeBox](jukebox/sources.md), [Build & signature](build-signing.md), [Maintenance du registre](jukebox/registry-maintenance.md)
 - **Outiller** → [Référence CLI de l'agent](cli.md), [Lint](tooling/lint.md), [Tests de paquet](tooling/test.md)
