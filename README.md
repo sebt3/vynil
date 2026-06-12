@@ -10,6 +10,21 @@ kubectl create ns vynil-system
 kubectl apply -k github.com/sebt3/vynil//deploy
 ```
 
+## Documentation
+
+Full documentation lives in [`docs/`](docs/index.md) (French). It can be browsed as plain
+Markdown on the forge, or built into a static site with `mkdocs serve` (see
+[`mkdocs.yml`](mkdocs.yml)). A machine-readable index for LLMs is provided at
+[`llms.txt`](llms.txt) following the [llmstxt.org](https://llmstxt.org) convention.
+
+Start here:
+- [Concepts](docs/concepts.md) — jukebox / package / instance model
+- [Installation](docs/installation.md)
+- [Architecture](docs/architecture.md) & [Reconciliation](docs/reconciliation.md)
+- [Authoring packages](docs/packages/format.md)
+- [Security & threat model](docs/operations/security.md)
+- [Troubleshooting](docs/operations/troubleshooting.md)
+
 ## Package Tooling
 
 ### `agent package lint <package-dir>`

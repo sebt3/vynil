@@ -330,12 +330,15 @@ Ces tests servent de filet de régression lors des mises à jour de la version R
 
 | Crate | Version | Rôle |
 |---|---|---|
-| `kube` | ~0.92 | Client Kubernetes + contrôleurs |
-| `k8s-openapi` | ~0.22 | Types Kubernetes |
+| `kube` | 3.1.0 | Client Kubernetes + contrôleurs |
+| `k8s-openapi` | 0.27.1 | Types Kubernetes |
 | `rhai` | ~1.20 | Moteur de script |
 | `handlebars` | ~6 | Rendu de templates |
 | `oci-client` | ~0.12 | Registre OCI |
-| `serde_yaml` | ~0.9 | Sérialisation YAML |
-| `tokio` | ~1 | Runtime async |
-| `actix-web` | ~4 | Serveur HTTP métriques |
+| `serde_yaml` | 0.9 | Sérialisation YAML (tri alphabétique) |
+| `rust-yaml` | git `sebt3/rust-yaml` | Sérialisation YAML à ordre préservé |
+| `tokio` | 1.48 | Runtime async |
+| `actix-web` | 4.12 | Serveur HTTP métriques |
 | `prometheus-client` | ~0.22 | Métriques Prometheus |
+
+> Version du workspace au moment de la rédaction : **0.7.7** (édition Rust 2024, licence BSD-3-Clause).
