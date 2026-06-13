@@ -50,6 +50,7 @@ impl Reconciler for JukeBox {
         let ns = ctx.client.default_namespace();
         let job_name = format!("scan-{}", self.name_any());
         let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
+        let force_scan = self.annotations().get("vynil.solidite.fr/force-scan").cloned();
 
         // Upsert cache from current status before any guard — this ensures the cache
         // is updated on every status change regardless of Job state (fixes latency and
@@ -58,8 +59,9 @@ impl Reconciler for JukeBox {
             ctx.upsert_jukebox_cache(self).await;
         }
 
-        // Guard: if scan job exists and is still running, requeue
-        if let Ok(Some(job)) = job_api.get_opt(&job_name).await {
+        // Guard: if scan job exists and is still running, requeue.
+        // Track whether a terminal job exists so we can skip re-creating it later.
+        let job_is_terminal = if let Ok(Some(job)) = job_api.get_opt(&job_name).await {
             if job.metadata.deletion_timestamp.is_some() {
                 return Ok(Action::requeue(Duration::from_secs(60)));
             }
@@ -70,8 +72,10 @@ impl Reconciler for JukeBox {
                 );
                 return Ok(Action::requeue(Duration::from_secs(60)));
             }
-            // Job is terminal: fall through to maintain CronJob and scan job below
-        }
+            true
+        } else {
+            false
+        };
 
         let mut context = ctx.base_context.clone();
         context
@@ -86,7 +90,8 @@ impl Reconciler for JukeBox {
             .as_object_mut()
             .unwrap()
             .insert("schedule".to_string(), self.spec.schedule.clone().into());
-        // Create the CronJob
+
+        // CronJob is always maintained.
         let cj_def_str = hbs.render("{{> cronscan.yaml }}", &context)?;
         let cj_def: Value = common::yamlhandler::yaml_str_to_json(&cj_def_str)?;
         let cron_api: Api<CronJob> = Api::namespaced(client.clone(), ns);
@@ -99,79 +104,85 @@ impl Reconciler for JukeBox {
             .await
             .map_err(Error::KubeError)?;
 
-        // force-scan: delete existing job and inject package filter
-        // Annotation is removed ONLY after successful job creation, so that on failure
-        // the next reconcile retry will still see the annotation and recreate with SCAN_PACKAGE.
-        let force_scan = self.annotations().get("vynil.solidite.fr/force-scan").cloned();
-        if let Some(ref filter_value) = force_scan {
-            let job = job_api.get_metadata_opt(&job_name).await;
-            if job.is_ok() && job.unwrap().is_some() {
-                match job_api.delete(&job_name, &DeleteParams::foreground()).await {
-                    Ok(eith) => {
-                        if let either::Left(j) = eith {
-                            let uid = j.metadata.uid.unwrap_or_default();
-                            let cond =
-                                await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
-                            tokio::time::timeout(std::time::Duration::from_secs(20), cond)
-                                .await
-                                .map_err(Error::Elapsed)?
-                                .map_err(Error::KubeWaitError)?;
+        // Only create/recreate the direct Job when:
+        //  - no terminal job exists (initial creation), or
+        //  - force-scan annotation is present (explicit user request).
+        // A terminal job without force-scan is left untouched; periodic rescans are
+        // the CronJob's responsibility.
+        if should_create_scan_job(job_is_terminal, &force_scan) {
+            // force-scan: delete the known terminal job and inject the package filter.
+            // Annotation is removed ONLY after successful job creation so that a creation
+            // failure retries on the next reconcile.
+            if let Some(ref filter_value) = force_scan {
+                if job_is_terminal {
+                    match job_api.delete(&job_name, &DeleteParams::foreground()).await {
+                        Ok(eith) => {
+                            if let either::Left(j) = eith {
+                                let uid = j.metadata.uid.unwrap_or_default();
+                                let cond =
+                                    await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
+                                tokio::time::timeout(std::time::Duration::from_secs(20), cond)
+                                    .await
+                                    .map_err(Error::Elapsed)?
+                                    .map_err(Error::KubeWaitError)?;
+                            }
                         }
+                        Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
                     }
-                    Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
                 }
+                inject_package_filter(&mut context, filter_value);
             }
-            inject_package_filter(&mut context, filter_value);
-        }
 
-        // Create the Job
-        let job_def_str = hbs.render("{{> scan.yaml }}", &context)?;
-        let job_def: Value = common::yamlhandler::yaml_str_to_json(&job_def_str)?;
-        let _job = match job_api
-            .patch(
-                &job_name,
-                &PatchParams::apply(&get_client_name()).force(),
-                &Patch::Apply(job_def.clone()),
-            )
-            .await
-        {
-            Ok(j) => j,
-            Err(_) => {
-                if let either::Left(j) = job_api
-                    .delete(&job_name, &DeleteParams::foreground())
-                    .await
-                    .map_err(Error::KubeError)?
-                {
-                    let uid = j.metadata.uid.unwrap_or_default();
-                    let cond = await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
-                    tokio::time::timeout(std::time::Duration::from_secs(20), cond)
-                        .await
-                        .map_err(Error::Elapsed)?
-                        .map_err(Error::KubeWaitError)?;
-                }
-                job_api
-                    .create(
-                        &PostParams::default(),
-                        &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
-                    )
-                    .await
-                    .map_err(Error::KubeError)?
-            }
-        };
-
-        // Remove force-scan annotation only after successful job creation
-        if force_scan.is_some() {
-            let stms = Api::<JukeBox>::all(client.clone());
-            let patch = Patch::Json::<()>(
-                serde_json::from_value(serde_json::json!([
-                    {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
-                ]))
-                .unwrap(),
-            );
-            stms.patch(&self.name_any(), &PatchParams::default(), &patch)
+            // Create the Job (server-side apply; fallback to delete+create on spec conflict).
+            let job_def_str = hbs.render("{{> scan.yaml }}", &context)?;
+            let job_def: Value = common::yamlhandler::yaml_str_to_json(&job_def_str)?;
+            let _job = match job_api
+                .patch(
+                    &job_name,
+                    &PatchParams::apply(&get_client_name()).force(),
+                    &Patch::Apply(job_def.clone()),
+                )
                 .await
-                .map_err(Error::KubeError)?;
+            {
+                Ok(j) => j,
+                Err(_) => {
+                    if let either::Left(j) = job_api
+                        .delete(&job_name, &DeleteParams::foreground())
+                        .await
+                        .map_err(Error::KubeError)?
+                    {
+                        let uid = j.metadata.uid.unwrap_or_default();
+                        let cond = await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
+                        tokio::time::timeout(std::time::Duration::from_secs(20), cond)
+                            .await
+                            .map_err(Error::Elapsed)?
+                            .map_err(Error::KubeWaitError)?;
+                    }
+                    job_api
+                        .create(
+                            &PostParams::default(),
+                            &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
+                        )
+                        .await
+                        .map_err(Error::KubeError)?
+                }
+            };
+
+            // Remove force-scan annotation only after successful job creation.
+            if force_scan.is_some() {
+                let stms = Api::<JukeBox>::all(client.clone());
+                let patch = Patch::Json::<()>(
+                    serde_json::from_value(serde_json::json!([
+                        {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
+                    ]))
+                    .unwrap(),
+                );
+                stms.patch(&self.name_any(), &PatchParams::default(), &patch)
+                    .await
+                    .map_err(Error::KubeError)?;
+            }
         }
+
         tracing::debug!("Reconcilling JukeBox {} Done", self.name_any());
         Ok(Action::requeue(Duration::from_secs(15 * 60)))
     }
@@ -201,6 +212,10 @@ impl Reconciler for JukeBox {
         }
         Ok(Action::await_change())
     }
+}
+
+fn should_create_scan_job(job_is_terminal: bool, force_scan: &Option<String>) -> bool {
+    !job_is_terminal || force_scan.is_some()
 }
 
 fn inject_package_filter(context: &mut Value, filter_value: &str) {
@@ -394,7 +409,24 @@ mod tests {
         spawned.await.unwrap();
     }
 
-    use super::inject_package_filter;
+    use super::{inject_package_filter, should_create_scan_job};
+
+    #[test]
+    fn no_job_always_creates_scan_job() {
+        assert!(should_create_scan_job(false, &None));
+        assert!(should_create_scan_job(false, &Some("apps/pkg".to_string())));
+    }
+
+    #[test]
+    fn terminal_job_without_force_scan_skips_job_creation() {
+        assert!(!should_create_scan_job(true, &None));
+    }
+
+    #[test]
+    fn terminal_job_with_force_scan_recreates_job() {
+        assert!(should_create_scan_job(true, &Some("apps/monappli".to_string())));
+        assert!(should_create_scan_job(true, &Some("true".to_string())));
+    }
 
     #[test]
     fn partial_filter_injects_package_filter() {

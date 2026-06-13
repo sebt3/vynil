@@ -246,3 +246,60 @@ fn scan_rhai_without_filter_runs_without_error() {
         result.err()
     );
 }
+
+#[test]
+fn partial_filter_no_match_does_not_full_scan() {
+    // When the filter matches no package in box.status.packages the script must NOT fall
+    // back to scanning the full image list — it must warn and call set_status_packages_merge
+    // with an empty list.
+    // Fails on current code: falls back to `list` → calls new_registry (which throws here).
+    // Passes on fixed code: warns and returns [] without touching the registry.
+    let base = env!("CARGO_MANIFEST_DIR");
+    let (mut script, _) = make_scan_script(vec![]);
+    script.add_code(
+        r#"
+        fn new_registry(reg, user, pass) {
+            throw "unexpected registry call: fallback to full scan occurred";
+        }
+        "#,
+    );
+    let json = serde_json::json!({
+        "kind": "JukeBox",
+        "metadata": {"name": "test-box"},
+        "spec": {
+            "source": {"list": ["docker.io/myrepo/pg"]},
+            "maturity": "stable",
+            "schedule": "0 * * * *"
+        },
+        "status": {
+            "conditions": [],
+            "packages": [{
+                "registry": "docker.io",
+                "image": "myrepo/pg",
+                "tag": "1.0.0",
+                "metadata": {
+                    "name": "pg",
+                    "category": "db",
+                    "description": "PostgreSQL",
+                    "type": "service",
+                    "features": []
+                },
+                "requirements": []
+            }]
+        }
+    });
+    let mock_obj: rhai::Dynamic = serde_json::from_str(&serde_json::to_string(&json).unwrap()).unwrap();
+    script
+        .ctx
+        .set_value("box", common::k8smock::K8sJukeBoxMock { obj: mock_obj });
+    let args = serde_json::json!({"namespace": "vynil-system", "filter": "monitoring/alertmanager"});
+    script.set_dynamic("args", &args);
+    let result = script.run_file(&std::path::PathBuf::from(format!(
+        "{base}/scripts/boxes/scan.rhai"
+    )));
+    assert!(
+        result.is_ok(),
+        "partial scan with unmatched filter must not fall back to full scan: {:?}",
+        result.err()
+    );
+}
