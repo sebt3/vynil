@@ -17,7 +17,6 @@ use tokio::time::Duration;
 use tracing::{Span, field, instrument};
 
 static JUKEBOX_FINALIZER: &str = "jukeboxes.vynil.solidite.fr";
-static LAST_SCAN_TIME_ANNOTATION: &str = "vynil.solidite.fr/last-scan-time";
 
 #[instrument(skip(ctx, dist), fields(trace_id))]
 pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> {
@@ -52,7 +51,14 @@ impl Reconciler for JukeBox {
         let job_name = format!("scan-{}", self.name_any());
         let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
 
-        // Guard: if scan job exists, check its state before doing anything else
+        // Upsert cache from current status before any guard — this ensures the cache
+        // is updated on every status change regardless of Job state (fixes latency and
+        // cron scan cases).
+        if ctx.cache_needs_update(self).await {
+            ctx.upsert_jukebox_cache(self).await;
+        }
+
+        // Guard: if scan job exists and is still running, requeue
         if let Ok(Some(job)) = job_api.get_opt(&job_name).await {
             if job.metadata.deletion_timestamp.is_some() {
                 return Ok(Action::requeue(Duration::from_secs(60)));
@@ -64,41 +70,7 @@ impl Reconciler for JukeBox {
                 );
                 return Ok(Action::requeue(Duration::from_secs(60)));
             }
-            // Job is terminal: update cache only once per completion, tracked via annotation
-            let completion_time = job
-                .status
-                .as_ref()
-                .and_then(|s| s.completion_time.as_ref())
-                .map(|t| t.0.to_string());
-            let already_processed = completion_time
-                .as_deref()
-                .map(|ct| {
-                    self.annotations()
-                        .get(LAST_SCAN_TIME_ANNOTATION)
-                        .map(|v| v == ct)
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if !already_processed {
-                match JukeBox::list().await {
-                    Ok(lst) => ctx.set_package_cache(&lst).await,
-                    Err(e) => tracing::warn!("While listing jukebox: {:?}", e),
-                };
-                if let Some(ct) = completion_time {
-                    let jbs = Api::<JukeBox>::all(client.clone());
-                    let patch = Patch::Merge(serde_json::json!({
-                        "metadata": {"annotations": {"vynil.solidite.fr/last-scan-time": ct}}
-                    }));
-                    if let Err(e) = jbs.patch(&self.name_any(), &PatchParams::default(), &patch).await {
-                        tracing::warn!(
-                            "Setting {} on JukeBox {} failed: {e}",
-                            LAST_SCAN_TIME_ANNOTATION,
-                            self.name_any()
-                        );
-                    }
-                }
-            }
-            // Fall through: maintain CronJob and create/upsert scan job below
+            // Job is terminal: fall through to maintain CronJob and scan job below
         }
 
         let mut context = ctx.base_context.clone();
@@ -207,6 +179,7 @@ impl Reconciler for JukeBox {
     // Reconcile with finalize cleanup (the object was deleted)
     async fn cleanup(&self, ctx: Arc<Context>) -> Result<Action> {
         ctx.diagnostics.write().await.last_event = Utc::now();
+        ctx.remove_jukebox_cache(&self.name_any()).await;
         let client = ctx.client.clone();
         let ns = ctx.client.default_namespace();
         let job_name = format!("scan-{}", self.name_any());
@@ -262,8 +235,166 @@ pub fn error_policy(dist: Arc<JukeBox>, error: &Error, ctx: Arc<Context>) -> Act
 
 #[cfg(test)]
 mod tests {
-    use super::inject_package_filter;
+    use super::*;
+    use crate::manager::{Context, Diagnostics, JukeCacheItem};
+    use common::{
+        handlebarshandler::HandleBars,
+        jukebox::{JukeBoxSpec, JukeBoxStatus},
+        vynilpackage::{VynilPackage, VynilPackageMeta, VynilPackageType},
+    };
+    use http::{Request, Response, StatusCode};
+    use kube::{api::ObjectMeta, client::Body};
     use serde_json::json;
+    use std::{collections::BTreeMap, pin::pin, sync::Arc};
+    use tokio::sync::RwLock;
+
+    fn make_pkg(category: &str, name: &str) -> VynilPackage {
+        VynilPackage {
+            registry: String::new(),
+            image: String::new(),
+            tag: String::new(),
+            metadata: VynilPackageMeta {
+                name: name.to_string(),
+                category: category.to_string(),
+                description: String::new(),
+                app_version: None,
+                usage: VynilPackageType::default(),
+                features: vec![],
+                backup_affinity: None,
+            },
+            requirements: vec![],
+            recommandations: None,
+            options: None,
+            value_script: None,
+        }
+    }
+
+    fn make_jukebox(name: &str, packages: Vec<VynilPackage>) -> JukeBox {
+        JukeBox {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: JukeBoxSpec {
+                schedule: "0 * * * *".to_string(),
+                pull_secret: None,
+                source: None,
+                maturity: None,
+            },
+            status: Some(JukeBoxStatus {
+                conditions: vec![],
+                packages,
+            }),
+        }
+    }
+
+    fn make_test_ctx(client: kube::Client, packages: BTreeMap<String, JukeCacheItem>) -> Arc<Context> {
+        Arc::new(Context {
+            client,
+            diagnostics: Arc::new(RwLock::new(Diagnostics::default())),
+            metrics: Arc::new(crate::Metrics::default()),
+            renderer: HandleBars::new(),
+            base_context: json!({}),
+            packages: Arc::new(RwLock::new(packages)),
+        })
+    }
+
+    fn running_job_body(name: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": { "name": name, "namespace": "default" },
+            "status": { "active": 1 }
+        }))
+        .unwrap()
+    }
+
+    fn not_found_body(resource: &str, name: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "kind": "Status",
+            "apiVersion": "v1",
+            "status": "Failure",
+            "message": format!("{} \"{}\" not found", resource, name),
+            "reason": "NotFound",
+            "code": 404
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn cache_updated_from_status_while_job_running() {
+        let pkg = make_pkg("db", "pg");
+        let jb = make_jukebox("box-a", vec![pkg.clone()]);
+        let (mock_svc, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
+        let spawned = tokio::spawn(async move {
+            let mut h = pin!(handle);
+            let (_req, send) = h.next_request().await.expect("expected job GET request");
+            send.send_response(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(running_job_body("scan-box-a")))
+                    .unwrap(),
+            );
+        });
+        let client = kube::Client::new(mock_svc, "default");
+        let ctx = make_test_ctx(client, BTreeMap::new());
+        let action = jb.reconcile(ctx.clone()).await.unwrap();
+        assert_eq!(action, Action::requeue(Duration::from_secs(60)));
+        let cache = ctx.packages.read().await;
+        assert!(
+            cache.contains_key("box-a"),
+            "cache must be updated despite running job"
+        );
+        assert_eq!(cache["box-a"].packages, vec![pkg]);
+        drop(cache);
+        spawned.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_cache_entry() {
+        let pkg = make_pkg("db", "pg");
+        let jb = make_jukebox("box-a", vec![pkg.clone()]);
+        let mut initial_cache = BTreeMap::new();
+        initial_cache.insert("box-a".to_string(), JukeCacheItem {
+            pull_secret: None,
+            packages: vec![pkg],
+        });
+        let (mock_svc, handle) = tower_test::mock::pair::<Request<Body>, Response<Body>>();
+        let spawned = tokio::spawn(async move {
+            let mut h = pin!(handle);
+            // GET CronJob scan-box-a → 404
+            let (_req, send) = h.next_request().await.expect("expected CronJob GET");
+            send.send_response(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(not_found_body("cronjobs", "scan-box-a")))
+                    .unwrap(),
+            );
+            // GET Job scan-box-a → 404
+            let (_req, send) = h.next_request().await.expect("expected Job GET");
+            send.send_response(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(not_found_body("jobs", "scan-box-a")))
+                    .unwrap(),
+            );
+        });
+        let client = kube::Client::new(mock_svc, "default");
+        let ctx = make_test_ctx(client, initial_cache);
+        let _ = jb.cleanup(ctx.clone()).await.unwrap();
+        let cache = ctx.packages.read().await;
+        assert!(
+            !cache.contains_key("box-a"),
+            "cleanup must remove jukebox from cache"
+        );
+        drop(cache);
+        spawned.await.unwrap();
+    }
+
+    use super::inject_package_filter;
 
     #[test]
     fn partial_filter_injects_package_filter() {
