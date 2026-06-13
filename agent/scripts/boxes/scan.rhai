@@ -211,7 +211,12 @@ try {
                 let k = `${m.registry}/${m.repository}`;
                 if k in seen {} else { seen[k] = true; deduped.push(m); }
             }
-            if deduped.len() > 0 { deduped } else { list }
+            if deduped.len() > 0 {
+                deduped
+            } else {
+                log_warn(`partial scan: filter '${scan_filter}' matched no known package — run a full scan first`);
+                []
+            }
         };
 
         for image in list {
