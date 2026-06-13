@@ -37,7 +37,39 @@ pub struct Context {
     /// Packages cache
     pub packages: Arc<RwLock<BTreeMap<String, JukeCacheItem>>>,
 }
+pub(crate) fn cache_entry_differs(cache: &BTreeMap<String, JukeCacheItem>, jukebox: &JukeBox) -> bool {
+    let Some(status) = &jukebox.status else {
+        return false;
+    };
+    match cache.get(&jukebox.name_any()) {
+        Some(entry) => entry.packages != status.packages || entry.pull_secret != jukebox.spec.pull_secret,
+        None => true,
+    }
+}
+
+pub(crate) fn upsert_cache_entry(cache: &mut BTreeMap<String, JukeCacheItem>, jukebox: &JukeBox) {
+    let Some(status) = &jukebox.status else { return };
+    cache.insert(jukebox.name_any(), JukeCacheItem {
+        pull_secret: jukebox.spec.pull_secret.clone(),
+        packages: status.packages.clone(),
+    });
+}
+
 impl Context {
+    pub async fn upsert_jukebox_cache(&self, jukebox: &JukeBox) {
+        let mut cache = self.packages.write().await;
+        upsert_cache_entry(&mut cache, jukebox);
+    }
+
+    pub async fn remove_jukebox_cache(&self, name: &str) {
+        self.packages.write().await.remove(name);
+    }
+
+    pub async fn cache_needs_update(&self, jukebox: &JukeBox) -> bool {
+        let cache = self.packages.read().await;
+        cache_entry_differs(&cache, jukebox)
+    }
+
     pub async fn set_package_cache(&self, list: &ObjectList<JukeBox>) {
         let mut cache = BTreeMap::new();
         for juke in list.items.clone() {
@@ -225,5 +257,148 @@ impl Manager {
     /// State getter
     pub async fn diagnostics(&self) -> Diagnostics {
         self.diagnostics.read().await.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::{
+        jukebox::{JukeBoxSpec, JukeBoxStatus},
+        vynilpackage::{VynilPackage, VynilPackageMeta, VynilPackageType},
+    };
+    use kube::api::ObjectMeta;
+
+    fn make_pkg(category: &str, name: &str) -> VynilPackage {
+        VynilPackage {
+            registry: String::new(),
+            image: String::new(),
+            tag: String::new(),
+            metadata: VynilPackageMeta {
+                name: name.to_string(),
+                category: category.to_string(),
+                description: String::new(),
+                app_version: None,
+                usage: VynilPackageType::default(),
+                features: vec![],
+                backup_affinity: None,
+            },
+            requirements: vec![],
+            recommandations: None,
+            options: None,
+            value_script: None,
+        }
+    }
+
+    fn make_jukebox(name: &str, packages: Vec<VynilPackage>, pull_secret: Option<String>) -> JukeBox {
+        JukeBox {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: JukeBoxSpec {
+                schedule: "0 * * * *".to_string(),
+                pull_secret,
+                source: None,
+                maturity: None,
+            },
+            status: Some(JukeBoxStatus {
+                conditions: vec![],
+                packages,
+            }),
+        }
+    }
+
+    #[test]
+    fn cache_entry_differs_when_not_in_cache() {
+        let cache = BTreeMap::new();
+        let jb = make_jukebox("box-a", vec![make_pkg("db", "pg")], None);
+        assert!(cache_entry_differs(&cache, &jb));
+    }
+
+    #[test]
+    fn cache_entry_differs_when_packages_changed() {
+        let mut cache = BTreeMap::new();
+        cache.insert("box-a".to_string(), JukeCacheItem {
+            pull_secret: None,
+            packages: vec![make_pkg("db", "old")],
+        });
+        let jb = make_jukebox("box-a", vec![make_pkg("db", "pg")], None);
+        assert!(cache_entry_differs(&cache, &jb));
+    }
+
+    #[test]
+    fn cache_entry_idempotent_when_status_unchanged() {
+        let pkg = make_pkg("db", "pg");
+        let mut cache = BTreeMap::new();
+        cache.insert("box-a".to_string(), JukeCacheItem {
+            pull_secret: None,
+            packages: vec![pkg.clone()],
+        });
+        let jb = make_jukebox("box-a", vec![pkg], None);
+        assert!(!cache_entry_differs(&cache, &jb));
+    }
+
+    #[test]
+    fn cache_entry_differs_when_pull_secret_changed() {
+        let pkg = make_pkg("db", "pg");
+        let mut cache = BTreeMap::new();
+        cache.insert("box-a".to_string(), JukeCacheItem {
+            pull_secret: None,
+            packages: vec![pkg.clone()],
+        });
+        let jb = make_jukebox("box-a", vec![pkg], Some("new-secret".to_string()));
+        assert!(cache_entry_differs(&cache, &jb));
+    }
+
+    #[test]
+    fn cache_entry_does_not_differ_when_no_status() {
+        let cache = BTreeMap::new();
+        let mut jb = make_jukebox("box-a", vec![], None);
+        jb.status = None;
+        assert!(!cache_entry_differs(&cache, &jb));
+    }
+
+    #[test]
+    fn upsert_cache_entry_inserts_new() {
+        let mut cache = BTreeMap::new();
+        let jb = make_jukebox("box-a", vec![make_pkg("db", "pg")], None);
+        upsert_cache_entry(&mut cache, &jb);
+        assert!(cache.contains_key("box-a"));
+        assert_eq!(cache["box-a"].packages.len(), 1);
+    }
+
+    #[test]
+    fn upsert_cache_entry_updates_existing() {
+        let mut cache = BTreeMap::new();
+        cache.insert("box-a".to_string(), JukeCacheItem {
+            pull_secret: None,
+            packages: vec![make_pkg("db", "old")],
+        });
+        let jb = make_jukebox("box-a", vec![make_pkg("db", "new")], None);
+        upsert_cache_entry(&mut cache, &jb);
+        assert_eq!(cache["box-a"].packages[0].metadata.name, "new");
+    }
+
+    #[test]
+    fn upsert_preserves_other_jukebox_entries() {
+        let mut cache = BTreeMap::new();
+        cache.insert("box-b".to_string(), JukeCacheItem {
+            pull_secret: None,
+            packages: vec![make_pkg("monitoring", "prom")],
+        });
+        let jb = make_jukebox("box-a", vec![make_pkg("db", "pg")], None);
+        upsert_cache_entry(&mut cache, &jb);
+        assert!(cache.contains_key("box-a"));
+        assert!(cache.contains_key("box-b"));
+    }
+
+    #[test]
+    fn upsert_no_op_when_no_status() {
+        let mut cache = BTreeMap::new();
+        let mut jb = make_jukebox("box-a", vec![], None);
+        jb.status = None;
+        upsert_cache_entry(&mut cache, &jb);
+        assert!(!cache.contains_key("box-a"));
     }
 }
