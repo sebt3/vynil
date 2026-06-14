@@ -1,0 +1,51 @@
+# Vynil
+
+> Vynil est un gestionnaire de paquets pour Kubernetes : un équivalent de dpkg/rpm pour le
+> cluster, dont l'objectif est de produire une distribution Kubernetes intégrée plutôt que
+> d'offrir une flexibilité de déploiement maximale. On y décrit des sources de paquets
+> (JukeBox) et des installations (SystemInstance, ServiceInstance, TenantInstance) sous
+> forme de ressources Kubernetes ; un opérateur les réconcilie en lançant un agent dans des
+> Jobs qui déploient, mettent à jour, sauvegardent et désinstallent les applications.
+
+Notes :
+- Les paquets sont des images OCI (métadonnées en annotations OCI, contenu = templates
+  Handlebars + scripts Rhai).
+- Trois types de paquet : system (composant cluster), service (app partagée + CRDs +
+  backup), tenant (app par namespace + backup).
+- Modèle de sécurité : l'agent s'exécute en cluster-admin et exécute le code des paquets —
+  n'installer que des paquets de confiance. Voir docs/operations/security.md.
+- Documentation en français. Toutes les pages sont du Markdown brut.
+
+## Documentation
+
+- [Accueil](docs/index.md): Vue d'ensemble, philosophie, positionnement vs Helm/OLM, modèle en trois objets.
+- [Concepts](docs/concepts.md): Vocabulaire — paquet, type, JukeBox, instance, enfants/phases, agent vs opérateur.
+- [Construire une distribution](docs/distribution.md): Opiniâtreté du packaging, bootstrap (pré-config cluster) vs paquet tenant (pré-config utilisateur), CI, guide opérateur-ou-paquet, box amont.
+- [Installation](docs/installation.md): Déploiement de l'opérateur, ajout d'une source, install/désinstall d'un paquet.
+- [Architecture](docs/architecture.md): Workspace Rust (common/operator/agent), CRDs, flux, trait InstanceKind, métriques.
+- [Réconciliation & cycle de vie](docs/reconciliation.md): Scan de JukeBox, do_reconcile, phases d'install, do_cleanup, gestion d'erreur.
+- [Référence des CRD](docs/crds.md): JukeBox, SystemInstance, ServiceInstance, TenantInstance, conditions, annotations de contrôle.
+- [Format d'un paquet](docs/packages/format.md): Répertoire source, package.yaml, requirements, options, annotations OCI.
+- [Cycle de vie d'un paquet](docs/packages/lifecycle.md): Orchestration Rhai, phases befores/vitals/tofu/others/scalables/posts, hooks, backup/restore.
+- [Le paquet OCI](docs/packages/portability.md): Immutabilité, auditabilité, développement sous-traitable, air-gap, reconstruction PRA.
+- [Génération de paquets](docs/gen-package.md): gen_system/gen_tenant/gen_service depuis Helm/manifestes, update.rhai, helpers HBS.
+- [Build & signature](docs/build-signing.md): Push OCI + signature Cosign optionnelle au build.
+- [Sources de JukeBox](docs/jukebox/sources.md): list, harbor, gitlab, script, http, s3 ; maturité et waypoints.
+- [GitLab Container Registry](docs/jukebox/gitlab-registry.md): Intégration GitLab (url API vs registry OCI), stratégies de tokens.
+- [Maintenance du registre](docs/jukebox/registry-maintenance.md): Purge des images de paquets — règles de rétention (maturité, waypoints, type de paquet), cohérence scan/purge.
+- [Référence CLI de l'agent](docs/cli.md): Sous-commandes package/box/system/service/tenant/template/run/crdgen, flags, codes de sortie.
+- [Lint d'un paquet](docs/tooling/lint.md): agent package lint, vérifications structure/hbs/rhai, .vynil-lint.yaml.
+- [Tests de paquet](docs/tooling/test.md): agent package test avec mocks, tests de régression Rhai internes.
+- [Sécurité & modèle de menace](docs/operations/security.md): cluster-admin, code arbitraire des paquets, signature non vérifiée, recommandations.
+- [Dépannage](docs/operations/troubleshooting.md): instance en erreur, désinstallation bloquée (tenant→service), scan, force-reinstall, suspend.
+- [Référence](docs/operations/reference.md): variables d'environnement, métriques, templates et helpers Handlebars, stratégie YAML, structure du dépôt.
+
+## Source
+
+- [Trait InstanceKind / réconciliation](operator/src/instance_common.rs): Logique générique do_reconcile/do_cleanup partagée par les trois types d'instance.
+- [Contrôleur JukeBox](operator/src/jukebox.rs): Scan, CronJob, détection de complétion de Job.
+- [Type de paquet & schéma](common/src/vynilpackage.rs): VynilPackage, VynilPackageType, requirements, waypoints.
+- [Moteur Rhai](common/src/rhaihandler.rs): Enregistrement des fonctions exposées aux scripts.
+- [Handler OCI](common/src/ocihandler.rs): push/pull/sign/verify des images de paquets.
+- [RBAC runtime](box/vynil/systems/rbac.yaml.hbs): Bindings cluster-admin de l'agent (cf. modèle de menace).
+- [Bootstrap](deploy/bootstrap/bootstrap.yaml): Amorçage (JukeBox vynil + SystemInstance vynil + Job d'install).

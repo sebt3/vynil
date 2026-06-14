@@ -1,0 +1,67 @@
+site_name: Vynil
+site_description: Gestionnaire de paquets pour Kubernetes — documentation
+repo_url: https://github.com/sebt3/vynil
+docs_dir: docs
+
+theme:
+  name: material
+  language: fr
+  palette:
+    - scheme: default
+      primary: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Mode sombre
+    - scheme: slate
+      primary: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Mode clair
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - content.code.copy
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+
+nav:
+  - Accueil: index.md
+  - Concepts: concepts.md
+  - Installation: installation.md
+  - Construire une distribution: distribution.md
+  - Architecture:
+      - Vue d'ensemble: architecture.md
+      - Réconciliation & cycle de vie: reconciliation.md
+      - Référence des CRD: crds.md
+  - Paquets:
+      - Format: packages/format.md
+      - Cycle de vie: packages/lifecycle.md
+      - Le paquet OCI (audit, air-gap): packages/portability.md
+      - Génération: gen-package.md
+      - Build & signature: build-signing.md
+  - JukeBox:
+      - Sources: jukebox/sources.md
+      - GitLab Container Registry: jukebox/gitlab-registry.md
+      - Maintenance du registre: jukebox/registry-maintenance.md
+  - Outillage:
+      - Référence CLI: cli.md
+      - Lint: tooling/lint.md
+      - Tests de paquet: tooling/test.md
+  - Exploitation:
+      - Sécurité & modèle de menace: operations/security.md
+      - Dépannage: operations/troubleshooting.md
+      - Référence: operations/reference.md

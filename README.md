@@ -4,11 +4,49 @@ Vynil is an installer for kubernetes intended to be used either at home or for S
 
 Unlike helm, kustomize, argoCD, Flux... which all give you all the flexibility to install as you please. Vynil main goal is to help create an integrated distribution for kubernetes, so customisation come scarse but integration of everything by default. Vynil differ also from openshift since olm can only install operators. Requiering an operator to manage an app while there is already a pseudo-generic installtion operator is madness. Olm should be able to install awx and phpmyadmin, but instead, you need a tower operator to install awx (as if the main use case is running many instances AWX instances). You even need an operator to install kube-virt while there can only be a single instance of kubevirt installed on a k8s cluster. Yet again, this design is madness... Redhat used to known how to install things properly /rant off
 
+
+## Why Vynil?
+
+**Stop configuring. Start distributing.**
+
+Every generic chart answers every use case — so it answers none of yours. Vynil flips the
+model: your distribution makes the integration decisions once, your users install in
+minutes with options they actually understand.
+
+- **Your platform, your rules** — packages bake in your resources, storage, network and
+  security decisions.
+- **Trust what you run** — packages are signed, immutable OCI images you can open and
+  read, line by line. Audit teams love it; so do one-person ops teams.
+- **Works where internet doesn't** — air-gapped by design: mirror, scan, install. Nothing
+  phones home.
+- **Your DR plan, executable** — registry + manifests = the whole platform, rebuildable on
+  demand.
+- **One engine, every scale** — homelab, enterprise platform, SaaS tenant orchestration,
+  self-service PaaS.
+
+Dive in: [Building a distribution](docs/distribution.md) ·
+[The OCI package](docs/packages/portability.md)
+
 ## Installation
 ```
 kubectl create ns vynil-system
 kubectl apply -k github.com/sebt3/vynil//deploy
 ```
+
+## Documentation
+
+Full documentation lives in [`docs/`](docs/index.md) (French). It can be browsed as plain
+Markdown on the forge, or built into a static site with `mkdocs serve` (see
+[`mkdocs.yml`](mkdocs.yml)). A machine-readable index for LLMs is provided at
+[`llms.txt`](llms.txt) following the [llmstxt.org](https://llmstxt.org) convention.
+
+Start here:
+- [Concepts](docs/concepts.md) — jukebox / package / instance model
+- [Installation](docs/installation.md)
+- [Architecture](docs/architecture.md) & [Reconciliation](docs/reconciliation.md)
+- [Authoring packages](docs/packages/format.md)
+- [Security & threat model](docs/operations/security.md)
+- [Troubleshooting](docs/operations/troubleshooting.md)
 
 ## Package Tooling
 
