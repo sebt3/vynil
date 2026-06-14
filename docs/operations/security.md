@@ -1,75 +1,75 @@
-# Sécurité & modèle de menace
+# Security & Threat Model
 
-Cette page décrit le modèle de sécurité **réel** de Vynil aujourd'hui, ses implications, et
-les chantiers d'amélioration identifiés. À lire avant tout déploiement en production.
+This page describes Vynil's actual security model today, its implications, and identified
+improvement areas. Read before any production deployment.
 
-## Modèle de menace en une phrase
+## Threat model in one sentence
 
-> **Installer un paquet = exécuter du code arbitraire avec les droits cluster-admin.**
+> **Installing a package = running arbitrary code with cluster-admin rights.**
 
-Par conséquent : **n'installez que des paquets issus de JukeBox de confiance**, et traitez
-le droit de créer une `*Instance` comme équivalent à un accès cluster-admin.
+Therefore: **only install packages from trusted JukeBox sources**, and treat the right to
+create a `*Instance` as equivalent to cluster-admin access.
 
-## Pourquoi
+## Why
 
-### L'agent tourne en cluster-admin
+### The agent runs as cluster-admin
 
-Le ServiceAccount `vynil-agent` est lié à `cluster-admin` **et** à un ClusterRole `*/*/*`
-maison ([`box/vynil/systems/rbac.yaml.hbs`](../../box/vynil/systems/rbac.yaml.hbs)). Le
-bootstrap (`vynil-bootstrap`) dispose lui aussi d'un ClusterRole `*/*/*`
-([`deploy/bootstrap/bootstrap.yaml`](../../deploy/bootstrap/bootstrap.yaml)).
+The `vynil-agent` ServiceAccount is bound to `cluster-admin` **and** to a custom
+ClusterRole `*/*/*`
+([`box/vynil/systems/rbac.yaml.hbs`](../../../box/vynil/systems/rbac.yaml.hbs)). The
+bootstrap (`vynil-bootstrap`) also has a ClusterRole `*/*/*`
+([`deploy/bootstrap/bootstrap.yaml`](../../../deploy/bootstrap/bootstrap.yaml)).
 
-### L'agent exécute le code des paquets
+### The agent runs package code
 
-L'agent exécute les scripts Rhai embarqués dans l'image OCI du paquet. Le moteur Rhai
-« core » expose des primitives puissantes à **tous** les paquets
-([`common/src/shellhandler.rs`](../../common/src/shellhandler.rs),
-[`common/src/rhaihandler.rs`](../../common/src/rhaihandler.rs)) :
+The agent executes the Rhai scripts embedded in the package's OCI image. The «core» Rhai
+engine exposes powerful primitives to **all** packages
+([`common/src/shellhandler.rs`](../../../common/src/shellhandler.rs),
+[`common/src/rhaihandler.rs`](../../../common/src/rhaihandler.rs)) :
 
-- `shell_run` / `shell_output` — exécution shell arbitraire (`sh -c …`) ;
-- `get_env` — lecture des variables d'environnement de l'agent ;
-- `file_read` / `file_write` / `file_copy` / `create_dir` — accès au système de fichiers.
+- `shell_run` / `shell_output` — arbitrary shell execution (`sh -c …`);
+- `get_env` — reading the agent's environment variables;
+- `file_read` / `file_write` / `file_copy` / `create_dir` — filesystem access.
 
-Combiné au point précédent, un paquet malveillant ou compromis (ou une JukeBox/un registre
-compromis) obtient le contrôle total du cluster : lecture de tous les secrets, création de
-pods privilégiés, exfiltration, persistance.
+Combined with the above, a malicious or compromised package (or a compromised JukeBox/registry)
+gains full cluster control: reading all secrets, creating privileged pods, exfiltration,
+persistence.
 
-### La signature des images n'est pas vérifiée à l'installation
+### Image signatures are not verified at install time
 
-Les images de paquets sont **signées au push** (Cosign — voir
-[Build & signature](../build-signing.md)), mais **aucune vérification de signature** n'est
-faite au pull/scan/install ([`common/src/ocihandler.rs`](../../common/src/ocihandler.rs) :
-`pull_image`, `verify_tag_in_registry`). La signature n'apporte donc aujourd'hui aucune
-garantie de provenance côté consommation.
+Package images are **signed on push** (Cosign — see
+[Build & signing](../build-signing.md)), but **no signature verification** is done on
+pull/scan/install ([`common/src/ocihandler.rs`](../../../common/src/ocihandler.rs):
+`pull_image`, `verify_tag_in_registry`). Signing therefore provides no provenance guarantee
+on the consumer side today.
 
-## Ce qui est correct
+## What is correct
 
-- **Génération de mots de passe** : `gen_password` / `gen_password_alphanum` utilisent un
-  CSPRNG (`rand`) avec jeux de caractères pondérés.
-- **HTTP** : le client HTTP utilise `rustls`.
-- **Auth de registre** : les credentials sont lus depuis des Secrets `dockerconfigjson` et
-  ne sont pas journalisés.
-- **SecurityContext** : les Jobs d'agent tournent en `runAsUser/Group 65534` (nobody),
-  `fsGroup 65534` ; la génération de paquets ajoute `runAsNonRoot`, `readOnlyRootFilesystem`
-  et `drop ALL` aux conteneurs applicatifs.
+- **Password generation**: `gen_password` / `gen_password_alphanum` use a CSPRNG (`rand`)
+  with weighted character sets.
+- **HTTP**: the HTTP client uses `rustls`.
+- **Registry auth**: credentials are read from `dockerconfigjson` Secrets and are not
+  logged.
+- **SecurityContext**: agent Jobs run as `runAsUser/Group 65534` (nobody), `fsGroup 65534`;
+  package generation adds `runAsNonRoot`, `readOnlyRootFilesystem` and `drop ALL` to
+  application containers.
 
-## Chantiers d'amélioration (suivis)
+## Improvement areas (tracked)
 
-| Sujet | Issue |
+| Topic | Issue |
 |---|---|
-| Réduire les privilèges de l'agent (moindre privilège par type de paquet, restreindre `shell_run`/`get_env` aux paquets de confiance) | [#13](https://git.kydah.fr/shuss/vynil/issues/13) |
-| Vérifier la signature Cosign au pull/install, épingler par digest, clé de confiance par JukeBox | [#14](https://git.kydah.fr/shuss/vynil/issues/14) |
+| Reduce agent privileges (least privilege per package type, restrict `shell_run`/`get_env` to trusted packages) | [#13](https://git.kydah.fr/shuss/vynil/issues/13) |
+| Verify Cosign signature on pull/install, pin by digest, trust key per JukeBox | [#14](https://git.kydah.fr/shuss/vynil/issues/14) |
 
-## Recommandations d'exploitation
+## Operational recommendations
 
-1. **Restreindre la création d'instances** par RBAC : seuls des opérateurs de confiance
-   doivent pouvoir créer des `SystemInstance`/`ServiceInstance`/`TenantInstance`.
-2. **Sources de confiance uniquement** : limitez les JukeBox à des registres que vous
-   contrôlez ; préférez des registres privés avec `pull_secret`.
-3. **Revue des paquets tiers** : auditez les scripts Rhai (et l'usage de `shell_run`) avant
-   d'ajouter une catégorie/un paquet à une JukeBox de production.
-4. **Défense en profondeur** : en attendant la vérification de signature en cluster,
-   utilisez une politique d'admission (Kyverno, Sigstore Policy Controller) avec `cosign.pub`
-   pour exiger des images signées.
-5. **Isolation réseau** : limitez l'accès sortant de l'agent au strict nécessaire (registre,
-   S3 de backup).
+1. **Restrict instance creation** via RBAC: only trusted operators should be able to create
+   `SystemInstance`/`ServiceInstance`/`TenantInstance`.
+2. **Trusted sources only**: limit JukeBoxes to registries you control; prefer private
+   registries with `pull_secret`.
+3. **Third-party package review**: audit Rhai scripts (and use of `shell_run`) before
+   adding a category/package to a production JukeBox.
+4. **Defense in depth**: while awaiting in-cluster signature verification, use an admission
+   policy (Kyverno, Sigstore Policy Controller) with `cosign.pub` to require signed images.
+5. **Network isolation**: restrict the agent's outbound access to the strict minimum
+   (registry, backup S3).

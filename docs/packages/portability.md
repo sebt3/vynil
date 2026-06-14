@@ -1,87 +1,83 @@
-# Le paquet OCI — immutabilité, audit, air-gap
+# OCI Package — immutability, auditability, air-gap
 
-Un paquet Vynil est une **image OCI** : ce choix de format n'est pas un détail
-d'implémentation, c'est ce qui rend le modèle exploitable aussi bien par une petite
-structure sans équipe plateforme que par un grand compte avec ses équipes d'audit et son
-PRA.
+A Vynil package is an **OCI image**: this format choice is not an implementation detail,
+it is what makes the model usable both by a small team without a dedicated platform
+team and by an enterprise with its audit teams and disaster recovery plan.
 
-## Immutabilité
+## Immutability
 
-Une version publiée ne change plus : tag semver + digest de contenu. La signature Cosign
-([Build & signature](../build-signing.md)) scelle ce digest — ce qui a été revu et signé
-est exactement ce qui sera installé. Les politiques de mise à jour s'appuient sur des
-versions immuables et des waypoints de migration explicites, pas sur un tag `latest`
-mouvant.
+A published version no longer changes: semver tag + content digest. The Cosign signature
+([Build & signing](../build-signing.md)) seals this digest — what was reviewed and signed
+is exactly what will be installed. Update policies rely on immutable versions and explicit
+migration waypoints, not on a moving `latest` tag.
 
-## Auditabilité
+## Auditability
 
-Le contenu d'un paquet est **intégralement lisible** : `agent package unpack` restitue le
-`package.yaml`, les templates Handlebars et les scripts Rhai — c'est-à-dire la recette
-exacte et complète de ce qui sera appliqué au cluster. Pas de boîte noire, pas de binaire
-opaque.
+A package's content is **fully readable**: `agent package unpack` restores the
+`package.yaml`, the Handlebars templates, and the Rhai scripts — that is, the exact and
+complete recipe of what will be applied to the cluster. No black box, no opaque binary.
 
-Conséquences pratiques :
+Practical implications:
 
-- une équipe d'audit peut **geler une version, la relire et l'approuver** ; le digest signé
-  garantit que c'est cette version-là qui tourne ;
-- l'écart entre deux versions est un **diff de fichiers texte** ;
-- le SBOM publié au build alimente l'analyse de vulnérabilités en continu ;
-- le [modèle de menace](../operations/security.md) se résume alors à une décision de
-  confiance explicite : *quelles box, signées par quelles clés ?*
+- an audit team can **freeze a version, review it, and approve it**; the signed digest
+  guarantees that this exact version is what runs;
+- the diff between two versions is a **text-file diff**;
+- the SBOM published at build time feeds continuous vulnerability analysis;
+- the [threat model](../operations/security.md) then reduces to an explicit trust decision:
+  *which boxes, signed by which keys?*
 
-## Développement sous-traitable
+## Outsourceable development
 
-Le répertoire d'un paquet est un **livrable autonome** : il se développe, se lint, se teste
-et se rend (`agent package test`, mocks K8s — aucun cluster requis) hors de toute
-infrastructure. Son développement peut donc être confié à un tiers :
+A package directory is a **self-contained deliverable**: it can be developed, linted,
+tested, and rendered (`agent package test`, K8s mocks — no cluster required) outside of
+any infrastructure. Its development can therefore be entrusted to a third party:
 
-1. le prestataire livre le répertoire du paquet (ou une MR sur la box) ;
-2. la revue interne lit la recette — templates et scripts, en clair ;
-3. **votre** CI construit, signe et publie — la clé de signature ne quitte jamais votre
-   périmètre.
+1. the vendor delivers the package directory (or a MR on the box);
+2. the internal review reads the recipe — templates and scripts, in plain text;
+3. **your** CI builds, signs, and publishes — the signing key never leaves your perimeter.
 
-La frontière de confiance est nette : le tiers écrit, vous signez.
+The trust boundary is clear: the vendor writes, you sign.
 
 ## Air-gapped by design
 
-Un paquet étant une image OCI standard, il se transporte avec l'outillage OCI standard
-(`skopeo`, `crane`, miroirs de registres…). Un environnement isolé d'internet consomme la
-distribution en miroir :
+Since a package is a standard OCI image, it can be moved with standard OCI tooling
+(`skopeo`, `crane`, registry mirrors…). An internet-isolated environment consumes the
+mirrored distribution:
 
 ```mermaid
 flowchart LR
     subgraph Internet
-        SRC[(Registre source)]
+        SRC[(Source registry)]
     end
-    subgraph Zone isolée
-        DST[(Registre privé)] -->|scan| JB[JukeBox]
-        JB --> OP[Opérateur Vynil] --> K8S[(Cluster)]
+    subgraph Air-gapped zone
+        DST[(Private registry)] -->|scan| JB[JukeBox]
+        JB --> OP[Vynil Operator] --> K8S[(Cluster)]
     end
-    SRC -->|mirror OCI - support amovible si nécessaire| DST
+    SRC -->|mirror OCI - removable media if needed| DST
 ```
 
-- la JukeBox scanne le registre privé — **aucune dépendance internet à l'installation** ;
-- les sources `http`/`s3` ([Sources](../jukebox/sources.md)) permettent même de servir un
-  index pré-calculé depuis un simple serveur de fichiers interne ;
-- les signatures voyagent avec les images : la vérification reste possible hors-ligne.
+- the JukeBox scans the private registry — **no internet dependency at install time**;
+- `http`/`s3` sources ([Sources](../jukebox/sources.md)) even allow serving a
+  pre-computed index from a simple internal file server;
+- signatures travel with the images: verification remains possible offline.
 
-## Reconstruction et PRA
+## Reconstruction and disaster recovery
 
-Une plateforme Vynil se décrit en deux artefacts : **la box** (les paquets, dans un
-registre) et **les manifestes d'instances** (JukeBox + `*Instance`, en général versionnés
-en GitOps). La reconstruction après sinistre en découle :
+A Vynil platform is described by two artifacts: **the box** (the packages, in a registry)
+and **the instance manifests** (JukeBox + `*Instance`, typically version-controlled in
+GitOps). Post-disaster reconstruction follows:
 
-1. restaurer/mirrorer le registre de paquets ;
-2. ré-appliquer les manifestes d'instances ;
-3. l'opérateur réconcilie — bootstrap, tenants, applications ;
-4. restaurer les données depuis les sauvegardes (`initFrom`).
+1. restore/mirror the package registry;
+2. re-apply the instance manifests;
+3. the operator reconciles — bootstrap, tenants, applications;
+4. restore data from backups (`initFrom`).
 
-Le PRA n'est pas un document à part : c'est la distribution elle-même, rejouable et
+The DR plan is not a separate document: it is the distribution itself, replayable and
 testable.
 
-## Pour qui ?
+## Who is it for?
 
-| | Ce que le format apporte |
+| | What the format brings |
 |---|---|
-| **Petite structure** | Des défauts opiniâtres et sûrs, zéro temps de configuration, des mises à jour par chaîne de waypoints — sans équipe plateforme dédiée. |
-| **Grand compte** | Auditabilité totale du contenu, signature et SBOM pour la conformité, développement sous-traitable sans céder la signature, air-gap natif, PRA reconstructible et testable. |
+| **Small team** | Opinionated and safe defaults, zero configuration time, updates via waypoint chains — without a dedicated platform team. |
+| **Enterprise** | Full content auditability, signature and SBOM for compliance, outsourceable development without surrendering the signing key, native air-gap, reconstructible and testable DR. |

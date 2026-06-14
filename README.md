@@ -35,8 +35,9 @@ kubectl apply -k github.com/sebt3/vynil//deploy
 
 ## Documentation
 
-Full documentation lives in [`docs/`](docs/index.md) (French). It can be browsed as plain
-Markdown on the forge, or built into a static site with `mkdocs serve` (see
+Full documentation lives in [`docs/`](docs/index.md) (English, source of truth). A French
+mirror is available under [`docs/fr/`](docs/fr/index.md). Both can be browsed as plain
+Markdown on the forge, or built into a bilingual static site with `mkdocs serve` (see
 [`mkdocs.yml`](mkdocs.yml)). A machine-readable index for LLMs is provided at
 [`llms.txt`](llms.txt) following the [llmstxt.org](https://llmstxt.org) convention.
 

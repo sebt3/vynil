@@ -1,118 +1,144 @@
-# Réconciliation & cycle de vie
+# Reconciliation & lifecycle
 
-Cette page décrit ce que fait l'opérateur (le « quoi ») et ce que fait l'agent (le
-« comment »). Le code générique de réconciliation des instances vit dans
-[`operator/src/instance_common.rs`](../operator/src/instance_common.rs) via le trait
-`InstanceKind`, partagé par les trois types d'instance.
+This page describes what the operator does (the "what") and what the agent does (the
+"how"). The generic instance reconciliation code lives in
+[`operator/src/instance_common.rs`](../../operator/src/instance_common.rs) via the
+`InstanceKind` trait, shared by all three instance types.
 
-## Scan d'une JukeBox
+## JukeBox scan
 
-```text
-JukeBox (cron schedule)
-  → CronJob "scan-<jukebox>"  →  Job  →  agent box scan
-      → sources OCI (list/harbor/gitlab/script) : liste les tags du registre
-      → sources http/s3 : télécharge index.yaml + fichiers de paquets pré-calculés
-      → filtre : semver valide + maturité + version Vynil compatible
-      → filtre partiel si annotation force-scan présente
-      → calcule les waypoints d'upgrade (1 version par époque de MinimumPreviousVersion)
-      → écrit JukeBox.status.packages
+```mermaid
+flowchart TD
+    JB[JukeBox] -->|cron schedule| CJ[CronJob]
+    CJ --> J[Job: agent box scan]
+    J --> SRC{Source type}
+    SRC -->|OCI: list/harbor/gitlab/script| OCI[List registry tags]
+    SRC -->|http/s3| CACHE[Download index.yaml + package files]
+    OCI --> F[Filter: valid semver + maturity + Vynil version]
+    CACHE --> F
+    F --> WP[Compute upgrade waypoints\n1 per MinimumPreviousVersion epoch]
+    WP --> ST[Write JukeBox.status.packages]
 ```
 
-L'opérateur ([`operator/src/jukebox.rs`](../operator/src/jukebox.rs)) maintient le CronJob,
-détecte la complétion du Job de scan (condition `Complete`/`Failed`), et ne recharge le
-cache **qu'une fois par complétion** (suivi via l'annotation `last-scan-time`).
+The operator ([`operator/src/jukebox.rs`](../../operator/src/jukebox.rs)) maintains the
+CronJob, detects scan Job completion (condition `Complete`/`Failed`), and only reloads the
+cache **once per completion** (tracked via the `last-scan-time` annotation).
 
-### Scan standalone (`box file-scan`)
+### Standalone scan (`box file-scan`)
 
-```text
-agent box file-scan
-  → lit une spec JukeBox YAML locale (source + pull_secret fichier)
-  → scanne les registres OCI sans connexion Kubernetes
-  → calcule les waypoints pour les 3 niveaux de maturité et stocke leur union
-  → produit <cache>/index.yaml + <cache>/<category>_<name>.yaml
-  [ upload vers HTTP/S3 ]
-
-JukeBox source http/s3
-  → télécharge index.yaml + fichiers de paquets
-  → applique le filtre de maturité + recalcule les waypoints
-  → met à jour status.packages (identique aux sources OCI)
+```mermaid
+flowchart LR
+    SPEC[Local JukeBox YAML spec] --> FS[agent box file-scan]
+    FS --> OCI2[Scan OCI registries\nno K8s connection required]
+    OCI2 --> WP2[Compute waypoints\nfor all 3 maturity levels]
+    WP2 --> IDX["Produce index.yaml\n+ category_name.yaml"]
+    IDX -->|optional upload| CACHE2[(HTTP/S3 cache)]
+    CACHE2 --> JB2[JukeBox source http/s3]
+    JB2 --> F2[Apply maturity filter\n+ recompute waypoints]
+    F2 --> ST2[Update status.packages]
 ```
 
-## Réconciliation d'une instance (apply)
+## Instance reconciliation (apply)
 
-`do_reconcile<T>()` :
+```mermaid
+flowchart TD
+    I[Instance CRD] --> V[current_version = status.tag]
+    V --> SEL[Select package from JukeBox cache]
+    SEL -->|not found| ERR1[missing_package condition\n→ requeue 15 min]
+    SEL -->|found| REQ[Check requirements]
+    REQ -->|failed| ERR2[missing_requirement condition\n→ requeue]
+    REQ -->|ok| REC[Build recommendations]
+    REC --> VS[Run value_script Rhai]
+    VS --> JOB[Render Job template]
+    JOB --> APPLY[Create/upsert Job]
+    APPLY --> RQ[Requeue 15 min]
+```
 
-1. `current_version = status.tag` (vide au premier install).
-2. **Sélection du paquet** dans le cache de la JukeBox :
-   - `name` + `category` + `usage == type de l'instance`,
-   - `is_min_version_ok(current_version)` — chaîne d'upgrade respectée,
+`do_reconcile<T>()`:
+
+1. `current_version = status.tag` (empty on first install).
+2. **Package selection** from the JukeBox cache:
+   - `name` + `category` + `usage == instance type`,
+   - `is_min_version_ok(current_version)` — upgrade chain respected,
    - `is_vynil_version_ok()` — framework compatible.
-   - Si absent → condition `missing_package` et requeue (15 min).
-3. **Prérequis** (`check_requirements`) : CRDs, services système, ressources… Échec →
-   condition `missing_requirement` et requeue.
-4. **Recommandations** : listes optionnelles (CRDs présents, services système/tenant
-   disponibles) injectées dans le contexte.
-5. **value_script** Rhai (si présent) → variables de contrôle (`ctrl_values`).
-6. **initFrom.version** (premier install) → vérification que le tag existe (cache puis OCI).
-7. **Rendu du Job** via `operator/templates/package.yaml.hbs` (action `install`).
-8. **Création/upsert** du Job (Server-Side Apply, fallback delete+create).
-9. Requeue toutes les **15 minutes**.
+   - If not found → `missing_package` condition and requeue (15 min).
+3. **Requirements** (`check_requirements`): CRDs, system services, resources… Failure →
+   `missing_requirement` condition and requeue.
+4. **Recommendations**: optional lists (present CRDs, available system/tenant services)
+   injected into the context.
+5. **value_script** Rhai (if present) → control variables (`ctrl_values`).
+6. **initFrom.version** (first install) → verification that the tag exists (cache then OCI).
+7. **Job rendering** via `operator/templates/package.yaml.hbs` (action `install`).
+8. **Job creation/upsert** (Server-Side Apply, fallback delete+create).
+9. Requeue every **15 minutes**.
 
-L'annotation `force-reinstall` supprime le Job existant avant recréation. L'annotation
-`suspend=true` court-circuite tout en (1).
+The `force-reinstall` annotation deletes the existing Job before recreation. The
+`suspend=true` annotation short-circuits everything at step (1).
 
-## Phases d'installation (côté agent)
+## Installation phases (agent side)
 
-Une fois le Job lancé, l'agent dépaquette l'image et exécute le script de cycle de vie
-(`agent/scripts/{type}/install.rhai`). Les objets sont appliqués **par phases**, et
-l'instance est rechargée entre chaque phase pour propager les mises à jour de statut :
+Once the Job is launched, the agent unpacks the image and executes the lifecycle script
+(`agent/scripts/{type}/install.rhai`). Objects are applied **by phase**, and the instance
+is reloaded between each phase to propagate status updates:
 
-```text
-install_pre
-  → befores      (si package_dir/befores)      ─┐
-  → vitals       (si package_dir/vitals)         │  enregistrés dans status.*
-  → tofu         (si fichiers OpenTofu)           │
-  → init_from    (si 1er install + initFrom)      │
-  → others       (si package_dir/others)          │
-  → scalables    (si package_dir/scalables)       │
-  → posts        (si package_dir/posts)          ─┘
-  → schedule_backup OU delete_backup  (selon use_backup + secret backup-settings)
-install_post
-  → set_status_ready
+```mermaid
+flowchart LR
+    PRE[install_pre] --> B[befores]
+    B --> V[vitals]
+    V --> T[tofu]
+    T --> IF[init_from]
+    IF --> O[others]
+    O --> SC[scalables]
+    SC --> P[posts]
+    P --> BK{use_backup\n+ secret?}
+    BK -->|yes| SB[schedule_backup]
+    BK -->|no| DB[delete_backup]
+    SB --> POST[install_post]
+    DB --> POST
+    POST --> READY[set_status_ready]
 ```
 
-Voir [Cycle de vie d'un paquet](packages/lifecycle.md) pour le détail des hooks
-`*_pre`/`*_post` et la sémantique de chaque phase.
+See [Package lifecycle](packages/lifecycle.md) for details on `*_pre`/`*_post` hooks and
+the semantics of each phase.
 
-## Désinstallation (finalizer / cleanup)
+## Deletion (finalizer / cleanup)
 
-`do_cleanup<T>()` :
+```mermaid
+flowchart TD
+    DEL[Instance deletion] --> SEL2[Select package]
+    SEL2 -->|not found + has children| BLOCK[Error: finalizer not removed]
+    SEL2 -->|found or no children| JOB2[Render delete Job]
+    JOB2 --> RORD[Delete in reverse order:\nposts → scalables → tofu → others → vitals → befores]
+    RORD --> WAIT[Wait for Job completion]
+    WAIT --> CLEAN[Purge Job + remove finalizer]
+```
 
-1. Sélection du paquet (même filtre que l'install).
-2. Si le paquet est introuvable **et** que l'instance a des enfants
-   (`status.have_child()`), une erreur est levée (le finalizer ne se retire pas tant que le
-   paquet est introuvable).
-3. Sinon : rendu du Job avec action `delete`, exécution du `delete.rhai` qui supprime les
-   enfants **dans l'ordre inverse** (posts → scalables → tofu → others → vitals → befores),
-   en se basant sur les listes du `status`.
-4. Attente de complétion du Job de delete, purge du Job, retrait du finalizer.
+`do_cleanup<T>()`:
 
-> **Limites connues** (voir [Dépannage](operations/troubleshooting.md)) :
-> - Si le `type` du paquet a changé depuis l'installation (ex. `tenant` → `service`), la
->   sélection échoue et la désinstallation reste bloquée (issue #12).
-> - L'attente de complétion ne détecte pas l'état `Failed` : un Job de delete en échec fait
->   patienter jusqu'au timeout (issue #15).
+1. Package selection (same filter as install).
+2. If the package cannot be found **and** the instance has children
+   (`status.have_child()`), an error is raised (the finalizer is not removed as long as the
+   package is missing).
+3. Otherwise: Job rendered with action `delete`, executing `delete.rhai` which removes
+   children **in reverse order** (posts → scalables → tofu → others → vitals → befores),
+   based on the `status` lists.
+4. Wait for the delete Job to complete, purge the Job, remove the finalizer.
 
-## Gestion d'erreur et requeue
+> **Known limitations** (see [Troubleshooting](operations/troubleshooting.md)):
+> - If the package `type` has changed since installation (e.g. `tenant` → `service`),
+>   selection fails and deletion remains blocked (issue #12).
+> - Completion waiting does not detect the `Failed` state: a failing delete Job waits
+>   until the timeout (issue #15).
 
-Chaque contrôleur a une `error_policy` qui logue l'erreur, incrémente les métriques
-d'échec et requeue (5 min pour les JukeBox). Les réconciliations réussies requeue à 15 min.
-Les opérations bloquantes (attente de suppression/complétion de Job) ont des timeouts
-explicites (20 s pour une suppression, 10 min pour un Job de delete).
+## Error handling and requeue
 
-## Métriques
+Each controller has an `error_policy` that logs the error, increments failure metrics, and
+requeues (5 min for JukeBox). Successful reconciliations requeue at 15 min. Blocking
+operations (waiting for Job deletion/completion) have explicit timeouts (20 s for a
+deletion, 10 min for a delete Job).
 
-L'opérateur expose des métriques Prometheus sur `GET /metrics` (port 9000). Quatre
-registres (un par type de ressource) exposent : durée des réconciliations (histogramme),
-compteurs succès/échec, jauge des réconciliations en cours, horodatage du dernier
-événement.
+## Metrics
+
+The operator exposes Prometheus metrics on `GET /metrics` (port 9000). Four registries
+(one per resource type) expose: reconciliation duration (histogram), success/failure
+counters, in-progress reconciliation gauge, last event timestamp.

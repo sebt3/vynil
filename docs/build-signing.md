@@ -1,52 +1,55 @@
-# Signature Cosign des images OCI lors du build
+# Cosign Signing of OCI Images at Build Time
 
-## Vue d'ensemble
+## Overview
 
-Après `vynil build`, l'agent pousse l'image OCI vers le registry puis la **signe avec Cosign**
-si une clé de signature est fournie. Harbor (et tout registry conforme Cosign) vérifie ensuite
-que les images présentent une signature valide avant de les autoriser en production.
+After `vynil build`, the agent pushes the OCI image to the registry then **signs it with
+Cosign** if a signing key is provided. Harbor (and any Cosign-compliant registry) then
+verifies that the images present a valid signature before allowing them into production.
 
-La signature est **optionnelle par conception** : sans clé configurée, le build se déroule
-normalement et l'image est poussée non signée. Cela garantit la compatibilité avec les
-environnements qui ne déploient pas encore Cosign.
-
----
-
-## Flux d'exécution
-
-```
-vynil build --signing-key cosign.key …
-  ├── build(args)          — prépare le répertoire temporaire
-  ├── reg.push_image(…)    — pousse l'image OCI, retourne le digest sha256
-  └── reg.sign_image(…)    — cosign sign --yes --key cosign.key repo:tag@sha256:…
-                             (skippé si signing_key est vide)
-```
-
-La signature se fait **après le push**, conformément au workflow standard Cosign :
-les signatures sont stockées en tant qu'artefacts OCI dans le même registry
-(tag `sha256-<digest>.sig`), ce qui nécessite que l'image soit déjà présente.
+Signing is **optional by design**: without a configured key, the build proceeds normally
+and the image is pushed unsigned. This ensures compatibility with environments that have
+not yet deployed Cosign.
 
 ---
 
-## Paramètre CLI
+## Execution flow
+
+```mermaid
+flowchart LR
+    PKG[Package directory] --> BUILD[agent package build]
+    BUILD --> PUSH[reg.push_image\nreturns sha256 digest]
+    PUSH --> Q{signing_key\nset?}
+    Q -->|yes| SIGN["cosign sign --yes --key cosign.key\nrepo:tag@sha256:…"]
+    Q -->|no| DONE[Done — unsigned]
+    SIGN --> REG[(Registry\nstores sig as OCI artifact)]
+    REG --> DONE2[Done — signed]
+```
+
+Signing happens **after the push**, in line with the standard Cosign workflow:
+signatures are stored as OCI artifacts in the same registry
+(tag `sha256-<digest>.sig`), which requires the image to already be present.
+
+---
+
+## CLI parameter
 
 ```
 --signing-key <SIGNING_KEY>   [env: SIGNING_KEY]   [default: ""]
 -k <SIGNING_KEY>
 ```
 
-| Valeur | Comportement |
+| Value | Behavior |
 |--------|-------------|
-| *(vide)* | Signing ignoré silencieusement — le build réussit sans signer |
+| *(empty)* | Signing silently ignored — the build succeeds without signing |
 | `/path/to/cosign.key` | `cosign sign --yes --key /path/to/cosign.key <ref>@<digest>` |
 
 ---
 
-## Prérequis
+## Prerequisites
 
-- Le binaire `cosign` doit être présent dans le `PATH` de l'agent au moment du build.
-- La clé privée Cosign (`cosign.key`) doit être accessible par le processus agent.
-  En environnement Kubernetes, la monter via un Secret :
+- The `cosign` binary must be present in the agent's `PATH` at build time.
+- The Cosign private key (`cosign.key`) must be accessible by the agent process.
+  In a Kubernetes environment, mount it via a Secret:
 
 ```yaml
 volumes:
@@ -66,19 +69,19 @@ containers:
 
 ---
 
-## Générer une paire de clés Cosign
+## Generating a Cosign key pair
 
 ```bash
 cosign generate-key-pair
-# Produit: cosign.key (privée) et cosign.pub (publique)
+# Produces: cosign.key (private) and cosign.pub (public)
 ```
 
-Stocker `cosign.key` dans un Secret Kubernetes et distribuer `cosign.pub` aux politiques
-d'admission (ex: Kyverno, Sigstore Policy Controller) pour la vérification en cluster.
+Store `cosign.key` in a Kubernetes Secret and distribute `cosign.pub` to admission
+policies (e.g. Kyverno, Sigstore Policy Controller) for in-cluster verification.
 
 ---
 
-## Vérification d'une image signée
+## Verifying a signed image
 
 ```bash
 cosign verify \
@@ -88,22 +91,22 @@ cosign verify \
 
 ---
 
-## Comportement en cas d'erreur
+## Error behavior
 
-| Situation | Résultat |
+| Situation | Result |
 |-----------|---------|
-| `cosign` absent du PATH | Erreur `Stdio` — le build échoue |
-| Clé introuvable ou invalide | `cosign sign` retourne un code non-zéro — le build échoue |
-| Registry inaccessible pour la signature | `cosign sign` échoue — le build échoue |
-| Clé vide (`""`) | Signing silencieusement ignoré — le build réussit |
+| `cosign` not in PATH | `Stdio` error — the build fails |
+| Key not found or invalid | `cosign sign` returns a non-zero exit code — the build fails |
+| Registry unreachable for signing | `cosign sign` fails — the build fails |
+| Empty key (`""`) | Signing silently ignored — the build succeeds |
 
 ---
 
-## Implémentation technique
+## Technical implementation
 
-- `common/src/ocihandler.rs` — `Registry::push_image` retourne désormais le digest
-  (`sha256:<hex>`) au lieu de `()` ; `Registry::sign_image` invoque `cosign sign` via
+- `common/src/ocihandler.rs` — `Registry::push_image` now returns the digest
+  (`sha256:<hex>`) instead of `()`; `Registry::sign_image` invokes `cosign sign` via
   `std::process::Command`.
-- `agent/scripts/packages/build.rhai` — capture le digest retourné par `push_image` et
-  appelle `sign_image` si `args.signing_key` est défini.
-- `agent/src/package/build.rs` — paramètre `--signing-key` / `SIGNING_KEY` ajouté.
+- `agent/scripts/packages/build.rhai` — captures the digest returned by `push_image` and
+  calls `sign_image` if `args.signing_key` is defined.
+- `agent/src/package/build.rs` — `--signing-key` / `SIGNING_KEY` parameter added.

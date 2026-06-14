@@ -1,13 +1,12 @@
-# Référence des CRD
+# CRD Reference
 
-Toutes les ressources sont dans le groupe **`vynil.solidite.fr/v1`**. Les définitions
-faisant foi se trouvent dans [`common/src/`](../common/src/) (types Rust dérivant
-`CustomResource`) et sont générées dans [`deploy/crd/crd.yaml`](../deploy/crd/crd.yaml) via
-`agent crdgen`.
+All resources are in the group **`vynil.solidite.fr/v1`**. The authoritative definitions
+are in [`common/src/`](../../common/src/) (Rust types deriving `CustomResource`) and are
+generated into [`deploy/crd/crd.yaml`](../../deploy/crd/crd.yaml) via `agent crdgen`.
 
 ## JukeBox (cluster-scoped)
 
-Source de paquets. Raccourci : `jb`.
+Package source. Shortcut: `jb`.
 
 ```yaml
 apiVersion: vynil.solidite.fr/v1
@@ -15,26 +14,26 @@ kind: JukeBox
 metadata:
   name: home-alpha
 spec:
-  source:            # exactement une variante (voir Sources de JukeBox)
+  source:            # exactly one variant (see JukeBox Sources)
     list: ["registry.example.com/org/vynil"]
   maturity: stable   # stable | beta | alpha
   schedule: "0 3 * * *"
-  pull_secret: my-pull-secret   # optionnel : Secret de type dockerconfigjson
+  pull_secret: my-pull-secret   # optional: dockerconfigjson Secret
 status:
-  packages: []       # cache des paquets scannés (waypoints)
+  packages: []       # cache of scanned packages (waypoints)
 ```
 
-| Champ | Type | Description |
+| Field | Type | Description |
 |---|---|---|
-| `spec.source` | objet | Variante de source : `list`, `harbor`, `gitlab`, `script`, `http`, `s3`. |
-| `spec.maturity` | enum | Niveau de maturité retenu lors du scan. |
-| `spec.schedule` | cron | Planification du rescan (CronJob). |
-| `spec.pull_secret` | string | Secret `dockerconfigjson` pour registre privé. |
-| `status.packages` | liste | Catalogue calculé (un waypoint par époque d'upgrade). |
+| `spec.source` | object | Source variant: `list`, `harbor`, `gitlab`, `script`, `http`, `s3`. |
+| `spec.maturity` | enum | Maturity level used during scan. |
+| `spec.schedule` | cron | Rescan schedule (CronJob). |
+| `spec.pull_secret` | string | `dockerconfigjson` Secret for private registry. |
+| `status.packages` | list | Computed catalogue (one waypoint per upgrade epoch). |
 
 ## SystemInstance (namespaced)
 
-Installation d'un paquet **système** (composant cluster). Pas de sauvegarde, pas d'`initFrom`.
+System package installation (cluster component). No backup, no `initFrom`.
 
 ```yaml
 apiVersion: vynil.solidite.fr/v1
@@ -49,18 +48,18 @@ spec:
   options: {}
 status:
   tag: "3.7.1"
-  digest: "<empreinte options>"
+  digest: "<options fingerprint>"
   conditions: []
 ```
 
 ## ServiceInstance (namespaced)
 
-Installation d'un paquet **service** (application partagée, CRDs propres, sauvegarde).
-Même structure que `TenantInstance` ci-dessous (avec `initFrom`).
+Installation of a **service** package (shared application, own CRDs, backup).
+Same structure as `TenantInstance` below (with `initFrom`).
 
 ## TenantInstance (namespaced)
 
-Installation d'un paquet **tenant**. Raccourci : `vti`.
+Installation of a **tenant** package. Shortcut: `vti`.
 
 ```yaml
 apiVersion: vynil.solidite.fr/v1
@@ -72,72 +71,72 @@ spec:
   jukebox: home-alpha
   category: think
   package: ollama
-  initFrom:                 # optionnel : restauration depuis une sauvegarde
+  initFrom:                 # optional: restore from a backup
     secretName: backup-settings
     subPath: epikaf-nan-ia/ollama
     snapshot: "abc123"
-    version: "0.1.8"        # version de paquet à utiliser pour restaurer
+    version: "0.1.8"        # package version to use for restore
   options:
     use_rocm: true
 status:
   tag: "0.1.8-beta.50"
-  digest: "<empreinte options>"
+  digest: "<options fingerprint>"
   conditions: []
-  vitals:    []   # PVC créés
-  scalables: []   # Deployment/StatefulSet créés
-  others:    []   # Service/ConfigMap/Ingress/…
+  vitals:    []   # created PVCs
+  scalables: []   # created Deployment/StatefulSet
+  others:    []   # created Service/ConfigMap/Ingress/…
   befores:   []
   posts:     []
-  services:  []   # services publiés (capability registry)
-  tfstate:   "…"  # état OpenTofu (gzip+base64), si applicable
-  rhaistate: "…"  # état Rhai custom (gzip+base64), si applicable
+  services:  []   # published services (capability registry)
+  tfstate:   "…"  # OpenTofu state (gzip+base64), if applicable
+  rhaistate: "…"  # custom Rhai state (gzip+base64), if applicable
 ```
 
-### Spec commune (service/tenant)
+### Common spec (service/tenant)
 
-| Champ | Type | Description |
+| Field | Type | Description |
 |---|---|---|
-| `spec.jukebox` | string | Nom de la JukeBox source. |
-| `spec.category` | string | Catégorie du paquet. |
-| `spec.package` | string | Nom du paquet. |
-| `spec.options` | map | Paramètres validés contre le schéma `options` du paquet. |
-| `spec.initFrom.secretName` | string | Secret S3/Restic (défaut `backup-settings`). |
-| `spec.initFrom.subPath` | string | Préfixe dans le bucket (défaut `<ns>/<app-slug>`). |
-| `spec.initFrom.snapshot` | string | Identifiant de snapshot Restic à restaurer. |
-| `spec.initFrom.version` | string | Version de paquet exacte pour la restauration. |
+| `spec.jukebox` | string | Name of the source JukeBox. |
+| `spec.category` | string | Package category. |
+| `spec.package` | string | Package name. |
+| `spec.options` | map | Parameters validated against the package `options` schema. |
+| `spec.initFrom.secretName` | string | S3/Restic Secret (default `backup-settings`). |
+| `spec.initFrom.subPath` | string | Prefix in the bucket (default `<ns>/<app-slug>`). |
+| `spec.initFrom.snapshot` | string | Restic snapshot identifier to restore. |
+| `spec.initFrom.version` | string | Exact package version for the restore. |
 
-### Conditions de statut
+### Status conditions
 
-Le `status.conditions` reflète l'avancement. Types possibles (tenant) : `Ready`,
+The `status.conditions` reflects progress. Possible types (tenant): `Ready`,
 `Installed`, `Backuped`, `Restored`, `AgentStarted`, `TofuInstalled`, `BeforeApplied`,
 `VitalApplied`, `ScalableApplied`, `InitFrom`, `ScheduleBackup`, `OtherApplied`,
-`RhaiApplied`, `PostApplied`. Chaque condition porte un `status` (`True`/`False`), un
-`message`, une `generation` et un `lastTransitionTime`.
+`RhaiApplied`, `PostApplied`. Each condition carries a `status` (`True`/`False`), a
+`message`, a `generation`, and a `lastTransitionTime`.
 
-Exemple de message d'erreur observable : une condition `AgentStarted=False` avec
-`message: "Package think/ollama is missing"` indique que l'opérateur n'a pas trouvé le
-paquet correspondant dans le cache de la JukeBox.
+Example of an observable error message: an `AgentStarted=False` condition with
+`message: "Package think/ollama is missing"` indicates that the operator did not find the
+matching package in the JukeBox cache.
 
-## Annotations de contrôle
+## Control annotations
 
-### Sur les instances
+### On instances
 
-| Annotation | Valeur | Effet |
+| Annotation | Value | Effect |
 |---|---|---|
-| `vynil.solidite.fr/suspend` | `"true"` | Suspend la réconciliation (requeue 15 min, aucune action) jusqu'au retrait. |
-| `vynil.solidite.fr/force-reinstall` | présente | Supprime le Job existant et force une réinstallation ; l'annotation est retirée automatiquement. |
+| `vynil.solidite.fr/suspend` | `"true"` | Suspends reconciliation (requeue 15 min, no action) until removed. |
+| `vynil.solidite.fr/force-reinstall` | present | Deletes the existing Job and forces a reinstallation; the annotation is removed automatically. |
 
-### Sur les JukeBox
+### On JukeBox resources
 
-| Annotation | Valeur | Comportement |
+| Annotation | Value | Behavior |
 |---|---|---|
-| `vynil.solidite.fr/force-scan` | `"true"` (ou présente) | Scan complet. |
-| `vynil.solidite.fr/force-scan` | `"<category>"` | Scan partiel d'une catégorie. |
-| `vynil.solidite.fr/force-scan` | `"<category>/<name>"` | Scan partiel d'un paquet. |
-| `vynil.solidite.fr/last-scan-time` | (géré par l'opérateur) | Horodatage de complétion du dernier scan traité. |
+| `vynil.solidite.fr/force-scan` | `"true"` (or present) | Full scan. |
+| `vynil.solidite.fr/force-scan` | `"<category>"` | Partial scan of a category. |
+| `vynil.solidite.fr/force-scan` | `"<category>/<name>"` | Partial scan of a single package. |
+| `vynil.solidite.fr/last-scan-time` | (managed by the operator) | Completion timestamp of the last processed scan. |
 
 ## Finalizers
 
-Chaque ressource pose un finalizer (`<kind>.vynil.solidite.fr`) pour garantir le nettoyage
-des objets enfants et des Jobs avant suppression. Voir
-[Réconciliation](reconciliation.md) et [Dépannage](operations/troubleshooting.md).
+Each resource places a finalizer (`<kind>.vynil.solidite.fr`) to guarantee cleanup of
+child objects and Jobs before deletion. See
+[Reconciliation](reconciliation.md) and [Troubleshooting](operations/troubleshooting.md).

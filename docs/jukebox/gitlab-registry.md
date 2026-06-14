@@ -1,41 +1,41 @@
-# GitLab Container Registry — Guide d'intégration
+# GitLab Container Registry — Integration Guide
 
 ## Architecture
 
-La source `gitlab` permet à un JukeBox de scanner, push et pull des packages depuis un GitLab Container Registry (gitlab.com ou self-hosted).
+The `gitlab` source allows a JukeBox to scan, push, and pull packages from a GitLab Container Registry (gitlab.com or self-hosted).
 
 ```
 JukeBox (spec.source.gitlab)
-  ├── url      → instance GitLab (API REST v4)
-  ├── registry → registry OCI (push/pull d'images)
-  └── project  → chemin complet du projet (group/project)
+  ├── url      → GitLab instance (API REST v4)
+  ├── registry → OCI registry (image push/pull)
+  └── project  → full project path (group/project)
 ```
 
-Contrairement à Harbor où `registry` = host API = host OCI, GitLab dissocie les deux :
-- **`url`** : sert exclusivement aux appels API (`/api/v4/...`) — ex: `https://gitlab.com`
-- **`registry`** : sert au push/pull OCI — ex: `registry.gitlab.com`
+Unlike Harbor where `registry` = API host = OCI host, GitLab separates the two:
+- **`url`**: used exclusively for API calls (`/api/v4/...`) — e.g. `https://gitlab.com`
+- **`registry`**: used for OCI push/pull — e.g. `registry.gitlab.com`
 
 ---
 
-## Tokens et stratégie d'authentification
+## Tokens and authentication strategy
 
-Trois contextes, trois types de tokens.
+Three contexts, three token types.
 
-### 1. Push depuis le Makefile (dev local)
+### 1. Push from Makefile (local dev)
 
-Utiliser un **Personal Access Token (PAT)** avec le scope `write_registry`.
+Use a **Personal Access Token (PAT)** with the `write_registry` scope.
 
 ```makefile
 REGISTRY_USER ?= my-gitlab-username
 REGISTRY_PASS ?= $(GITLAB_PAT)
 ```
 
-> ⚠️ Le PAT est lié à un compte utilisateur. S'il quitte l'organisation, le token est révoqué.
-> Préférer un "project bot token" ou un "service account" quand c'est possible.
+> ⚠️ The PAT is tied to a user account. If they leave the organization, the token is revoked.
+> Prefer a "project bot token" or a "service account" when possible.
 
-### 2. Push depuis la CI GitLab
+### 2. Push from GitLab CI
 
-Utiliser le **`CI_JOB_TOKEN`** injecté automatiquement par GitLab CI.
+Use the **`CI_JOB_TOKEN`** automatically injected by GitLab CI.
 
 ```yaml
 build:
@@ -43,46 +43,46 @@ build:
     - make push REGISTRY_USER=gitlab-ci-token REGISTRY_PASS=$CI_JOB_TOKEN
 ```
 
-Le `CI_JOB_TOKEN` est scopé au job, n'expire pas à gérer et n'a pas besoin d'être stocké en secret.
+The `CI_JOB_TOKEN` is scoped to the job, has no expiry to manage, and does not need to be stored as a secret.
 
-> ⚠️ Par défaut, `CI_JOB_TOKEN` ne peut s'authentifier qu'au registry **du même projet**.
-> Pour pusher dans un projet différent, activer le _CI/CD job token allowlist_ dans les settings du projet cible
+> ⚠️ By default, `CI_JOB_TOKEN` can only authenticate to the registry **of the same project**.
+> To push to a different project, enable the _CI/CD job token allowlist_ in the target project settings
 > (`Settings → CI/CD → Token Access`).
 
-### 3. Scan et pull dans le cluster (JukeBox / instances)
+### 3. Scan and pull in the cluster (JukeBox / instances)
 
-Utiliser un **Project Access Token** (ou Deploy Token) read-only stocké en secret Kubernetes de type `dockerconfigjson`.
+Use a **Project Access Token** (or Deploy Token) read-only, stored as a Kubernetes secret of type `dockerconfigjson`.
 
-#### Scopes requis
+#### Required scopes
 
-| Scope          | Utilité                                                  |
+| Scope          | Use case                                                 |
 |----------------|----------------------------------------------------------|
-| `read_registry` | Pull OCI des layers (ocihandler.rs)                     |
-| `read_api`      | Appels API REST `/api/v4/.../registry/repositories`     |
+| `read_registry` | OCI layer pull (ocihandler.rs)                          |
+| `read_api`      | REST API calls `/api/v4/.../registry/repositories`      |
 
-> ⚠️ **Point d'attention** : `read_registry` seul ne suffit pas pour le scan.
-> Le script `scan_gitlab.rhai` appelle l'API GitLab REST pour lister les repositories.
-> Sans `read_api`, l'appel retourne HTTP 403.
-> Ce scope est disponible sur les deploy tokens depuis **GitLab 13.9**.
+> ⚠️ **Important**: `read_registry` alone is not sufficient for scanning.
+> The `scan_gitlab.rhai` script calls the GitLab REST API to list repositories.
+> Without `read_api`, the call returns HTTP 403.
+> This scope has been available on deploy tokens since **GitLab 13.9**.
 
-#### Rôle minimum requis (Project Access Token)
+#### Minimum required role (Project Access Token)
 
-L'API `/api/v4/projects/:id/registry/repositories` exige au minimum le rôle **Reporter**.
-Un token créé avec le rôle **Guest** retourne HTTP 403 même avec les scopes corrects.
+The `/api/v4/projects/:id/registry/repositories` API requires at minimum the **Reporter** role.
+A token created with the **Guest** role returns HTTP 403 even with the correct scopes.
 
-> ⚠️ Pour les **Project Access Tokens** (`glpat-…`), le rôle est choisi à la création.
-> Pour les **Deploy Tokens**, la restriction s'applique aussi : créer avec rôle ≥ Reporter.
+> ⚠️ For **Project Access Tokens** (`glpat-…`), the role is chosen at creation time.
+> The same restriction applies to **Deploy Tokens**: create with role ≥ Reporter.
 
-#### Création du project access token
+#### Creating the project access token
 
 ```
 GitLab → Project → Settings → Access Tokens
   Name   : vynil-scan-pull
-  Role   : Reporter        ← minimum requis
+  Role   : Reporter        ← minimum required
   Scopes : ✅ read_registry  ✅ read_api
 ```
 
-#### Création du secret Kubernetes
+#### Creating the Kubernetes secret
 
 ```bash
 kubectl create secret docker-registry gitlab-registry-pull \
@@ -92,7 +92,7 @@ kubectl create secret docker-registry gitlab-registry-pull \
   --docker-password=<deploy-token-value>
 ```
 
-#### Exemple de JukeBox
+#### JukeBox example
 
 ```yaml
 apiVersion: vynil.solidite.fr/v1
@@ -111,48 +111,48 @@ spec:
 
 ---
 
-## Fonctionnement du scan
+## How scanning works
 
-Le script `agent/scripts/lib/scan_gitlab.rhai` :
+The `agent/scripts/lib/scan_gitlab.rhai` script:
 
-1. Lit le `pull_secret` (dockerconfigjson) → extrait `user:pass`
-2. Utilise `pass` comme Bearer token pour l'API REST GitLab
-3. Résout le project path en ID numérique via `GET {url}/api/v4/projects?search={name}`
-   et filtre sur `path_with_namespace == project`
-   > Note : l'URL-encoding (`/` → `%2F`) dans le path HTTP est silencieusement décodé par
-   > le client HTTP (reqwest/url-crate), ce qui donnait HTTP 404. L'ID numérique contourne ce bug.
+1. Reads the `pull_secret` (dockerconfigjson) → extracts `user:pass`
+2. Uses `pass` as the Bearer token for the GitLab REST API
+3. Resolves the project path to a numeric ID via `GET {url}/api/v4/projects?search={name}`
+   and filters on `path_with_namespace == project`
+   > Note: URL-encoding (`/` → `%2F`) in the HTTP path is silently decoded by
+   > the HTTP client (reqwest/url-crate), which resulted in HTTP 404. The numeric ID works around this bug.
 4. `GET {url}/api/v4/projects/{id}/registry/repositories?per_page=20`
-   - La pagination est pilotée par le header `X-Total-Pages`
-5. Retourne la liste des `location` (ex: `registry.gitlab.com/my-group/my-project/my-image`)
-6. Le scan principal (`scan.rhai`) prend le relais : OCI list_tags + lecture des annotations
+   - Pagination is driven by the `X-Total-Pages` header
+5. Returns the list of `location` values (e.g. `registry.gitlab.com/my-group/my-project/my-image`)
+6. The main scan (`scan.rhai`) takes over: OCI list_tags + reading annotations
 
 ---
 
-## Fonctionnement du push (build.rhai)
+## How push works (build.rhai)
 
-Le push utilise `ocihandler.rs` via `new_registry(registry, user, pass)` — standard OCI, aucun code spécifique GitLab.
+Push uses `ocihandler.rs` via `new_registry(registry, user, pass)` — standard OCI, no GitLab-specific code.
 
-| Contexte   | user                | pass                  |
-|------------|---------------------|-----------------------|
-| Makefile   | nom d'utilisateur   | PAT (`write_registry`) |
-| CI GitLab  | `gitlab-ci-token`   | `$CI_JOB_TOKEN`       |
-
----
-
-## Fonctionnement du pull (ocihandler.rs)
-
-Identique au pull Harbor : le `pull_secret` (dockerconfigjson) est lu, les credentials sont passés à `oci_client` pour l'authentification standard Docker. Aucun code spécifique GitLab.
+| Context     | user                | pass                   |
+|-------------|---------------------|------------------------|
+| Makefile    | username            | PAT (`write_registry`) |
+| GitLab CI   | `gitlab-ci-token`   | `$CI_JOB_TOKEN`        |
 
 ---
 
-## Points d'attention récapitulatifs
+## How pull works (ocihandler.rs)
 
-| # | Point                                | Détail                                                              |
+Identical to Harbor pull: the `pull_secret` (dockerconfigjson) is read, credentials are passed to `oci_client` for standard Docker authentication. No GitLab-specific code.
+
+---
+
+## Summary of key points
+
+| # | Point                                | Detail                                                              |
 |---|--------------------------------------|---------------------------------------------------------------------|
-| 1 | Scope `read_api` requis              | Obligatoire pour le scan — `read_registry` seul retourne HTTP 403  |
-| 2 | Rôle **Reporter** minimum            | Un token avec rôle Guest retourne HTTP 403 même avec les bons scopes |
-| 3 | Deux URLs distinctes                 | `url` (API) ≠ `registry` (OCI) pour les instances self-hosted      |
-| 4 | PAT lié à un user                    | Préférer project access token en prod pour le Makefile              |
-| 5 | CI_JOB_TOKEN cross-project           | Nécessite l'activation du token allowlist sur le projet cible       |
-| 6 | ID numérique vs path encodé          | `%2F` décodé par reqwest → scan utilise l'ID numérique GitLab      |
-| 7 | GitLab 13.9 minimum                  | Scope `read_api` sur deploy token disponible depuis cette version   |
+| 1 | `read_api` scope required            | Mandatory for scanning — `read_registry` alone returns HTTP 403     |
+| 2 | **Reporter** role minimum            | A token with Guest role returns HTTP 403 even with correct scopes   |
+| 3 | Two distinct URLs                    | `url` (API) ≠ `registry` (OCI) for self-hosted instances           |
+| 4 | PAT tied to a user                   | Prefer project access token in prod for the Makefile               |
+| 5 | CI_JOB_TOKEN cross-project           | Requires enabling the token allowlist on the target project         |
+| 6 | Numeric ID vs encoded path           | `%2F` decoded by reqwest → scan uses the GitLab numeric ID         |
+| 7 | GitLab 13.9 minimum                  | `read_api` scope on deploy token available since this version       |

@@ -1,61 +1,60 @@
-# Maintenance du registre (purge des images de paquets)
+# Registry Maintenance (purging package images)
 
-Un registre de paquets Vynil grossit en continu : chaque build publie un tag semver, plus
-des artefacts associés (signatures Cosign `.sig`/`.att`, SBOM, caches de scan). Une purge
-périodique est nécessaire — mais elle doit respecter des **règles de rétention** strictes,
-sous peine de casser des installations existantes.
+A Vynil package registry grows continuously: each build publishes a semver tag, plus
+associated artifacts (Cosign `.sig`/`.att` signatures, SBOM, scan caches). Periodic
+purging is necessary — but it must follow strict **retention rules**, or risk breaking
+existing installations.
 
-## Le contrat : la purge ne doit jamais supprimer ce que le scan exposerait
+## The contract: purging must never delete what the scan would expose
 
-Le scan de JukeBox ([Sources](sources.md)) calcule une **vue réduite** du registre : tête
-de version par niveau de maturité + waypoints de migration. La purge est l'opération
-duale : elle peut supprimer tout ce qui n'apparaîtra plus jamais dans cette vue réduite —
-et **rien d'autre**.
+The JukeBox scan ([Sources](sources.md)) computes a **reduced view** of the registry: the
+version head per maturity level + migration waypoints. Purging is the dual operation: it
+may delete everything that will never appear again in this reduced view —
+and **nothing else**.
 
-Concrètement, une purge doit conserver :
+Concretely, a purge must keep:
 
-1. **La tête de chaque canal de maturité** : le tag le plus récent en `alpha`, le plus
-   récent en `beta`, le plus récent `stable`.
-2. **Les waypoints de migration** : toute version qu'une chaîne de
-   `MinimumPreviousVersion` rend nécessaire pour permettre les mises à jour par étapes.
-   Supprimer un waypoint condamne les installations anciennes à ne plus pouvoir se mettre
-   à jour.
-3. **La dernière révision de chaque `type` de paquet**, si le type a changé au cours de
-   l'historique. Une instance installée avec l'ancien type a besoin d'une révision de ce
-   type pour se **désinstaller** proprement (ses hooks de delete vivent dans l'image du
-   paquet — voir [Cycle de vie](../packages/lifecycle.md)). Purger la dernière révision
-   `tenant` d'un paquet devenu `service` rend les instances `TenantInstance` existantes
-   indésinstallables (voir [Dépannage](../operations/troubleshooting.md)).
-4. **Les artefacts attachés aux tags conservés** : signatures Cosign, attestations et SBOM
-   référencés par les tags gardés. Les artefacts orphelins (rattachés à des tags purgés)
-   sont au contraire de bons candidats à la suppression.
+1. **The head of each maturity channel**: the most recent tag in `alpha`, the most
+   recent in `beta`, the most recent `stable`.
+2. **Migration waypoints**: any version that a `MinimumPreviousVersion` chain
+   requires to allow step-by-step upgrades. Deleting a waypoint prevents old
+   installations from being able to update.
+3. **The last revision of each package `type`**, if the type has changed during the
+   history. An instance installed with the old type needs a revision of that type to
+   **uninstall** cleanly (its delete hooks live in the package image — see
+   [Lifecycle](../packages/lifecycle.md)). Purging the last `tenant` revision of a
+   package that became a `service` makes existing `TenantInstance` instances
+   uninstallable (see [Troubleshooting](../operations/troubleshooting.md)).
+4. **Artifacts attached to retained tags**: Cosign signatures, attestations, and SBOMs
+   referenced by the kept tags. Orphaned artifacts (attached to purged tags) are on
+   the contrary good candidates for deletion.
 
-> Les règles 1 et 2 se décident à partir des seuls noms de tags et des annotations de
-> *requirements*. La règle 3 impose de lire les **métadonnées** des manifests
-> (`fr.solidite.vynil.metadata`) pour connaître le `type` de chaque révision : une purge
-> qui ne regarde que les chaînes de tags est aveugle aux changements de type.
+> Rules 1 and 2 can be decided from tag names and *requirements* annotations alone.
+> Rule 3 requires reading the **manifest metadata**
+> (`fr.solidite.vynil.metadata`) to know the `type` of each revision: a purge that
+> only looks at tag strings is blind to type changes.
 
-## Changement de type = migration
+## Type change = migration
 
-Changer le `type` d'un paquet entre deux publications est très fortement déconseillé
-([Concepts](../concepts.md)). Si c'est inévitable :
+Changing the `type` of a package between two publications is strongly discouraged
+([Concepts](../concepts.md)). If unavoidable:
 
-- considérez la publication qui change le type comme une **frontière de migration** : la
-  dernière révision de l'ancien type doit rester dans le registre tant qu'il peut exister
-  des instances installées avec ce type ;
-- désinstallez (ou migrez) les instances de l'ancien type **avant** de laisser la purge
-  réclamer l'ancienne révision.
+- treat the publication that changes the type as a **migration boundary**: the last
+  revision of the old type must remain in the registry as long as instances installed
+  with that type may still exist;
+- uninstall (or migrate) instances of the old type **before** allowing the purge to
+  reclaim the old revision.
 
-## Cohérence scan ↔ purge
+## Scan ↔ purge consistency
 
-Le scan et la purge appliquent les **mêmes règles** (semver, maturité, waypoints, types) ;
-les implémenter à deux endroits différents crée un risque de dérive — une purge plus
-agressive que le scan détruit des versions que le contrôleur attend encore. Recommandation
-pratique : dériver le script de purge de la même bibliothèque que le scan (scripts Rhai
-embarqués dans l'image de l'agent), et l'exécuter via l'agent :
+The scan and the purge apply the **same rules** (semver, maturity, waypoints, types);
+implementing them in two separate places creates a risk of drift — a purge more
+aggressive than the scan destroys versions the controller still expects. Practical
+recommendation: derive the purge script from the same library as the scan (Rhai scripts
+embedded in the agent image), and run it via the agent:
 
 ```yaml
-# Exemple : job de purge planifié dans la CI de la distribution
+# Example: purge job scheduled in the distribution CI
 schedule: "0 5 * * *"
 steps:
 - uses: docker://<registry>/vynil-agent:<version>
@@ -63,11 +62,11 @@ steps:
     args: run -f .scripts/clean_registry.rhai
 ```
 
-## Symptômes d'une purge trop agressive
+## Symptoms of overly aggressive purging
 
-| Symptôme | Règle violée |
+| Symptom | Rule violated |
 |---|---|
-| `Package <cat>/<name> is missing` sur une instance installée | 1 ou 3 |
-| Upgrade refusé (`MinimumPreviousVersion` non satisfiable) | 2 |
-| Désinstallation bloquée (finalizer non retiré) après changement de type | 3 |
-| `cosign verify` échoue sur un tag conservé | 4 |
+| `Package <cat>/<name> is missing` on an installed instance | 1 or 3 |
+| Upgrade refused (`MinimumPreviousVersion` not satisfiable) | 2 |
+| Uninstall blocked (finalizer not removed) after type change | 3 |
+| `cosign verify` fails on a retained tag | 4 |

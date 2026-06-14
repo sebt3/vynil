@@ -1,84 +1,84 @@
-# Référence
+# Reference
 
-## Variables d'environnement de l'opérateur
+## Operator Environment Variables
 
-| Variable | Défaut | Rôle |
+| Variable | Default | Role |
 |---|---|---|
-| `CONTROLLER_BASE_DIR` | `./operator` | Répertoire des templates Handlebars. |
-| `VYNIL_NAMESPACE` | `vynil-system` | Namespace système de Vynil. |
-| `AGENT_IMAGE` | image compilée par défaut | Image de l'agent utilisée pour les Jobs. |
-| `AGENT_ACCOUNT` | `vynil-agent` | ServiceAccount des Jobs d'agent. |
-| `AGENT_LOG_LEVEL` | `info` | Niveau de log des Jobs d'agent. |
-| `TENANT_LABEL` | `vynil.solidite.fr/tenant` | Clé de label identifiant un tenant. |
-| `SCAN_PACKAGE` | (absent) | Filtre partiel pour `box scan` / `box file-scan`. |
+| `CONTROLLER_BASE_DIR` | `./operator` | Directory for Handlebars templates. |
+| `VYNIL_NAMESPACE` | `vynil-system` | Vynil system namespace. |
+| `AGENT_IMAGE` | compiled default image | Agent image used for Jobs. |
+| `AGENT_ACCOUNT` | `vynil-agent` | ServiceAccount for agent Jobs. |
+| `AGENT_LOG_LEVEL` | `info` | Log level for agent Jobs. |
+| `TENANT_LABEL` | `vynil.solidite.fr/tenant` | Label key identifying a tenant. |
+| `SCAN_PACKAGE` | (absent) | Partial filter for `box scan` / `box file-scan`. |
 
-> `AGENT_IMAGE` doit suivre la version de l'opérateur. Vérifiez la valeur réelle déployée
-> plutôt qu'une valeur codée en dur dans la documentation.
+> `AGENT_IMAGE` must match the operator version. Check the actual deployed value rather
+> than a hardcoded value in documentation.
 
-## Variables d'environnement de l'agent
+## Agent Environment Variables
 
-Voir les flags équivalents dans la [Référence CLI](../cli.md) : `NAMESPACE`, `INSTANCE`,
+See the equivalent flags in the [CLI Reference](../cli.md): `NAMESPACE`, `INSTANCE`,
 `VYNIL_NAMESPACE`, `PACKAGE_DIRECTORY`, `SCRIPT_DIRECTORY`, `TEMPLATE_DIRECTORY`,
 `CONFIG_DIR`, `CONTROLLER_VALUES`, `AGENT_IMAGE`, `TAG`, `LOG_LEVEL`, `SIGNING_KEY`,
 `JUNIT_OUTPUT_FILENAME`, `TEMPLATE_OUTPUT_FILENAME`, `TESTSETS_DIRECTORY`, `TEST_NAME`.
 
-## Métriques Prometheus
+## Prometheus Metrics
 
-Exposées sur `GET /metrics` (port 9000, format OpenMetrics). Quatre registres (JukeBox,
-System, Service, Tenant) exposent par type :
+Exposed at `GET /metrics` (port 9000, OpenMetrics format). Four registries (JukeBox,
+System, Service, Tenant) expose per type:
 
-- durée des réconciliations (histogramme) ;
-- compteurs de succès/échec ;
-- jauge des réconciliations en cours ;
-- horodatage du dernier événement.
+- reconciliation duration (histogram);
+- success/failure counters;
+- in-progress reconciliation gauge;
+- last event timestamp.
 
-## Templates Handlebars de l'opérateur
+## Operator Handlebars Templates
 
-Répertoire [`operator/templates/`](../../operator/templates/) :
+Directory [`operator/templates/`](../../../operator/templates/):
 
 | Template | Usage |
 |---|---|
-| `package.yaml.hbs` | Job d'installation/suppression d'une instance. |
-| `cronscan.yaml.hbs` | CronJob de scan d'une JukeBox. |
-| `scan.yaml.hbs` | Job de scan manuel d'une JukeBox. |
+| `package.yaml.hbs` | Instance install/delete Job. |
+| `cronscan.yaml.hbs` | JukeBox scan CronJob. |
+| `scan.yaml.hbs` | JukeBox manual scan Job. |
 
-Variables systématiquement présentes dans le contexte : `tag`, `image`, `registry`,
-`namespace`, `name`, `job_name`, `package_type`, `package_action`, `digest`, `ctrl_values`,
-`rec_crds`, `rec_system_services`, `rec_tenant_services`.
+Variables always available in context: `tag`, `image`, `registry`, `namespace`, `name`,
+`job_name`, `package_type`, `package_action`, `digest`, `ctrl_values`, `rec_crds`,
+`rec_system_services`, `rec_tenant_services`.
 
-## Helpers Handlebars des paquets
+## Package Handlebars Helpers
 
 | Helper | Signature | Description |
 |---|---|---|
-| `image_from_ctx` | `(ctx "key")` | `registry/repository:tag` depuis `package.yaml[images][key]`. |
-| `resources_from_ctx` | `(ctx "key")` | `{requests, limits}` depuis `package.yaml[resources][key]`. |
-| `selector_from_ctx` | `(ctx comp="key")` | Labels de selector pour le composant. |
-| `labels_from_ctx` | `(ctx)` | Labels complets du pod template. |
-| `json_to_str` | `(value)` | Sérialise un objet en JSON inline. |
-| `ctx_have_crd` | `(ctx "group/version/kind")` | Vrai si le CRD est installé. |
+| `image_from_ctx` | `(ctx "key")` | `registry/repository:tag` from `package.yaml[images][key]`. |
+| `resources_from_ctx` | `(ctx "key")` | `{requests, limits}` from `package.yaml[resources][key]`. |
+| `selector_from_ctx` | `(ctx comp="key")` | Selector labels for the component. |
+| `labels_from_ctx` | `(ctx)` | Full pod template labels. |
+| `json_to_str` | `(value)` | Serializes an object to inline JSON. |
+| `ctx_have_crd` | `(ctx "group/version/kind")` | True if the CRD is installed. |
 
-Voir [Génération de paquets](../gen-package.md) pour l'usage complet.
+See [Package generation](../gen-package.md) for full usage.
 
-## Stratégie YAML
+## YAML Strategy
 
-| Usage | Bibliothèque | Ordre des clés |
+| Usage | Library | Key order |
 |---|---|---|
-| Code Rust (serde) | `serde_yaml` | alphabétique |
-| `yaml_*_ordered` (Rhai) | `rust-yaml` | préservé |
+| Rust code (serde) | `serde_yaml` | alphabetical |
+| `yaml_*_ordered` (Rhai) | `rust-yaml` | preserved |
 
-`rust-yaml` est utilisé pour `package.yaml` (préservation de l'ordre, block scalars
-intacts) ; `serde_yaml` partout ailleurs. Le type `YamlError(String)` encapsule les deux.
+`rust-yaml` is used for `package.yaml` (order preservation, block scalars intact);
+`serde_yaml` everywhere else. The `YamlError(String)` type wraps both.
 
-## Structure du dépôt
+## Repository Structure
 
 ```text
 vynil/
-├── common/      bibliothèque partagée (CRDs, moteurs Rhai/Handlebars, handlers)
-├── operator/    contrôleur Kubernetes (+ templates)
-├── agent/       CLI exécuté dans les Jobs (+ scripts Rhai)
-├── box/         paquets sources (vynil, test)
-├── deploy/      kustomize : CRDs + bootstrap
-└── docs/        cette documentation
+├── common/      shared library (CRDs, Rhai/Handlebars engines, handlers)
+├── operator/    Kubernetes controller (+ templates)
+├── agent/       CLI executed in Jobs (+ Rhai scripts)
+├── box/         source packages (vynil, test)
+├── deploy/      kustomize: CRDs + bootstrap
+└── docs/        this documentation
 ```
 
-Voir [Architecture](../architecture.md) pour le détail des crates.
+See [Architecture](../architecture.md) for crate details.

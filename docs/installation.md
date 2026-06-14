@@ -1,46 +1,46 @@
 # Installation
 
-## Prérequis
+## Prerequisites
 
-- Un cluster Kubernetes et `kubectl` configuré (droits cluster-admin pour l'installation
-  initiale — voir la note de sécurité plus bas).
-- Un accès réseau au registre OCI hébergeant les paquets (par défaut `docker.io/sebt3/vynil`).
+- A Kubernetes cluster and `kubectl` configured (cluster-admin rights for the initial
+  installation — see the security note below).
+- Network access to the OCI registry hosting the packages (default `docker.io/sebt3/vynil`).
 
-## Installation de l'opérateur
+## Installing the operator
 
 ```bash
 kubectl create ns vynil-system
 kubectl apply -k github.com/sebt3/vynil//deploy
 ```
 
-Le kustomize `deploy/` installe :
+The `deploy/` kustomize installs:
 
-- les **CRD** (`deploy/crd/`) : `JukeBox`, `SystemInstance`, `ServiceInstance`,
-  `TenantInstance` ;
-- le **bootstrap** (`deploy/bootstrap/`) : un ServiceAccount `vynil-bootstrap`, une
-  `JukeBox` nommée `vynil` pointant vers `docker.io/sebt3/vynil`, une `SystemInstance`
-  `vynil`, et un Job d'amorçage qui scanne la JukeBox puis installe le paquet `core/vynil`
-  (qui déploie à son tour l'opérateur lui-même).
+- the **CRDs** (`deploy/crd/`): `JukeBox`, `SystemInstance`, `ServiceInstance`,
+  `TenantInstance`;
+- the **bootstrap** (`deploy/bootstrap/`): a `vynil-bootstrap` ServiceAccount, a
+  `JukeBox` named `vynil` pointing to `docker.io/sebt3/vynil`, a `vynil`
+  `SystemInstance`, and a bootstrap Job that scans the JukeBox then installs the
+  `core/vynil` package (which in turn deploys the operator itself).
 
-Vynil s'installe donc *via Vynil* : le bootstrap pose juste assez de matière pour que
-l'opérateur prenne le relais et se gère ensuite comme n'importe quel paquet système.
+Vynil therefore installs itself *via Vynil*: the bootstrap lays down just enough
+material for the operator to take over and manage itself like any other system package.
 
-## Vérifier l'installation
+## Verify the installation
 
 ```bash
-# l'opérateur tourne
+# the operator is running
 kubectl -n vynil-system get pods
 
-# le catalogue de la jukebox de référence est peuplé
+# the reference jukebox catalogue is populated
 kubectl get jukebox vynil -o jsonpath='{.status.packages[*].metadata.name}'
 
-# la SystemInstance vynil est Ready
+# the vynil SystemInstance is Ready
 kubectl -n vynil-system get systeminstances
 ```
 
-## Ajouter une source de paquets
+## Add a package source
 
-Créez une `JukeBox` pointant vers votre registre :
+Create a `JukeBox` pointing to your registry:
 
 ```yaml
 apiVersion: vynil.solidite.fr/v1
@@ -52,19 +52,19 @@ spec:
     list:
     - "registry.example.com/my-org/vynil"
   maturity: stable
-  schedule: "0 3 * * *"        # rescan quotidien à 3h
-  # pull_secret: my-pull-secret # si registre privé
+  schedule: "0 3 * * *"        # daily rescan at 3am
+  # pull_secret: my-pull-secret # for private registries
 ```
 
-Forcer un scan immédiat sans attendre le cron :
+Force an immediate scan without waiting for the cron:
 
 ```bash
 kubectl annotate jukebox home-alpha vynil.solidite.fr/force-scan=true --overwrite
 ```
 
-Voir [Sources de JukeBox](jukebox/sources.md) pour les sources Harbor, GitLab, HTTP et S3.
+See [JukeBox sources](jukebox/sources.md) for Harbor, GitLab, HTTP, and S3 sources.
 
-## Installer un paquet
+## Install a package
 
 ```yaml
 apiVersion: vynil.solidite.fr/v1
@@ -80,32 +80,32 @@ spec:
     use_rocm: true
 ```
 
-Suivre l'avancement :
+Follow the progress:
 
 ```bash
 kubectl -n my-namespace get tenantinstances
-kubectl -n my-namespace describe tenantinstance my-ollama   # conditions détaillées
-kubectl -n vynil-system get jobs                            # job d'install de l'agent
+kubectl -n my-namespace describe tenantinstance my-ollama   # detailed conditions
+kubectl -n vynil-system get jobs                            # agent install job
 ```
 
-## Désinstaller
+## Uninstall
 
 ```bash
 kubectl -n my-namespace delete tenantinstance my-ollama
 ```
 
-La suppression est gérée par un finalizer : l'opérateur lance un Job de `delete` qui
-nettoie les enfants enregistrés dans le `status`, puis retire le finalizer. Si une
-désinstallation reste bloquée, voir [Dépannage](operations/troubleshooting.md).
+Deletion is managed by a finalizer: the operator launches a `delete` Job that cleans
+up the children recorded in the `status`, then removes the finalizer. If an
+uninstallation remains stuck, see [Troubleshooting](operations/troubleshooting.md).
 
-## Note de sécurité importante
+## Important security note
 
-Par défaut, l'agent Vynil s'exécute avec des droits **cluster-admin** et exécute le code
-(Rhai) embarqué dans les paquets. **N'installez que des paquets issus de JukeBox de
-confiance.** Lisez [Sécurité & modèle de menace](operations/security.md) avant tout
-déploiement en production.
+By default, the Vynil agent runs with **cluster-admin** rights and executes the code
+(Rhai) embedded in packages. **Only install packages from trusted JukeBox sources.**
+Read [Security & threat model](operations/security.md) before any production
+deployment.
 
-## Variables d'environnement de l'opérateur
+## Operator environment variables
 
-Les principales variables sont décrites dans la [Référence](operations/reference.md)
+The main variables are described in the [Reference](operations/reference.md)
 (`VYNIL_NAMESPACE`, `AGENT_IMAGE`, `AGENT_ACCOUNT`, `TENANT_LABEL`, etc.).

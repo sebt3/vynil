@@ -1,31 +1,31 @@
-# Format d'un paquet
+# Package Format
 
-Un paquet existe sous deux formes : un **répertoire source** (pendant le développement) et
-une **image OCI** (une fois packé). Cette page décrit les deux.
+A package exists in two forms: a **source directory** (during development) and
+an **OCI image** (once packaged). This page describes both.
 
-## Répertoire source
+## Source directory
 
 ```text
 my-package/
-├── package.yaml          # manifeste (métadonnées, images, resources, options, requirements)
-├── befores/              # phase 1 — templates .yaml.hbs / .yaml
-├── vitals/               # phase 2 — données persistantes (PVC)
-├── tofu/                 # phase 3 — fichiers OpenTofu/Terraform (*.tf)
+├── package.yaml          # manifest (metadata, images, resources, options, requirements)
+├── befores/              # phase 1 — .yaml.hbs / .yaml templates
+├── vitals/               # phase 2 — persistent data (PVC)
+├── tofu/                 # phase 3 — OpenTofu/Terraform files (*.tf)
 ├── others/               # phase 4 — Service, ConfigMap, Ingress, Role…
 ├── scalables/            # phase 5 — Deployment, StatefulSet…
-├── posts/                # phase 6 — actions finales
-├── crds/                 # CRDs (system/service uniquement)
-├── handlebars/           # partials Handlebars réutilisables
-└── scripts/              # hooks Rhai du cycle de vie (*.rhai)
+├── posts/                # phase 6 — final actions
+├── crds/                 # CRDs (system/service only)
+├── handlebars/           # reusable Handlebars partials
+└── scripts/              # lifecycle Rhai hooks (*.rhai)
 ```
 
-Les répertoires de phase sont **optionnels** : l'agent ne traite que ceux présents (voir
-[Cycle de vie](lifecycle.md)). Les fichiers `*.yaml.hbs` sont rendus avec le contexte de
-l'instance ; les `*.yaml` sont appliqués tels quels.
+Phase directories are **optional**: the agent only processes those that are present (see
+[Lifecycle](lifecycle.md)). `*.yaml.hbs` files are rendered with the instance context;
+`*.yaml` files are applied as-is.
 
-> Note de nomenclature : le générateur (`gen_package.rhai`) écrit dans des répertoires
-> préfixés `get_` (`get_vitals/`, `get_scalables/`, `get_others/`, `get_systems/`,
-> `get_crds/`) qui correspondent aux phases ci-dessus côté agent.
+> Naming note: the generator (`gen_package.rhai`) writes to directories prefixed with
+> `get_` (`get_vitals/`, `get_scalables/`, `get_others/`, `get_systems/`, `get_crds/`)
+> which correspond to the phases above on the agent side.
 
 ## `package.yaml`
 
@@ -34,91 +34,90 @@ l'instance ; les `*.yaml` sont appliqués tels quels.
 apiVersion: vinyl.solidite.fr/v1beta1
 kind: Package
 metadata:
-  name: traefik             # identifiant (appslug dans les templates)
-  category: networking      # catégorie libre
+  name: traefik             # identifier (appslug in templates)
+  category: networking      # free-form category
   type: system              # system | service | tenant
-  app_version: "3.7.1"      # version de l'application
+  app_version: "3.7.1"      # application version
   description: Traefik ingress controller.
   features:
     - upgrade
     - auto_config
-  # backup_affinity: controller   # composant servant d'affinité requise aux jobs de backup
+  # backup_affinity: controller   # component serving as required pod affinity for backup jobs
 images:
-  traefik:                  # clé arbitraire, référencée par {{image_from_ctx this "traefik"}}
+  traefik:                  # arbitrary key, referenced by {{image_from_ctx this "traefik"}}
     registry: ghcr.io
     repository: traefik/traefik
-    tag: v3.7.1             # mis à jour par `agent package update`
-resources:                  # requests/limits par conteneur
+    tag: v3.7.1             # updated by `agent package update`
+resources:                  # requests/limits per container
   traefik:
     requests: { cpu: 100m, memory: 128Mi }
     limits:   { cpu: 1000m, memory: 256Mi }
-requirements: []            # dépendances et prérequis
-recommandations: []         # dépendances optionnelles déclenchant une mise à jour au changement (ex. monitoring)
-options:                    # schéma des paramètres configurables
+requirements: []            # dependencies and prerequisites
+recommandations: []         # optional dependencies that trigger an update on change (e.g. monitoring)
+options:                    # schema for configurable parameters
   replicas:
     type: integer
     default: 1
-    description: Nombre de réplicas
+    description: Number of replicas
 ```
 
-### Métadonnées (`metadata`)
+### Metadata (`metadata`)
 
-| Champ | Obligatoire | Description |
+| Field | Required | Description |
 |---|---|---|
-| `name` | oui | Identifiant du paquet (devient `instance.appslug`). |
-| `category` | oui | Catégorie de regroupement. |
-| `type` | oui | `system`, `service` ou `tenant`. |
-| `app_version` | recommandé | Version de l'application embarquée. |
-| `description` | oui | Description lisible. |
-| `features` | non | `upgrade`, `backup`, `monitoring`, `high_availability`, `auto_config`, `auto_scaling`, `deprecated`. |
-| `backup_affinity` | non | Composant utilisé comme affinité de pod requise pour les jobs de sauvegarde. |
+| `name` | yes | Package identifier (becomes `instance.appslug`). |
+| `category` | yes | Grouping category. |
+| `type` | yes | `system`, `service`, or `tenant`. |
+| `app_version` | recommended | Version of the bundled application. |
+| `description` | yes | Human-readable description. |
+| `features` | no | `upgrade`, `backup`, `monitoring`, `high_availability`, `auto_config`, `auto_scaling`, `deprecated`. |
+| `backup_affinity` | no | Component used as required pod affinity for backup jobs. |
 
-### Prérequis (`requirements`)
+### Requirements (`requirements`)
 
-Liste de contraintes vérifiées par l'opérateur avant d'installer
-(`VynilPackageRequirement`) :
+List of constraints checked by the operator before installing
+(`VynilPackageRequirement`):
 
-| Variante | Vérifie |
+| Variant | Checks |
 |---|---|
-| `MinimumPreviousVersion` | version minimale déjà installée pour autoriser l'upgrade |
-| `VynilVersion` | version minimale du framework Vynil |
-| `ClusterVersion` | version minimale de Kubernetes |
-| `CustomResourceDefinition` | présence d'un CRD donné |
-| `SystemService` / `TenantService` | présence d'un service fourni par un autre paquet |
-| `Cpu` / `Memory` / `Disk` | ressources disponibles |
-| `StorageCapability` | capacité de stockage (`RWX` / `ROX`) |
-| `Prefly` | script Rhai de vérification personnalisée |
+| `MinimumPreviousVersion` | minimum already-installed version required to allow the upgrade |
+| `VynilVersion` | minimum Vynil framework version |
+| `ClusterVersion` | minimum Kubernetes version |
+| `CustomResourceDefinition` | presence of a given CRD |
+| `SystemService` / `TenantService` | presence of a service provided by another package |
+| `Cpu` / `Memory` / `Disk` | available resources |
+| `StorageCapability` | storage capability (`RWX` / `ROX`) |
+| `Prefly` | custom Rhai verification script |
 
 ### Options (`options`)
 
-Schéma (style OpenAPI) des paramètres acceptés dans `spec.options` des instances. Les
-options sont validées (`validate_options`) puis exposées au contexte de rendu. Toute valeur
-fournie dans `spec.options` est de l'entrée utilisateur : le rendu doit en tenir compte.
+OpenAPI-style schema for accepted parameters in `spec.options` of instances. Options
+are validated (`validate_options`) and then exposed to the rendering context. Any value
+provided in `spec.options` is user input: the rendering must take this into account.
 
-### Recommandations & `value_script`
+### Recommendations & `value_script`
 
-- `recommandations` : listes optionnelles (CRDs, services système/tenant) dont la présence
-  active des fonctionnalités supplémentaires sans être bloquante.
-- `value_script` : script Rhai évalué par l'opérateur pour produire des valeurs de contrôle
-  (`ctrl_values`) injectées dans le contexte Handlebars.
+- `recommandations`: optional lists (CRDs, system/tenant services) whose presence
+  activates additional features without being blocking.
+- `value_script`: Rhai script evaluated by the operator to produce control values
+  (`ctrl_values`) injected into the Handlebars context.
 
-## Image OCI (paquet packé)
+## OCI image (packaged package)
 
-`agent package build` (ou `package unpack` pour l'inverse) transforme le répertoire en
-image OCI. Les métadonnées sont portées par des **annotations OCI** :
+`agent package build` (or `package unpack` for the inverse) turns the directory into
+an OCI image. Metadata is carried by **OCI annotations**:
 
-| Annotation | Contenu (JSON, sauf indication) |
+| Annotation | Content (JSON, unless stated otherwise) |
 |---|---|
-| `fr.solidite.vynil.metadata` | nom, catégorie, type, app_version, features |
-| `fr.solidite.vynil.requirements` | liste des prérequis |
-| `fr.solidite.vynil.options` | schéma des options |
-| `fr.solidite.vynil.recommandations` | recommandations |
-| `fr.solidite.vynil.value_script` | script Rhai (chaîne) |
+| `fr.solidite.vynil.metadata` | name, category, type, app_version, features |
+| `fr.solidite.vynil.requirements` | list of prerequisites |
+| `fr.solidite.vynil.options` | options schema |
+| `fr.solidite.vynil.recommandations` | recommendations |
+| `fr.solidite.vynil.value_script` | Rhai script (string) |
 
-Le contenu de l'image (la couche) embarque les répertoires de phase, les scripts Rhai et
-les templates Handlebars. L'agent monte ce contenu (`unpack`) avant d'exécuter le cycle de
-vie.
+The image content (the layer) includes the phase directories, Rhai scripts, and
+Handlebars templates. The agent mounts this content (`unpack`) before executing the
+lifecycle.
 
-Voir [Génération de paquets](../gen-package.md) pour produire ces répertoires depuis un
-chart Helm ou des manifestes bruts, et [Build & signature](../build-signing.md) pour la
-publication signée.
+See [Package generation](../gen-package.md) to produce these directories from a Helm
+chart or raw manifests, and [Build & signing](../build-signing.md) for signed publishing.

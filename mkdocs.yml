@@ -1,28 +1,65 @@
 site_name: Vynil
-site_description: Gestionnaire de paquets pour Kubernetes — documentation
+site_description: Kubernetes package manager — documentation
 repo_url: https://github.com/sebt3/vynil
 docs_dir: docs
 
 theme:
   name: material
-  language: fr
+  language: en
   palette:
     - scheme: default
       primary: deep purple
       toggle:
         icon: material/weather-night
-        name: Mode sombre
+        name: Dark mode
     - scheme: slate
       primary: deep purple
       toggle:
         icon: material/weather-sunny
-        name: Mode clair
+        name: Light mode
   features:
     - navigation.sections
     - navigation.top
     - navigation.instant
     - content.code.copy
     - search.suggest
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: fr
+          name: Français
+          build: true
+          nav_translations:
+            Home: Accueil
+            Concepts: Concepts
+            Installation: Installation
+            Building a distribution: Construire une distribution
+            Overview: Vue d'ensemble
+            Reconciliation & lifecycle: Réconciliation & cycle de vie
+            CRD reference: Référence des CRD
+            Packages: Paquets
+            Format: Format
+            Lifecycle: Cycle de vie
+            OCI package (audit, air-gap): Le paquet OCI (audit, air-gap)
+            Package generation: Génération
+            Build & signing: Build & signature
+            Sources: Sources
+            Registry maintenance: Maintenance du registre
+            Tooling: Outillage
+            CLI reference: Référence CLI
+            Lint: Lint
+            Package tests: Tests de paquet
+            Operations: Exploitation
+            Security & threat model: Sécurité & modèle de menace
+            Troubleshooting: Dépannage
+            Reference: Référence
 
 markdown_extensions:
   - admonition
@@ -39,29 +76,29 @@ markdown_extensions:
   - tables
 
 nav:
-  - Accueil: index.md
+  - Home: index.md
   - Concepts: concepts.md
   - Installation: installation.md
-  - Construire une distribution: distribution.md
+  - Building a distribution: distribution.md
   - Architecture:
-      - Vue d'ensemble: architecture.md
-      - Réconciliation & cycle de vie: reconciliation.md
-      - Référence des CRD: crds.md
-  - Paquets:
+      - Overview: architecture.md
+      - Reconciliation & lifecycle: reconciliation.md
+      - CRD reference: crds.md
+  - Packages:
       - Format: packages/format.md
-      - Cycle de vie: packages/lifecycle.md
-      - Le paquet OCI (audit, air-gap): packages/portability.md
-      - Génération: gen-package.md
-      - Build & signature: build-signing.md
+      - Lifecycle: packages/lifecycle.md
+      - OCI package (audit, air-gap): packages/portability.md
+      - Package generation: gen-package.md
+      - Build & signing: build-signing.md
   - JukeBox:
       - Sources: jukebox/sources.md
       - GitLab Container Registry: jukebox/gitlab-registry.md
-      - Maintenance du registre: jukebox/registry-maintenance.md
-  - Outillage:
-      - Référence CLI: cli.md
+      - Registry maintenance: jukebox/registry-maintenance.md
+  - Tooling:
+      - CLI reference: cli.md
       - Lint: tooling/lint.md
-      - Tests de paquet: tooling/test.md
-  - Exploitation:
-      - Sécurité & modèle de menace: operations/security.md
-      - Dépannage: operations/troubleshooting.md
-      - Référence: operations/reference.md
+      - Package tests: tooling/test.md
+  - Operations:
+      - Security & threat model: operations/security.md
+      - Troubleshooting: operations/troubleshooting.md
+      - Reference: operations/reference.md
