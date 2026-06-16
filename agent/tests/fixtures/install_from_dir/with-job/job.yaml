@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: preload-data
+  namespace: test-ns
+spec:
+  template:
+    metadata:
+      labels:
+        app: preload-data
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: preload
+          image: busybox:latest
+          command: ["sh", "-c", "echo done"]

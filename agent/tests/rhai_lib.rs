@@ -623,6 +623,141 @@ fn install_from_dir_respects_ordering() {
     assert!(result.as_bool().unwrap());
 }
 
+#[test]
+fn install_from_dir_applies_job_in_last_phase() {
+    // Nominal: a Job fixture is applied and appears in the result list
+    // Job belongs to get_last() so it is applied after ConfigMap (get_first())
+    let base = env!("CARGO_MANIFEST_DIR");
+    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/with-job", base);
+
+    let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
+
+    let result = rhai
+        .eval(&format!(
+            r#"
+        import "install_from_dir" as install;
+
+        let instance = #{{
+            metadata: #{{ namespace: "test-ns" }}
+        }};
+
+        let context = #{{
+            config_dir: "",
+            package_dir: ""
+        }};
+
+        let applied = install::install(instance, context, "{}", true, false);
+
+        // Should have applied ConfigMap and Job (2 objects)
+        applied.len() == 2 &&
+        applied.some(|o| o.kind == "ConfigMap") &&
+        applied.some(|o| o.kind == "Job")
+    "#,
+            fixture_dir
+        ))
+        .unwrap();
+
+    assert!(
+        result.as_bool().unwrap(),
+        "install must apply both ConfigMap and Job"
+    );
+
+    let created_objs = created.lock().unwrap();
+    assert_eq!(created_objs.len(), 2);
+}
+
+#[test]
+fn install_from_dir_job_applied_after_configmap() {
+    // Edge case / ordering: Job (get_last) must be applied strictly after ConfigMap (get_first)
+    // Verifies the 3-phase ordering: first → middle → last
+    let base = env!("CARGO_MANIFEST_DIR");
+    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/with-job", base);
+
+    let (mut rhai, _created) = make_lib_script_with_k8s(vec![]);
+
+    let result = rhai
+        .eval(&format!(
+            r#"
+        import "install_from_dir" as install;
+
+        let instance = #{{
+            metadata: #{{ namespace: "test-ns" }}
+        }};
+
+        let context = #{{
+            config_dir: "",
+            package_dir: ""
+        }};
+
+        let applied = install::install(instance, context, "{}", true, false);
+
+        // ConfigMap must appear at index 0, Job at index 1 (first-phase before last-phase)
+        applied.len() == 2 &&
+        applied[0].kind == "ConfigMap" &&
+        applied[1].kind == "Job"
+    "#,
+            fixture_dir
+        ))
+        .unwrap();
+
+    assert!(
+        result.as_bool().unwrap(),
+        "ConfigMap (get_first) must be applied before Job (get_last)"
+    );
+}
+
+#[test]
+fn install_from_dir_job_applied_to_instance_namespace() {
+    // Nominal: Job in fixture gets the instance namespace applied (force_ns=true)
+    let base = env!("CARGO_MANIFEST_DIR");
+    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/with-job", base);
+
+    let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
+
+    let result = rhai
+        .eval(&format!(
+            r#"
+        import "install_from_dir" as install;
+
+        let instance = #{{
+            metadata: #{{ namespace: "forced-ns" }}
+        }};
+
+        let context = #{{
+            config_dir: "",
+            package_dir: ""
+        }};
+
+        // force_ns=true forces all objects into the instance namespace
+        let applied = install::install(instance, context, "{}", true, true);
+        applied.some(|o| o.kind == "Job" && o.namespace == "forced-ns")
+    "#,
+            fixture_dir
+        ))
+        .unwrap();
+
+    assert!(
+        result.as_bool().unwrap(),
+        "Job must be applied in the forced namespace"
+    );
+
+    let created_objs = created.lock().unwrap();
+    for obj in created_objs.iter() {
+        if let Ok(map) = obj.as_map_ref()
+            && map
+                .get("kind")
+                .and_then(|k| k.clone().into_string().ok())
+                .as_deref()
+                == Some("Job")
+            && let Some(meta) = map.get("metadata")
+            && let Ok(meta_map) = meta.as_map_ref()
+            && let Some(ns) = meta_map.get("namespace")
+        {
+            assert_eq!(ns.to_string(), "forced-ns");
+        }
+    }
+}
+
 // ===== gen_package.rhai tests =====
 
 #[test]

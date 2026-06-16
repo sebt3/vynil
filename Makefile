@@ -1,5 +1,7 @@
 PROJECT    ?= sebt3
 VARIANT    ?=
+CONTEXT    ?=
+KUBECTL    := kubectl$(if $(CONTEXT), --context $(CONTEXT),)
 TAG_REMOTE := $(shell git remote | grep -q '^upstream$$' && echo upstream || echo origin)
 LATEST_TAG := $(shell git ls-remote --tags $(TAG_REMOTE) 2>/dev/null | grep -v '\^{}' | awk -F/ '{print $$3}' | sort -V | tail -1)
 NEXT_PATCH := $(shell echo $(LATEST_TAG) | awk -F. '{print $$1"."$$2"."$$3+1}')
@@ -32,8 +34,8 @@ endef
 .PHONY: box deploy
 
 help:
-	@echo "Usage: make <target> [PROJECT=sebt3|reivaxm] [VARIANT=alpha|beta]"
-	@echo "       PROJECT default: sebt3 — VARIANT default: (stable)"
+	@echo "Usage: make <target> [PROJECT=sebt3|reivaxm] [VARIANT=alpha|beta] [CONTEXT=<kubecontext>]"
+	@echo "       PROJECT default: sebt3 — VARIANT default: (stable) — CONTEXT default: current"
 	@echo ""
 	@echo "Dev:"
 	@echo "  generate-crd   Generate CRD yaml files"
@@ -55,7 +57,7 @@ help:
 	@echo "  box            make box [PROJECT=reivaxm] [VARIANT=alpha|beta]"
 	@echo ""
 	@echo "Deploy (patches bootstrap.yaml on the fly):"
-	@echo "  deploy         make deploy [PROJECT=reivaxm] [VARIANT=alpha|beta]"
+	@echo "  deploy         make deploy [PROJECT=reivaxm] [VARIANT=alpha|beta] [CONTEXT=default]"
 
 # ── Dev ──────────────────────────────────────────────────────────────────────
 
@@ -68,7 +70,7 @@ generate: generate-crd
 	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"agent",/' <Cargo.toml >operator/parent.toml
 
 crd: generate-crd
-	kubectl apply -f box/vynil/crds/crd.yaml
+	$(KUBECTL) apply -f box/vynil/crds/crd.yaml
 
 fmt:
 	cargo +nightly fmt
@@ -114,23 +116,27 @@ operator-beta: bump-version
 
 # ── Box ──────────────────────────────────────────────────────────────────────
 
+BOX_TMP = /tmp/vynil-box
+
 box:
 	$(call img-build-push,agent,$(TAG))
 	$(call img-build-push,operator,$(TAG))
-	sed -i 's|repository: sebt3/vynil|repository: $(PROJECT)/vynil|g' box/vynil/package.yaml
-	cargo run --bin agent -- package update --source ./box/vynil/
-	cargo run --bin agent -- package build -o ./box/vynil/ \
+	rm -rf $(BOX_TMP) && cp -r box/vynil $(BOX_TMP)
+	sed -i 's|repository: sebt3/vynil|repository: $(PROJECT)/vynil|g' $(BOX_TMP)/package.yaml
+	sed -i 's|app_version:.*|app_version: $(TAG)|' $(BOX_TMP)/package.yaml
+	cargo run --bin agent -- package build -o $(BOX_TMP)/ \
 		--tag $(TAG) -r docker.io -n $(PROJECT)/vynil \
 		-u $(DOCKER_USER) -p $(DOCKER_PASS)
-	sed -i 's|repository: $(PROJECT)/vynil|repository: sebt3/vynil|g' box/vynil/package.yaml
+	rm -rf $(BOX_TMP)
 
 # ── Deploy ───────────────────────────────────────────────────────────────────
 
 deploy: generate-crd
-	kubectl create ns vynil-system || true
-	kubectl apply -f deploy/crd/crd.yaml
+	$(KUBECTL) create ns vynil-system || true
+	$(KUBECTL) apply -f deploy/crd/crd.yaml
+	$(KUBECTL) delete job vynil-bootstrap -n vynil-system --ignore-not-found
 	sed \
 		-e 's|sebt3|$(PROJECT)|g' \
 		-e 's|0\.3\.1|$(TAG)|g' \
 		-e 's|maturity: stable|maturity: $(MATURITY)|g' \
-		deploy/bootstrap/bootstrap.yaml | kubectl apply -f -
+		deploy/bootstrap/bootstrap.yaml | $(KUBECTL) apply -f -
