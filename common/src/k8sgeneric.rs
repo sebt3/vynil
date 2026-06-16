@@ -911,15 +911,40 @@ impl K8sGeneric {
                         .insert("ownerReferences".to_string(), vec![owner].into());
                 }
             }
+            let kind = patch
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .unwrap_or("")
+                .to_string();
+            let api_for_get = api.clone();
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
-                    api.patch(
-                        name,
-                        &PatchParams::apply(&get_client_name()).force(),
-                        &Patch::Apply(handle),
-                    )
-                    .await
-                    .map_err(Error::KubeError)
+                    match api
+                        .patch(
+                            name,
+                            &PatchParams::apply(&get_client_name()).force(),
+                            &Patch::Apply(handle),
+                        )
+                        .await
+                    {
+                        Ok(obj) => Ok(obj),
+                        Err(e) => {
+                            // SSA force on a completed Job fails with 422 "immutable" because
+                            // Kubernetes adds controller-uid/job-name to spec.template.metadata.labels
+                            // at runtime. If the Job is already complete the error is benign.
+                            if kind == "Job"
+                                && e.to_string().contains("immutable")
+                                && let Ok(current) = api_for_get.get(name).await
+                                && job_is_completed(&current.data)
+                            {
+                                tracing::debug!(
+                                    "Job {name} spec.template immutable but already completed — skipping"
+                                );
+                                return Ok(current);
+                            }
+                            Err(Error::KubeError(e))
+                        }
+                    }
                 })
             })
         } else {
@@ -1024,6 +1049,17 @@ pub fn k8sgeneric_rhai_register(engine: &mut Engine) {
     );
 }
 
+fn job_is_completed(data: &serde_json::Value) -> bool {
+    let status = match data.get("status") {
+        Some(s) => s,
+        None => return false,
+    };
+    if status.get("succeeded").and_then(|v| v.as_i64()).unwrap_or(0) > 0 {
+        return true;
+    }
+    status.get("completionTime").is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1045,5 +1081,35 @@ mod tests {
             K8sGeneric::new_ns,
             K8sGeneric::new_group_ns
         );
+    }
+
+    #[test]
+    fn test_job_is_completed_succeeded() {
+        let data = serde_json::json!({"status": {"succeeded": 1}});
+        assert!(job_is_completed(&data));
+    }
+
+    #[test]
+    fn test_job_is_completed_zero_succeeded() {
+        let data = serde_json::json!({"status": {"succeeded": 0}});
+        assert!(!job_is_completed(&data));
+    }
+
+    #[test]
+    fn test_job_is_completed_completion_time() {
+        let data = serde_json::json!({"status": {"completionTime": "2024-01-01T00:00:00Z"}});
+        assert!(job_is_completed(&data));
+    }
+
+    #[test]
+    fn test_job_is_completed_no_status() {
+        let data = serde_json::json!({});
+        assert!(!job_is_completed(&data));
+    }
+
+    #[test]
+    fn test_job_is_completed_still_running() {
+        let data = serde_json::json!({"status": {"active": 1, "succeeded": 0}});
+        assert!(!job_is_completed(&data));
     }
 }
