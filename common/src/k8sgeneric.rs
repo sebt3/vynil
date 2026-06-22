@@ -23,18 +23,34 @@ lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
 }
 async fn async_populate_cache() -> Discovery {
-    Discovery::new(CLIENT.clone())
-        .run()
-        .await
-        .expect("create discovery")
+    match Discovery::new(CLIENT.clone()).run().await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("E_DISCOVERY_WARN: full discovery failed ({e}), retrying without metrics.k8s.io");
+            Discovery::new(CLIENT.clone())
+                .exclude(&["metrics.k8s.io"])
+                .run()
+                .await
+                .expect("create discovery (without metrics.k8s.io)")
+        }
+    }
 }
 fn populate_cache() -> Discovery {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            Discovery::new(CLIENT.clone())
-                .run()
-                .await
-                .expect("create discovery")
+            match Discovery::new(CLIENT.clone()).run().await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(
+                        "E_DISCOVERY_WARN: full discovery failed ({e}), retrying without metrics.k8s.io"
+                    );
+                    Discovery::new(CLIENT.clone())
+                        .exclude(&["metrics.k8s.io"])
+                        .run()
+                        .await
+                        .expect("create discovery (without metrics.k8s.io)")
+                }
+            }
         })
     })
 }

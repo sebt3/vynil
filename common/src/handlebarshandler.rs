@@ -251,8 +251,15 @@ impl HandleBars<'_> {
             `${im[\"registry\"]}/${im[\"repository\"]}:${tag}`");
         let _ = engine.register_script_helper(
             "resources_from_ctx",
-            "let root = params[0]?[\"instance\"]?[\"resources\"];let name = params[1];\n\
-            #{requests: #{cpu: root?[name]?[\"requests\"]?[\"cpu\"], memory: root?[name]?[\"requests\"]?[\"memory\"]}, limits: #{cpu: root?[name]?[\"limits\"]?[\"cpu\"], memory: root?[name]?[\"limits\"]?[\"memory\"]}}",
+            "let root = params[0]?[\"instance\"]?[\"resources\"]; let name = params[1];\n\
+            let res = #{}; let req = #{}; let lim = #{};\n\
+            let v = root?[name]?[\"requests\"]?[\"cpu\"]; if v != () { req[\"cpu\"] = v; }\n\
+            let v = root?[name]?[\"requests\"]?[\"memory\"]; if v != () { req[\"memory\"] = v; }\n\
+            let v = root?[name]?[\"limits\"]?[\"cpu\"]; if v != () { lim[\"cpu\"] = v; }\n\
+            let v = root?[name]?[\"limits\"]?[\"memory\"]; if v != () { lim[\"memory\"] = v; }\n\
+            if req.len() != 0 { res[\"requests\"] = req; }\n\
+            if lim.len() != 0 { res[\"limits\"] = lim; }\n\
+            res",
         );
         HandleBars { engine }
     }
@@ -475,5 +482,71 @@ mod tests {
         let data = serde_json::json!({"u": "user", "p": "pass"});
         let result = hbs.render("{{header_basic u p}}", &data).unwrap();
         assert_eq!(result, "Basic dXNlcjpwYXNz");
+    }
+
+    // ── resources_from_ctx ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resources_from_ctx_full_config() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({
+            "instance": {
+                "resources": {
+                    "app": {
+                        "requests": {"cpu": "50m", "memory": "128Mi"},
+                        "limits":   {"cpu": "500m", "memory": "512Mi"}
+                    }
+                }
+            }
+        });
+        let result = hbs
+            .render(r#"{{json_to_str (resources_from_ctx this "app")}}"#, &data)
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["requests"]["cpu"], "50m");
+        assert_eq!(parsed["requests"]["memory"], "128Mi");
+        assert_eq!(parsed["limits"]["cpu"], "500m");
+        assert_eq!(parsed["limits"]["memory"], "512Mi");
+    }
+
+    #[test]
+    fn test_resources_from_ctx_requests_only_no_limits_key() {
+        // When limits are absent from the instance config, the rendered JSON
+        // must not contain a "limits" key at all — null limits cause Kubernetes
+        // to reject the Deployment with "limit of 0".
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({
+            "instance": {
+                "resources": {
+                    "app": {
+                        "requests": {"cpu": "50m", "memory": "256Mi"}
+                    }
+                }
+            }
+        });
+        let result = hbs
+            .render(r#"{{json_to_str (resources_from_ctx this "app")}}"#, &data)
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["requests"]["cpu"], "50m");
+        assert_eq!(parsed["requests"]["memory"], "256Mi");
+        assert!(
+            parsed.get("limits").is_none(),
+            "limits key must be absent when not configured, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_resources_from_ctx_empty_context_returns_empty_object() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({ "instance": {} });
+        let result = hbs
+            .render(r#"{{json_to_str (resources_from_ctx this "app")}}"#, &data)
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(
+            parsed.get("requests").is_none() && parsed.get("limits").is_none(),
+            "empty context must produce empty resources object, got: {result}"
+        );
     }
 }
