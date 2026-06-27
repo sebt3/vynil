@@ -41,6 +41,14 @@ fn get_known_class() { [
         "driverClass": "efs.csi.aws.com",
         "accessModes": #{"ReadOnlyMany": true, "ReadWriteMany": true, "ReadWriteOnce": true, "ReadWriteOncePod": false},
         "capabilities": #{"dynamic": true, "file": true},
+    }, #{
+        "driverClass": "ebs.csi.aws.com",
+        "accessModes": #{"ReadOnlyMany": false, "ReadWriteMany": false, "ReadWriteOnce": true, "ReadWriteOncePod": true},
+        "capabilities": #{"clone": false, "dynamic": true, "expansion": true, "raw": true, "snapshot": true, "topology": true, "tracking": false},
+    }, #{
+        "driverClass": "ebs.csi.eks.amazonaws.com",
+        "accessModes": #{"ReadOnlyMany": false, "ReadWriteMany": false, "ReadWriteOnce": true, "ReadWriteOncePod": true},
+        "capabilities": #{"clone": false, "dynamic": true, "expansion": true, "raw": true, "snapshot": true, "topology": true, "tracking": false},
     }
 ] }
 
@@ -81,6 +89,11 @@ fn classes_enrich(scs) {
     enriched
 }
 
+fn pick_sc(scs) {
+    let def = scs.find(|s| s.is_default);
+    if def != () { def.name } else { scs[0].name }
+}
+
 fn get_prefered_sc(scs) {
     let pref = #{
         "block_readWriteMany": (),
@@ -100,45 +113,45 @@ fn get_prefered_sc(scs) {
         let many = block.filter(|s| s.accessModes==["ReadWriteMany"]);
         let others = block.filter(|s| s.accessModes!=["ReadWriteMany"]);
         if many.len() > 0 {
-            pref["block_readWriteMany"] = many[0].name;
+            pref["block_readWriteMany"] = pick_sc(many);
         }
         if others.len() > 0 {
-            pref["block_readWriteOnce"] = others[0].name;
+            pref["block_readWriteOnce"] = pick_sc(others);
         } else {
-            pref["block_readWriteOnce"] = many[0].name;
+            pref["block_readWriteOnce"] = pick_sc(many);
         }
     }
     if fs_many.len() > 0 {
-        pref["fs_readWriteMany"] = fs_many[0].name;
+        pref["fs_readWriteMany"] = pick_sc(fs_many);
     }
     if fs_only.len() > 1 {
         let onlys = fs_only.filter(|s| !s.accessModes.contains(["ReadWriteMany"]));
         if onlys.len() > 1 {
             let local = onlys.filter(|s| s.provisioner=="rancher.io/local-path");
-            let other = block.filter(|s| s.provisioner!="rancher.io/local-path");
+            let other = onlys.filter(|s| s.provisioner!="rancher.io/local-path");
             if local.len() > 0 && other.len() > 0 {
-                pref["distibuted_readWriteOnce"] = other[0].name;
-                pref["fs_readWriteOnce"] = local[0].name;
+                pref["distibuted_readWriteOnce"] = pick_sc(other);
+                pref["fs_readWriteOnce"] = pick_sc(local);
             } else if local.len() > 0 {
-                pref["distibuted_readWriteOnce"] = local[0].name;
-                pref["fs_readWriteOnce"] = local[0].name;
+                pref["distibuted_readWriteOnce"] = pick_sc(local);
+                pref["fs_readWriteOnce"] = pick_sc(local);
             } else if other.len() > 0 {
-                pref["distibuted_readWriteOnce"] = other[0].name;
-                pref["fs_readWriteOnce"] = onlys[0].name;
+                pref["distibuted_readWriteOnce"] = pick_sc(other);
+                pref["fs_readWriteOnce"] = pick_sc(onlys);
             } else {
-                pref["distibuted_readWriteOnce"] = onlys[0].name;
-                pref["fs_readWriteOnce"] = onlys[0].name;
+                pref["distibuted_readWriteOnce"] = pick_sc(onlys);
+                pref["fs_readWriteOnce"] = pick_sc(onlys);
             }
         } else if onlys.len() > 0 {
-            pref["distibuted_readWriteOnce"] = onlys[0].name;
-            pref["fs_readWriteOnce"] = fs_only[0].name;
+            pref["distibuted_readWriteOnce"] = pick_sc(onlys);
+            pref["fs_readWriteOnce"] = pick_sc(fs_only);
         } else {
-            pref["distibuted_readWriteOnce"] = fs_only[0].name;
-            pref["fs_readWriteOnce"] = fs_only[0].name;
+            pref["distibuted_readWriteOnce"] = pick_sc(fs_only);
+            pref["fs_readWriteOnce"] = pick_sc(fs_only);
         }
     } else if fs_only.len() > 0 {
-        pref["distibuted_readWriteOnce"] = fs_only[0].name;
-        pref["fs_readWriteOnce"] = fs_only[0].name;
+        pref["distibuted_readWriteOnce"] = pick_sc(fs_only);
+        pref["fs_readWriteOnce"] = pick_sc(fs_only);
     }
     pref
 }

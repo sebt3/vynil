@@ -22,19 +22,53 @@ type DynObjCondition = Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::Eval
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
 }
+async fn excluded_apiservice_groups() -> Vec<String> {
+    let ar = ApiResource {
+        group: "apiregistration.k8s.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "apiregistration.k8s.io/v1".to_string(),
+        kind: "APIService".to_string(),
+        plural: "apiservices".to_string(),
+    };
+    let api: Api<DynamicObject> = Api::all_with(CLIENT.clone(), &ar);
+    match api.list(&ListParams::default()).await {
+        Ok(list) => list
+            .items
+            .iter()
+            .filter_map(|obj| {
+                obj.data
+                    .get("spec")
+                    .and_then(|s| s.get("group"))
+                    .and_then(|g| g.as_str())
+                    .filter(|g| !g.is_empty())
+                    .map(|g| g.to_string())
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!("E_DISCOVERY_WARN: cannot list APIServices ({e}), proceeding without exclusions");
+            vec![]
+        }
+    }
+}
 async fn async_populate_cache() -> Discovery {
+    let excluded = excluded_apiservice_groups().await;
+    let excluded_refs: Vec<&str> = excluded.iter().map(|s| s.as_str()).collect();
     Discovery::new(CLIENT.clone())
+        .exclude(&excluded_refs)
         .run()
         .await
-        .expect("create discovery")
+        .expect("create discovery (excluding api-services)")
 }
 fn populate_cache() -> Discovery {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
+            let excluded = excluded_apiservice_groups().await;
+            let excluded_refs: Vec<&str> = excluded.iter().map(|s| s.as_str()).collect();
             Discovery::new(CLIENT.clone())
+                .exclude(&excluded_refs)
                 .run()
                 .await
-                .expect("create discovery")
+                .expect("create discovery (excluding api-services)")
         })
     })
 }

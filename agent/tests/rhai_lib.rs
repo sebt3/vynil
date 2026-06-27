@@ -300,6 +300,58 @@ fn storage_class_enrich_block_volumemode_duplication() {
     assert!(result.as_bool().unwrap());
 }
 
+#[test]
+fn storage_class_enrich_ebs_eks_recognized() {
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "storage_class_enrich" as enrich;
+
+        let scs = [#{
+            name: "gp3",
+            provisioner: "ebs.csi.eks.amazonaws.com",
+            is_default: true,
+        }];
+
+        let enriched = enrich::classes_enrich(scs);
+        enriched.len() == 2 &&
+        enriched.filter(|s| s.volumeMode == "Block").len() > 0 &&
+        enriched.filter(|s| s.volumeMode == "Filesystem").len() > 0 &&
+        enriched[0].capabilities.expansion == true &&
+        enriched[0].capabilities.snapshot == true
+    "#,
+        )
+        .unwrap();
+
+    assert!(result.as_bool().unwrap());
+}
+
+#[test]
+fn storage_class_enrich_prefered_sc_picks_default_over_first() {
+    let mut rhai = make_lib_script();
+    let result = rhai
+        .eval(
+            r#"
+        import "storage_class_enrich" as enrich;
+
+        let scs = [
+            #{ name: "gp2", provisioner: "ebs.csi.eks.amazonaws.com", is_default: false },
+            #{ name: "gp3", provisioner: "ebs.csi.eks.amazonaws.com", is_default: true },
+        ];
+
+        let enriched = enrich::classes_enrich(scs);
+        let pref = enrich::get_prefered_sc(enriched);
+
+        pref.distibuted_readWriteOnce == "gp3" &&
+        pref.block_readWriteOnce == "gp3"
+    "#,
+        )
+        .unwrap();
+
+    assert!(result.as_bool().unwrap());
+}
+
 // ===== wait.rhai tests =====
 
 #[test]
