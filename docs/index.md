@@ -1,15 +1,15 @@
-# Vynil — gestionnaire de paquets pour Kubernetes
+# Vynil — package manager for Kubernetes
 
-> Vynil est à Kubernetes ce que `dpkg`/`rpm` sont à une distribution Linux : un
-> gestionnaire de paquets dont le but est de produire une **distribution Kubernetes
-> intégrée**, et non d'offrir une flexibilité de déploiement maximale.
+> Vynil is to Kubernetes what `dpkg`/`rpm` are to a Linux distribution: a
+> package manager whose goal is to produce an **integrated Kubernetes distribution**,
+> not to offer maximum deployment flexibility.
 
-## En une phrase
+## In one sentence
 
-Vous décrivez une **source de paquets** (`JukeBox`) et des **installations**
-(`SystemInstance`, `ServiceInstance`, `TenantInstance`) sous forme de ressources
-Kubernetes ; l'opérateur Vynil réconcilie ces objets en lançant un **agent** dans des
-Jobs qui déploient, mettent à jour, sauvegardent et désinstallent les applications.
+You describe a **package source** (`JukeBox`) and **installations**
+(`SystemInstance`, `ServiceInstance`, `TenantInstance`) as Kubernetes resources;
+the Vynil operator reconciles these objects by launching an **agent** in Jobs that
+deploy, update, back up, and uninstall applications.
 
 ```mermaid
 flowchart LR
@@ -29,72 +29,71 @@ flowchart LR
     AG -->|Rhai + Handlebars| K8S[(Objets Kubernetes)]
 ```
 
-## Objectif primaire et positionnement
+## Primary goal and positioning
 
-Contrairement à Helm, Kustomize, ArgoCD ou Flux — qui donnent toute latitude pour
-installer comme bon vous semble — Vynil vise **l'intégration par défaut**. La
-personnalisation y est volontairement réduite, mais tout s'intègre nativement avec le
-reste de la distribution. Vynil se distingue aussi d'OLM (OpenShift) : OLM n'installe que
-des opérateurs, alors que Vynil est un opérateur d'installation *générique*. Il peut
-installer une application simple (phpMyAdmin), une application avec état et sauvegarde
-(une base de données) ou un composant cluster unique (kube-virt) sans exiger un opérateur
-dédié par application.
+Unlike Helm, Kustomize, ArgoCD, or Flux — which give you full latitude to install
+however you like — Vynil targets **integration by default**. Customisation is
+deliberately limited, but everything integrates natively with the rest of the
+distribution. Vynil also differs from OLM (OpenShift): OLM only installs operators,
+whereas Vynil is a *generic* installation operator. It can install a simple
+application (phpMyAdmin), a stateful application with backups (a database), or a
+unique cluster component (kube-virt) without requiring a dedicated operator per
+application.
 
-La valeur ajoutée est l'**opiniâtreté** : un paquet Vynil fige les décisions d'intégration
-(ressources, stockage, réseau, sécurité, dépendances) qu'un chart générique laisse à la
-charge de chaque utilisateur — voir
-[Construire une distribution](distribution.md). Le format paquet = image OCI apporte le
-reste : immutabilité, auditabilité, air-gap —
-voir [Le paquet OCI](packages/portability.md).
+The value proposition is **opinionation**: a Vynil package locks in integration
+decisions (resources, storage, networking, security, dependencies) that a generic
+chart leaves to each user — see
+[Building a distribution](distribution.md). The package format = OCI image delivers
+the rest: immutability, auditability, air-gap —
+see [The OCI package](packages/portability.md).
 
-## Cas d'usage
+## Use cases
 
-Vynil est un cadre générique : le même moteur couvre des usages très différents.
+Vynil is a generic framework: the same engine covers very different use cases.
 
-| Cas d'usage | En quelques mots |
+| Use case | In brief |
 |---|---|
-| **Distribution communautaire** | Reproduire l'écosystème d'une distribution Linux (à la Debian) dans Kubernetes : un catalogue intégré, maintenu par une communauté. |
-| **Distribution d'entreprise** | Une plateforme interne intégrée à l'écosystème existant (SSO, stockage, réseau, conformité) ; les équipes consomment des paquets pré-intégrés. |
-| **Orchestration SaaS** | Le client commande son tenant et ses options dans l'interface du produit ; le produit crée des `TenantInstance` et Vynil déploie et maintient. Le produit lui-même peut être distribué comme paquet Vynil. |
-| **Orchestration d'infrastructure cloud** | La phase OpenTofu des paquets pilote des ressources hors cluster (DNS, buckets, bases managées…) dans le même cycle de vie. |
-| **Platform-as-a-Service depuis Kubernetes** | Définir une plateforme self-service (dans l'esprit de Crossplane, sans sa prolifération de CRDs) : les capacités sont des paquets, la surface utilisateur des instances. |
-| **Packaging amont** | Un projet open-source publie directement sa propre box — le « paquet officiel » du projet, signé par l'amont, consommé via une simple JukeBox supplémentaire. |
+| **Community distribution** | Reproducing the ecosystem of a Linux distribution (Debian-style) in Kubernetes: an integrated catalogue maintained by a community. |
+| **Enterprise distribution** | An internal platform integrated with the existing ecosystem (SSO, storage, networking, compliance); teams consume pre-integrated packages. |
+| **SaaS orchestration** | The customer orders their tenant and options in the product UI; the product creates `TenantInstance` objects and Vynil deploys and maintains them. The product itself can be distributed as a Vynil package. |
+| **Cloud infrastructure orchestration** | The OpenTofu phase of packages drives out-of-cluster resources (DNS, buckets, managed databases…) within the same lifecycle. |
+| **Platform-as-a-Service from Kubernetes** | Defining a self-service platform (in the spirit of Crossplane, without its CRD proliferation): capabilities are packages, user-facing surfaces are instances. |
+| **Upstream packaging** | An open-source project publishes its own box directly — the project's "official package", signed upstream, consumed via a simple additional JukeBox. |
 
-## Le modèle mental en trois objets
+## The mental model in three objects
 
-| Objet | Portée | Rôle |
+| Object | Scope | Role |
 |---|---|---|
-| **JukeBox** | cluster | Source de paquets. Scanne périodiquement un registre OCI (ou un cache HTTP/S3) et publie la liste des paquets disponibles dans son `status`. |
-| **SystemInstance** | namespace | Installe un paquet *système* (composant cluster, sans sauvegarde). |
-| **ServiceInstance** | namespace | Installe un paquet *service* (application partagée, avec CRDs propres et sauvegarde). |
-| **TenantInstance** | namespace | Installe un paquet *tenant* (application cantonnée à un tenant, avec sauvegarde/restauration). |
+| **JukeBox** | cluster | Package source. Periodically scans an OCI registry (or an HTTP/S3 cache) and publishes the list of available packages in its `status`. |
+| **SystemInstance** | namespace | Installs a *system* package (cluster component, no backup). |
+| **ServiceInstance** | namespace | Installs a *service* package (shared application, with its own CRDs and backup). |
+| **TenantInstance** | namespace | Installs a *tenant* package (application scoped to a tenant, with backup/restore). |
 
-Un **paquet** est une **image OCI** : ses métadonnées sont portées par des annotations
-OCI, et son contenu embarque des templates Handlebars et des scripts Rhai décrivant son
-cycle de vie.
+A **package** is an **OCI image**: its metadata is carried by OCI annotations, and
+its content embeds Handlebars templates and Rhai scripts describing its lifecycle.
 
-## Par où commencer
+## Getting started
 
-- **Découvrir le modèle** → [Concepts](concepts.md)
-- **Installer Vynil** → [Installation](installation.md)
-- **Comprendre le moteur** → [Architecture](architecture.md) et [Réconciliation](reconciliation.md)
-- **Construire une distribution** → [Distribution](distribution.md), [Le paquet OCI](packages/portability.md)
-- **Écrire un paquet** → [Format d'un paquet](packages/format.md), [Cycle de vie](packages/lifecycle.md), [Génération](gen-package.md)
-- **Publier des paquets** → [Sources de JukeBox](jukebox/sources.md), [Build & signature](build-signing.md), [Maintenance du registre](jukebox/registry-maintenance.md)
-- **Outiller** → [Référence CLI de l'agent](cli.md), [Lint](tooling/lint.md), [Tests de paquet](tooling/test.md)
-- **Exploiter** → [Sécurité & modèle de menace](operations/security.md), [Dépannage](operations/troubleshooting.md), [Référence](operations/reference.md)
+- **Discover the model** → [Concepts](concepts.md)
+- **Install Vynil** → [Installation](installation.md)
+- **Understand the engine** → [Architecture](architecture.md) and [Reconciliation](reconciliation.md)
+- **Build a distribution** → [Distribution](distribution.md), [The OCI package](packages/portability.md)
+- **Write a package** → [Package format](packages/format.md), [Lifecycle](packages/lifecycle.md), [Generation](gen-package.md)
+- **Publish packages** → [JukeBox sources](jukebox/sources.md), [Build & signing](build-signing.md), [Registry maintenance](jukebox/registry-maintenance.md)
+- **Tooling** → [Agent CLI reference](cli.md), [Lint](tooling/lint.md), [Package tests](tooling/test.md)
+- **Operations** → [Security & threat model](operations/security.md), [Troubleshooting](operations/troubleshooting.md), [Reference](operations/reference.md)
 
-## Note pour les assistants (LLM)
+## Note for AI assistants (LLM)
 
-Un index lisible par machine est disponible à la racine du dépôt :
-[`llms.txt`](../llms.txt). Il liste les pages de cette documentation avec une courte
-description, au format [llmstxt.org](https://llmstxt.org). Toutes les pages sont du
-Markdown brut, directement consommable.
+A machine-readable index is available at the root of the repository:
+[`llms.txt`](../llms.txt). It lists the pages of this documentation with a short
+description, in [llmstxt.org](https://llmstxt.org) format. All pages are raw
+Markdown, directly consumable.
 
-## Licence, état et crédits
+## License, status, and credits
 
-BSD-3-Clause. Projet en développement actif (workspace en version `0.7.7`). Fork :
+BSD-3-Clause. Project under active development (workspace version `0.7.7`). Fork:
 `sebt3/vynil`.
 
-Documentation rédigée et maintenue par les mainteneurs, à partir du code et du
-retour d'expérience d'exploitation de distributions Vynil en production.
+Documentation written and maintained by the maintainers, based on the code and
+operational experience from running Vynil distributions in production.

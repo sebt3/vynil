@@ -1,32 +1,32 @@
-# Référence CLI de l'agent
+# Agent CLI Reference
 
-L'agent (`agent`) est le binaire exécuté dans les Jobs Kubernetes, mais il s'utilise aussi
-en ligne de commande pour développer et tester les paquets. Les sous-commandes sont
-définies dans [`agent/src/main.rs`](../agent/src/main.rs).
+The agent (`agent`) binary runs in Kubernetes Jobs, but is also used as a CLI tool
+for developing and testing packages. Subcommands are defined in
+[`agent/src/main.rs`](../../agent/src/main.rs).
 
 ```text
 agent <COMMAND>
-  package   gestion du cycle de vie des paquets (build/lint/update/test/validate/unpack)
-  system    opérations sur une SystemInstance (install/delete/…)
-  service   opérations sur une ServiceInstance
-  tenant    opérations sur une TenantInstance
-  box       opérations sur une JukeBox (scan, file-scan)
-  template  rendu de templates
-  run       exécute un dépôt git comme source de JukeBox
-  crdgen    génère les manifestes CRD
-  version   affiche la version
+  package   package lifecycle management (build/lint/update/test/validate/unpack)
+  system    operations on a SystemInstance (install/delete/…)
+  service   operations on a ServiceInstance
+  tenant    operations on a TenantInstance
+  box       operations on a JukeBox (scan, file-scan)
+  template  template rendering
+  run       runs a git repository as a JukeBox source
+  crdgen    generates CRD manifests
+  version   prints the version
 ```
 
 ## `agent package`
 
-| Sous-commande | Rôle |
+| Subcommand | Role |
 |---|---|
-| `build` | Packe un répertoire en image OCI et la pousse (option `--signing-key` pour signer, voir [Build & signature](build-signing.md)). |
-| `unpack` | Télécharge et extrait une image de paquet dans un répertoire. |
-| `update` | Met à jour les tags d'images dans `package.yaml` en interrogeant les registres, puis lance le hook `update_post` (régénération des templates). |
-| `lint` | Analyse statique du paquet (structure, Handlebars, Rhai). Voir [Lint](tooling/lint.md). |
-| `test` | Exécute les tests du paquet avec mocks K8s/HTTP. Voir [Tests de paquet](tooling/test.md). |
-| `validate` | Valide le `package.yaml` (schéma, options). |
+| `build` | Packages a directory as an OCI image and pushes it (option `--signing-key` to sign, see [Build & signing](build-signing.md)). |
+| `unpack` | Downloads and extracts a package image into a directory. |
+| `update` | Updates image tags in `package.yaml` by querying registries, then runs the `update_post` hook (template regeneration). |
+| `lint` | Static analysis of the package (structure, Handlebars, Rhai). See [Lint](tooling/lint.md). |
+| `test` | Runs package tests with K8s/HTTP mocks. See [Package tests](tooling/test.md). |
+| `validate` | Validates `package.yaml` (schema, options). |
 
 ### `agent package lint`
 
@@ -44,43 +44,42 @@ agent package test  -p <package-dir>
                    [--testsets-dir <dir>]
                    [--format text|json]
                    [--junit-output-filename <file>]
-                   [--template-output-filename <file>]   # pour un test uniquement => usage yamllint, kubelinter, ....
+                   [--template-output-filename <file>]   # for a single test only => yamllint, kubelinter, ... usage
 ```
 
-Le répertoire `<package-dir>/tests` doit exister (sinon erreur `MissingTestDirectory`).
+The `<package-dir>/tests` directory must exist (otherwise error `MissingTestDirectory`).
 
 ## `agent box`
 
-| Sous-commande | Rôle |
+| Subcommand | Role |
 |---|---|
-| `scan` | Scanne une JukeBox (utilisé par le CronJob de l'opérateur). |
-| `file-scan` | Scan standalone vers fichiers (`index.yaml` + fichiers de paquets), sans connexion Kubernetes. Voir [Réconciliation](reconciliation.md#scan-standalone-box-file-scan). |
+| `scan` | Scans a JukeBox (used by the operator's CronJob). |
+| `file-scan` | Standalone scan to files (`index.yaml` + package files), without a Kubernetes connection. See [Reconciliation](reconciliation.md#scan-standalone-box-file-scan). |
 
 ## `agent {system,service,tenant}`
 
-Opérations d'instance exécutées dans les Jobs : `install`, `delete`, `reconfigure`, et —
-pour service/tenant — `backup`, `restore`. Paramètres communs (via flags ou variables
-d'environnement) :
+Instance operations executed in Jobs: `install`, `delete`, `reconfigure`, and —
+for service/tenant — `backup`, `restore`. Common parameters (via flags or env vars):
 
-| Flag | Env | Défaut | Rôle |
+| Flag | Env | Default | Role |
 |---|---|---|---|
-| `-n`, `--namespace` | `NAMESPACE` | — | Namespace de l'instance. |
-| `-i`, `--instance` | `INSTANCE` | — | Nom de l'instance. |
-| `-v`, `--vynil-namespace` | `VYNIL_NAMESPACE` | — | Namespace système de Vynil. |
-| `-p`, `--package-dir` | `PACKAGE_DIRECTORY` | `/tmp/package` | Répertoire du paquet dépaqueté. |
-| `-s`, `--script-dir` | `SCRIPT_DIRECTORY` | `./agent/scripts` | Scripts d'agent. |
-| `-t`, `--template-dir` | `TEMPLATE_DIRECTORY` | `./agent/templates` | Templates d'agent. |
-| `-c`, `--config-dir` | `CONFIG_DIR` | `.` | Scripts Rhai additionnels. |
-| `--controller-values` | `CONTROLLER_VALUES` | `{}` | Valeurs calculées par l'opérateur. |
-| `--agent-image` | `AGENT_IMAGE` | (défaut compilé) | Image de l'agent. |
+| `-n`, `--namespace` | `NAMESPACE` | — | Instance namespace. |
+| `-i`, `--instance` | `INSTANCE` | — | Instance name. |
+| `-v`, `--vynil-namespace` | `VYNIL_NAMESPACE` | — | Vynil system namespace. |
+| `-p`, `--package-dir` | `PACKAGE_DIRECTORY` | `/tmp/package` | Unpacked package directory. |
+| `-s`, `--script-dir` | `SCRIPT_DIRECTORY` | `./agent/scripts` | Agent scripts. |
+| `-t`, `--template-dir` | `TEMPLATE_DIRECTORY` | `./agent/templates` | Agent templates. |
+| `-c`, `--config-dir` | `CONFIG_DIR` | `.` | Additional Rhai scripts. |
+| `--controller-values` | `CONTROLLER_VALUES` | `{}` | Values computed by the operator. |
+| `--agent-image` | `AGENT_IMAGE` | (compiled default) | Agent image. |
 
 ## `agent crdgen`
 
-Génère les manifestes CRD à partir des types Rust. Sert à régénérer
-[`deploy/crd/crd.yaml`](../deploy/crd/crd.yaml).
+Generates CRD manifests from Rust types. Used to regenerate
+[`deploy/crd/crd.yaml`](../../deploy/crd/crd.yaml).
 
-## Codes de sortie
+## Exit codes
 
-- `0` : succès
-- `1` : erreur d'exécution (ou lint avec erreurs)
-- `2` : lint avec warnings uniquement / échec de génération de CRD
+- `0`: success
+- `1`: execution error (or lint with errors)
+- `2`: lint with warnings only / CRD generation failure

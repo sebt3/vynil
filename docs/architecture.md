@@ -1,111 +1,110 @@
 # Architecture — Vynil
 
-## Vue d'ensemble
+## Overview
 
-Vynil est un gestionnaire de paquets pour Kubernetes. Son objectif est de fournir une
-distribution intégrée de Kubernetes, à la manière de dpkg/rpm mais pour le cluster.
-Contrairement à Helm, ArgoCD ou Flux, Vynil vise l'intégration par défaut plutôt que la
-flexibilité maximale.
+Vynil is a package manager for Kubernetes. Its goal is to provide an integrated distribution
+of Kubernetes, in the spirit of dpkg/rpm but for the cluster. Unlike Helm, ArgoCD, or Flux,
+Vynil targets integration by default rather than maximum flexibility.
 
-Le projet est un **workspace Rust** composé de trois crates :
+The project is a **Rust workspace** composed of three crates:
 
 ```
 vynil/
-├── common/     — bibliothèque partagée : CRDs, types, moteurs de script
-├── operator/   — contrôleur Kubernetes (binaire + lib)
-└── agent/      — outil CLI (binaire + lib)
+├── common/     — shared library: CRDs, types, script engines
+├── operator/   — Kubernetes controller (binary + lib)
+└── agent/      — CLI tool (binary + lib)
 ```
 
 ---
 
-## Composants
+## Components
 
-### common (bibliothèque)
+### common (library)
 
-Contient tous les types partagés entre l'opérateur et l'agent :
+Contains all types shared between the operator and the agent:
 
-- **CRDs Kubernetes** : définitions des quatre ressources personnalisées
-- **Moteur Rhai** : intégration du langage de script (40+ fonctions exposées)
-- **Moteur Handlebars** : rendu de templates (30+ helpers)
-- **Handlers** : OCI, HTTP, YAML, mots de passe, semver, hachages
-- **Macros** : génération de code répétitif pour les conditions de statut
+- **Kubernetes CRDs**: definitions of the four custom resources
+- **Rhai engine**: scripting language integration (40+ exposed functions)
+- **Handlebars engine**: template rendering (30+ helpers)
+- **Handlers**: OCI, HTTP, YAML, passwords, semver, hashes
+- **Macros**: boilerplate code generation for status conditions
 
-### operator (contrôleur)
+### operator (controller)
 
-Binaire `operator` — serveur HTTP Actix sur le port 9000 + quatre contrôleurs kube-rs.
+Binary `operator` — Actix HTTP server on port 9000 + four kube-rs controllers.
 
-Responsabilités :
-- Surveiller les CRDs (`JukeBox`, `TenantInstance`, `ServiceInstance`, `SystemInstance`)
-- Mettre en cache les packages disponibles (depuis le statut des `JukeBox`)
-- Pour chaque instance : sélectionner le bon package, vérifier les prérequis, créer le Job
-- Exposer les métriques Prometheus (`GET /metrics`)
+Responsibilities:
+- Watch CRDs (`JukeBox`, `TenantInstance`, `ServiceInstance`, `SystemInstance`)
+- Cache available packages (from `JukeBox` status)
+- For each instance: select the right package, verify requirements, create the Job
+- Expose Prometheus metrics (`GET /metrics`)
 
 ### agent (CLI)
 
-Binaire `agent` — outil en ligne de commande lancé dans des Jobs Kubernetes.
+Binary `agent` — command-line tool launched inside Kubernetes Jobs.
 
-Sous-commandes principales :
-- `package {build,update,test,validate,unpack,lint}` — gestion du cycle de vie des packages OCI et linting statique
-- `{system,service,tenant} {install,delete,reconfigure,backup,restore}` — opérations d'instance
-- `crdgen` — génération des manifestes CRD
-- `box`, `template`, `run` — utilitaires
-- `box file-scan` — scan standalone vers fichiers (sans K8s)
+Main subcommands:
+- `package {build,update,test,validate,unpack,lint}` — OCI package lifecycle management and static linting
+- `{system,service,tenant} {install,delete,reconfigure,backup,restore}` — instance operations
+- `crdgen` — CRD manifest generation
+- `box`, `template`, `run` — utilities
+- `box file-scan` — standalone scan to files (without K8s)
 
 ---
 
-## Ressources Kubernetes personnalisées
+## Custom Kubernetes resources
 
-Toutes dans le groupe `vynil.solidite.fr/v1`.
+All in the group `vynil.solidite.fr/v1`.
 
 ### JukeBox (cluster-scoped)
 
-Source de packages Vynil. Contient une définition de source (liste OCI, projet Harbor, script,
-URL HTTP ou bucket S3) et un planning de scan (cron). Le statut stocke la liste des packages
-disponibles (waypoints d'upgrade).
+Vynil package source. Contains a source definition (OCI list, Harbor project, script,
+HTTP URL, or S3 bucket) and a scan schedule (cron). The status stores the list of available
+packages (upgrade waypoints).
 
 ```
 spec:
   source:  List | Harbor | Script | Http | S3
   maturity: stable | beta | alpha
-  pull_secret: <nom du secret imagePull>
-  schedule: <expression cron>
+  pull_secret: <imagePull secret name>
+  schedule: <cron expression>
 
 status:
-  packages: [VynilPackage]   ← cache des packages scannés
+  packages: [VynilPackage]   ← cache of scanned packages
 ```
 
-Types de source :
-- `List` / `Harbor` / `Script` : scan direct des registres OCI
-- `Http` : URL vers un cache de packages pré-calculés ; auth Basic ou Bearer via Secret
-- `S3` : bucket S3/MinIO/OVH avec prefix optionnel ; credentials via Secret ou IAM role
+Source types:
+- `List` / `Harbor` / `Script`: direct OCI registry scan
+- `Http`: URL to a pre-computed package cache; Basic or Bearer auth via Secret
+- `S3`: S3/MinIO/OVH bucket with optional prefix; credentials via Secret or IAM role
 
 ### TenantInstance / ServiceInstance (namespaced)
 
-Installation d'un package pour un tenant ou un service. Les deux types partagent la même
-structure, avec backup/restore.
+Installation of a package for a tenant or a service. Both types share the same structure,
+with backup/restore.
 
 ```
 spec:
   jukebox, category, package
   init_from:
     secret_name, sub_path, snapshot
-    version: <version exacte pour restauration>
-  options: { clé: valeur }
+    version: <exact version for restore>
+  options: { key: value }
 
 status:
-  tag:    <version actuellement installée>
-  digest: <empreinte des options>
+  tag:    <currently installed version>
+  digest: <options fingerprint>
   conditions: [Ready, Installed, BeforeApplied, VitalApplied, ...]
 ```
 
 ### SystemInstance (namespaced)
 
-Installation d'un package système (cluster-level). Pas de backup/restore, pas d'`initFrom`.
+Installation of a system package (cluster-level). No backup/restore, no `initFrom`.
 
 ```
 spec:
   jukebox, category, package
-  options: { clé: valeur }
+  options: { key: value }
 
 status:
   tag, digest
@@ -114,231 +113,232 @@ status:
 
 ---
 
-## Format des packages
+## Package format
 
-Un package Vynil est une **image OCI** avec des annotations de métadonnées :
+A Vynil package is an **OCI image** with metadata annotations:
 
-| Annotation | Contenu |
+| Annotation | Content |
 |---|---|
-| `fr.solidite.vynil.metadata` | JSON : nom, catégorie, type (tenant/system/service), features |
-| `fr.solidite.vynil.requirements` | JSON : prérequis (CRDs, versions, ressources) |
-| `fr.solidite.vynil.options` | JSON : paramètres configurables |
-| `fr.solidite.vynil.recommandations` | JSON : recommandations (services, CRDs) |
-| `fr.solidite.vynil.value_script` | Script Rhai pour valeurs dynamiques |
+| `fr.solidite.vynil.metadata` | JSON: name, category, type (tenant/system/service), features |
+| `fr.solidite.vynil.requirements` | JSON: requirements (CRDs, versions, resources) |
+| `fr.solidite.vynil.options` | JSON: configurable parameters |
+| `fr.solidite.vynil.recommandations` | JSON: recommendations (services, CRDs) |
+| `fr.solidite.vynil.value_script` | Rhai script for dynamic values |
 
-Le contenu de l'image contient les scripts Rhai du cycle de vie du package.
+The image content contains the Rhai scripts for the package lifecycle.
 
-### Prérequis d'un package (`VynilPackageRequirement`)
+### Package requirements (`VynilPackageRequirement`)
 
-- `MinimumPreviousVersion` — version minimale déjà installée pour pouvoir mettre à jour
-- `VynilVersion` — version minimale du framework Vynil
-- `ClusterVersion` — version minimale de Kubernetes
-- `CustomResourceDefinition`, `SystemService`, `TenantService` — dépendances d'autres packages
-- `Cpu`, `Memory`, `Disk`, `StorageCapability` — ressources nécessaires
-- `Prefly` — script Rhai de vérification personnalisée
+- `MinimumPreviousVersion` — minimum version already installed to be able to upgrade
+- `VynilVersion` — minimum version of the Vynil framework
+- `ClusterVersion` — minimum version of Kubernetes
+- `CustomResourceDefinition`, `SystemService`, `TenantService` — dependencies on other packages
+- `Cpu`, `Memory`, `Disk`, `StorageCapability` — required resources
+- `Prefly` — custom Rhai verification script
 
 ---
 
-## Flux de réconciliation
+## Reconciliation flow
 
-### Scan du jukebox
+### JukeBox scan
 
 ```
 JukeBox CRD
     → (cron) Job agent "scan.rhai"
-        → sources OCI (List/Harbor/Script) : liste les tags OCI
-        → sources Http/S3 : télécharge index.yaml + fichiers packages depuis le cache
-        → filtre : semver valide + maturité + version Vynil compatible
-        → filtre partiel si annotation force-scan=<category>[/<name>] présente
-        → conserve les waypoints d'upgrade (1 version par "époque" de MinimumPreviousVersion)
-        → met à jour JukeBox.status.packages
+        → OCI sources (List/Harbor/Script): lists OCI tags
+        → Http/S3 sources: downloads index.yaml + package files from cache
+        → filter: valid semver + maturity + compatible Vynil version
+        → partial filter if force-scan=<category>[/<name>] annotation is present
+        → retains upgrade waypoints (1 version per "epoch" of MinimumPreviousVersion)
+        → updates JukeBox.status.packages
 ```
 
-Les waypoints permettent une mise à jour progressive sans stocker toutes les versions.
-Exemple : versions disponibles [4.0(min:3.0), 3.5(min:2.0), 3.0(min:2.0), 2.5, 1.5]
-→ stocke [4.0, 3.5, 2.5, 1.5]
+Waypoints enable progressive upgrades without storing all versions.
+Example: available versions [4.0(min:3.0), 3.5(min:2.0), 3.0(min:2.0), 2.5, 1.5]
+→ stores [4.0, 3.5, 2.5, 1.5]
 
-### Scan standalone (file-scan)
+### Standalone scan (file-scan)
 
 ```
 agent box file-scan
-    → lit une spec JukeBox YAML locale (source + pull_secret fichier)
-    → scanne les registres OCI sans connexion K8s
-    → calcule les waypoints pour 3 niveaux de maturité et stocke l'union
-    → produit <cache_dir>/index.yaml + <cache_dir>/<category>_<name>.yaml
-    [upload vers HTTP/S3]
+    → reads a local JukeBox YAML spec (source + pull_secret file)
+    → scans OCI registries without a K8s connection
+    → computes waypoints for 3 maturity levels and stores the union
+    → produces <cache_dir>/index.yaml + <cache_dir>/<category>_<name>.yaml
+    [upload to HTTP/S3]
 JukeBox source Http/S3
-    → télécharge index.yaml + fichiers packages
-    → applique filtre maturity + recalcule waypoints
-    → met à jour JukeBox.status.packages (identique aux sources OCI)
+    → downloads index.yaml + package files
+    → applies maturity filter + recomputes waypoints
+    → updates JukeBox.status.packages (identical to OCI sources)
 ```
 
-### Réconciliation d'une instance
+### Instance reconciliation
 
 ```
 Instance CRD (TenantInstance / ServiceInstance / SystemInstance)
-    → operator : do_reconcile<T>()
-        1. current_version = status.tag (vide si premier install)
-        2. sélection du package dans le cache jukebox :
-           - nom + catégorie + type correspondants
-           - is_min_version_ok(current_version) — chaîne d'upgrade respectée
+    → operator: do_reconcile<T>()
+        1. current_version = status.tag (empty on first install)
+        2. package selection from the jukebox cache:
+           - matching name + category + type
+           - is_min_version_ok(current_version) — upgrade chain respected
            - is_vynil_version_ok() — framework compatible
-        3. vérification des prérequis (CRDs, services, resources...)
-        4. construction des recommandations (listes CRDs/services optionnels)
-        5. exécution du value_script Rhai (si présent)
-        6. [si initFrom.version et premier install] vérification tag OCI directe
-        7. rendu du Job Kubernetes via template Handlebars (package.yaml.hbs)
-        8. création/mise à jour du Job (Server-Side Apply)
-        → requeue toutes les 15 minutes
+        3. requirements check (CRDs, services, resources...)
+        4. recommendations build (optional CRDs/services lists)
+        5. Rhai value_script execution (if present)
+        6. [if initFrom.version and first install] direct OCI tag verification
+        7. Kubernetes Job rendering via Handlebars template (package.yaml.hbs)
+        8. Job creation/update (Server-Side Apply)
+        → requeue every 15 minutes
 ```
 
-### Annotations de contrôle sur les instances
+### Control annotations on instances
 
-| Annotation | Valeur | Effet |
+| Annotation | Value | Effect |
 |---|---|---|
-| `vynil.solidite.fr/suspend` | `"true"` | Suspend la réconciliation jusqu'à suppression de l'annotation. Le controller requeue normalement (15 min) mais ne fait rien. |
-| `vynil.solidite.fr/force-reinstall` | présente | Force la réinstallation : supprime le Job existant avant de le recréer, puis retire l'annotation automatiquement. |
+| `vynil.solidite.fr/suspend` | `"true"` | Suspends reconciliation until the annotation is removed. The controller requeues normally (15 min) but does nothing. |
+| `vynil.solidite.fr/force-reinstall` | present | Forces reinstallation: deletes the existing Job before recreating it, then removes the annotation automatically. |
 
-### Annotations de contrôle sur les JukeBox
+### Control annotations on JukeBox resources
 
-| Annotation | Valeur | Comportement |
+| Annotation | Value | Behavior |
 |---|---|---|
-| `vynil.solidite.fr/force-scan` | `"true"` (ou présente sans valeur) | Scan complet de tous les packages |
-| `vynil.solidite.fr/force-scan` | `"<category>"` | Scan partiel de toute la catégorie |
-| `vynil.solidite.fr/force-scan` | `"<category>/<name>"` | Scan partiel d'un seul package |
+| `vynil.solidite.fr/force-scan` | `"true"` (or present without value) | Full scan of all packages |
+| `vynil.solidite.fr/force-scan` | `"<category>"` | Partial scan of the entire category |
+| `vynil.solidite.fr/force-scan` | `"<category>/<name>"` | Partial scan of a single package |
 
-### Suppression d'une instance (finalizer)
+### Instance deletion (finalizer)
 
 ```
-Instance CRD (suppression)
+Instance CRD (deletion)
     → do_cleanup<T>()
-        → même sélection de package
-        → Job avec action "delete"
-        → attente de completion
-        → retrait du finalizer
+        → same package selection
+        → Job with action "delete"
+        → wait for completion
+        → finalizer removal
 ```
 
 ---
 
-## Pattern générique : trait InstanceKind
+## Generic pattern: InstanceKind trait
 
-Les trois types d'instance partagent un seul algorithme de réconciliation via le trait
-`InstanceKind` dans `operator/src/instance_common.rs`.
+The three instance types share a single reconciliation algorithm via the `InstanceKind` trait
+in `operator/src/instance_common.rs`.
 
-Méthodes clés du trait :
+Key trait methods:
 
-| Méthode | Rôle |
+| Method | Role |
 |---|---|
-| `type_name()`, `package_type()` | Constantes de type |
-| `spec_jukebox()`, `spec_category()`, `spec_package()` | Accesseurs spec |
-| `current_tag()` | Version installée (depuis `status.tag`) |
-| `init_from_version()` | Version de restauration (`initFrom.version`), default `None` |
-| `check_requirements()` | Vérifie les prérequis du package |
-| `build_recommendations()` | Construit les listes de recommandations |
-| `set_rhai_instance()` | Injecte l'instance dans le scope Rhai |
-| `set_missing_box()`, `set_missing_package()`, ... | Mises à jour de statut d'erreur |
+| `type_name()`, `package_type()` | Type constants |
+| `spec_jukebox()`, `spec_category()`, `spec_package()` | Spec accessors |
+| `current_tag()` | Installed version (from `status.tag`) |
+| `init_from_version()` | Restore version (`initFrom.version`), default `None` |
+| `check_requirements()` | Verifies package requirements |
+| `build_recommendations()` | Builds recommendation lists |
+| `set_rhai_instance()` | Injects the instance into the Rhai scope |
+| `set_missing_box()`, `set_missing_package()`, ... | Error status updates |
 
 ---
 
-## Stratégie YAML
+## YAML strategy
 
-| Usage | Bibliothèque | Ordre des clés |
+| Usage | Library | Key order |
 |---|---|---|
-| Tout le code Rust (sérialisation/désérialisation) | `serde_yaml` | Alphabétique |
-| `yaml_decode_ordered` / `yaml_encode_ordered` (Rhai) | `rust-yaml` | Préservé |
+| All Rust code (serialization/deserialization) | `serde_yaml` | Alphabetical |
+| `yaml_decode_ordered` / `yaml_encode_ordered` (Rhai) | `rust-yaml` | Preserved |
 
-Le type `YamlError(String)` dans `common/src/lib.rs` encapsule les deux bibliothèques.
-`rust-yaml` est utilisé uniquement dans `update.rhai` pour ne pas réordonner les clés de
-`package.yaml`.
-
----
-
-## Scripts Rhai
-
-Les scripts Rhai sont embarqués dans les images OCI des packages et exécutés par l'agent.
-Le moteur Rhai est configuré dans `common/src/rhaihandler.rs`.
-
-Bibliothèque de scripts réutilisables (`agent/scripts/lib/`) :
-- `secret_dockerconfigjson.rhai` — lecture des secrets imagePull
-- `scan_harbor.rhai` — listing des dépôts Harbor
-
-Scripts de l'agent (`agent/scripts/`) :
-- `boxes/scan.rhai` — scan du jukebox
-- `packages/{build,update,test,validate}.rhai` — cycle de vie des packages
-- `service/`, `tenant/`, `system/` — hooks d'installation, suppression, backup, restauration
+The `YamlError(String)` type in `common/src/lib.rs` wraps both libraries.
+`rust-yaml` is used only in `update.rhai` to avoid reordering the keys of `package.yaml`.
 
 ---
 
-## Templates Handlebars
+## Rhai scripts
 
-Répertoire : `operator/templates/`
+Rhai scripts are embedded in package OCI images and executed by the agent.
+The Rhai engine is configured in `common/src/rhaihandler.rs`.
+
+Reusable script library (`agent/scripts/lib/`):
+- `secret_dockerconfigjson.rhai` — imagePull secret reading
+- `scan_harbor.rhai` — Harbor repository listing
+
+Agent scripts (`agent/scripts/`):
+- `boxes/scan.rhai` — jukebox scan
+- `packages/{build,update,test,validate}.rhai` — package lifecycle
+- `service/`, `tenant/`, `system/` — install, delete, backup, restore hooks
+
+---
+
+## Handlebars templates
+
+Directory: `operator/templates/`
 
 | Template | Usage |
 |---|---|
-| `package.yaml.hbs` | Job d'installation/suppression d'une instance |
-| `cronscan.yaml.hbs` | CronJob de scan d'un JukeBox |
-| `scan.yaml.hbs` | Job de scan manuel d'un JukeBox |
+| `package.yaml.hbs` | Instance install/delete Job |
+| `cronscan.yaml.hbs` | JukeBox scan CronJob |
+| `scan.yaml.hbs` | Manual JukeBox scan Job |
 
-Variables systématiquement disponibles dans le contexte : `tag`, `image`, `registry`,
+Variables systematically available in context: `tag`, `image`, `registry`,
 `namespace`, `name`, `job_name`, `package_type`, `package_action`, `digest`, `ctrl_values`.
 
 ---
 
-## Métriques
+## Metrics
 
-L'opérateur expose des métriques Prometheus sur `GET /metrics` (format OpenMetrics).
+The operator exposes Prometheus metrics on `GET /metrics` (OpenMetrics format).
 
-Quatre registres séparés (un par type de ressource) exposent :
-- Durée des réconciliations (histogramme)
-- Compteurs de succès/échec
-- Jauge des réconciliations en cours
-- Horodatage du dernier événement
-
----
-
-## Tests de régression Rhai
-
-La suite de tests dans `agent/tests/rhai_*.rs` exécute les scripts Rhai internes de l'agent avec un moteur Rhai réel et des mocks K8s/HTTP. Elle est structurée en deux niveaux :
-
-- **`rhai_lib.rs`** : tests unitaires des scripts `agent/scripts/lib/` (fonctions isolées, assertions sur valeurs retournées)
-  - Couvre les patterns susceptibles de régresser lors des mises à jour Rhai (`.filter()`, `.replace()`, `.reduce()`, closures)
-  - Environ 20 tests unitaires couvrant storage_class, wait, install_from_dir, gen_package, backup_context, resolv_service
-
-- **`rhai_lifecycle.rs`** : tests d'intégration des scripts de cycle de vie service/install et service/delete (flow complet avec mocks K8s)
-  - Exécute les flows end-to-end : context → install / context → delete
-  - Valide que tous les scripts lib/ s'assemblent correctement
-
-Ces tests servent de filet de régression lors des mises à jour de la version Rhai, en capturant les changements de sémantique des fonctions de manipulation de strings et collections.
+Four separate registries (one per resource type) expose:
+- Reconciliation duration (histogram)
+- Success/failure counters
+- In-progress reconciliation gauge
+- Last event timestamp
 
 ---
 
-## Variables d'environnement (operator)
+## Rhai regression tests
 
-| Variable | Défaut | Rôle |
+The test suite in `agent/tests/rhai_*.rs` runs the agent's internal Rhai scripts with a real
+Rhai engine and K8s/HTTP mocks. It is structured in two levels:
+
+- **`rhai_lib.rs`**: unit tests for `agent/scripts/lib/` scripts (isolated functions, assertions on returned values)
+  - Covers patterns likely to regress during Rhai updates (`.filter()`, `.replace()`, `.reduce()`, closures)
+  - Around 20 unit tests covering storage_class, wait, install_from_dir, gen_package, backup_context, resolv_service
+
+- **`rhai_lifecycle.rs`**: integration tests for service/install and service/delete lifecycle scripts (full flow with K8s mocks)
+  - Runs end-to-end flows: context → install / context → delete
+  - Validates that all lib/ scripts assemble correctly
+
+These tests serve as a regression safety net during Rhai version upgrades, capturing semantic
+changes in string and collection manipulation functions.
+
+---
+
+## Environment variables (operator)
+
+| Variable | Default | Role |
 |---|---|---|
-| `CONTROLLER_BASE_DIR` | `./operator` | Répertoire des templates Handlebars |
-| `VYNIL_NAMESPACE` | `vynil-system` | Namespace système de Vynil |
-| `AGENT_IMAGE` | `docker.io/sebt3/vynil-agent:0.6.0` | Image de l'agent pour les Jobs |
-| `AGENT_ACCOUNT` | `vynil-agent` | ServiceAccount des Jobs |
-| `AGENT_LOG_LEVEL` | `info` | Niveau de log |
-| `TENANT_LABEL` | `vynil.solidite.fr/tenant` | Clé du label tenant |
-| `SCAN_PACKAGE` | (absent) | Filtre partiel pour `box scan` et `box file-scan` |
+| `CONTROLLER_BASE_DIR` | `./operator` | Handlebars templates directory |
+| `VYNIL_NAMESPACE` | `vynil-system` | Vynil system namespace |
+| `AGENT_IMAGE` | `docker.io/sebt3/vynil-agent:0.6.0` | Agent image for Jobs |
+| `AGENT_ACCOUNT` | `vynil-agent` | Job ServiceAccount |
+| `AGENT_LOG_LEVEL` | `info` | Log level |
+| `TENANT_LABEL` | `vynil.solidite.fr/tenant` | Tenant label key |
+| `SCAN_PACKAGE` | (absent) | Partial filter for `box scan` and `box file-scan` |
 
 ---
 
-## Dépendances principales
+## Main dependencies
 
-| Crate | Version | Rôle |
+| Crate | Version | Role |
 |---|---|---|
-| `kube` | 3.1.0 | Client Kubernetes + contrôleurs |
-| `k8s-openapi` | 0.27.1 | Types Kubernetes |
-| `rhai` | ~1.20 | Moteur de script |
-| `handlebars` | ~6 | Rendu de templates |
-| `oci-client` | ~0.12 | Registre OCI |
-| `serde_yaml` | 0.9 | Sérialisation YAML (tri alphabétique) |
-| `rust-yaml` | git `sebt3/rust-yaml` | Sérialisation YAML à ordre préservé |
-| `tokio` | 1.48 | Runtime async |
-| `actix-web` | 4.12 | Serveur HTTP métriques |
-| `prometheus-client` | ~0.22 | Métriques Prometheus |
+| `kube` | 3.1.0 | Kubernetes client + controllers |
+| `k8s-openapi` | 0.27.1 | Kubernetes types |
+| `rhai` | ~1.20 | Script engine |
+| `handlebars` | ~6 | Template rendering |
+| `oci-client` | ~0.12 | OCI registry |
+| `serde_yaml` | 0.9 | YAML serialization (alphabetical sort) |
+| `rust-yaml` | git `sebt3/rust-yaml` | Order-preserving YAML serialization |
+| `tokio` | 1.48 | Async runtime |
+| `actix-web` | 4.12 | Metrics HTTP server |
+| `prometheus-client` | ~0.22 | Prometheus metrics |
 
-> Version du workspace au moment de la rédaction : **0.7.7** (édition Rust 2024, licence BSD-3-Clause).
+> Workspace version at time of writing: **0.7.7** (Rust 2024 edition, BSD-3-Clause license).

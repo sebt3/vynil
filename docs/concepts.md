@@ -1,81 +1,82 @@
 # Concepts
 
-Cette page pose le vocabulaire et le modèle mental de Vynil. Tout le reste de la
-documentation s'appuie dessus.
+This page establishes the vocabulary and mental model of Vynil. Everything else in
+the documentation builds on it.
 
-## Paquet (package)
+## Package
 
-Un **paquet Vynil** est une **image OCI** publiée dans un registre. Elle contient :
+A **Vynil package** is an **OCI image** published in a registry. It contains:
 
-- des **métadonnées** portées par des annotations OCI (nom, catégorie, type, features,
-  prérequis, options, recommandations, `value_script`) ;
-- un **contenu** : des templates Handlebars (`*.yaml.hbs`), des manifestes YAML statiques
-  et des scripts Rhai décrivant le cycle de vie (`scripts/`).
+- **metadata** carried by OCI annotations (name, category, type, features,
+  prerequisites, options, recommendations, `value_script`);
+- **content**: Handlebars templates (`*.yaml.hbs`), static YAML manifests,
+  and Rhai scripts describing the lifecycle (`scripts/`).
 
-Côté développement, un paquet est un **répertoire** avec un `package.yaml` (voir
-[Format d'un paquet](packages/format.md)) que l'on **packe** (`agent package build`) en
-image OCI.
+On the development side, a package is a **directory** with a `package.yaml` (see
+[Package format](packages/format.md)) that you **build** (`agent package build`) into
+an OCI image.
 
-### Type de paquet (`type`)
+### Package type (`type`)
 
-Le type fixe la portée et les capacités. Il est exposé comme `usage` dans le code.
+The type fixes the scope and capabilities. It is exposed as `usage` in the code.
 
-| Type | Pour quoi | Sauvegarde | CRDs propres |
+| Type | Purpose | Backup | Own CRDs |
 |---|---|---|---|
-| `system` | composant cluster (CNI, ingress, opérateur…) | non | oui (`get_crds/`) |
-| `service` | application partagée à l'échelle du cluster | oui | oui |
-| `tenant` | application cantonnée au namespace/tenant | oui | non |
+| `system` | cluster component (CNI, ingress, operator…) | no | yes (`get_crds/`) |
+| `service` | application shared at cluster scale | yes | yes |
+| `tenant` | application scoped to the namespace/tenant | yes | no |
 
-Le type détermine aussi quel CRD pilote l'installation (`SystemInstance` /
-`ServiceInstance` / `TenantInstance`) et quel jeu de scripts d'agent est utilisé
+The type also determines which CRD drives the installation (`SystemInstance` /
+`ServiceInstance` / `TenantInstance`) and which set of agent scripts is used
 (`agent/scripts/{system,service,tenant}/`).
 
-> ⚠️ Le `type` d'un paquet peut changer entre deux publications (ex. un paquet
-> historiquement `tenant` republié en `service`). C'est un cas réel qui a un impact sur la
-> désinstallation — voir [Dépannage](operations/troubleshooting.md).
-> C'est cependant très fortement déconseillé : c'est un cas limite qui peut survenir
-> pendant la maturation ou le développement d'un paquet. Si un changement de type est
-> inévitable, traitez-le comme une migration et assurez-vous que la dernière révision de
-> l'ancien type reste disponible dans le registre — voir
-> [Maintenance du registre](jukebox/registry-maintenance.md).
+> ⚠️ The `type` of a package can change between two publications (e.g. a package
+> historically published as `tenant` republished as `service`). This is a real-world
+> case that impacts uninstallation — see [Troubleshooting](operations/troubleshooting.md).
+> It is however strongly discouraged: this is an edge case that may arise during
+> maturation or development of a package. If a type change is unavoidable, treat it
+> as a migration and ensure that the last revision of the old type remains available
+> in the registry — see
+> [Registry maintenance](jukebox/registry-maintenance.md).
 
-### Catégorie (`category`)
+### Category (`category`)
 
-Chaîne libre regroupant les paquets (ex. `core`, `networking`, `database`, `think`). Le
-couple **`category/name`** identifie un paquet au sein d'une JukeBox.
+A free-form string grouping packages together (e.g. `core`, `networking`, `database`,
+`think`). The **`category/name`** pair identifies a package within a JukeBox.
 
 ### Features
 
-Drapeaux déclaratifs : `upgrade`, `backup`, `monitoring`, `high_availability`,
-`auto_config`, `auto_scaling`, `deprecated`. Ils décrivent ce que le paquet sait faire.
+Declarative flags: `upgrade`, `backup`, `monitoring`, `high_availability`,
+`auto_config`, `auto_scaling`, `deprecated`. They describe what the package is
+capable of.
 
-## JukeBox — la source de paquets
+## JukeBox — the package source
 
-Une `JukeBox` (cluster-scoped) décrit **d'où** viennent les paquets et **quand** les
-rescanner. Le scan (un Job d'agent piloté par un CronJob) liste les versions disponibles,
-filtre par semver/maturité/compatibilité, calcule les **waypoints d'upgrade**, puis écrit
-le catalogue dans `JukeBox.status.packages`. C'est ce cache que l'opérateur consulte pour
-chaque installation.
+A `JukeBox` (cluster-scoped) describes **where** packages come from and **when** to
+rescan them. The scan (an agent Job driven by a CronJob) lists available versions,
+filters by semver/maturity/compatibility, computes **upgrade waypoints**, then writes
+the catalogue into `JukeBox.status.packages`. This cache is what the operator
+consults for every installation.
 
-Sources possibles : liste OCI, projet Harbor, projet GitLab, script Rhai, cache HTTP, ou
-bucket S3. Voir [Sources de JukeBox](jukebox/sources.md).
+Possible sources: OCI list, Harbor project, GitLab project, Rhai script, HTTP cache,
+or S3 bucket. See [JukeBox sources](jukebox/sources.md).
 
-### Maturité et waypoints
+### Maturity and waypoints
 
-Une JukeBox a une `maturity` (`stable` | `beta` | `alpha`). Le scan ne conserve pas toutes
-les versions : il garde un **waypoint par « époque »** de `MinimumPreviousVersion`, ce qui
-permet une mise à jour progressive (chaîne d'upgrade) sans stocker l'historique complet.
+A JukeBox has a `maturity` (`stable` | `beta` | `alpha`). The scan does not keep all
+versions: it retains **one waypoint per "epoch"** of `MinimumPreviousVersion`, which
+enables progressive updates (upgrade chain) without storing the full history.
 
-Exemple — versions publiées `[4.0(min:3.0), 3.5(min:2.0), 3.0(min:2.0), 2.5, 1.5]`
-→ waypoints conservés `[4.0, 3.5, 2.5, 1.5]`.
+Example — published versions `[4.0(min:3.0), 3.5(min:2.0), 3.0(min:2.0), 2.5, 1.5]`
+→ retained waypoints `[4.0, 3.5, 2.5, 1.5]`.
 
-## Instance — une installation
+## Instance — an installation
 
-Une **instance** est une demande d'installation d'un paquet dans un namespace. Les trois
-CRD partagent la même mécanique (`spec.jukebox`, `spec.category`, `spec.package`,
-`spec.options`) et un `status` qui mémorise la version installée (`status.tag`),
-l'empreinte des options (`status.digest`), les conditions et — pour service/tenant — les
-**enfants** créés (voir ci-dessous).
+An **instance** is a request to install a package in a namespace. The three CRDs
+share the same mechanics (`spec.jukebox`, `spec.category`, `spec.package`,
+`spec.options`) and a `status` that records the installed version (`status.tag`),
+the options fingerprint (`status.digest`), conditions, and — for service/tenant — the
+**children** created (see below).
 
 ```yaml
 apiVersion: vynil.solidite.fr/v1
@@ -92,54 +93,64 @@ spec:
     models: [ "qwen3:14b", "mistral-small3.2:24b" ]
 ```
 
-### Enfants (children) et phases
+### Children and phases
 
-À l'installation, l'agent applique les objets du paquet en **phases ordonnées**, et
-enregistre les objets créés dans le `status` de l'instance par catégorie :
+At installation time, the agent applies the package objects in **ordered phases** and
+records the created objects in the instance `status` by category:
 
-| Phase / champ status | Contenu typique | Ordre install | Ordre delete |
+```mermaid
+flowchart LR
+    subgraph install["Install order →"]
+        B1[befores] --> V1[vitals] --> T1[tofu] --> O1[others] --> SC1[scalables] --> P1[posts]
+    end
+    subgraph delete["← Delete order"]
+        P2[posts] --> SC2[scalables] --> O2[others] --> V2[vitals] --> B2[befores]
+    end
+```
+
+| Phase / status field | Typical content | Install order | Delete order |
 |---|---|---|---|
-| `befores` | pré-requis (jobs d'init, secrets) | 1 | dernier |
-| `vitals` | données persistantes (PVC) | 2 | avant-dernier |
-| *(tofu)* | ressources OpenTofu/Terraform | 3 | — |
-| `others` | Service, ConfigMap, Ingress, Role… | 4 | 3ᵉ |
-| `scalables` | Deployment, StatefulSet… | 5 | 1ᵉʳ (avec tofu) |
-| `posts` | actions finales | 6 | en premier |
+| `befores` | prerequisites (init jobs, secrets) | 1 | last |
+| `vitals` | persistent data (PVC) | 2 | second-to-last |
+| *(tofu)* | OpenTofu/Terraform resources | 3 | — |
+| `others` | Service, ConfigMap, Ingress, Role… | 4 | 3rd |
+| `scalables` | Deployment, StatefulSet… | 5 | 1st (with tofu) |
+| `posts` | final actions | 6 | first |
 
-L'agent récupère l'instance à jour entre chaque phase. La **désinstallation** procède dans
-l'ordre inverse et s'appuie sur ces listes du `status` pour savoir *quoi* supprimer. Le
-`status` ne suffit cependant pas à lui seul : les **hooks de delete** embarqués dans
-l'image du paquet restent indispensables pour nettoyer les ressources créées
-*indirectement* (par exemple les volumes créés par un opérateur tiers, qui ne portent pas
-les marqueurs d'appartenance de l'instance). Voir
-[Cycle de vie d'un paquet](packages/lifecycle.md).
+The agent fetches the up-to-date instance between each phase. **Uninstallation**
+proceeds in reverse order and relies on these `status` lists to know *what* to
+delete. The `status` alone is not sufficient however: the **delete hooks** embedded
+in the package image remain essential for cleaning up resources created
+*indirectly* (for example volumes created by a third-party operator that do not carry
+the instance ownership markers). See
+[Package lifecycle](packages/lifecycle.md).
 
-> La présence d'au moins un enfant (`status.have_child()`) signale qu'une instance a
-> réellement déployé quelque chose ; la logique de cleanup en tient compte.
+> The presence of at least one child (`status.have_child()`) signals that an instance
+> has actually deployed something; cleanup logic takes this into account.
 
-### initFrom — restauration
+### initFrom — restore
 
-`spec.initFrom` (service/tenant) permet d'initialiser une nouvelle installation à partir
-d'une sauvegarde (snapshot Restic), avec optionnellement une `version` de paquet précise à
-utiliser pour la restauration.
+`spec.initFrom` (service/tenant) allows initialising a new installation from a
+backup (Restic snapshot), optionally specifying a precise package `version` to use
+for the restore.
 
-## Agent vs Opérateur
+## Agent vs Operator
 
-- L'**opérateur** (`operator`) surveille les CRD et décide *quoi* faire : il sélectionne le
-  paquet dans le cache de la JukeBox, vérifie les prérequis, rend le template du Job, et
-  crée/supprime ce Job. Il ne touche jamais directement aux objets applicatifs.
-- L'**agent** (`agent`, lancé dans un Job) fait le travail concret : il dépaquette l'image
-  OCI, exécute les scripts Rhai du paquet, rend les templates Handlebars et applique les
-  objets dans le cluster.
+- The **operator** (`operator`) watches the CRDs and decides *what* to do: it selects
+  the package from the JukeBox cache, checks prerequisites, renders the Job template,
+  and creates/deletes that Job. It never touches application objects directly.
+- The **agent** (`agent`, launched in a Job) does the concrete work: it unpacks the
+  OCI image, executes the package's Rhai scripts, renders the Handlebars templates,
+  and applies the objects in the cluster.
 
-Cette séparation est la clé de l'architecture : voir [Architecture](architecture.md) et
-[Réconciliation](reconciliation.md).
+This separation is the key to the architecture: see [Architecture](architecture.md)
+and [Reconciliation](reconciliation.md).
 
-## Scripts Rhai et templates Handlebars
+## Rhai scripts and Handlebars templates
 
-- **Handlebars** rend les manifestes Kubernetes à partir du contexte de l'instance
+- **Handlebars** renders Kubernetes manifests from the instance context
   (helpers `image_from_ctx`, `resources_from_ctx`, `selector_from_ctx`…).
-- **Rhai** est le langage de script du cycle de vie. Le moteur expose des fonctions de
-  manipulation K8s, OCI, HTTP, S3, secrets, mots de passe, semver, etc. Certaines
-  primitives (shell, accès fichiers, variables d'environnement) sont puissantes et doivent
-  être considérées dans le [modèle de menace](operations/security.md).
+- **Rhai** is the lifecycle scripting language. The engine exposes functions for K8s,
+  OCI, HTTP, S3, secrets, passwords, semver manipulation, etc. Some primitives (shell,
+  file access, environment variables) are powerful and must be considered in the
+  [threat model](operations/security.md).

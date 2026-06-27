@@ -1,89 +1,87 @@
-# Tests de paquet
+# Package Tests
 
-Vynil distingue deux niveaux de test : les **tests d'un paquet** (`agent package test`,
-écrits par l'auteur du paquet) et les **tests de régression internes** (suite Rust de
-l'agent, garantissant la stabilité du moteur Rhai).
+Vynil distinguishes two testing levels: **package tests** (`agent package test`,
+written by the package author) and **internal regression tests** (agent Rust test suite,
+ensuring Rhai engine stability).
 
-## Tests d'un paquet — `agent package test`
+## Package tests — `agent package test`
 
-Exécute des scénarios définis dans `<package-dir>/tests/` avec un moteur Rhai réel et des
-**mocks K8s/HTTP/OCI** : aucun cluster requis. Le rendu des templates et les hooks du cycle
-de vie sont exécutés, et des assertions valident le résultat.
+Runs scenarios defined in `<package-dir>/tests/` with a real Rhai engine and
+**K8s/HTTP/OCI mocks**: no cluster required. Template rendering and lifecycle hooks are
+executed, and assertions validate the result.
 
 ```bash
-# tous les tests
+# all tests
 agent package test -p ./my-package --all
 
-# un test précis, avec dump du rendu
+# a specific test, with rendered output dump
 agent package test -p ./my-package --test-name install-default \
   --template-output-filename rendered.yaml
 
-# rapport JUnit pour la CI
+# JUnit report for CI
 agent package test -p ./my-package --all --format json \
   --junit-output-filename results.xml
 ```
 
-| Option | Rôle |
+| Option | Role |
 |---|---|
-| `--test-name <name>` | Exécute un seul test. |
-| `--all` | Exécute tous les tests. |
-| `--testsets-dir <dir>` | Répertoire additionnel de jeux de tests. |
-| `--format text\|json` | Format de sortie. |
-| `--junit-output-filename <file>` | Rapport JUnit XML. |
-| `--template-output-filename <file>` | Dump du rendu (test unique uniquement). |
+| `--test-name <name>` | Runs a single test. |
+| `--all` | Runs all tests. |
+| `--testsets-dir <dir>` | Additional test set directory. |
+| `--format text\|json` | Output format. |
+| `--junit-output-filename <file>` | JUnit XML report. |
+| `--template-output-filename <file>` | Rendered output dump (single test only). |
 
-Le répertoire `tests/` doit exister, sinon l'agent renvoie `MissingTestDirectory`.
+The `tests/` directory must exist, otherwise the agent returns `MissingTestDirectory`.
 
-### Ce qu'un test peut faire
+### What a test can do
 
-- fournir des **options** d'instance et un **contexte** (cluster/tenant) ;
-- déclarer des **mocks** : objets K8s présents, réponses HTTP, manifestes OCI ;
-- exécuter un flow (`context → install`, `context → delete`, …) ;
-- **asserter** sur les objets créés, le statut, ou le rendu des templates.
+- provide instance **options** and a **context** (cluster/tenant);
+- declare **mocks**: K8s objects present, HTTP responses, OCI manifests;
+- execute a flow (`context → install`, `context → delete`, …);
+- **assert** on created objects, status, or template rendering.
 
-> Le framework de test fait l'objet d'améliorations en cours (variables de contexte
-> d'assertions, surcharge cluster/tenant) — voir les issues du dépôt si un comportement
-> attendu manque.
+> The test framework is subject to ongoing improvements (assertion context variables,
+> cluster/tenant overrides) — see the repository issues if an expected behavior is missing.
 
-### Bonnes pratiques
+### Best practices
 
-- **Tests prévisibles** : ne pas asserter sur des champs dépendants de la version amont
-  (tags d'images de conteneurs, `app_version`) — ils casseraient à chaque
-  `agent package update`. Asserter plutôt sur la structure, les noms et les valeurs
-  dérivées des options.
-- **Un jeu de test par posture** : un `default.yaml` minimal, puis des jeux dédiés aux
-  variantes significatives (HA activé, option majeure activée…), plutôt qu'un test unique
-  qui mélange tout.
-- **Utiliser les placeholders de contexte** (`{{instance.appslug}}`,
-  `{{instance.namespace}}`) dans les valeurs attendues, pour que les tests restent valides
-  quel que soit le nom de l'instance.
+- **Predictable tests**: do not assert on fields that depend on upstream versions
+  (container image tags, `app_version`) — they would break on every
+  `agent package update`. Assert instead on structure, names, and values derived from options.
+- **One test set per posture**: a minimal `default.yaml`, then dedicated sets for
+  significant variants (HA enabled, major option activated…), rather than a single test
+  that mixes everything.
+- **Use context placeholders** (`{{instance.appslug}}`,
+  `{{instance.namespace}}`) in expected values, so tests remain valid regardless of the
+  instance name.
 
-## Tests de régression internes (`agent/tests/rhai_*.rs`)
+## Internal regression tests (`agent/tests/rhai_*.rs`)
 
-La suite Rust exécute les scripts Rhai *de l'agent* (pas ceux d'un paquet) avec un moteur
-réel et des mocks. Elle sert de filet de sécurité lors des montées de version de Rhai, en
-capturant les changements de sémantique des fonctions de manipulation de chaînes et de
-collections (`.filter()`, `.replace()`, `.reduce()`, closures).
+The Rust suite runs the agent's Rhai scripts (not a package's) with a real engine
+and mocks. It serves as a safety net during Rhai version upgrades, capturing semantic
+changes in string and collection manipulation functions (`.filter()`, `.replace()`,
+`.reduce()`, closures).
 
-- **niveau unitaire** : fonctions isolées de `agent/scripts/lib/` (storage_class, wait,
-  install_from_dir, gen_package, backup_context, resolv_service…) ;
-- **niveau intégration** : flows de cycle de vie service/install et service/delete de bout
-  en bout avec mocks K8s, validant que les scripts `lib/` s'assemblent correctement.
+- **unit level**: isolated functions from `agent/scripts/lib/` (storage_class, wait,
+  install_from_dir, gen_package, backup_context, resolv_service…);
+- **integration level**: end-to-end service/install and service/delete lifecycle flows
+  with K8s mocks, validating that the `lib/` scripts assemble correctly.
 
 ```bash
-# lancer toute la suite
+# run the full suite
 cargo test -p agent
 
-# une famille de tests
+# a test family
 cargo test -p agent --test rhai_build
 ```
 
-## En CI
+## In CI
 
-Enchaînement recommandé pour un paquet :
+Recommended sequence for a package:
 
 ```bash
 agent package lint -p ./pkg --format junit --junit-output-filename lint.xml
 agent package test -p ./pkg --all --format json --junit-output-filename test.xml
-agent package build -p ./pkg --signing-key "$SIGNING_KEY"   # publication signée
+agent package build -p ./pkg --signing-key "$SIGNING_KEY"   # signed publication
 ```

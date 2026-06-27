@@ -1,41 +1,43 @@
-# Système de génération et mise à jour des packages Vynil
+# Vynil Package Generation and Update System
 
-## Vue d'ensemble
+## Overview
 
-Un package Vynil est un répertoire contenant :
-- `package.yaml` — manifeste décrivant le package (métadonnées, images, resources, options, dépendances)
-- Des sous-répertoires de templates Handlebars (`.yaml.hbs`) et YAML statiques
-- Des scripts Rhai (`scripts/`) pour les hooks du cycle de vie
+A Vynil package is a directory containing:
+- `package.yaml` — manifest describing the package (metadata, images, resources, options, dependencies)
+- Handlebars template subdirectories (`.yaml.hbs`) and static YAML files
+- Rhai scripts (`scripts/`) for lifecycle hooks
 
-La bibliothèque `gen_package.rhai` génère ces templates à partir d'un rendu Helm ou d'un manifeste Kubernetes brut. Le script `update.rhai` met à jour les tags d'images en interrogeant les registries OCI.
+The `gen_package.rhai` library generates these templates from a Helm render or a raw
+Kubernetes manifest. The `update.rhai` script updates image tags by querying OCI
+registries.
 
 ---
 
-## Structure de `package.yaml`
+## `package.yaml` structure
 
 ```yaml
 apiVersion: vinyl.solidite.fr/v1beta1
 kind: Package
 metadata:
-  name: traefik             # identifiant du package (appslug dans les templates)
-  category: networking      # catégorie libre
+  name: traefik             # package identifier (appslug in templates)
+  category: networking      # free-form category
   type: system              # "system" | "tenant" | "service"
-  app_version: "3.7.1"      # version de l'application (semver recommandé)
+  app_version: "3.7.1"      # application version (semver recommended)
   description: >
     Traefik ingress controller.
   features:
     - upgrade
     - auto_config
 images:
-  traefik:                  # clé arbitraire, référencée par {{image_from_ctx this "traefik"}}
+  traefik:                  # arbitrary key, referenced by {{image_from_ctx this "traefik"}}
     registry: ghcr.io
     repository: traefik/traefik
-    tag: v3.7.1             # mis à jour automatiquement par update.rhai
+    tag: v3.7.1             # automatically updated by update.rhai
   acme-solver:
     registry: quay.io
     repository: traefik/acme-solver
     tag: v3.7.1
-resources:                  # requests/limits par conteneur, référencées par {{resources_from_ctx}}
+resources:                  # requests/limits per container, referenced by {{resources_from_ctx}}
   traefik:
     requests:
       cpu: 100m
@@ -43,37 +45,37 @@ resources:                  # requests/limits par conteneur, référencées par 
     limits:
       cpu: 1000m
       memory: 256Mi
-requirements: []            # liste de dépendances (autres packages)
-options:                    # schéma OpenAPI des options configurables
+requirements: []            # list of dependencies (other packages)
+options:                    # OpenAPI schema for configurable options
   replicas:
     type: integer
     default: 1
-    description: Nombre de réplicas
+    description: Number of replicas
 ```
 
-### Règles sur `package.yaml`
+### `package.yaml` rules
 
-- L'ordre des clés est **préservé** (manipulation texte brut, jamais re-parsé par serde_yaml qui trie alphabétiquement).
-- Toujours commencer par `---`.
-- Les sections `images:` et `resources:` sont écrasées à chaque regénération avec les valeurs extraites des manifestes.
+- Key order is **preserved** (raw text manipulation, never re-parsed by serde_yaml which sorts alphabetically).
+- Always start with `---`.
+- The `images:` and `resources:` sections are overwritten at each regeneration with values extracted from the manifests.
 
 ---
 
-## Génération des templates
+## Template generation
 
 ### `placeholder()`
 
-Génère une chaîne kubernetes-valide unique (`v<8-hex-chars>`, ex: `vf3a27b8c`).
+Generates a unique kubernetes-valid string (`v<8-hex-chars>`, e.g. `vf3a27b8c`).
 
-**Pourquoi l'utiliser pour TOUT :** Helm insère le nom du release ET le namespace dans les noms de ressources (ex: `traefik-vynil-apps-clusterrole`). Si ces valeurs sont des chaînes réelles (comme `"traefik"` ou `"vynil-apps"`), elles peuvent apparaître dans d'autres contextes (noms d'images, labels…) et provoquer des faux positifs lors du remplacement. Une chaîne aléatoire distinctive évite ce problème.
+**Why to use it for everything:** Helm inserts both the release name and the namespace into resource names (e.g. `traefik-vynil-apps-clusterrole`). If these values are real strings (like `"traefik"` or `"vynil-apps"`), they may appear in other contexts (image names, labels…) and cause false positives during replacement. A distinctive random string avoids this problem.
 
 ```rhai
 import "gen_package" as gen;
 
-let name = gen::placeholder();   // remplacé par {{instance.appslug}} dans les templates
-let ns   = gen::placeholder();   // remplacé par {{instance.namespace}} dans les templates
+let name = gen::placeholder();   // replaced by {{instance.appslug}} in templates
+let ns   = gen::placeholder();   // replaced by {{instance.namespace}} in templates
 
-// En Rhai, pas de continuation \  —  utiliser += pour la lisibilité
+// In Rhai, no line continuation \  —  use += for readability
 let cmd  = `helm template ${name}`;
 cmd     += " oci://ghcr.io/traefik/helm/traefik";
 cmd     += ` --namespace=${ns}`;
@@ -86,34 +88,34 @@ gen::gen_system(args.source, yaml_decode_multi(shell_output(cmd)), name, ns);
 
 ### `gen_system(path, docs[, name[, ns]])`
 
-Génère les templates pour un **package système** (ressources cluster-wide : CRD, ClusterRole, Deployment dans un namespace dédié).
+Generates templates for a **system package** (cluster-wide resources: CRD, ClusterRole, Deployment in a dedicated namespace).
 
-| Paramètre | Type | Description |
+| Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | `string` | Chemin du répertoire du package |
-| `docs` | `array` | Liste de maps Kubernetes (sortie de `yaml_decode_multi`) |
-| `name` | `string` | Nom du release Helm. Toutes ses occurrences → `{{instance.appslug}}`. Déduit de `package.yaml` si absent |
-| `ns` | `string` | *(optionnel)* Namespace Helm (`--namespace=`). Toutes ses occurrences → `{{instance.namespace}}` |
+| `path` | `string` | Path to the package directory |
+| `docs` | `array` | List of Kubernetes maps (output of `yaml_decode_multi`) |
+| `name` | `string` | Helm release name. All occurrences → `{{instance.appslug}}`. Inferred from `package.yaml` if absent |
+| `ns` | `string` | *(optional)* Helm namespace (`--namespace=`). All occurrences → `{{instance.namespace}}` |
 
-**Répertoires créés :**
-- `get_crds/` — CustomResourceDefinitions (`.yaml` statique ou `.yaml.hbs` si webhook de conversion)
-- `get_systems/` — toutes les autres ressources (Deployment, ClusterRole, Service, etc.)
+**Created directories:**
+- `get_crds/` — CustomResourceDefinitions (static `.yaml` or `.yaml.hbs` if conversion webhook)
+- `get_systems/` — all other resources (Deployment, ClusterRole, Service, etc.)
 
-**Transformations appliquées :**
-- `metadata.namespace` supprimé
-- `metadata.labels` supprimés (remplacés par le contexte Vynil)
-- Annotations Helm (`helm.sh/chart`, `meta.helm.sh/release-*`, `checksum/*`) supprimées
-- Nom des ressources : `name` → `{{instance.appslug}}` ; pour ClusterRole/ClusterRoleBinding/Webhook : `name` → `{{instance.namespace}}-{{instance.appslug}}`
-- Subjects des bindings : namespace → `{{instance.namespace}}`
-- Images des conteneurs extraites vers `package.yaml` et remplacées par `{{image_from_ctx this "key"}}`
-- Resources des conteneurs extraites vers `package.yaml` et remplacées par `{{json_to_str (resources_from_ctx this "key")}}`
-- Selectors remplacés par `{{json_to_str (selector_from_ctx this comp="...")}}`
-- SecurityContext ajouté si absent (`runAsNonRoot`, `readOnlyRootFilesystem`, capabilities drop ALL)
-- `podAntiAffinity` converti en `topologySpreadConstraints`
-- Annotations Reloader ajoutées (`configmap.reloader.stakater.com/reload`, etc.)
-- Variables d'environnement plain-value extraites dans un ConfigMap dédié
+**Applied transformations:**
+- `metadata.namespace` removed
+- `metadata.labels` removed (replaced by the Vynil context)
+- Helm annotations (`helm.sh/chart`, `meta.helm.sh/release-*`, `checksum/*`) removed
+- Resource names: `name` → `{{instance.appslug}}`; for ClusterRole/ClusterRoleBinding/Webhook: `name` → `{{instance.namespace}}-{{instance.appslug}}`
+- Binding subjects: namespace → `{{instance.namespace}}`
+- Container images extracted to `package.yaml` and replaced by `{{image_from_ctx this "key"}}`
+- Container resources extracted to `package.yaml` and replaced by `{{json_to_str (resources_from_ctx this "key")}}`
+- Selectors replaced by `{{json_to_str (selector_from_ctx this comp="...")}}`
+- SecurityContext added if absent (`runAsNonRoot`, `readOnlyRootFilesystem`, capabilities drop ALL)
+- `podAntiAffinity` converted to `topologySpreadConstraints`
+- Reloader annotations added (`configmap.reloader.stakater.com/reload`, etc.)
+- Plain-value environment variables extracted into a dedicated ConfigMap
 
-**Exemple :**
+**Example:**
 
 ```rhai
 import "gen_package" as gen;
@@ -141,22 +143,22 @@ fn run(args) {
 
 ### `gen_tenant(path, docs[, name[, ns]])`
 
-Génère les templates pour un **package tenant** (ressources par namespace : Deployment, Service, PVC, etc.).
+Generates templates for a **tenant package** (per-namespace resources: Deployment, Service, PVC, etc.).
 
-| Paramètre | Type | Description |
+| Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | `string` | Chemin du répertoire du package |
-| `docs` | `array` | Liste de maps Kubernetes |
-| `name` | `string` | Nom du release. Occurrences → `{{instance.appslug}}`. Déduit de `package.yaml` si absent |
-| `ns` | `string` | *(optionnel)* Namespace Helm. Occurrences → `{{instance.namespace}}` |
+| `path` | `string` | Path to the package directory |
+| `docs` | `array` | List of Kubernetes maps |
+| `name` | `string` | Release name. Occurrences → `{{instance.appslug}}`. Inferred from `package.yaml` if absent |
+| `ns` | `string` | *(optional)* Helm namespace. Occurrences → `{{instance.namespace}}` |
 
-**Répertoires créés :**
+**Created directories:**
 - `get_vitals/` — PersistentVolumeClaim
 - `get_scalables/` — Deployment, StatefulSet, DaemonSet, ReplicaSet
-- `get_systems/` — ressources cluster-wide (ClusterRole, CRD, Namespace…)
-- `get_others/` — tout le reste (Service, ConfigMap, Role, Ingress, Certificate…)
+- `get_systems/` — cluster-wide resources (ClusterRole, CRD, Namespace…)
+- `get_others/` — everything else (Service, ConfigMap, Role, Ingress, Certificate…)
 
-**Exemple :**
+**Example:**
 
 ```rhai
 import "gen_package" as gen;
@@ -182,9 +184,9 @@ fn run(args) {
 
 ### `gen_service(path, docs[, name[, ns]])`
 
-Génère les templates pour un **package service** (tenant + CRDs propres). Identique à `gen_tenant` mais crée aussi `get_crds/`.
+Generates templates for a **service package** (tenant + own CRDs). Identical to `gen_tenant` but also creates `get_crds/`.
 
-**Exemple :**
+**Example:**
 
 ```rhai
 import "gen_package" as gen;
@@ -209,11 +211,11 @@ fn run(args) {
 
 ---
 
-## Extraction automatique
+## Automatic extraction
 
 ### Images → `image_from_ctx this "key"`
 
-Lors de la génération, chaque `image:` de conteneur est parsé et décomposé :
+During generation, each container `image:` is parsed and decomposed:
 
 ```
 ghcr.io/traefik/traefik:v3.7.1
@@ -222,12 +224,12 @@ ghcr.io/traefik/traefik:v3.7.1
     tag:         v3.7.1
 ```
 
-La clé dans `package.yaml[images]` est construite à partir du nom du conteneur. Pour les `initContainers`, le préfixe `init-` est ajouté. Les arguments `--*-image=<img>` sont également extraits (ex: `--acme-http01-solver-image=quay.io/jetstack/acmesolver:v1.16.3`).
+The key in `package.yaml[images]` is built from the container name. For `initContainers`, the `init-` prefix is added. `--*-image=<img>` arguments are also extracted (e.g. `--acme-http01-solver-image=quay.io/jetstack/acmesolver:v1.16.3`).
 
-Dans les templates générés :
+In the generated templates:
 ```yaml
 image: {{image_from_ctx this "traefik"}}
-# → ghcr.io/traefik/traefik:v3.7.1  (résolu au moment du déploiement)
+# → ghcr.io/traefik/traefik:v3.7.1  (resolved at deploy time)
 ```
 
 ### Resources → `resources_from_ctx this "key"`
@@ -237,20 +239,20 @@ resources: {{json_to_str (resources_from_ctx this "traefik")}}
 # → {"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"1000m","memory":"256Mi"}}
 ```
 
-Si un conteneur n'a pas de `resources:` défini, l'entrée existante dans `package.yaml` est conservée.
+If a container has no `resources:` defined, the existing entry in `package.yaml` is preserved.
 
 ### Selectors → `selector_from_ctx this comp="..."`
 
-Les `matchLabels` des selectors et des `topologySpreadConstraints` sont remplacés par un helper qui génère des labels cohérents avec le contexte de l'instance :
+The `matchLabels` of selectors and `topologySpreadConstraints` are replaced by a helper that generates labels consistent with the instance context:
 
 ```yaml
 selector:
   matchLabels: {{json_to_str (selector_from_ctx this comp="controller")}}
 ```
 
-### Labels de pod → `labels_from_ctx this`
+### Pod labels → `labels_from_ctx this`
 
-Les labels du pod template (nécessaires pour que les selectors fonctionnent) :
+The pod template labels (required for selectors to work):
 
 ```yaml
 template:
@@ -260,21 +262,33 @@ template:
 
 ---
 
-## Cycle de mise à jour (`update.rhai`)
+## Update cycle (`update.rhai`)
 
-Ce script est exécuté par la commande `agent package update`. Il :
+```mermaid
+flowchart LR
+    YAML[package.yaml] --> CMD[agent package update]
+    CMD --> PRE[update_pre hook]
+    PRE --> OCI[Query OCI registries\nfor latest semver tags]
+    OCI --> CMP{Newer tag\nfound?}
+    CMP -->|yes| UPD[Update package.yaml\nyaml_encode_ordered]
+    CMP -->|no| DONE[No change]
+    UPD --> POST[update_post hook]
+    POST --> REGEN[Regenerate templates\ngen_system / gen_tenant / gen_service]
+```
 
-1. Lit `package.yaml` avec `yaml_decode_ordered` (préservation de l'ordre des clés)
-2. Pour chaque entrée dans `images:`, interroge le registry OCI pour lister les tags semver disponibles
-3. Compare le tag courant avec le plus récent trouvé
-4. Si un tag plus récent existe, met à jour `package.yaml` et écrit avec `yaml_encode_ordered`
-5. Appelle `update_pre` (hook optionnel) avant et `update_post` (hook optionnel) après
+This script is executed by the `agent package update` command. It:
+
+1. Reads `package.yaml` with `yaml_decode_ordered` (key order preservation)
+2. For each entry in `images:`, queries the OCI registry to list available semver tags
+3. Compares the current tag with the most recent one found
+4. If a newer tag exists, updates `package.yaml` and writes with `yaml_encode_ordered`
+5. Calls `update_pre` (optional hook) before and `update_post` (optional hook) after
 
 ### Hook `update_post.rhai`
 
-Placé dans `scripts/update_post.rhai`, ce script regénère les templates après mise à jour des tags. C'est là qu'on appelle `gen_system`, `gen_tenant` ou `gen_service`.
+Placed in `scripts/update_post.rhai`, this script regenerates templates after updating image tags. This is where `gen_system`, `gen_tenant`, or `gen_service` is called.
 
-**Exemple typique :**
+**Typical example:**
 
 ```rhai
 import "gen_package" as gen;
@@ -297,7 +311,7 @@ fn run(args) {
 }
 ```
 
-**Exemple avec filtrage des versions disponibles (ArtifactHub) :**
+**Example with available version filtering (ArtifactHub):**
 
 ```rhai
 import "gen_package" as gen;
@@ -308,12 +322,12 @@ fn run(args) {
     let yaml          = yaml_decode(file_read(args.source + "/package.yaml"));
     let chart_version = yaml["metadata"]["app_version"];
 
-    // Lister les versions disponibles dans la même major
+    // List available versions within the same major
     let more = pck.available_versions
         .map(|v| v.version)
         .filter(|v| parse_int(v.split(".")[0]) >= parse_int(chart_version.split(".")[0]));
     if more.len > 0 {
-        print(`Versions disponibles à partir de ${chart_version}: ${yaml_encode(more)}`);
+        print(`Available versions from ${chart_version}: ${yaml_encode(more)}`);
     }
 
     let name = gen::placeholder();
@@ -333,18 +347,18 @@ fn run(args) {
 
 ---
 
-## Helpers HBS disponibles dans les templates
+## HBS helpers available in templates
 
 | Helper | Signature | Description |
 |--------|-----------|-------------|
-| `image_from_ctx` | `(ctx "key")` | Rendu `registry/repository:tag` depuis `package.yaml[images][key]` |
-| `resources_from_ctx` | `(ctx "key")` | Objet `{requests:{...}, limits:{...}}` depuis `package.yaml[resources][key]` |
-| `selector_from_ctx` | `(ctx comp="key")` | Labels de selector pour le composant `key` |
-| `labels_from_ctx` | `(ctx)` | Labels complets pour le pod template |
-| `json_to_str` | `(value)` | Sérialise un objet en JSON inline (pour YAML scalaire) |
-| `ctx_have_crd` | `(ctx "group/version/kind")` | Vrai si le CRD est installé dans le cluster |
+| `image_from_ctx` | `(ctx "key")` | Renders `registry/repository:tag` from `package.yaml[images][key]` |
+| `resources_from_ctx` | `(ctx "key")` | Object `{requests:{...}, limits:{...}}` from `package.yaml[resources][key]` |
+| `selector_from_ctx` | `(ctx comp="key")` | Selector labels for component `key` |
+| `labels_from_ctx` | `(ctx)` | Full labels for the pod template |
+| `json_to_str` | `(value)` | Serializes an object to inline JSON (for YAML scalar) |
+| `ctx_have_crd` | `(ctx "group/version/kind")` | True if the CRD is installed in the cluster |
 
-**Exemple d'utilisation combinée :**
+**Combined usage example:**
 
 ```yaml
 spec:
@@ -360,7 +374,7 @@ spec:
         resources: {{json_to_str (resources_from_ctx this "worker")}}
 ```
 
-**Ressource conditionnelle sur présence d'un CRD :**
+**Resource conditional on CRD presence:**
 
 ```yaml
 {{#if (ctx_have_crd this "servicemonitors.monitoring.coreos.com")}}
@@ -373,12 +387,12 @@ kind: ServiceMonitor
 
 ---
 
-## Règles de génération
+## Generation rules
 
-1. **Utiliser `placeholder()` pour tout** — passer un placeholder aléatoire comme nom de release Helm ET comme namespace. Les chaînes réelles (comme `"traefik"` ou `"vynil-apps"`) peuvent apparaître dans d'autres contextes et provoquer des remplacements non désirés.
+1. **Use `placeholder()` for everything** — pass a random placeholder as both the Helm release name and the namespace. Real strings (like `"traefik"` or `"vynil-apps"`) may appear in other contexts and cause unintended replacements.
 
-2. **Ordre des clés YAML** — `package.yaml` est modifié par manipulation de texte brut ; les sections `images:` et `resources:` sont remplacées ligne par ligne sans re-parser le fichier (évite la corruption par `rust_yaml` RoundTrip avec les block scalars `>`, `|`, `>-`, `|-`).
+2. **YAML key order** — `package.yaml` is modified by raw text manipulation; the `images:` and `resources:` sections are replaced line by line without re-parsing the file (avoids corruption by `rust_yaml` RoundTrip with block scalars `>`, `|`, `>-`, `|-`).
 
-3. **Re-génération** — les sections `images:` et `resources:` sont **toujours écrasées**. Exception : si un conteneur n'a pas de `resources:` défini, l'entrée existante dans `package.yaml` est conservée.
+3. **Re-generation** — the `images:` and `resources:` sections are **always overwritten**. Exception: if a container has no `resources:` defined, the existing entry in `package.yaml` is preserved.
 
-4. **CRDs** — le fichier généré commence toujours par `# yamllint disable rule:line-length` car les CRDs contiennent des lignes très longues (descriptions OpenAPI).
+4. **CRDs** — the generated file always starts with `# yamllint disable rule:line-length` because CRDs contain very long lines (OpenAPI descriptions).

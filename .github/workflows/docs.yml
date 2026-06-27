@@ -1,0 +1,27 @@
+---
+name: Docs parity
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+      - 'feature/**'
+      - 'fix/**'
+    paths:
+      - 'docs/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+
+jobs:
+  parity:
+    name: EN/FR parity check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check docs EN/FR parity
+        run: bash .github/scripts/check-docs-parity.sh

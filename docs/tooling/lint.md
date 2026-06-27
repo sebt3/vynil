@@ -1,50 +1,50 @@
-# Lint d'un paquet
+# Package Linting
 
-`agent package lint` analyse un paquet **statiquement**, sans déploiement : structure,
-templates Handlebars et scripts Rhai. C'est l'outil à brancher en CI avant publication.
+`agent package lint` analyzes a package **statically**, without deployment: structure,
+Handlebars templates, and Rhai scripts. This is the tool to integrate in CI before publishing.
 
 ```bash
 agent package lint -p ./my-package --format junit --junit-output-filename lint.xml
 ```
 
-| Option | Défaut | Rôle |
+| Option | Default | Role |
 |---|---|---|
-| `-p`, `--package-dir` | `/tmp/package` | Répertoire du paquet. |
-| `-c`, `--config-dir` | `.` | Scripts Rhai additionnels. |
-| `--format` | `text` | `text` ou `junit`. |
-| `--level` | `all` | Sévérité minimale affichée : `error`, `warn`, `all`. |
-| `--junit-output-filename` | — | Écrit un rapport JUnit XML. |
+| `-p`, `--package-dir` | `/tmp/package` | Package directory. |
+| `-c`, `--config-dir` | `.` | Additional Rhai scripts. |
+| `--format` | `text` | `text` or `junit`. |
+| `--level` | `all` | Minimum severity displayed: `error`, `warn`, `all`. |
+| `--junit-output-filename` | — | Writes a JUnit XML report. |
 
-## Vérifications effectuées
+## Checks performed
 
 ### Structure (`package/`)
 
-- présence et format de `package.yaml` ;
-- structure de répertoires requise ;
-- définitions de ressources.
+- presence and format of `package.yaml`;
+- required directory structure;
+- resource definitions.
 
 ### Templates Handlebars (`hbs/`)
 
-- validité de syntaxe ;
-- helpers inconnus (`hbs/unknown-helper`) ;
-- partials inconnus ;
-- cohérence des variables de contexte avec `package.yaml` ;
-- validité des clés de ressources et d'images ;
-- usage du bon type de paquet.
+- syntax validity;
+- unknown helpers (`hbs/unknown-helper`);
+- unknown partials;
+- consistency of context variables with `package.yaml`;
+- validity of resource and image keys;
+- correct package type usage.
 
 ### Scripts Rhai (`rhai/`)
 
-- validité de syntaxe ;
-- imports non résolus ;
-- code mort, variables inutilisées, variables masquées (shadowing) ;
-- paramètres et fonctions inutilisés (`rhai/unused-function`, `rhai/unused-variable`) ;
-- validation du mode d'API (pas de full-API dans les scripts core) ;
-- validation du type de paquet (pas d'accès tenant dans un paquet système) ;
-- validation du retour des hooks de contexte (`rhai/context-hook-no-return`).
+- syntax validity;
+- unresolved imports;
+- dead code, unused variables, shadowed variables;
+- unused parameters and functions (`rhai/unused-function`, `rhai/unused-variable`);
+- API mode validation (no full-API in core scripts);
+- package type validation (no tenant access in a system package);
+- context hook return value validation (`rhai/context-hook-no-return`).
 
-## Configuration : `.vynil-lint.yaml`
+## Configuration: `.vynil-lint.yaml`
 
-Placé à la racine du paquet, il personnalise le comportement.
+Placed at the package root, it customizes behavior.
 
 ```yaml
 disable:
@@ -64,19 +64,19 @@ files:
       rhai/context-hook-no-return: error
 ```
 
-## Désactivation inline
+## Inline disabling
 
-Désactiver une règle sur une seule ligne :
+Disable a rule for a single line:
 
-- Rhai : `// vynil-lint-disable rhai/unused-variable`
-- Handlebars : `{{!-- vynil-lint-disable hbs/unknown-helper --}}`
+- Rhai: `// vynil-lint-disable rhai/unused-variable`
+- Handlebars: `{{!-- vynil-lint-disable hbs/unknown-helper --}}`
 
-Support du mode block (enable/disable)
+Block mode support (enable/disable)
 
-## Codes de sortie
+## Exit codes
 
-| Code | Signification |
+| Code | Meaning |
 |---|---|
-| `0` | Aucun problème. |
-| `1` | Erreurs détectées. |
-| `2` | Uniquement des warnings. |
+| `0` | No issues. |
+| `1` | Errors detected. |
+| `2` | Warnings only. |

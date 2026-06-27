@@ -1,12 +1,12 @@
-# Sources de JukeBox
+# JukeBox Sources
 
-Une `JukeBox` déclare **une** variante de source dans `spec.source`. Le scan
-([Réconciliation](../reconciliation.md)) la lit pour produire le catalogue
-`status.packages`.
+A `JukeBox` declares **one** source variant in `spec.source`. The scan
+([Reconciliation](../reconciliation.md)) reads it to produce the
+`status.packages` catalog.
 
-## List — liste de dépôts OCI
+## List — list of OCI repositories
 
-La forme la plus simple : une liste d'images OCI à scanner directement.
+The simplest form: a list of OCI images to scan directly.
 
 ```yaml
 spec:
@@ -15,16 +15,16 @@ spec:
     - "docker.io/sebt3/vynil"
     - "registry.example.com/org/another-set"
   maturity: stable
-  schedule: "0 3 * * *"
-  pull_secret: my-pull-secret   # optionnel
+  schedule: "0 3 * * *"  # daily rescan at 3am
+  pull_secret: my-pull-secret   # if private registry
 ```
 
-Le scan liste les tags de chaque dépôt, ne garde que les tags semver valides, applique le
-filtre de maturité et calcule les waypoints d'upgrade.
+The scan lists the tags of each repository, keeps only valid semver tags, applies
+the maturity filter, and computes upgrade waypoints.
 
-## Harbor — projet Harbor
+## Harbor — Harbor project
 
-Scanne tous les dépôts d'un projet Harbor (l'hôte API et l'hôte OCI sont identiques).
+Scans all repositories in a Harbor project (API host and OCI host are the same).
 
 ```yaml
 spec:
@@ -39,8 +39,8 @@ spec:
 
 ## GitLab — GitLab Container Registry
 
-GitLab dissocie l'hôte API (`url`) de l'hôte registre OCI (`registry`). Détails complets et
-stratégies de tokens (PAT, `CI_JOB_TOKEN`, deploy token) dans le guide dédié :
+GitLab separates the API host (`url`) from the OCI registry host (`registry`). Full details and
+token strategies (PAT, `CI_JOB_TOKEN`, deploy token) in the dedicated guide:
 [GitLab Container Registry](gitlab-registry.md).
 
 ```yaml
@@ -54,33 +54,33 @@ spec:
   schedule: "0 3 * * *"
 ```
 
-## Script — scan piloté par Rhai
+## Script — Rhai-driven scan
 
-Pour les registres non standard, un script Rhai fournit la liste des dépôts à scanner. Utile
-quand l'énumération des images nécessite une logique d'API spécifique.
+For non-standard registries, a Rhai script provides the list of repositories to scan. Useful
+when enumerating images requires specific API logic.
 
-## Http — cache de paquets pré-calculé
+## Http — pre-computed package cache
 
-Au lieu de scanner un registre, la JukeBox télécharge un index et des fichiers de paquets
-déjà calculés (produits par `agent box file-scan`). Idéal pour découpler le scan
-(coûteux, hors cluster) de la consommation.
+Instead of scanning a registry, the JukeBox downloads a pre-computed index and package files
+(produced by `agent box file-scan`). Ideal for decoupling the scan (expensive, off-cluster)
+from consumption.
 
 ```yaml
 spec:
   source:
     http:
       url: "https://cache.example.com/vynil/"
-      # auth Basic ou Bearer via Secret
+      # auth Basic or Bearer via Secret
   maturity: stable
   schedule: "*/30 * * * *"
 ```
 
-Le scan récupère `index.yaml` puis les `<category>_<name>.yaml`, applique le filtre de
-maturité et recalcule les waypoints — le résultat est identique à un scan OCI direct.
+The scan fetches `index.yaml` then the `<category>_<name>.yaml` files, applies the
+maturity filter and recomputes waypoints — the result is identical to a direct OCI scan.
 
 ## S3 — bucket S3/MinIO/OVH
 
-Même principe que `http`, mais le cache est stocké dans un bucket S3.
+Same principle as `http`, but the cache is stored in an S3 bucket.
 
 ```yaml
 spec:
@@ -88,26 +88,26 @@ spec:
     s3:
       bucket: "vynil-cache"
       endpoint: "https://s3.example.com"   # MinIO/OVH compatible
-      prefix: "packages/"                   # optionnel
-      # credentials via Secret ou rôle IAM
+      prefix: "packages/"                   # optional
+      # credentials via Secret or IAM role
   maturity: stable
   schedule: "*/30 * * * *"
 ```
 
-## Maturité et waypoints
+## Maturity and waypoints
 
-Quelle que soit la source, le scan applique la `maturity` choisie et ne conserve qu'un
-**waypoint par époque** de `MinimumPreviousVersion`, garantissant une chaîne de mise à jour
-cohérente sans stocker toutes les versions. Le scan standalone (`file-scan`) calcule l'union
-des waypoints pour les trois niveaux de maturité, et c'est la JukeBox consommatrice (http/s3)
-qui applique ensuite son propre filtre de maturité.
+Regardless of source, the scan applies the chosen `maturity` and keeps only one
+**waypoint per epoch** of `MinimumPreviousVersion`, ensuring a consistent upgrade
+chain without storing every version. The standalone scan (`file-scan`) computes the union
+of waypoints for all three maturity levels, and the consuming JukeBox (http/s3)
+then applies its own maturity filter.
 
-## Forcer un scan
+## Forcing a scan
 
 ```bash
-# scan complet immédiat
+# immediate full scan
 kubectl annotate jukebox <name> vynil.solidite.fr/force-scan=true --overwrite
-# scan partiel d'une catégorie ou d'un paquet
+# partial scan of a category or package
 kubectl annotate jukebox <name> vynil.solidite.fr/force-scan="database" --overwrite
 kubectl annotate jukebox <name> vynil.solidite.fr/force-scan="database/postgresql" --overwrite
 ```

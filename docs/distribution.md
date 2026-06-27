@@ -1,207 +1,205 @@
-# Construire une distribution Vynil
+# Building a Vynil distribution
 
-Une **distribution Vynil** n'est pas un tas de paquets : c'est un ensemble d'opinions
-matérialisées — une box (le dépôt des paquets), des conventions, une CI, et deux paquets
-fondateurs qui pré-configurent le cluster puis l'espace utilisateur. Cette page décrit le
-processus de création d'une distribution et les décisions qui la structurent.
+A **Vynil distribution** is not a pile of packages: it is a set of materialised
+opinions — a box (the package repository), conventions, a CI pipeline, and two
+founding packages that pre-configure the cluster and then the user space. This page
+describes the process of creating a distribution and the decisions that shape it.
 
-> Ironie assumée : Vynil sert à construire des systèmes opiniâtres, mais choisit de ne pas
-> l'être lui-même pour ne fermer aucun cas d'usage. Il fournit les structures de *votre*
-> opinion.
+> Acknowledged irony: Vynil is designed to build opinionated systems, yet deliberately
+> chooses not to be opinionated itself so as not to close off any use case. It
+> provides the structures for *your* opinions.
 
-## La valeur ajoutée : l'opiniâtreté
+## The value proposition: opinionation
 
-Un artefact du marché (chart Helm, kustomization) est par définition **non-opiniâtre** : il
-doit répondre au plus grand nombre, donc il expose des centaines d'options, laisse les
-choix de sécurité « à la responsabilité de l'utilisateur », et ne s'intègre à rien. Le
-résultat connu : des semaines de configuration, et des trous laissés ouverts en amont.
+A market artefact (Helm chart, kustomization) is by definition **unopinionated**: it
+must serve the largest possible audience, so it exposes hundreds of options, leaves
+security choices "at the user's responsibility", and integrates with nothing. The
+well-known result: weeks of configuration, and gaps left open upstream.
 
-Empaqueter pour Vynil, c'est l'inverse : **prendre ce qui existe sur le marché et le
-standardiser dans le cadre de la distribution**. Le tooling (génération, lint, tests)
-automatise la mécanique ; le vrai travail est la prise de décision :
+Packaging for Vynil is the opposite: **taking what exists on the market and
+standardising it within the distribution's framework**. The tooling (generation, lint,
+tests) automates the mechanics; the real work is decision-making:
 
-- les **ressources** des pods (requests/limits réalistes, pas de valeurs par défaut creuses) ;
-- les **HPA** requis — ou leur absence assumée ;
-- la **classe de stockage** adaptée à chaque besoin (données répliquées ou non, RWX/RWO) ;
-- les **flux réseau** nécessaires, donc les `NetworkPolicy` ;
-- **opérateur dédié ou paquet Vynil** ? (guide de décision ci-dessous) ;
-- la **politique de sécurité** applicable (PSS, seccomp, capabilities) ;
-- les **prérequis et dépendances** (`requirements`) ;
-- les **événements cluster qui doivent déclencher une reconfiguration** d'une instance
-  (`recommandations` : apparition d'un CRD, d'un service système…) ;
-- ce que le paquet **apporte aux autres** pour leur auto-configuration (services/capacités
-  publiés).
+- pod **resources** (realistic requests/limits, not hollow defaults);
+- required **HPAs** — or their deliberate absence;
+- the **storage class** suited to each need (replicated or not, RWX/RWO);
+- the necessary **network flows**, hence the `NetworkPolicy` objects;
+- **dedicated operator or Vynil package**? (decision guide below);
+- the applicable **security policy** (PSS, seccomp, capabilities);
+- **prerequisites and dependencies** (`requirements`);
+- the **cluster events that should trigger reconfiguration** of an instance
+  (`recommendations`: appearance of a CRD, a system service…);
+- what the package **provides to others** for their auto-configuration (published
+  services/capabilities).
 
-Le résultat pour l'utilisateur final : une installation simple, des options peu nombreuses
-et **compréhensibles par un non-spécialiste**, et une intégration automatique à son
-écosystème (SSO détecté et configuré, certificats émis, sauvegardes branchées…).
+The result for the end user: a simple installation, few options that are
+**understandable by a non-specialist**, and automatic integration into their ecosystem
+(SSO detected and configured, certificates issued, backups wired up…).
 
-## Guide de décision : opérateur dédié ou paquet ?
+## Decision guide: dedicated operator or package?
 
-| Question | Si oui | Si non |
+| Question | If yes | If no |
 |---|---|---|
-| Le contrôleur fait-il plus que déployer des ressources (failover, réplication de données, orchestration d'état) ? | Installer l'opérateur (paquet `system`) et consommer ses CRs depuis les paquets applicatifs | Un paquet Vynil suffit |
-| L'application gère-t-elle plusieurs instances avec des cycles de vie indépendants pilotés par l'opérateur ? | Opérateur | Paquet |
-| Le « pattern » de l'opérateur se limite-t-il à templater des manifestes ? | — | Paquet : Vynil fait déjà ce travail, l'opérateur serait un poids mort |
+| Does the controller do more than deploying resources (failover, data replication, state orchestration)? | Install the operator (a `system` package) and consume its CRs from application packages | A Vynil package is sufficient |
+| Does the application manage multiple instances with independent lifecycles driven by the operator? | Operator | Package |
+| Does the operator "pattern" amount to nothing more than templating manifests? | — | Package: Vynil already does this work, the operator would be dead weight |
 
-Beaucoup d'opérateurs du marché relèvent du dernier cas : dans un contexte Vynil, ils
-n'apportent rien.
+Many market operators fall into the last category: in a Vynil context, they add
+nothing.
 
-## Anatomie d'une distribution
+## Distribution anatomy
 
 ```mermaid
 flowchart LR
-    BOX[Box - dépôt git des paquets] --> CI[CI : lint, test, build, signature]
-    CI --> REG[(Registre OCI - canaux alpha/beta/stable)]
+    BOX[Box - git package repo] --> CI[CI: lint, test, build, sign]
+    CI --> REG[(OCI Registry - alpha/beta/stable channels)]
     REG -->|scan| JB[JukeBox]
-    JB --> OP[Opérateur Vynil]
-    OP --> BS[bootstrap - pré-config cluster]
-    OP --> TN[paquet tenant - pré-config utilisateur]
-    OP --> APP[paquets applicatifs]
-    BS -.->|écrit le contrat| CTX[(contexte cluster)]
-    TN -.->|projette| CTXNS[(contexte namespace)]
+    JB --> OP[Vynil Operator]
+    OP --> BS[bootstrap - cluster pre-config]
+    OP --> TN[tenant package - user space pre-config]
+    OP --> APP[application packages]
+    BS -.->|writes the contract| CTX[(cluster context)]
+    TN -.->|projects| CTXNS[(namespace context)]
     CTX --> APP
     CTXNS --> APP
 ```
 
-Une distribution comporte typiquement :
+A distribution typically comprises:
 
-1. **la box** : un dépôt `<catégorie>/<paquet>/`, avec ses conventions (nommage,
-   namespaces, sécurité) ;
-2. **un paquet `bootstrap`** (système) — pré-configuration du *cluster* ;
-3. **un paquet `tenant`** (système) — pré-configuration de l'*espace utilisateur* ;
-4. **une CI** qui lint, teste, construit, signe et publie ;
-5. **un ou plusieurs registres** et les JukeBox de maturité correspondantes.
+1. **the box**: a `<category>/<package>/` repository, with its conventions (naming,
+   namespaces, security);
+2. **a `bootstrap` package** (system) — *cluster* pre-configuration;
+3. **a `tenant` package** (system) — *user space* pre-configuration;
+4. **a CI pipeline** that lints, tests, builds, signs, and publishes;
+5. **one or more registries** and the corresponding maturity JukeBoxes.
 
-## Bootstrap — pré-configurer le cluster
+## Bootstrap — pre-configuring the cluster
 
-Le bootstrap est le point d'entrée de la plateforme. Il a deux responsabilités séquencées :
+The bootstrap is the platform's entry point. It has two sequenced responsibilities:
 
-1. **Aligner le cluster** : détecter ce qui existe, installer ce qui manque pour atteindre
-   le niveau de capacité voulu ;
-2. **Écrire le contrat** : publier dans la configuration cluster de Vynil les scripts de
-   contexte et les valeurs résolues, pour que tout paquet installé ensuite dispose d'une
-   vision complète et cohérente du cluster **sans interroger l'API lui-même**.
+1. **Align the cluster**: detect what exists, install what is missing to reach the
+   desired capability level;
+2. **Write the contract**: publish into Vynil's cluster configuration the context
+   scripts and resolved values, so that any package installed afterwards has a
+   complete and consistent view of the cluster **without querying the API itself**.
 
-Sa philosophie : **detect → gap-fill → write**. Les options du bootstrap ne sont pas des
-feature flags (« voulez-vous un ingress ? ») mais des **préférences d'installation**
-(« si le cluster n'a pas d'ingress, lequel installer ? ») :
+Its philosophy: **detect → gap-fill → write**. Bootstrap options are not feature
+flags ("do you want an ingress?") but **installation preferences** ("if the cluster
+has no ingress, which one should be installed?"):
 
 ```mermaid
 flowchart TD
-    A[Capacité requise : ingress, TLS, SSO, secrets, storage] --> B{Déjà présente ?<br/>CRD sentinel, IngressClass…}
-    B -->|oui| C[Enregistrer la capacité telle quelle]
-    B -->|non| D[Installer le provider préféré des options]
-    C --> E[Écrire le résultat dans le contrat cluster]
+    A[Required capability: ingress, TLS, SSO, secrets, storage] --> B{Already present?<br/>CRD sentinel, IngressClass…}
+    B -->|yes| C[Register the capability as-is]
+    B -->|no| D[Install the preferred provider from options]
+    C --> E[Write the result into the cluster contract]
     D --> E
 ```
 
-Ce modèle permet à une même box d'atterrir sur des clusters de profils très différents
-(mono-nœud de dev, cloud managé avec ingress/IdP fournis, baremetal complet, OpenShift) :
-le bootstrap ne cible pas un profil, il s'adapte à celui qu'il trouve.
+This model allows the same box to land on clusters with very different profiles
+(single-node dev, managed cloud with ingress/IdP provided, full baremetal, OpenShift):
+the bootstrap does not target a profile, it adapts to the one it finds.
 
-## Tenant — pré-configurer l'espace utilisateur
+## Tenant — pre-configuring the user space
 
-Pour Vynil, la définition native d'un tenant est **volontairement minimale** : un ensemble
-de namespaces partageant un couple clé/valeur de labels. Rien de plus — et cette
-définition ne peut pas être réduite, car chaque distribution l'étend dans sa propre
-direction.
+For Vynil, the native definition of a tenant is **deliberately minimal**: a set of
+namespaces sharing a key/value label pair. Nothing more — and this definition cannot
+be reduced, since every distribution extends it in its own direction.
 
-Une distribution doit donc **compléter** cette définition par un paquet de type `system`
-qui orchestre réellement le cycle de vie d'un tenant. Ce paquet matérialise ce qu'« être
-un tenant » signifie dans la distribution, typiquement :
+A distribution must therefore **complete** this definition with a `system` type
+package that actually orchestrates the tenant lifecycle. This package materialises
+what "being a tenant" means in the distribution, typically:
 
-- un **namespace système** du tenant, portant ses briques de base (SSO dédié, gestionnaire
-  de secrets dédié…) ;
-- la **frontière d'isolation** : RBAC, quotas natifs, périmètre réseau (une posture
-  par défaut extensible localement, plutôt qu'un deny-all rigide) ;
-- des **conventions** (sauvegarde, mail…) dont les secrets sont sourcés depuis le
-  gestionnaire de secrets du tenant — jamais d'identifiants en clair dans les options ;
-- la **projection du contexte** : les valeurs résolues (SSO, secrets, conventions) sont
-  exposées dans le contexte de namespace, avec une cascade de priorité du type
-  `annotation du namespace > configuration du tenant > défaut cluster`.
+- a **tenant system namespace** carrying its base building blocks (dedicated SSO,
+  dedicated secrets manager…);
+- the **isolation boundary**: RBAC, native quotas, network perimeter (a locally
+  extensible default posture rather than a rigid deny-all);
+- **conventions** (backup, mail…) whose secrets are sourced from the tenant's secrets
+  manager — never plaintext credentials in options;
+- **context projection**: resolved values (SSO, secrets, conventions) are exposed in
+  the namespace context, with a priority cascade of the form
+  `namespace annotation > tenant configuration > cluster default`.
 
-Bootstrap et tenant forment les deux moitiés du même contrat :
+Bootstrap and tenant together form the two halves of the same contract:
 
-| | Bootstrap | Paquet tenant |
+| | Bootstrap | Tenant package |
 |---|---|---|
-| Pré-configure | le **cluster** | l'**espace utilisateur** |
-| Écrit | le contexte cluster (`context.cluster`) | le contexte namespace (`context.namespace`) |
-| Un paquet applicatif… | ne sonde jamais le cluster | ne sonde jamais le tenant |
+| Pre-configures | the **cluster** | the **user space** |
+| Writes | the cluster context (`context.cluster`) | the namespace context (`context.namespace`) |
+| An application package… | never probes the cluster | never probes the tenant |
 
-C'est ce qui rend les installations applicatives triviales : le paquet **lit** des valeurs
-déjà résolues au lieu de poser des questions à l'utilisateur ou de fouiller l'API.
+This is what makes application installations trivial: the package **reads** already-resolved
+values instead of asking questions to the user or browsing the API.
 
-## Customiser Vynil au niveau cluster
+## Customizing Vynil at the cluster level
 
-Le comportement de Vynil est extensible au niveau du cluster : scripts de contexte,
-valeurs de configuration de l'agent, définition du label de tenant. C'est par ce canal
-qu'une distribution injecte ses opinions transverses — et qu'elle alimente
-l'auto-configuration de tous les paquets. Tout ce que le bootstrap « écrit » est lu ici.
+Vynil's behaviour is extensible at the cluster level: context scripts, agent
+configuration values, tenant label definition. This is the channel through which a
+distribution injects its cross-cutting opinions — and feeds the auto-configuration of
+all packages. Everything the bootstrap "writes" is read here.
 
-## Utilisateurs finaux et objets cluster-wide
+## End users and cluster-wide objects
 
-Un utilisateur de tenant n'a pas — et ne doit pas avoir — les droits sur les objets
-cluster-wide (namespaces, CRDs, classes). Stratégies éprouvées pour lui donner néanmoins
-la main, sans élévation de droits :
+A tenant user does not — and must not — have rights over cluster-wide objects
+(namespaces, CRDs, classes). Proven strategies for giving them control nonetheless,
+without privilege escalation:
 
-- **objets namespacés comme surface de demande** : l'utilisateur exprime son besoin via un
-  objet dans son namespace (une instance, une annotation) ; un paquet `system` de la
-  distribution réconcilie et matérialise la partie cluster-wide ;
-- **annotations à cascade** : une annotation posée sur le namespace surcharge la
-  configuration du tenant, elle-même surchargée du défaut cluster — détectée par les
-  `value_script`/scripts de contexte ;
-- **ponts d'API déclaratifs** : pour les systèmes qui n'exposent qu'une API REST
-  (provisionnement de royaumes SSO, de clients OIDC…), un opérateur de pont REST permet de
-  déclarer ces appels comme des objets namespacés ;
-- **self-service par instances** : la `TenantInstance` est elle-même la surface de
-  self-service — l'utilisateur (ou le produit SaaS au-dessus) crée des instances, la
-  distribution garde le contrôle de ce qu'elles peuvent faire.
+- **namespaced objects as request surface**: the user expresses their need via an
+  object in their namespace (an instance, an annotation); a `system` package in the
+  distribution reconciles and materialises the cluster-wide part;
+- **cascading annotations**: an annotation placed on the namespace overrides the
+  tenant configuration, which itself overrides the cluster default — detected by the
+  `value_script`/context scripts;
+- **declarative API bridges**: for systems that only expose a REST API (SSO realm
+  provisioning, OIDC client creation…), a REST bridge operator allows declaring
+  these calls as namespaced objects;
+- **self-service via instances**: the `TenantInstance` is itself the self-service
+  surface — the user (or the SaaS product above) creates instances, and the
+  distribution retains control over what they can do.
 
-## Un projet open-source peut publier sa propre box
+## An open-source project can publish its own box
 
-Rien ne réserve la création de box aux opérateurs de clusters : un **projet open-source
-peut publier directement ses paquets Vynil**, comme il publie un chart Helm — la box
-devient le « packaging officiel amont ». Les utilisateurs ajoutent une JukeBox pointant
-vers le registre du projet et obtiennent une installation intégrée, signée et maintenue
-par l'amont.
+Nothing restricts box creation to cluster operators: an **open-source project can
+publish its Vynil packages directly**, just as it publishes a Helm chart — the box
+becomes the "official upstream packaging". Users add a JukeBox pointing to the
+project's registry and obtain an integrated, signed, upstream-maintained installation.
 
-C'est le modèle des distributions Linux porté à Kubernetes : l'amont fournit le paquet, la
-distribution l'intègre — et un même cluster peut consommer plusieurs box (celle de la
-distribution, celle d'un projet amont) via plusieurs JukeBox.
+This is the Linux distribution model brought to Kubernetes: upstream provides the
+package, the distribution integrates it — and a single cluster can consume multiple
+boxes (the distribution's own, an upstream project's) via multiple JukeBoxes.
 
-## La CI d'une distribution
+## Distribution CI
 
 ```mermaid
 flowchart LR
-    MR[Branche / MR] -->|lint + tests| B1[build alpha]
-    B1 --> REG[(Registre OCI)]
-    MAIN[Branche principale] -->|lint + tests| B2[build beta]
-    TAG[Tag release] --> B3[build stable]
+    MR[Branch / MR] -->|lint + tests| B1[build alpha]
+    B1 --> REG[(OCI Registry)]
+    MAIN[Main branch] -->|lint + tests| B2[build beta]
+    TAG[Release tag] --> B3[build stable]
     B2 --> REG
     B3 --> REG
-    REG --> SIGN[Signature Cosign + SBOM]
-    CRON[Purge planifiée] -->|règles de rétention| REG
+    REG --> SIGN[Cosign signature + SBOM]
+    CRON[Scheduled purge] -->|retention rules| REG
 ```
 
-Les invariants d'une CI de distribution saine :
+The invariants of a healthy distribution CI:
 
-1. **lint et tests bloquants** avant tout build (`agent package lint` / `agent package test`) ;
-2. **canaux de maturité** : les branches de travail publient en `alpha`, la branche
-   principale en `beta`, les tags en `stable` — les JukeBox filtrent par `maturity` ;
-3. **signature et SBOM** au build ([Build & signature](build-signing.md)) ;
-4. **purge planifiée** du registre, respectant les règles de rétention
-   ([Maintenance du registre](jukebox/registry-maintenance.md)) ;
-5. les mises à jour amont passent par `agent package update` + relecture, jamais par
-   modification directe des manifestes générés.
+1. **blocking lint and tests** before any build (`agent package lint` / `agent package test`);
+2. **maturity channels**: working branches publish to `alpha`, the main branch to
+   `beta`, tags to `stable` — JukeBoxes filter by `maturity`;
+3. **signature and SBOM** at build time ([Build & signing](build-signing.md));
+4. **scheduled purge** of the registry, respecting retention rules
+   ([Registry maintenance](jukebox/registry-maintenance.md));
+5. upstream updates go through `agent package update` + review, never through direct
+   modification of generated manifests.
 
-## Étapes préparatoires — checklist
+## Preparatory steps — checklist
 
-1. choisir le **registre** et les canaux de maturité, créer les JukeBox ;
-2. fixer les **conventions** de la box : catégories, namespaces de déploiement, classes de
-   stockage, politique de sécurité, politique réseau ;
-3. écrire le **bootstrap** (detect → gap-fill → write) pour les profils de clusters visés ;
-4. écrire le **paquet tenant** (la définition de *votre* tenant) ;
-5. monter la **CI** (lint, tests, build signé, purge) ;
-6. empaqueter les **premières applications** — et capitaliser chaque décision
-   d'intégration dans les conventions de la box.
+1. choose the **registry** and maturity channels, create the JukeBoxes;
+2. fix the box **conventions**: categories, deployment namespaces, storage classes,
+   security policy, network policy;
+3. write the **bootstrap** (detect → gap-fill → write) for the targeted cluster profiles;
+4. write the **tenant package** (the definition of *your* tenant);
+5. set up the **CI** (lint, tests, signed build, purge);
+6. package the **first applications** — and capitalise each integration decision into
+   the box conventions.
