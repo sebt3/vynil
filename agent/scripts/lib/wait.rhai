@@ -84,9 +84,8 @@ fn vital(lst, duration) {
             obj.wait_condition("UpToDate", duration);
         } else if ["Dragonfly"].contains(v.kind) {
             log_info(`Waiting for ${v.kind} ${v.namespace}/${v.name} to be available`);
-            let api = k8s_resource(v.kind, v.namespace);
-            let obj = api.get_obj(v.name);
-            obj.wait_status_string("phase", "ready", duration);
+            let sts = get_statefulset(v.namespace, v.name);
+            sts.wait_available(duration);
         }
     }
 }
