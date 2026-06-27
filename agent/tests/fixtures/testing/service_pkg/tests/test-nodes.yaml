@@ -4,13 +4,14 @@ kind: Test
 metadata:
   name: nodes-override-test
 instance:
-  name: my-svc
-  namespace: my-ns
+  name: my-app
+  namespace: test-ns
   nodes:
     - master01
     - worker01
 asserts:
-  - name: some-object
+  - name: ha-cm-exists
     selector:
       kind: ConfigMap
+      name: ha-cm
     matcher: any

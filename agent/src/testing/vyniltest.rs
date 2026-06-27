@@ -47,10 +47,16 @@ pub struct VynilTestInstance {
     pub name: String,
     pub namespace: String,
     pub options: Option<BTreeMap<String, serde_json::Value>>,
-    /// Override tenant name for tenant packages (defaults to namespace)
+    /// Override tenant name for tenant packages: sets the `vynil.solidite.fr/tenant` label
+    /// on the injected instance mock. Defaults to namespace (same as `get_tenant_name()`).
     pub tenant: Option<String>,
-    /// Inject Node mock objects; controls context.cluster.ha in the Rhai scripts
+    /// Inject Node mock objects into the k8s layer so that
+    /// `build_context.rhai` derives `cluster.ha = nodes.len() > 1` naturally.
     pub nodes: Option<Vec<String>>,
+    /// Path to an `agent.yaml` override, relative to the package's `tests/` directory.
+    /// Used as the cluster config for this test run; allows explicit control of `ha`,
+    /// `prefered_storage`, and any other property normally set in the real `agent.yaml`.
+    pub agent_yaml: Option<String>,
 }
 
 #[allow(non_snake_case)]

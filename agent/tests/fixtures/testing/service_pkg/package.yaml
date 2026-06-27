@@ -5,7 +5,7 @@ metadata:
   type: service
   category: test
   name: my-service-app
-  description: Test service package
+  description: Test service package for framework assertions
   features: []
   app_version: "1.0.0"
 requirements: []

@@ -20,10 +20,10 @@ junit-report = "0.9.0"
 clap = { version = "4.5.53", features = ["derive", "env"] }
 env_logger = "0.11.5"
 wildmatch = "2.6.1"
+tempfile = "3"
 
 
 [dev-dependencies]
-tempfile = "3"
 tower-test = "0.4.0"
 http = "1.1.0"
 base64.workspace = true

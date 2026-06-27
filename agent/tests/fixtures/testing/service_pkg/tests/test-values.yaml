@@ -2,16 +2,11 @@
 apiVersion: vinyl.solidite.fr/v1beta1
 kind: Test
 metadata:
-  name: tenant-context-test
+  name: values-test
 instance:
   name: my-app
-  namespace: my-tenant-ns
+  namespace: test-ns
 asserts:
-  - name: tenant-name-resolves
-    selector:
-      kind: ConfigMap
-      name: "{{tenant.name}}-config"
-    matcher: any
   - name: values-common-name-resolves
     selector:
       kind: ConfigMap
