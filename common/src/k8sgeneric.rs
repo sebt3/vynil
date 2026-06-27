@@ -22,35 +22,53 @@ type DynObjCondition = Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::Eval
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
 }
-async fn async_populate_cache() -> Discovery {
-    match Discovery::new(CLIENT.clone()).run().await {
-        Ok(d) => d,
+async fn excluded_apiservice_groups() -> Vec<String> {
+    let ar = ApiResource {
+        group: "apiregistration.k8s.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "apiregistration.k8s.io/v1".to_string(),
+        kind: "APIService".to_string(),
+        plural: "apiservices".to_string(),
+    };
+    let api: Api<DynamicObject> = Api::all_with(CLIENT.clone(), &ar);
+    match api.list(&ListParams::default()).await {
+        Ok(list) => list
+            .items
+            .iter()
+            .filter_map(|obj| {
+                obj.data
+                    .get("spec")
+                    .and_then(|s| s.get("group"))
+                    .and_then(|g| g.as_str())
+                    .filter(|g| !g.is_empty())
+                    .map(|g| g.to_string())
+            })
+            .collect(),
         Err(e) => {
-            tracing::warn!("E_DISCOVERY_WARN: full discovery failed ({e}), retrying without metrics.k8s.io");
-            Discovery::new(CLIENT.clone())
-                .exclude(&["metrics.k8s.io"])
-                .run()
-                .await
-                .expect("create discovery (without metrics.k8s.io)")
+            tracing::warn!("E_DISCOVERY_WARN: cannot list APIServices ({e}), proceeding without exclusions");
+            vec![]
         }
     }
+}
+async fn async_populate_cache() -> Discovery {
+    let excluded = excluded_apiservice_groups().await;
+    let excluded_refs: Vec<&str> = excluded.iter().map(|s| s.as_str()).collect();
+    Discovery::new(CLIENT.clone())
+        .exclude(&excluded_refs)
+        .run()
+        .await
+        .expect("create discovery (excluding api-services)")
 }
 fn populate_cache() -> Discovery {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            match Discovery::new(CLIENT.clone()).run().await {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!(
-                        "E_DISCOVERY_WARN: full discovery failed ({e}), retrying without metrics.k8s.io"
-                    );
-                    Discovery::new(CLIENT.clone())
-                        .exclude(&["metrics.k8s.io"])
-                        .run()
-                        .await
-                        .expect("create discovery (without metrics.k8s.io)")
-                }
-            }
+            let excluded = excluded_apiservice_groups().await;
+            let excluded_refs: Vec<&str> = excluded.iter().map(|s| s.as_str()).collect();
+            Discovery::new(CLIENT.clone())
+                .exclude(&excluded_refs)
+                .run()
+                .await
+                .expect("create discovery (excluding api-services)")
         })
     })
 }

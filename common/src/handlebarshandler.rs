@@ -255,8 +255,10 @@ impl HandleBars<'_> {
             let res = #{}; let req = #{}; let lim = #{};\n\
             let v = root?[name]?[\"requests\"]?[\"cpu\"]; if v != () { req[\"cpu\"] = v; }\n\
             let v = root?[name]?[\"requests\"]?[\"memory\"]; if v != () { req[\"memory\"] = v; }\n\
+            let v = root?[name]?[\"requests\"]?[\"storage\"]; if v != () { req[\"ephemeral-storage\"] = v; }\n\
             let v = root?[name]?[\"limits\"]?[\"cpu\"]; if v != () { lim[\"cpu\"] = v; }\n\
             let v = root?[name]?[\"limits\"]?[\"memory\"]; if v != () { lim[\"memory\"] = v; }\n\
+            let v = root?[name]?[\"limits\"]?[\"storage\"]; if v != () { lim[\"ephemeral-storage\"] = v; }\n\
             if req.len() != 0 { res[\"requests\"] = req; }\n\
             if lim.len() != 0 { res[\"limits\"] = lim; }\n\
             res",
@@ -533,6 +535,54 @@ mod tests {
         assert!(
             parsed.get("limits").is_none(),
             "limits key must be absent when not configured, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_resources_from_ctx_storage_maps_to_ephemeral_storage() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({
+            "instance": {
+                "resources": {
+                    "app": {
+                        "requests": {"cpu": "50m", "memory": "128Mi", "storage": "1Gi"},
+                        "limits":   {"storage": "2Gi"}
+                    }
+                }
+            }
+        });
+        let result = hbs
+            .render(r#"{{json_to_str (resources_from_ctx this "app")}}"#, &data)
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["requests"]["ephemeral-storage"], "1Gi");
+        assert_eq!(parsed["limits"]["ephemeral-storage"], "2Gi");
+        assert!(
+            parsed["requests"].get("storage").is_none(),
+            "vynil 'storage' key must not appear in k8s output, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_resources_from_ctx_scaler_does_not_leak() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({
+            "instance": {
+                "resources": {
+                    "app": {
+                        "requests": {"cpu": "50m"},
+                        "scaler": {"max_replicas": 5, "average_utilization": 70}
+                    }
+                }
+            }
+        });
+        let result = hbs
+            .render(r#"{{json_to_str (resources_from_ctx this "app")}}"#, &data)
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(
+            parsed.get("scaler").is_none(),
+            "vynil 'scaler' field must not appear in k8s resources output, got: {result}"
         );
     }
 
