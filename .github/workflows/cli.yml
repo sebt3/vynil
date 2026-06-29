@@ -6,10 +6,23 @@ on:
     tags:
     - '*'
 jobs:
-  release:
+  # upload-rust-binary-action does NOT create the release — it only uploads assets to an
+  # existing one. Create it first, once, then fan out the per-target uploads.
+  create-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create the release and upload the binaries
+      contents: write
+    steps:
+    - uses: actions/checkout@v7
+    - uses: taiki-e/create-gh-release-action@v1
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+  upload:
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
       matrix:
         target:
@@ -18,7 +31,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     # Builds kubectl-vynil for the target (uses `cross` for non-native arches),
-    # then creates/updates the GitHub release for the tag and uploads the archive.
+    # then uploads the archive to the release created above.
     - name: Build and upload kubectl-vynil
       uses: taiki-e/upload-rust-binary-action@v1
       with:
