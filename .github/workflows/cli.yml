@@ -23,6 +23,9 @@ jobs:
       uses: taiki-e/upload-rust-binary-action@v1
       with:
         bin: kubectl-vynil
+        # Scope cargo to the CLI package: the workspace default-members are agent+operator,
+        # so a bare `--bin kubectl-vynil` at the root resolves against the wrong package set.
+        manifest-path: kubectl-vynil/Cargo.toml
         target: ${{ matrix.target }}
         archive: kubectl-vynil-$target
         tar: all

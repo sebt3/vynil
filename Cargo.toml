@@ -28,7 +28,7 @@ actix-web = "4.12.1"
 base64 = "0.22.1"
 
 [workspace.package]
-version = "0.7.8-alpha.1"
+version = "0.7.8-alpha.2"
 authors = [
     "Sébastien Huss <sebastien.huss@gmail.com>",
     "Xavier Mortelette <reivaxm@gmail.com>"
@@ -96,7 +96,10 @@ server = { cmd=[
 serverbeta = { cmd=[
     "podman build . -f server/Dockerfile -t docker.io/sebt3/vynil-server:$(cargo run --bin agent -- version)-beta && podman push docker.io/sebt3/vynil-server:$(cargo run --bin agent -- version)-beta",
 ]}
-box = { cmd=[
+update_box = { cmd=[
     "cargo run --bin agent -- package update --source ./box/vynil/",
+    "cargo run --bin agent -- package build -o ./box/vynil/ --tag $(cargo run --bin agent -- version) -r docker.io -n sebt3/vynil -u $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $1}') -p $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $2}')",
+]}
+box = { cmd=[
     "cargo run --bin agent -- package build -o ./box/vynil/ --tag $(cargo run --bin agent -- version) -r docker.io -n sebt3/vynil -u $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $1}') -p $(jq -r '.auths[\"docker.io\"].auth' </run/user/$(id -u)/containers/auth.json |base64 -d|awk -F: '{print $2}')",
 ]}
