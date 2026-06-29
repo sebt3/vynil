@@ -22,6 +22,20 @@ type DynObjCondition = Box<dyn Fn(&DynamicObject) -> Result<bool, Box<rhai::Eval
 lazy_static::lazy_static! {
     pub static ref CLIENT: Client = get_client();
 }
+/// Group to exclude from discovery for a given APIService `spec`.
+///
+/// Only **aggregated** apiservices (backed by an external `spec.service`) can be down/503 and
+/// must be excluded. **Local** apiservices (`spec.service == null`) serve built-in groups
+/// (`storage.k8s.io`, `apps`, `batch`, ...) and MUST stay discoverable — excluding them broke
+/// `k8s_resource("StorageClass")` (returned unit → "Unsupported method" on `.list()`).
+fn aggregated_apiservice_group(spec: &serde_json::Value) -> Option<String> {
+    spec.get("service").filter(|s| !s.is_null())?;
+    spec.get("group")
+        .and_then(|g| g.as_str())
+        .filter(|g| !g.is_empty())
+        .map(|g| g.to_string())
+}
+
 async fn excluded_apiservice_groups() -> Vec<String> {
     let ar = ApiResource {
         group: "apiregistration.k8s.io".to_string(),
@@ -35,14 +49,7 @@ async fn excluded_apiservice_groups() -> Vec<String> {
         Ok(list) => list
             .items
             .iter()
-            .filter_map(|obj| {
-                obj.data
-                    .get("spec")
-                    .and_then(|s| s.get("group"))
-                    .and_then(|g| g.as_str())
-                    .filter(|g| !g.is_empty())
-                    .map(|g| g.to_string())
-            })
+            .filter_map(|obj| aggregated_apiservice_group(obj.data.get("spec")?))
             .collect(),
         Err(e) => {
             tracing::warn!("E_DISCOVERY_WARN: cannot list APIServices ({e}), proceeding without exclusions");
@@ -1097,6 +1104,29 @@ fn job_is_completed(data: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_excludes_aggregated_keeps_local_apiservices() {
+        // Aggregated (external service) → excluded.
+        let aggregated = serde_json::json!({
+            "group": "metrics.k8s.io",
+            "service": { "name": "metrics-server", "namespace": "kube-system" }
+        });
+        assert_eq!(
+            aggregated_apiservice_group(&aggregated),
+            Some("metrics.k8s.io".to_string())
+        );
+
+        // Local apiservice (spec.service null or absent) → kept discoverable.
+        let local_null = serde_json::json!({ "group": "storage.k8s.io", "service": null });
+        assert_eq!(aggregated_apiservice_group(&local_null), None);
+        let local_absent = serde_json::json!({ "group": "apps" });
+        assert_eq!(aggregated_apiservice_group(&local_absent), None);
+
+        // Aggregated but empty group → nothing to exclude.
+        let empty_group = serde_json::json!({ "group": "", "service": { "name": "x" } });
+        assert_eq!(aggregated_apiservice_group(&empty_group), None);
+    }
 
     #[test]
     fn register_k8s_object_compiles_for_k8sobject() {
