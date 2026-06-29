@@ -88,17 +88,14 @@ pub enum Error {
     #[error("Tests failed: {0} failed out of {1} assertions")]
     TestFailure(usize, usize),
 
-    /*
-        #[error("Ed25519 encode public key error {0}")]
-        Ed25519EncodePublicError(#[from] ed25519_dalek::pkcs8::spki::Error),
+    #[error("KEY-OPENSSL-001 OpenSSL error {0}")]
+    OpenSSL(#[from] openssl::error::ErrorStack),
 
-        #[error("Ed25519 encode private key error {0}")]
-        Ed25519EncodePrivateError(#[from] ed25519_dalek::pkcs8::Error),
+    #[error("KEY-ALGO-001 Unsupported key algorithm: {0}")]
+    UnsupportedKeyAlgorithm(String),
 
-        #[error("Openssl error {0}")]
-        OpenSSL(#[from] openssl::error::ErrorStack),
-
-    */
+    #[error("{0}")]
+    PasswordSpec(String),
     #[error("INIT-VERSION-001 Init version {0} not found in registry")]
     MissingInitVersion(String),
 
@@ -121,6 +118,7 @@ pub fn rhai_err_str(e: String) -> Box<rhai::EvalAltResult> {
 }
 pub mod chronohandler;
 pub mod context;
+pub mod ed25519handler;
 pub mod handlebarshandler;
 pub mod hasheshandlers;
 pub mod httphandler;

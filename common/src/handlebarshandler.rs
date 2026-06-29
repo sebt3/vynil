@@ -1,4 +1,4 @@
-use crate::{Error, Result, RhaiRes, hasheshandlers::Argon, passwordhandler::Passwords, rhai_err};
+use crate::{Error, Result, RhaiRes, hasheshandlers::Argon, rhai_err};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use handlebars::{Handlebars, handlebars_helper};
 pub use handlebars::{
@@ -87,6 +87,7 @@ pub const NATIVE_HBS_HELPERS: &[&str] = &[
     "crc32_hash",
     "gen_password",
     "gen_password_alphanum",
+    "gen_private_key",
     "concat",
     "selector_from_ctx",
     "labels_from_ctx",
@@ -155,8 +156,18 @@ handlebars_helper!(crc32_hash: |password:Value| crate::hasheshandlers::crc32_has
     warn!("handlebars::crc32_hash received a non-string password: {:?}",password);
     ""
 }).to_string()));
-handlebars_helper!(gen_password: |len:u32| Passwords::new().generate(len.into(), 6, 2, 2));
-handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(len.into(), 8, 2, 0));
+handlebars_helper!(gen_password: |len:u32, {lower:u32=1, upper:u32=1, digits:u32=1, symbols:u32=1}| crate::passwordhandler::generate(len as usize, lower as usize, upper as usize, digits as usize, symbols as usize).unwrap_or_else(|e| {
+    warn!("handlebars::gen_password failed with: {e:?}");
+    String::new()
+}));
+handlebars_helper!(gen_password_alphanum: |len:u32| crate::passwordhandler::generate(len as usize, 1, 1, 1, 0).unwrap_or_else(|e| {
+    warn!("handlebars::gen_password_alphanum failed with: {e:?}");
+    String::new()
+}));
+handlebars_helper!(gen_private_key: |algo:str, {bits:u32=4096}| crate::ed25519handler::gen_private_key(algo, bits).unwrap_or_else(|e| {
+    warn!("handlebars::gen_private_key failed with: {e:?}");
+    String::new()
+}));
 handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
     let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["selector"].as_object().unwrap().clone();
     if !comp.is_empty() {
@@ -240,6 +251,7 @@ impl HandleBars<'_> {
         engine.register_helper("url_encode", Box::new(url_encode));
         engine.register_helper("gen_password", Box::new(gen_password));
         engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
+        engine.register_helper("gen_private_key", Box::new(gen_private_key));
         engine.register_helper("have_system_service", Box::new(have_system_service));
         engine.register_helper("have_tenant_service", Box::new(have_tenant_service));
         engine.register_helper("render_template", Box::new(render_template));
@@ -414,6 +426,48 @@ mod tests {
     }
 
     // ── Built-in helpers ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_helper_gen_password_length_and_classes() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({});
+        let p = hbs.render("{{gen_password 24}}", &data).unwrap();
+        assert_eq!(p.chars().count(), 24);
+        assert!(p.chars().any(|c| c.is_ascii_lowercase()));
+        assert!(p.chars().any(|c| c.is_ascii_uppercase()));
+        assert!(p.chars().any(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_helper_gen_password_symbols_disabled() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({});
+        let p = hbs.render("{{gen_password 32 symbols=0}}", &data).unwrap();
+        assert_eq!(p.chars().count(), 32);
+        assert!(p.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn test_helper_gen_private_key_ed25519() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({});
+        let result = hbs.render("{{gen_private_key \"ed25519\"}}", &data).unwrap();
+        assert!(result.contains("-----BEGIN PRIVATE KEY-----"));
+    }
+
+    #[test]
+    fn test_helper_gen_private_key_rsa_with_bits() {
+        let mut hbs = HandleBars::new();
+        let data = serde_json::json!({});
+        let result = hbs
+            .render("{{gen_private_key \"rsa\" bits=2048}}", &data)
+            .unwrap();
+        assert!(result.contains("-----BEGIN PRIVATE KEY-----"));
+        // The rendered PEM must parse back intact: guards against HTML-escaping
+        // corrupting the base64 body (e.g. '=' padding turned into '&#x3D;').
+        let key = openssl::pkey::PKey::private_key_from_pem(result.as_bytes()).unwrap();
+        assert_eq!(key.bits(), 2048);
+    }
 
     #[test]
     fn test_helper_base64_encode() {

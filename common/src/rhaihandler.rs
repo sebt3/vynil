@@ -3,8 +3,8 @@ use crate::{
     Result, RhaiRes,
     chronohandler::chrono_rhai_register,
     context,
+    ed25519handler::key_rhai_register,
     globhandler::glob_rhai_register,
-    /*ed25519handler::Ed25519,*/
     handlebarshandler::handlebars_rhai_register,
     hasheshandlers::hashes_rhai_register,
     httphandler::http_rhai_register,
@@ -169,6 +169,7 @@ impl Script {
         chrono_rhai_register(&mut script.engine);
         hashes_rhai_register(&mut script.engine);
         password_rhai_register(&mut script.engine);
+        key_rhai_register(&mut script.engine);
         semver_rhai_register(&mut script.engine);
         package_rhai_register(&mut script.engine);
         yaml_rhai_register(&mut script.engine);
