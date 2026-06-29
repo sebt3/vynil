@@ -43,6 +43,11 @@ pub enum Commands {
 
 #[tokio::main]
 async fn main() {
+    // rustls ne détecte plus automatiquement le CryptoProvider depuis les features du crate
+    // (régression 0.23.41) : kube construit sa ClientConfig TLS dès la création du client et
+    // paniquerait. On installe explicitement le provider ring.
+    rustls::crypto::ring::default_provider().install_default().ok();
+
     env_logger::init_from_env(
         env_logger::Env::default()
             .filter_or("LOG_LEVEL", "info")

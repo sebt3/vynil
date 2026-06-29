@@ -1,8 +1,8 @@
 [workspace]
 resolver = "1"
 members = [
-    "server",
     "common",
+    "server",
 ]
 default-members = [
     "server",
@@ -23,13 +23,15 @@ actix-web = "4.12.1"
 base64 = "0.22.1"
 
 [workspace.package]
-version = "0.7.7"
+version = "0.7.8-alpha.1"
 authors = [
     "Sébastien Huss <sebastien.huss@gmail.com>",
     "Xavier Mortelette <reivaxm@gmail.com>"
 ]
 edition = "2024"
 license = "BSD-3-Clause"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [package]
 name = "vynil"
@@ -38,3 +40,4 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+

@@ -681,6 +681,9 @@ mod tests {
     }
 
     fn fake_client() -> kube::Client {
+        // kube construit sa ClientConfig TLS dès la création du client ; sans CryptoProvider
+        // installé, rustls 0.23.41 panique. Idempotent : .ok() ignore les appels suivants.
+        rustls::crypto::ring::default_provider().install_default().ok();
         let config = kube::Config::new("http://localhost:9999".parse().unwrap());
         kube::Client::try_from(config).unwrap()
     }

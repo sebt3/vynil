@@ -36,6 +36,11 @@ fn main() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
+    // rustls ne détecte plus automatiquement le CryptoProvider depuis les features du crate
+    // (régression 0.23.41) : kube construit sa ClientConfig TLS dès la création du client et
+    // paniquerait. On installe explicitement le provider ring.
+    rustls::crypto::ring::default_provider().install_default().ok();
+
     // Setup tracing layers
     #[cfg(feature = "telemetry")]
     let telemetry = tracing_opentelemetry::layer().with_tracer(telemetry::init_tracer().await);
