@@ -1,0 +1,58 @@
+{{#if (and (ctx_have_crd this "certificates.cert-manager.io") (ctx_have_crd this "issuers.cert-manager.io"))}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{instance.appslug}}-diag
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{json_to_str (selector_from_ctx this comp="diag")}}
+  template:
+    metadata:
+      labels: {{json_to_str (selector_from_ctx this comp="diag")}}
+    spec:
+      serviceAccountName: {{instance.appslug}}-diag
+      containers:
+      - name: vynil-diag
+        image: {{image_from_ctx this "diag"}}
+        imagePullPolicy: IfNotPresent
+        resources: {{json_to_str (resources_from_ctx this "diag")}}
+        args:
+        - --bind=0.0.0.0:8443
+        - --trust-request-header
+        - --tls-cert=/tls/tls.crt
+        - --tls-key=/tls/tls.key
+        ports:
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        env:
+        - name: RUST_LOG
+          value: info
+        - name: VYNIL_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: DIAG_ENABLE_PACKAGES
+          value: "{{values.diagnostic_expose_packages}}"
+        # mTLS rejects probes without a client cert → use a TCP probe, not httpGet.
+        readinessProbe:
+          tcpSocket:
+            port: https
+          initialDelaySeconds: 3
+          periodSeconds: 15
+        livenessProbe:
+          tcpSocket:
+            port: https
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        volumeMounts:
+        - name: tls
+          mountPath: /tls
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: {{instance.appslug}}-diag-tls
+{{/if}}

@@ -1,0 +1,58 @@
+{{#if (and (ctx_have_crd this "certificates.cert-manager.io") (ctx_have_crd this "issuers.cert-manager.io"))}}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{instance.appslug}}-diag-selfsign
+spec:
+  selfSigned: {}
+---
+# Stable CA (long-lived). Its ca.crt is what gets injected into the APIService caBundle, so it
+# must NOT rotate with the serving cert — otherwise inject-ca-from desyncs on every renewal.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{instance.appslug}}-diag-ca
+spec:
+  isCA: true
+  commonName: ca.diag.{{instance.appslug}}
+  secretName: {{instance.appslug}}-diag-ca
+  duration: 87600h
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: {{instance.appslug}}-diag-selfsign
+  usages:
+  - digital signature
+  - key encipherment
+  - cert sign
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{instance.appslug}}-diag-ca
+spec:
+  ca:
+    secretName: {{instance.appslug}}-diag-ca
+---
+# Serving certificate (LEG 1), issued by the stable CA above. Its secret's ca.crt is the CA,
+# which inject-ca-from (on the APIService) injects as a stable caBundle while this leaf rotates.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{instance.appslug}}-diag
+spec:
+  secretName: {{instance.appslug}}-diag-tls
+  duration: 8760h
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: {{instance.appslug}}-diag-ca
+  dnsNames:
+  - {{instance.appslug}}-diag.{{instance.namespace}}.svc
+  - {{instance.appslug}}-diag.{{instance.namespace}}.svc.cluster.local
+  usages:
+  - digital signature
+  - key encipherment
+  - server auth
+{{/if}}

@@ -1,0 +1,29 @@
+---
+name: Release CLI
+
+on:
+  push:
+    tags:
+    - '*'
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release and upload the binaries
+    strategy:
+      matrix:
+        target:
+        - x86_64-unknown-linux-gnu
+        - aarch64-unknown-linux-gnu
+    steps:
+    - uses: actions/checkout@v7
+    # Builds kubectl-vynil for the target (uses `cross` for non-native arches),
+    # then creates/updates the GitHub release for the tag and uploads the archive.
+    - name: Build and upload kubectl-vynil
+      uses: taiki-e/upload-rust-binary-action@v1
+      with:
+        bin: kubectl-vynil
+        target: ${{ matrix.target }}
+        archive: kubectl-vynil-$target
+        tar: all
+        token: ${{ secrets.GITHUB_TOKEN }}

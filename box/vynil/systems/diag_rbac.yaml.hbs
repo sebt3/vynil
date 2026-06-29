@@ -1,0 +1,63 @@
+{{#if (and (ctx_have_crd this "certificates.cert-manager.io") (ctx_have_crd this "issuers.cert-manager.io"))}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{instance.appslug}}-diag
+automountServiceAccountToken: true
+---
+# Read-only, cluster-wide collection rights (incl. secrets for anonymisation and pods/log).
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-{{instance.appslug}}-diag
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get", "list"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-{{instance.appslug}}-diag
+subjects:
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: {{instance.appslug}}-diag
+roleRef:
+  kind: ClusterRole
+  name: {{instance.namespace}}-{{instance.appslug}}-diag
+  apiGroup: rbac.authorization.k8s.io
+---
+# Delegated authn/authz: grants create on tokenreviews + subjectaccessreviews.
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.namespace}}-{{instance.appslug}}-diag-auth-delegator
+subjects:
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: {{instance.appslug}}-diag
+roleRef:
+  kind: ClusterRole
+  name: system:auth-delegator
+  apiGroup: rbac.authorization.k8s.io
+---
+# Read the front-proxy CA (extension-apiserver-authentication CM) for mTLS LEG 2 verification.
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{instance.appslug}}-diag-authentication-reader
+  namespace: kube-system
+subjects:
+- kind: ServiceAccount
+  namespace: {{instance.namespace}}
+  name: {{instance.appslug}}-diag
+roleRef:
+  kind: Role
+  name: extension-apiserver-authentication-reader
+  apiGroup: rbac.authorization.k8s.io
+{{/if}}

@@ -16,6 +16,9 @@ images:
   controller:
     registry: docker.io
     repository: sebt3/vynil-operator
+  diag:
+    registry: docker.io
+    repository: sebt3/vynil-server
 resources:
   controller:
     requests:
@@ -24,4 +27,16 @@ resources:
     limits:
       cpu: 1000m
       memory: 1Gi
+  diag:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+options:
+  diagnostic_expose_packages:
+    default: true
+    type: boolean
+    description: Expose the cluster-wide packages list on the diagnostic API (disable for tenants needing stricter confidentiality).
 requirements: []

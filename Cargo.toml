@@ -4,6 +4,8 @@ members = [
     "agent",
     "operator",
     "common",
+    "server",
+    "kubectl-vynil",
 ]
 default-members = [
     "agent",
@@ -54,8 +56,9 @@ generate_crd = { cmd=[
 ]}
 generate = { cmd=[
     "cargo cmd generate_crd",
-    "awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/\"operator\",/'<Cargo.toml>agent/parent.toml",
-    "awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/\"agent\",/'<Cargo.toml>operator/parent.toml",
+    "awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/\"operator\",/&&!/\"server\",/&&!/\"kubectl-vynil\",/'<Cargo.toml>agent/parent.toml",
+    "awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/\"agent\",/&&!/\"server\",/&&!/\"kubectl-vynil\",/'<Cargo.toml>operator/parent.toml",
+    "awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/\"agent\",/&&!/\"operator\",/&&!/\"kubectl-vynil\",/'<Cargo.toml>server/parent.toml",
 ]}
 crd = { cmd=[
     "cargo cmd generate_crd",
@@ -85,6 +88,12 @@ operator = { cmd=[
 ]}
 operatorbeta = { cmd=[
     "podman build . -f operator/Dockerfile -t docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version)-beta && podman push docker.io/sebt3/vynil-operator:$(cargo run --bin agent -- version)-beta",
+]}
+server = { cmd=[
+    "podman build . -f server/Dockerfile -t docker.io/sebt3/vynil-server:$(cargo run --bin agent -- version) && podman push docker.io/sebt3/vynil-server:$(cargo run --bin agent -- version)",
+]}
+serverbeta = { cmd=[
+    "podman build . -f server/Dockerfile -t docker.io/sebt3/vynil-server:$(cargo run --bin agent -- version)-beta && podman push docker.io/sebt3/vynil-server:$(cargo run --bin agent -- version)-beta",
 ]}
 box = { cmd=[
     "cargo run --bin agent -- package update --source ./box/vynil/",
