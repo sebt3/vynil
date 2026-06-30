@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{Error, Error::*, RhaiRes, get_client_name, rhai_err};
-use actix_web::Result;
+use crate::{Error, Error::*, RhaiRes, rhai_err};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Certificate, Client, Response};
 use rhai::{Dynamic, Engine, Map};
@@ -11,6 +10,10 @@ use serde_json::{Value, json};
 use serde_yaml;
 use tokio::runtime::Handle;
 use tracing::*;
+
+fn get_client_name() -> String {
+    std::env::var("VYNIL_CLIENT_NAME").unwrap_or_else(|_| "vynil.solidite.fr".to_string())
+}
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
 pub enum ReadMethod {
@@ -151,8 +154,7 @@ impl RestClient {
             }
         } else {
             let cli_cert = format!(
-                "{}
-{}",
+                "{}\n{}",
                 self.client_key.clone().unwrap(),
                 self.client_cert.clone().unwrap()
             );
@@ -202,7 +204,7 @@ impl RestClient {
         }
     }
 
-    pub fn body_get(&mut self, path: &str) -> Result<String, Error> {
+    pub fn body_get(&mut self, path: &str) -> crate::Result<String> {
         let response = self.http_get(path).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
@@ -226,7 +228,7 @@ impl RestClient {
         Ok(text)
     }
 
-    pub fn json_get(&mut self, path: &str) -> Result<Value, Error> {
+    pub fn json_get(&mut self, path: &str) -> crate::Result<Value> {
         let text = self.body_get(path)?;
         let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
         Ok(json)
@@ -268,7 +270,7 @@ impl RestClient {
     }
 
     pub fn http_head(&mut self, path: &str) -> std::result::Result<Response, reqwest::Error> {
-        debug!("http_get '{}' ", format!("{}/{}", self.baseurl, path));
+        debug!("http_head '{}' ", format!("{}/{}", self.baseurl, path));
         match self.get_client() {
             Ok(client) => {
                 let mut req = client.head(format!("{}/{}", self.baseurl, path));
@@ -286,7 +288,7 @@ impl RestClient {
         }
     }
 
-    pub fn header_head(&mut self, path: &str) -> Result<Vec<(String, String)>, Error> {
+    pub fn header_head(&mut self, path: &str) -> crate::Result<Vec<(String, String)>> {
         let response = self.http_get(path).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
@@ -337,7 +339,7 @@ impl RestClient {
         }
     }
 
-    pub fn http_patch(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
+    pub fn http_patch(&mut self, path: &str, body: &str) -> crate::Result<Response> {
         debug!("http_patch '{}' ", format!("{}/{}", self.baseurl, path));
         match self.get_client() {
             Ok(client) => {
@@ -348,13 +350,14 @@ impl RestClient {
                     req = req.header(key.to_string(), val.to_string());
                 }
                 tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+                    .map_err(Error::ReqwestError)
             }
-            Err(e) => Err(e),
+            Err(e) => Err(Error::ReqwestError(e)),
         }
     }
 
-    pub fn body_patch(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self.http_patch(path, body).map_err(Error::ReqwestError)?;
+    pub fn body_patch(&mut self, path: &str, body: &str) -> crate::Result<String> {
+        let response = self.http_patch(path, body)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -377,7 +380,7 @@ impl RestClient {
         Ok(text)
     }
 
-    pub fn json_patch(&mut self, path: &str, input: &Value) -> Result<Value, Error> {
+    pub fn json_patch(&mut self, path: &str, input: &Value) -> crate::Result<Value> {
         let body = serde_json::to_string(input).map_err(Error::JsonError)?;
         let text = self.body_patch(path, body.as_str())?;
         let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
@@ -424,7 +427,7 @@ impl RestClient {
         }
     }
 
-    pub fn http_put(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
+    pub fn http_put(&mut self, path: &str, body: &str) -> crate::Result<Response> {
         debug!("http_put '{}' ", format!("{}/{}", self.baseurl, path));
         match self.get_client() {
             Ok(client) => {
@@ -435,13 +438,14 @@ impl RestClient {
                     req = req.header(key.to_string(), val.to_string());
                 }
                 tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+                    .map_err(Error::ReqwestError)
             }
-            Err(e) => Err(e),
+            Err(e) => Err(Error::ReqwestError(e)),
         }
     }
 
-    pub fn body_put(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self.http_put(path, body).map_err(Error::ReqwestError)?;
+    pub fn body_put(&mut self, path: &str, body: &str) -> crate::Result<String> {
+        let response = self.http_put(path, body)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -464,7 +468,7 @@ impl RestClient {
         Ok(text)
     }
 
-    pub fn json_put(&mut self, path: &str, input: &Value) -> Result<Value, Error> {
+    pub fn json_put(&mut self, path: &str, input: &Value) -> crate::Result<Value> {
         let body = serde_json::to_string(input).map_err(Error::JsonError)?;
         let text = self.body_put(path, body.as_str())?;
         let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
@@ -511,7 +515,7 @@ impl RestClient {
         }
     }
 
-    pub fn http_post(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
+    pub fn http_post(&mut self, path: &str, body: &str) -> crate::Result<Response> {
         debug!("http_post '{}' ", format!("{}/{}", self.baseurl, path));
         match self.get_client() {
             Ok(client) => {
@@ -522,13 +526,14 @@ impl RestClient {
                     req = req.header(key.to_string(), val.to_string());
                 }
                 tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+                    .map_err(Error::ReqwestError)
             }
-            Err(e) => Err(e),
+            Err(e) => Err(Error::ReqwestError(e)),
         }
     }
 
-    pub fn body_post(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self.http_post(path, body).map_err(Error::ReqwestError)?;
+    pub fn body_post(&mut self, path: &str, body: &str) -> crate::Result<String> {
+        let response = self.http_post(path, body)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -551,7 +556,7 @@ impl RestClient {
         Ok(text)
     }
 
-    pub fn json_post(&mut self, path: &str, input: &Value) -> Result<Value, Error> {
+    pub fn json_post(&mut self, path: &str, input: &Value) -> crate::Result<Value> {
         let body = serde_json::to_string(input).map_err(Error::JsonError)?;
         let text = self.body_post(path, body.as_str())?;
         let json = serde_json::from_str(&text).map_err(Error::JsonError)?;
@@ -598,7 +603,7 @@ impl RestClient {
         }
     }
 
-    pub fn http_delete(&mut self, path: &str) -> Result<Response, reqwest::Error> {
+    pub fn http_delete(&mut self, path: &str) -> crate::Result<Response> {
         debug!("http_delete '{}' ", format!("{}/{}", self.baseurl, path));
         match self.get_client() {
             Ok(client) => {
@@ -607,13 +612,14 @@ impl RestClient {
                     req = req.header(key.to_string(), val.to_string());
                 }
                 tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+                    .map_err(Error::ReqwestError)
             }
-            Err(e) => Err(e),
+            Err(e) => Err(Error::ReqwestError(e)),
         }
     }
 
-    pub fn body_delete(&mut self, path: &str) -> Result<String, Error> {
-        let response = self.http_delete(path).map_err(Error::ReqwestError)?;
+    pub fn body_delete(&mut self, path: &str) -> crate::Result<String> {
+        let response = self.http_delete(path)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -636,7 +642,7 @@ impl RestClient {
         Ok(text)
     }
 
-    pub fn json_delete(&mut self, path: &str) -> Result<Value, Error> {
+    pub fn json_delete(&mut self, path: &str) -> crate::Result<Value> {
         let text = self.body_delete(path)?;
         let json =
             serde_json::from_str(&text).or_else(|_| Ok::<serde_json::Value, Error>(json!({"body": text})))?;
@@ -678,7 +684,7 @@ impl RestClient {
         }
     }
 
-    pub fn obj_read(&mut self, method: ReadMethod, path: &str, key: &str) -> Result<Value, Error> {
+    pub fn obj_read(&mut self, method: ReadMethod, path: &str, key: &str) -> crate::Result<Value> {
         let full_path = if key.is_empty() {
             path.to_string()
         } else {
@@ -691,7 +697,7 @@ impl RestClient {
         }
     }
 
-    pub fn obj_create(&mut self, method: CreateMethod, path: &str, input: &Value) -> Result<Value, Error> {
+    pub fn obj_create(&mut self, method: CreateMethod, path: &str, input: &Value) -> crate::Result<Value> {
         if method == CreateMethod::Post {
             self.json_post(path, input)
         } else {
@@ -706,7 +712,7 @@ impl RestClient {
         key: &str,
         input: &Value,
         use_slash: bool,
-    ) -> Result<Value, Error> {
+    ) -> crate::Result<Value> {
         let full_path = if key.is_empty() {
             path.to_string()
         } else if use_slash {
@@ -725,7 +731,7 @@ impl RestClient {
         }
     }
 
-    pub fn obj_delete(&mut self, method: DeleteMethod, path: &str, key: &str) -> Result<Value, Error> {
+    pub fn obj_delete(&mut self, method: DeleteMethod, path: &str, key: &str) -> crate::Result<Value> {
         let full_path = if key.is_empty() {
             path.to_string()
         } else {
@@ -873,7 +879,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_http_get_yaml_basic() {
         let server = MockServer::start().await;
-        // base64("user:pass") = "dXNlcjpwYXNz"
         Mock::given(method("GET"))
             .and(path("/index.yaml"))
             .and(header("authorization", "Basic dXNlcjpwYXNz"))

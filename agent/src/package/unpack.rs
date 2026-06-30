@@ -91,6 +91,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
             let auth = user_pass.split(":").collect::<Vec<&str>>();
             Registry::new(args.registry.clone(), auth[0].to_string(), auth[1].to_string())
         };
-        cli.pull_image(&args.destination, args.image.clone(), args.tag.clone())
+        cli.pull_image(&args.destination, args.image.clone(), args.tag.clone())?;
+        Ok(())
     }
 }

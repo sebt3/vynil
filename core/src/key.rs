@@ -2,17 +2,8 @@ use crate::{Error, Result};
 use openssl::{pkey::PKey, rsa::Rsa};
 use rhai::Engine;
 
-/// Default RSA modulus size (in bits) used when none is provided.
 pub const DEFAULT_RSA_BITS: u32 = 4096;
 
-/// Generate a PEM-encoded PKCS#8 private key for the requested algorithm.
-///
-/// - `ed25519` : asymmetric Ed25519 key (the `bits` argument is ignored).
-/// - `rsa`     : RSA key whose modulus size is given by `bits` (e.g. 2048, 4096).
-///
-/// The output is a standard `-----BEGIN PRIVATE KEY-----` PKCS#8 PEM block, suitable
-/// for a Kubernetes Secret `stringData` field. Persistence/idempotency is the caller's
-/// responsibility (check-then-create in the package install logic).
 pub fn gen_private_key(algo: &str, bits: u32) -> Result<String> {
     let pem = match algo.to_ascii_lowercase().as_str() {
         "ed25519" => PKey::generate_ed25519()?.private_key_to_pem_pkcs8()?,

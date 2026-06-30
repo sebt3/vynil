@@ -863,6 +863,7 @@ dependencies = [
  "tower-test",
  "tracing",
  "url",
+ "vynil-core",
  "wildmatch",
  "wiremock",
 ]
@@ -4689,6 +4690,48 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vynil"
 version = "0.7.8-alpha.4"
+
+[[package]]
+name = "vynil-core"
+version = "0.7.8-alpha.4"
+dependencies = [
+ "actix-web",
+ "argon2",
+ "base64 0.22.1",
+ "bcrypt",
+ "chrono",
+ "crc32fast",
+ "flate2",
+ "futures",
+ "handlebars",
+ "handlebars_misc_helpers",
+ "http 1.4.2",
+ "k8s-openapi",
+ "kube",
+ "lazy_static",
+ "object_store",
+ "oci-client",
+ "openssl",
+ "rand 0.10.1",
+ "regex",
+ "reqwest 0.12.28",
+ "rhai",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha256",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower-test",
+ "tracing",
+ "url",
+ "wildmatch",
+ "wiremock",
+]
 
 [[package]]
 name = "walkdir"

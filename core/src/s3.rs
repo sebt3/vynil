@@ -10,7 +10,7 @@ fn build_store(
     endpoint: &str,
     access_key: &str,
     secret_key: &str,
-) -> Result<Box<dyn ObjectStore>, Error> {
+) -> crate::Result<Box<dyn ObjectStore>> {
     use object_store::aws::AmazonS3Builder;
     let mut builder = AmazonS3Builder::new()
         .with_bucket_name(bucket)
