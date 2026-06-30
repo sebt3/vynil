@@ -1,4 +1,4 @@
-use crate::{Error, Result, RhaiRes, rhai_err, rhaihandler::Map};
+use crate::{Error, Result, RhaiRes, rhai_err};
 use base64::Engine as _;
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
@@ -6,7 +6,7 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::{Client as KubeClient, api::Api};
 pub use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
-use rhai::{Dynamic, Engine, ImmutableString};
+use rhai::{Dynamic, Engine, ImmutableString, Map};
 use std::{collections::BTreeMap, path::PathBuf};
 use tar::{Archive, Builder};
 use tokio::{runtime::Handle, task::block_in_place};
@@ -42,7 +42,6 @@ impl Registry {
         for (key, val) in annotations {
             values.insert(key.into(), val.to_string());
         }
-        // Build uncompressed tar first to compute the diff_id (sha256 of uncompressed content)
         let mut tar_uncompressed = Builder::new(Vec::new());
         tar_uncompressed
             .append_dir_all(".", source_dir)
@@ -51,7 +50,6 @@ impl Registry {
             .into_inner()
             .map_err(|e| rhai_err(Error::Stdio(e)))?;
         let diff_id = format!("sha256:{}", sha256::digest(raw_tar.as_slice()));
-        // Gzip compress for the actual layer
         let mut gz = GzEncoder::new(Vec::new(), Compression::default());
         std::io::copy(&mut raw_tar.as_slice(), &mut gz).map_err(|e| rhai_err(Error::Stdio(e)))?;
         let data = gz.finish().map_err(|e| rhai_err(Error::Stdio(e)))?;
@@ -91,7 +89,6 @@ impl Registry {
             })
         })
         .map_err(|e| rhai_err(Error::OCIDistrib(e)))?;
-        // manifest_url is "sha256:<hex>" or a full URL ending with "sha256:<hex>"
         let manifest_url = push_response.manifest_url;
         let digest: ImmutableString = if let Some(idx) = manifest_url.rfind("sha256:") {
             manifest_url[idx..].to_string()
@@ -177,9 +174,6 @@ impl Registry {
     }
 }
 
-/// Lit un secret k8s de type dockerconfigjson et retourne les credentials OCI
-/// pour le registre demandé. Retourne Anonymous si le secret est absent ou ne
-/// contient pas d'entrée pour ce registre.
 pub async fn resolve_registry_auth(
     secret_name: &str,
     registry: &str,
@@ -213,9 +207,6 @@ pub async fn resolve_registry_auth(
     }
 }
 
-/// Vérifie qu'un tag existe dans un registre OCI via une requête de manifest
-/// (sans télécharger le contenu). Retourne false si le tag est absent (404),
-/// true s'il est accessible, et propage les autres erreurs réseau.
 pub async fn verify_tag_in_registry(
     registry: &str,
     image: &str,
@@ -287,7 +278,6 @@ mod tests {
     fn get_auth_from_file_valid() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        // "user:pass" en base64
         write_docker_config(&path, "docker.io", "dXNlcjpwYXNz");
         let result = get_auth_from_file(path.to_string_lossy().to_string(), "docker.io".to_string());
         let map = result.unwrap().cast::<Map>();
@@ -325,6 +315,7 @@ mod tests {
         assert_eq!(map["user"].clone().cast::<String>(), "");
         assert_eq!(map["pass"].clone().cast::<String>(), "");
     }
+
     #[test]
     fn sign_image_empty_key_returns_ok() {
         let mut reg = Registry::new("r.io".into(), "u".into(), "p".into());
@@ -334,9 +325,6 @@ mod tests {
 
     #[test]
     fn sign_image_cosign_not_found_returns_error() {
-        // When cosign binary is missing or key does not exist, sign_image returns Err.
-        // We provide a non-existent key path; cosign will exit non-zero.
-        // If cosign is not installed, the Stdio error also satisfies is_err().
         let mut reg = Registry::new("r.io".into(), "u".into(), "p".into());
         let result = reg.sign_image(
             "repo/img".into(),
@@ -384,7 +372,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_registry_auth_valid_secret() {
-        // "user:pass" en base64
         let auth_b64 = "dXNlcjpwYXNz";
         let body = make_secret_json("registry.example.com", auth_b64);
 
@@ -441,7 +428,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_registry_auth_registry_absent() {
-        // Secret valide mais pour un autre registre
         let auth_b64 = "dXNlcjpwYXNz";
         let body = make_secret_json("other.registry.com", auth_b64);
 

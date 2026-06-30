@@ -43,8 +43,6 @@ pub fn rhai_get_stdout(command: String) -> RhaiRes<String> {
         Ok(output)
     }
 }
-// Pour quelque choses de plus complet :
-// https://stackoverflow.com/a/72831067
 
 pub fn shell_rhai_register(engine: &mut Engine) {
     engine

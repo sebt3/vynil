@@ -49,10 +49,10 @@ pub fn crc32_hash(text: String) -> u32 {
 pub fn hashes_rhai_register(engine: &mut Engine) {
     engine
         .register_fn("crc32_hash", |s: ImmutableString| {
-            crate::hasheshandlers::crc32_hash(s.to_string())
+            crate::hashes::crc32_hash(s.to_string())
         })
         .register_fn("bcrypt_hash", |s: ImmutableString| {
-            crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
+            crate::hashes::bcrypt_hash(s.to_string()).map_err(rhai_err)
         })
         .register_type_with_name::<Argon>("Argon")
         .register_fn("new_argon", Argon::new)

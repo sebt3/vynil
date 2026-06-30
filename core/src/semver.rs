@@ -7,7 +7,7 @@ pub struct Semver {
     pub version: Version,
     pub use_v: bool,
 }
-// TODO: support des rc (release candidate)
+
 impl Semver {
     pub fn parse(str: &str) -> Result<Self> {
         let use_v = str.starts_with("v");
@@ -53,12 +53,11 @@ impl Semver {
     pub fn inc_beta(&mut self) -> Result<()> {
         if self.version.pre.is_empty() || !self.version.pre.starts_with("beta.") {
             self.version.patch += 1;
-            self.version.pre = Prerelease::new("beta.1").map_err(|e: semver::Error| Error::Semver(e))?;
+            self.version.pre = Prerelease::new("beta.1").map_err(Error::Semver)?;
         } else {
             let str = self.version.pre.strip_prefix("beta.").unwrap().to_string();
             let beta = str.parse::<u32>().unwrap() + 1;
-            self.version.pre =
-                Prerelease::new(&format!("beta.{beta}")).map_err(|e: semver::Error| Error::Semver(e))?;
+            self.version.pre = Prerelease::new(&format!("beta.{beta}")).map_err(Error::Semver)?;
         }
         Ok(())
     }
@@ -70,12 +69,11 @@ impl Semver {
     pub fn inc_alpha(&mut self) -> Result<()> {
         if self.version.pre.is_empty() || !self.version.pre.starts_with("alpha.") {
             self.version.patch += 1;
-            self.version.pre = Prerelease::new("alpha.1").map_err(|e: semver::Error| Error::Semver(e))?;
+            self.version.pre = Prerelease::new("alpha.1").map_err(Error::Semver)?;
         } else {
             let str = self.version.pre.strip_prefix("alpha.").unwrap().to_string();
             let alpha = str.parse::<u32>().unwrap() + 1;
-            self.version.pre =
-                Prerelease::new(&format!("alpha.{alpha}")).map_err(|e: semver::Error| Error::Semver(e))?;
+            self.version.pre = Prerelease::new(&format!("alpha.{alpha}")).map_err(Error::Semver)?;
         }
         Ok(())
     }
@@ -137,8 +135,6 @@ mod tests {
 
     #[test]
     fn test_to_string_preserves_v_prefix() {
-        // `sv.to_string()` resolves to Display::to_string (omits the "v"),
-        // so call the inherent method explicitly.
         let mut sv = Semver::parse("v1.2.3").unwrap();
         assert_eq!(Semver::to_string(&mut sv), "v1.2.3");
     }
@@ -175,7 +171,6 @@ mod tests {
 
     #[test]
     fn test_comparison_v_prefix_transparent() {
-        // v prefix does not affect ordering
         let v1 = Semver::parse("v1.2.3").unwrap();
         let v2 = Semver::parse("2.0.0").unwrap();
         assert!(v1 < v2);
@@ -211,7 +206,6 @@ mod tests {
     fn test_inc_patch_clears_prerelease_without_bumping_patch() {
         let mut sv = Semver::parse("1.2.3-beta.1").unwrap();
         sv.inc_patch();
-        // pre is cleared but patch stays at 3
         assert_eq!(sv.version.patch, 3);
         assert!(sv.version.pre.is_empty());
     }

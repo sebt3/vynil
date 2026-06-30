@@ -4,6 +4,7 @@ members = [
     "agent",
     "operator",
     "common",
+    "core",
     "server",
     "kubectl-vynil",
 ]

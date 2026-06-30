@@ -101,6 +101,9 @@ pub enum Error {
 
     #[error("Error: {0}")]
     Other(String),
+
+    #[error(transparent)]
+    Core(#[from] vynil_core::Error),
 }
 impl Error {
     pub fn metric_label(&self) -> String {
@@ -116,37 +119,31 @@ pub fn rhai_err(e: Error) -> Box<rhai::EvalAltResult> {
 pub fn rhai_err_str(e: String) -> Box<rhai::EvalAltResult> {
     e.into()
 }
-pub mod chronohandler;
 pub mod context;
-pub mod ed25519handler;
 pub mod handlebarshandler;
-pub mod hasheshandlers;
-pub mod httphandler;
-pub mod httpmock;
 pub mod k8smock;
 pub mod ttl_cache;
 #[macro_use]
 pub mod instance_macros;
-pub mod globhandler;
 pub mod instanceservice;
 pub mod instancesystem;
 pub mod instancetenant;
 pub mod jukebox;
 pub mod jukebox_file;
-pub mod k8sgeneric;
-pub mod k8sraw;
-pub mod k8sworkload;
-pub mod ocihandler;
-pub mod passwordhandler;
 pub mod rhaihandler;
-pub mod s3handler;
-mod semverhandler;
-pub mod shellhandler;
 mod tools;
 pub mod vynilpackage;
 pub mod yamlhandler;
+
+// ── Re-exports from vynil-core (preserve old import paths) ──────────────────
+
 pub use context::get_client_name;
-pub use semverhandler::Semver;
+pub use vynil_core::{
+    Semver, chrono as chronohandler, glob as globhandler, hashes as hasheshandlers, http as httphandler,
+    http_mock as httpmock, k8s as k8sgeneric, k8s as k8sraw, k8s as k8sworkload, key as ed25519handler,
+    oci as ocihandler, password as passwordhandler, register_k8s_generic, register_k8s_object,
+    register_k8s_raw, s3 as s3handler, semver as semverhandler, shell as shellhandler,
+};
 
 /// Children describe a k8s object
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]

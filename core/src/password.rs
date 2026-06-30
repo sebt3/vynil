@@ -14,20 +14,8 @@ const UPPER: &[char] = &[
     'V', 'W', 'X', 'Y', 'Z',
 ];
 const DIGITS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-/// Config-safe symbol set: excludes quotes, backslash, backtick and `$` so the
-/// generated secret survives YAML/JSON/shell/env interpolation untouched.
 const SYMBOLS: &[char] = &['!', '#', '%', '*', '+', '-', '.', ':', '=', '?', '@', '_'];
 
-/// Generate a random password of `length` characters, guaranteeing at least
-/// `lower`/`upper`/`digits`/`symbols` characters from each respective class.
-///
-/// A class whose minimum is `0` is excluded entirely from the alphabet — e.g.
-/// `symbols = 0` yields an alphanumeric password. After the required minimums
-/// are placed, the remaining positions are filled uniformly from the union of
-/// the enabled classes (maximising entropy), then the whole result is shuffled
-/// so the guaranteed characters are not in predictable positions.
-///
-/// Randomness comes from [`rand::rng`] (`ThreadRng`), a CSPRNG.
 pub fn generate(length: usize, lower: usize, upper: usize, digits: usize, symbols: usize) -> Result<String> {
     let classes: [(&[char], usize); 4] = [
         (LOWER, lower),
@@ -65,7 +53,6 @@ pub fn generate(length: usize, lower: usize, upper: usize, digits: usize, symbol
     Ok(chars.into_iter().collect())
 }
 
-/// Read a per-class minimum from a Rhai spec map, defaulting to 1 when absent.
 fn class_min(spec: &Map, key: &str) -> usize {
     spec.get(key)
         .and_then(|v| v.as_int().ok())
@@ -129,7 +116,6 @@ mod tests {
 
     #[test]
     fn symbol_set_is_config_safe() {
-        // Large sample with many symbols: none of the hostile chars must appear.
         let p = generate(200, 1, 1, 1, 50).unwrap();
         for bad in ['"', '\'', '\\', '`', '$'] {
             assert!(!p.contains(bad), "unsafe symbol {bad} leaked into password");
