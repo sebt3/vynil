@@ -23,7 +23,7 @@ actix-web = "4.12.1"
 base64 = "0.22.1"
 
 [workspace.package]
-version = "0.7.8-alpha.2"
+version = "0.7.8-alpha.3"
 authors = [
     "Sébastien Huss <sebastien.huss@gmail.com>",
     "Xavier Mortelette <reivaxm@gmail.com>"
