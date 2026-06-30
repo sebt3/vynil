@@ -1,0 +1,15 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "{{tenant.name}}-config"
+  namespace: "{{instance.namespace}}"
+data:
+  common_name: "{{values.common_name}}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "cm-{{values.common_name}}"
+  namespace: "{{instance.namespace}}"
+data: {}

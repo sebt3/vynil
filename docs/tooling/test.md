@@ -41,8 +41,76 @@ The `tests/` directory must exist, otherwise the agent returns `MissingTestDirec
 - execute a flow (`context → install`, `context → delete`, …);
 - **assert** on created objects, status, or template rendering.
 
-> The test framework is subject to ongoing improvements (assertion context variables,
-> cluster/tenant overrides) — see the repository issues if an expected behavior is missing.
+### Variables available in assertion selectors
+
+Selectors (`selector.name`, `selector.namespace`) and expected values (`value`) are
+Handlebars templates resolved against the **real context** produced by `ctx::run()` — the
+same context used by the package's Rhai scripts and templates. All context keys are
+available, notably:
+
+| Variable | Description |
+|---|---|
+| `{{values.xxx}}` | Instance options merged with `package.yaml` defaults |
+| `{{defaults.xxx}}` | Raw default values from `package.yaml` |
+| `{{cluster.ha}}` | `true` if the cluster has more than one node |
+| `{{cluster.storage_classes}}` | List of mocked StorageClasses |
+| `{{tenant.name}}` | Tenant name (tenant-type packages only) |
+| `{{tenant.namespaces}}` | Tenant namespaces |
+| `{{instance.appslug}}` | Instance slug (`{instance}-{package}`, truncated to 28 chars) |
+| `{{instance.namespace}}` | Instance namespace |
+| `{{package.metadata.name}}` | Package name |
+
+### Instance fields in a Test
+
+```yaml
+instance:
+  name: my-app
+  namespace: test-ns
+  options:                       # package option overrides
+    common_name: custom.host
+  tenant: my-custom-tenant       # (tenant packages) injects vynil.solidite.fr/tenant label
+  nodes:                         # injects Node mocks → cluster.ha = nodes.len() > 1
+    - master01
+    - worker01
+  agent_yaml: agent-ha.yaml      # path relative to tests/, used as the cluster's agent.yaml
+```
+
+#### `nodes` — simulating HA via node count
+
+`nodes` injects Node objects into the k8s mock layer. `build_context.rhai` derives
+`cluster.ha = nodes.len() > 1` naturally, exactly as in production:
+
+```yaml
+instance:
+  nodes: [master01, worker01]   # → cluster.ha = true
+```
+
+#### `agent_yaml` — explicit cluster configuration override
+
+`agent_yaml` points to a YAML file in `tests/` (path relative to the package directory).
+That file is used as the cluster's `agent.yaml` for this test, allowing you to explicitly
+define `ha`, `prefered_storage`, or any property the operator would have set in the real
+`agent.yaml`:
+
+```yaml
+instance:
+  agent_yaml: agent-ha.yaml   # tests/agent-ha.yaml
+```
+
+```yaml
+# tests/agent-ha.yaml
+ha: true
+prefered_storage: rook-cephfs
+```
+
+Values in `agent_yaml` take precedence over those derived from k8s mocks (same behavior
+as `build_context.rhai`: keys present in `agent.yaml` are not recalculated). The two
+mechanisms are complementary:
+
+| Mechanism | What it tests | Corresponding prod path |
+|---|---|---|
+| `nodes` | HA derived from node count | Cluster without explicit `ha:` in `agent.yaml` |
+| `agent_yaml` (with `ha: true`) | Explicitly configured HA | Cluster with `ha: true` in `agent.yaml` |
 
 ### Best practices
 
@@ -52,9 +120,12 @@ The `tests/` directory must exist, otherwise the agent returns `MissingTestDirec
 - **One test set per posture**: a minimal `default.yaml`, then dedicated sets for
   significant variants (HA enabled, major option activated…), rather than a single test
   that mixes everything.
-- **Use context placeholders** (`{{instance.appslug}}`,
-  `{{instance.namespace}}`) in expected values, so tests remain valid regardless of the
-  instance name.
+- **Use context placeholders** (`{{instance.appslug}}`, `{{values.xxx}}`,
+  `{{cluster.ha}}`) in expected values, so tests remain valid regardless of the
+  instance name or simulated cluster configuration.
+- **`nodes` vs `agent_yaml`**: use `nodes` to test the "HA inferred from nodes" path
+  (no explicit `ha:`), and `agent_yaml` to test the "manually configured HA" path. Both
+  can coexist in the same test, with `agent_yaml` taking precedence.
 
 ## Internal regression tests (`agent/tests/rhai_*.rs`)
 
