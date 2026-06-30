@@ -1,6 +1,6 @@
 use crate::linting::{LintConfig, LintFinding, LintLevel, parse_inline_disables};
 use common::{
-    handlebarshandler::{HbsPath, NATIVE_HBS_HELPERS, Parameter, PathSeg, Template, TemplateElement},
+    handlebarshandler::{HbsPath, Parameter, PathSeg, Template, TemplateElement, is_native_hbs_helper},
     vynilpackage::VynilPackageSource,
 };
 use std::{
@@ -519,7 +519,7 @@ impl<'a> HelperWalker<'a> {
 
     fn check_helper(&mut self, name: &Parameter, params: &[Parameter], line: Option<usize>) {
         if let Parameter::Name(helper_name) = name
-            && !NATIVE_HBS_HELPERS.contains(&helper_name.as_str())
+            && !is_native_hbs_helper(helper_name)
         {
             self.used_helpers.insert(helper_name.clone());
 
