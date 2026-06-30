@@ -10,7 +10,7 @@ license.workspace = true
 default = []
 k8s = ["dep:kube", "dep:k8s-openapi", "dep:futures"]
 oci = ["dep:oci-client"]
-s3 = ["dep:object_store"]
+s3 = ["dep:object_store", "dep:futures"]
 
 [dependencies]
 rhai = { version = "1.20.0", features = ["sync", "serde", "internals"] }

@@ -2,7 +2,9 @@ use crate::{Error, Result, RhaiRes, rhai_err};
 use base64::Engine as _;
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+#[cfg(feature = "k8s")]
 use k8s_openapi::api::core::v1::Secret;
+#[cfg(feature = "k8s")]
 use kube::{Client as KubeClient, api::Api};
 pub use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
@@ -174,6 +176,7 @@ impl Registry {
     }
 }
 
+#[cfg(feature = "k8s")]
 pub async fn resolve_registry_auth(
     secret_name: &str,
     registry: &str,
@@ -335,121 +338,125 @@ mod tests {
         assert!(result.is_err(), "Non-existent key must produce an error");
     }
 
-    use http::{Request, Response, StatusCode};
-    use kube::client::Body;
-    use std::pin::pin;
-    use tower_test::mock;
+    #[cfg(feature = "k8s")]
+    mod k8s_tests {
+        use super::*;
+        use http::{Request, Response, StatusCode};
+        use kube::client::Body;
+        use std::pin::pin;
+        use tower_test::mock;
 
-    fn make_secret_json(registry: &str, auth_b64: &str) -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": { "name": "my-secret", "namespace": "vynil-system" },
-            "type": "kubernetes.io/dockerconfigjson",
-            "data": {
-                ".dockerconfigjson": base64::engine::general_purpose::STANDARD.encode(
-                    serde_json::json!({
-                        "auths": {
-                            registry: { "auth": auth_b64 }
-                        }
-                    }).to_string()
-                )
-            }
-        }))
-        .unwrap()
-    }
+        fn make_secret_json(registry: &str, auth_b64: &str) -> Vec<u8> {
+            serde_json::to_vec(&serde_json::json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": { "name": "my-secret", "namespace": "vynil-system" },
+                "type": "kubernetes.io/dockerconfigjson",
+                "data": {
+                    ".dockerconfigjson": base64::engine::general_purpose::STANDARD.encode(
+                        serde_json::json!({
+                            "auths": {
+                                registry: { "auth": auth_b64 }
+                            }
+                        }).to_string()
+                    )
+                }
+            }))
+            .unwrap()
+        }
 
-    fn make_404_json() -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "kind": "Status",
-            "apiVersion": "v1",
-            "status": "Failure",
-            "reason": "NotFound",
-            "code": 404
-        }))
-        .unwrap()
-    }
+        fn make_404_json() -> Vec<u8> {
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "Status",
+                "apiVersion": "v1",
+                "status": "Failure",
+                "reason": "NotFound",
+                "code": 404
+            }))
+            .unwrap()
+        }
 
-    #[tokio::test]
-    async fn test_resolve_registry_auth_valid_secret() {
-        let auth_b64 = "dXNlcjpwYXNz";
-        let body = make_secret_json("registry.example.com", auth_b64);
+        #[tokio::test]
+        async fn test_resolve_registry_auth_valid_secret() {
+            let auth_b64 = "dXNlcjpwYXNz";
+            let body = make_secret_json("registry.example.com", auth_b64);
 
-        let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
-        let spawned = tokio::spawn(async move {
-            let mut handle = pin!(handle);
-            let (_req, send) = handle.next_request().await.expect("service not called");
-            send.send_response(
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
+            let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
+            let spawned = tokio::spawn(async move {
+                let mut handle = pin!(handle);
+                let (_req, send) = handle.next_request().await.expect("service not called");
+                send.send_response(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                );
+            });
+
+            let client = kube::Client::new(mock_service, "vynil-system");
+            let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
+                .await
+                .unwrap();
+
+            assert!(
+                matches!(auth, RegistryAuth::Basic(ref u, ref p) if u == "user" && p == "pass"),
+                "expected Basic(user, pass), got {auth:?}"
             );
-        });
+            spawned.await.unwrap();
+        }
 
-        let client = kube::Client::new(mock_service, "vynil-system");
-        let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
-            .await
-            .unwrap();
+        #[tokio::test]
+        async fn test_resolve_registry_auth_secret_absent() {
+            let body = make_404_json();
 
-        assert!(
-            matches!(auth, RegistryAuth::Basic(ref u, ref p) if u == "user" && p == "pass"),
-            "expected Basic(user, pass), got {auth:?}"
-        );
-        spawned.await.unwrap();
-    }
+            let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
+            let spawned = tokio::spawn(async move {
+                let mut handle = pin!(handle);
+                let (_req, send) = handle.next_request().await.expect("service not called");
+                send.send_response(
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                );
+            });
 
-    #[tokio::test]
-    async fn test_resolve_registry_auth_secret_absent() {
-        let body = make_404_json();
+            let client = kube::Client::new(mock_service, "vynil-system");
+            let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
+                .await
+                .unwrap();
 
-        let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
-        let spawned = tokio::spawn(async move {
-            let mut handle = pin!(handle);
-            let (_req, send) = handle.next_request().await.expect("service not called");
-            send.send_response(
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            );
-        });
+            assert!(matches!(auth, RegistryAuth::Anonymous));
+            spawned.await.unwrap();
+        }
 
-        let client = kube::Client::new(mock_service, "vynil-system");
-        let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
-            .await
-            .unwrap();
+        #[tokio::test]
+        async fn test_resolve_registry_auth_registry_absent() {
+            let auth_b64 = "dXNlcjpwYXNz";
+            let body = make_secret_json("other.registry.com", auth_b64);
 
-        assert!(matches!(auth, RegistryAuth::Anonymous));
-        spawned.await.unwrap();
-    }
+            let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
+            let spawned = tokio::spawn(async move {
+                let mut handle = pin!(handle);
+                let (_req, send) = handle.next_request().await.expect("service not called");
+                send.send_response(
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                );
+            });
 
-    #[tokio::test]
-    async fn test_resolve_registry_auth_registry_absent() {
-        let auth_b64 = "dXNlcjpwYXNz";
-        let body = make_secret_json("other.registry.com", auth_b64);
+            let client = kube::Client::new(mock_service, "vynil-system");
+            let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
+                .await
+                .unwrap();
 
-        let (mock_service, handle) = mock::pair::<Request<Body>, Response<Body>>();
-        let spawned = tokio::spawn(async move {
-            let mut handle = pin!(handle);
-            let (_req, send) = handle.next_request().await.expect("service not called");
-            send.send_response(
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            );
-        });
-
-        let client = kube::Client::new(mock_service, "vynil-system");
-        let auth = resolve_registry_auth("my-secret", "registry.example.com", client, "vynil-system")
-            .await
-            .unwrap();
-
-        assert!(matches!(auth, RegistryAuth::Anonymous));
-        spawned.await.unwrap();
+            assert!(matches!(auth, RegistryAuth::Anonymous));
+            spawned.await.unwrap();
+        }
     }
 }
