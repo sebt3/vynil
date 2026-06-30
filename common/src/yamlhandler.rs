@@ -1,8 +1,12 @@
 use crate::{Error, RhaiRes, rhai_err};
 use indexmap::IndexMap;
-use rhai::{Dynamic, Engine, ImmutableString, Map};
+use rhai::{Dynamic, Engine, ImmutableString};
 use rust_yaml::{Value, Yaml, YamlConfig, yaml::IndentConfig};
 use std::str::FromStr;
+
+// ── Re-exports from core (serde helpers) ──────────────────────────────────────
+
+pub use vynil_core::yaml::{yaml_all_serialize_to_string, yaml_serialize_to_string, yaml_str_to_json};
 
 fn new_yaml() -> Yaml {
     Yaml::with_config(YamlConfig {
@@ -19,10 +23,6 @@ fn new_yaml() -> Yaml {
 }
 
 // ── Order-preserving YAML document type (rust-yaml) ───────────────────────────
-//
-// Used exclusively by `yaml_decode_ordered` / `yaml_encode_ordered`, which are
-// called from agent/scripts/packages/update.rhai so that package.yaml key order
-// is preserved when image tags are bumped.
 
 /// A YAML document that preserves key insertion order (backed by IndexMap).
 #[derive(Debug, Clone)]
@@ -114,7 +114,6 @@ impl YamlDoc {
 }
 
 // ── Conversions: rust_yaml::Value ↔ Rhai Dynamic ─────────────────────────────
-// Used internally by YamlDoc indexers.
 
 pub fn value_to_dynamic(v: Value) -> Dynamic {
     match v {
@@ -154,7 +153,6 @@ pub fn dynamic_to_value(d: Dynamic) -> Value {
             .collect();
         Value::Mapping(indexmap)
     } else {
-        // Fallback: JSON round-trip
         serde_json::to_string(&d)
             .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -163,7 +161,6 @@ pub fn dynamic_to_value(d: Dynamic) -> Value {
     }
 }
 
-// Used only by the dynamic_to_value fallback path above.
 fn serde_json_value_to_yaml_value(v: serde_json::Value) -> Value {
     match v {
         serde_json::Value::Null => Value::Null,
@@ -191,64 +188,9 @@ fn serde_json_value_to_yaml_value(v: serde_json::Value) -> Value {
     }
 }
 
-// ── Public helpers (backed by serde_yaml) ────────────────────────────────────
+// ── Rhai registration (ordered / YamlDoc only) ────────────────────────────────
 
-/// Parses a YAML string to a `serde_json::Value`.
-pub fn yaml_str_to_json(s: &str) -> crate::Result<serde_json::Value> {
-    serde_yaml::from_str(s).map_err(|e| Error::YamlError(e.to_string()))
-}
-
-/// Serialises any `serde::Serialize` value to a YAML string.
-pub fn yaml_serialize_to_string<T: serde::Serialize>(val: &T) -> crate::Result<String> {
-    serde_yaml::to_string(val).map_err(|e| Error::YamlError(e.to_string()))
-}
-
-/// Serialises a slice of `serde::Serialize` values as a multi-document YAML string.
-pub fn yaml_all_serialize_to_string<T: serde::Serialize>(vals: &[T]) -> crate::Result<String> {
-    let mut out = String::new();
-    for v in vals {
-        out.push_str("---\n");
-        out.push_str(&serde_yaml::to_string(v).map_err(|e| Error::YamlError(e.to_string()))?);
-    }
-    Ok(out)
-}
-
-// ── Rhai registration ─────────────────────────────────────────────────────────
-
-pub fn yaml_rhai_register(engine: &mut Engine) {
-    // ── Standard functions (serde_yaml, alphabetical key order) ──────────
-    engine
-        .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
-            serde_yaml::to_string(&val)
-                .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
-                .map(|s| s.into())
-        })
-        .register_fn("yaml_encode", |val: Map| -> RhaiRes<ImmutableString> {
-            serde_yaml::to_string(&val)
-                .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
-                .map(|s| s.into())
-        })
-        .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-            serde_yaml::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e.to_string())))
-        })
-        .register_fn(
-            "yaml_decode_multi",
-            |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
-                if val.len() <= 5 {
-                    return Ok(vec![]);
-                }
-                let mut result = Vec::new();
-                for doc in serde_yaml::Deserializer::from_str(val.as_ref()) {
-                    let d: Dynamic = serde::Deserialize::deserialize(doc)
-                        .map_err(|e| rhai_err(Error::YamlError(e.to_string())))?;
-                    result.push(d);
-                }
-                Ok(result)
-            },
-        );
-
-    // ── Order-preserving functions (rust-yaml / YamlDoc) ─────────────────
-    // Used exclusively by agent/scripts/packages/update.rhai.
+pub fn yaml_ordered_rhai_register(engine: &mut Engine) {
     engine
         .register_fn(
             "yaml_decode_ordered",
@@ -273,7 +215,6 @@ pub fn yaml_rhai_register(engine: &mut Engine) {
                 .map(|s| s.into())
         });
 
-    // ── YamlDoc type registration ─────────────────────────────────────────
     engine
         .register_type_with_name::<YamlDoc>("map")
         .register_indexer_get(YamlDoc::idx_get)

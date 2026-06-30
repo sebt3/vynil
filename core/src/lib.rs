@@ -105,14 +105,17 @@ pub fn rhai_err_str(e: String) -> Box<rhai::EvalAltResult> {
 }
 
 pub mod chrono;
+pub mod engine;
 pub mod glob;
 pub mod hashes;
+pub mod hbs;
 pub mod http;
 pub mod http_mock;
 pub mod key;
 pub mod password;
 pub mod semver;
 pub mod shell;
+pub mod yaml;
 
 #[cfg(feature = "oci")] pub mod oci;
 

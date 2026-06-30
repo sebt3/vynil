@@ -2,10 +2,8 @@ use crate::{Error, Result, RhaiRes, rhai_err};
 use base64::Engine as _;
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-#[cfg(feature = "k8s")]
-use k8s_openapi::api::core::v1::Secret;
-#[cfg(feature = "k8s")]
-use kube::{Client as KubeClient, api::Api};
+#[cfg(feature = "k8s")] use k8s_openapi::api::core::v1::Secret;
+#[cfg(feature = "k8s")] use kube::{Client as KubeClient, api::Api};
 pub use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_client::{Client, Reference, client, config, manifest, secrets::RegistryAuth};
 use rhai::{Dynamic, Engine, ImmutableString, Map};
