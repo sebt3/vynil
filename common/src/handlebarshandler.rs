@@ -7,75 +7,8 @@ pub use handlebars::{
 pub use serde_json::Value;
 use tracing::*;
 
-/// All helpers available in a HandleBars engine created by HandleBars::new().
-/// Includes: core helpers + 7 contextual helpers + render_template/render_file.
-pub const NATIVE_HBS_HELPERS: &[&str] = &[
-    // Core helpers (from vynil_core::hbs::CORE_HBS_HELPERS)
-    "if",
-    "unless",
-    "each",
-    "with",
-    "lookup",
-    "raw",
-    "log",
-    "inline",
-    "eq",
-    "ne",
-    "gt",
-    "gte",
-    "lt",
-    "lte",
-    "and",
-    "or",
-    "not",
-    "len",
-    "lowerCamelCase",
-    "upperCamelCase",
-    "snakeCase",
-    "kebabCase",
-    "shoutySnakeCase",
-    "shoutyKebabCase",
-    "titleCase",
-    "trainCase",
-    "read_to_str",
-    "parent",
-    "file_name",
-    "extension",
-    "canonicalize",
-    "env_var",
-    "to_lower_case",
-    "to_upper_case",
-    "trim",
-    "trim_start",
-    "trim_end",
-    "replace",
-    "quote",
-    "unquote",
-    "first_non_empty",
-    "json_to_str",
-    "str_to_json",
-    "from_json",
-    "to_json",
-    "json_query",
-    "json_str_query",
-    "jsonnet",
-    "regex_captures",
-    "regex_is_match",
-    "uuid_new_v4",
-    "uuid_new_v7",
-    "base64_encode",
-    "base64_decode",
-    "url_encode",
-    "to_decimal",
-    "header_basic",
-    "argon_hash",
-    "bcrypt_hash",
-    "crc32_hash",
-    "gen_password",
-    "gen_password_alphanum",
-    "gen_private_key",
-    "concat",
-    // Contextual helpers (common only)
+/// Helpers Handlebars spécifiques à vynil (en plus de vynil_core::hbs::CORE_HBS_HELPERS).
+pub const VYNIL_HBS_HELPERS: &[&str] = &[
     "selector_from_ctx",
     "labels_from_ctx",
     "ctx_have_crd",
@@ -86,6 +19,11 @@ pub const NATIVE_HBS_HELPERS: &[&str] = &[
     "render_template",
     "render_file",
 ];
+
+/// Vrai si `name` est un helper natif (core générique OU contextuel vynil).
+pub fn is_native_hbs_helper(name: &str) -> bool {
+    vynil_core::hbs::CORE_HBS_HELPERS.contains(&name) || VYNIL_HBS_HELPERS.contains(&name)
+}
 
 // ── Contextual helpers (vynil-specific, stay in common) ────────────────────────
 
