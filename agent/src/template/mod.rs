@@ -5,7 +5,6 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::process;
 
-
 #[derive(Parser, Debug)]
 pub struct Parameters {
     #[command(subcommand)]

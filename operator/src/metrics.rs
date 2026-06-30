@@ -132,7 +132,6 @@ pub struct ErrorLabelsInstance {
     pub error: String,
 }
 
-
 #[derive(Clone)]
 pub struct ReconcileMetricsJukebox {
     pub runs: Family<LabelBox, Counter>,

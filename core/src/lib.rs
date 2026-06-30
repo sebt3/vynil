@@ -118,10 +118,12 @@ pub mod shell;
 pub mod yaml;
 
 #[cfg(feature = "oci")] pub mod oci;
+#[cfg(feature = "oci")] pub mod oci_mock;
 
 #[cfg(feature = "s3")] pub mod s3;
 
 #[cfg(feature = "k8s")] pub mod k8s;
+#[cfg(feature = "k8s")] pub mod k8s_mock;
 
 pub use semver::Semver;
 

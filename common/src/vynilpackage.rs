@@ -391,7 +391,6 @@ impl VynilPackageRequirement {
     }
 }
 
-
 /// Vynil Package Recommandation
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -547,7 +546,6 @@ pub struct Resource {
     /// Ressources scaler
     pub scaler: Option<ResourceScaler>,
 }
-
 
 /// Vynil Package in the sources
 #[allow(non_snake_case)]

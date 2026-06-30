@@ -756,7 +756,6 @@ impl<'a> HelperWalker<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

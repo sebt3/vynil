@@ -8,7 +8,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-
 #[derive(ValueEnum, Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputFormat {
