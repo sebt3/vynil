@@ -4,27 +4,81 @@ use common::{
     instancetenant::TenantInstance,
 };
 use k8s_openapi::api::{batch::v1::Job as BatchJob, core::v1::Pod};
-use kube::{Api, Client};
+use kube::{Api, Client, api::ListParams};
 
-/// Get agent logs for an instance
+/// Map a kind plural to the CamelCase Kind used by the kube controller-runtime in its
+/// `object.ref` span field (e.g. `tenantinstances` → `TenantInstance`).
+fn kind_camel(kind: &str) -> Option<&'static str> {
+    match kind {
+        "tenantinstances" => Some("TenantInstance"),
+        "serviceinstances" => Some("ServiceInstance"),
+        "systeminstances" => Some("SystemInstance"),
+        _ => None,
+    }
+}
+
+/// Map a kind plural to the operator `type` label value carried by the agent jobs.
+fn kind_type_label(kind: &str) -> Option<&'static str> {
+    match kind {
+        "tenantinstances" => Some("tenant"),
+        "serviceinstances" => Some("service"),
+        "systeminstances" => Some("system"),
+        _ => None,
+    }
+}
+
+/// Label selector that selects the agent (install) job(s) of an instance. The operator stamps
+/// these labels on every job it renders (see `operator/templates/package.yaml.hbs`). The jobs
+/// live in the operator namespace, never in the instance namespace, and carry no owner-reference
+/// to the instance (a cross-namespace owner-ref is impossible) — so labels are the only link.
+fn install_job_selector(kind: &str, name: &str, namespace: &str) -> Option<String> {
+    kind_type_label(kind).map(|t| format!("instance={name},namespace={namespace},type={t}"))
+}
+
+/// The kube controller-runtime tags every operator log line emitted while reconciling an object
+/// with an `object.ref` span field: `{Kind}.v1.vynil.solidite.fr/{name}.{namespace}`. This token
+/// is the only reliable, leak-free way to attribute a log line to one instance (matching on the
+/// bare name or namespace would catch sibling instances of the same namespace).
+fn instance_object_ref(kind: &str, name: &str, namespace: &str) -> Option<String> {
+    kind_camel(kind).map(|k| format!("{k}.v1.vynil.solidite.fr/{name}.{namespace}"))
+}
+
+/// Keep only the operator log lines tagged with this instance's `object.ref` token.
+fn filter_operator_lines(logs: &str, object_ref: &str) -> String {
+    logs.lines()
+        .filter(|line| line.contains(object_ref))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Get agent logs for an instance.
+///
+/// The agent install job runs in the operator namespace (`vynil_namespace`), not in the instance
+/// namespace. We locate it by label selector and read its pods' logs there.
 pub async fn get_agent_log(
     client: &Client,
+    kind: &str,
     namespace: &str,
     name: &str,
     vynil_namespace: &str,
 ) -> Result<(String, ScrubStats), DiagError> {
-    // Find install Jobs owned by the instance
-    let jobs = find_install_jobs(client, namespace, name).await?;
+    let selector = install_job_selector(kind, name, namespace).ok_or(DiagError::UnknownKind)?;
+    let api: Api<BatchJob> = Api::namespaced(client.clone(), vynil_namespace);
+    let jobs = api
+        .list(&ListParams::default().labels(&selector))
+        .await
+        .map_err(DiagError::KubeError)?
+        .items;
 
     let mut all_logs = String::new();
 
     for job in jobs {
-        // Get pods for this job
-        let pods = get_job_pods(client, namespace, &job.metadata.name.unwrap_or_default()).await?;
+        // Pods of the job also live in the operator namespace.
+        let pods = get_job_pods(client, vynil_namespace, &job.metadata.name.unwrap_or_default()).await?;
 
         for pod in pods {
             let pod_name = pod.metadata.name.clone().unwrap_or_default();
-            let logs = get_pod_logs(client, namespace, &pod_name, None).await?;
+            let logs = get_pod_logs(client, vynil_namespace, &pod_name, None).await?;
             if !logs.is_empty() {
                 all_logs.push_str(&format!("=== pod/{} ===\n", pod_name));
                 all_logs.push_str(&logs);
@@ -41,34 +95,6 @@ pub async fn get_agent_log(
     let (scrubbed, stats) = scrub(&all_logs, client, namespace, vynil_namespace).await;
 
     Ok((scrubbed, stats))
-}
-
-/// Find install Jobs owned by an instance
-async fn find_install_jobs(
-    client: &Client,
-    namespace: &str,
-    instance_name: &str,
-) -> Result<Vec<BatchJob>, DiagError> {
-    let api: Api<BatchJob> = Api::namespaced(client.clone(), namespace);
-    let job_list = api
-        .list(&Default::default())
-        .await
-        .map_err(DiagError::KubeError)?;
-
-    // Filter jobs owned by the instance
-    Ok(job_list
-        .items
-        .into_iter()
-        .filter(|job| {
-            if let Some(owner_refs) = &job.metadata.owner_references {
-                owner_refs
-                    .iter()
-                    .any(|owner| owner.controller == Some(true) && owner.name == instance_name)
-            } else {
-                false
-            }
-        })
-        .collect())
 }
 
 /// Get pods for a job
@@ -338,13 +364,21 @@ fn cap(logs: &str, max: usize) -> String {
     format!("{}\n... [truncated]", &logs[..end])
 }
 
-/// Get operator logs filtered for a specific instance
+/// Get operator logs filtered for a specific instance.
+///
+/// Filtering is anchored on the `object.ref` span token the controller-runtime stamps on every
+/// reconcile line — precise and leak-free. A few unattributable lines (e.g. raw `K8s error:`
+/// dumps logged outside any reconcile span) carry no `object.ref` and are intentionally dropped.
 pub async fn get_operator_log(
     client: &Client,
+    kind: &str,
     instance_namespace: &str,
     instance_name: &str,
     vynil_namespace: &str,
 ) -> Result<(String, ScrubStats), DiagError> {
+    let object_ref =
+        instance_object_ref(kind, instance_name, instance_namespace).ok_or(DiagError::UnknownKind)?;
+
     // Get pods in the vynil namespace with the vynil label
     let api: Api<Pod> = Api::namespaced(client.clone(), vynil_namespace);
     let pod_list = api
@@ -363,12 +397,8 @@ pub async fn get_operator_log(
             let pod_name = pod.metadata.name.clone().unwrap_or_default();
             let logs = get_pod_logs(client, vynil_namespace, &pod_name, None).await?;
 
-            // Filter logs for lines mentioning the instance
-            let filtered_logs: String = logs
-                .lines()
-                .filter(|line| line.contains(instance_name) || line.contains(instance_namespace))
-                .collect::<Vec<_>>()
-                .join("\n");
+            // Keep only the lines tagged with this instance's object.ref token.
+            let filtered_logs = filter_operator_lines(&logs, &object_ref);
 
             if !filtered_logs.is_empty() {
                 all_logs.push_str(&format!("=== pod/{} ===\n", pod_name));
@@ -392,4 +422,64 @@ pub async fn get_operator_log(
 
     let (scrubbed, stats) = scrub(&all_logs, client, instance_namespace, vynil_namespace).await;
     Ok((scrubbed, stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_job_selector_uses_instance_namespace_type_labels() {
+        assert_eq!(
+            install_job_selector("tenantinstances", "gitea", "media-test").as_deref(),
+            Some("instance=gitea,namespace=media-test,type=tenant")
+        );
+        assert_eq!(
+            install_job_selector("serviceinstances", "db", "apps").as_deref(),
+            Some("instance=db,namespace=apps,type=service")
+        );
+        assert_eq!(
+            install_job_selector("systeminstances", "reloader", "kydah-core").as_deref(),
+            Some("instance=reloader,namespace=kydah-core,type=system")
+        );
+        assert_eq!(install_job_selector("bogus", "x", "y"), None);
+    }
+
+    #[test]
+    fn object_ref_matches_controller_runtime_format() {
+        // Exactly the token kube-runtime emits: {Kind}.v1.vynil.solidite.fr/{name}.{namespace}
+        assert_eq!(
+            instance_object_ref("tenantinstances", "gitea", "media-test").as_deref(),
+            Some("TenantInstance.v1.vynil.solidite.fr/gitea.media-test")
+        );
+        assert_eq!(instance_object_ref("bogus", "x", "y"), None);
+    }
+
+    #[test]
+    fn operator_filter_keeps_only_the_target_instance() {
+        // Real compact-formatter shape (ANSI stripped): the object.ref value is contiguous ASCII.
+        let logs = "\
+WARN reconciling object{object.ref=TenantInstance.v1.vynil.solidite.fr/gitea.media-test}: reconcile failed for gitea
+INFO reconciling object{object.ref=TenantInstance.v1.vynil.solidite.fr/plane.media-test}: Deleting plane
+INFO reconciling object{object.ref=TenantInstance.v1.vynil.solidite.fr/gitea.media-test}: job tenant--media-test--gitea
+K8s error: ApiError: systeminstances media not found";
+        let object_ref = instance_object_ref("tenantinstances", "gitea", "media-test").unwrap();
+        let filtered = filter_operator_lines(logs, &object_ref);
+
+        assert!(filtered.contains("reconcile failed for gitea"));
+        assert!(filtered.contains("job tenant--media-test--gitea"));
+        // The sibling instance in the same namespace must NOT leak in.
+        assert!(!filtered.contains("Deleting plane"));
+        // Unattributable lines (no object.ref) are dropped.
+        assert!(!filtered.contains("ApiError"));
+    }
+
+    #[test]
+    fn operator_filter_does_not_match_on_bare_namespace() {
+        // A line that only mentions the namespace (not this instance's object.ref) is excluded.
+        let logs =
+            "INFO reconciling object{object.ref=TenantInstance.v1.vynil.solidite.fr/other.media-test}: x";
+        let object_ref = instance_object_ref("tenantinstances", "gitea", "media-test").unwrap();
+        assert_eq!(filter_operator_lines(logs, &object_ref), "");
+    }
 }

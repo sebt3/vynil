@@ -2,17 +2,18 @@ use crate::{
     dto::{PackageState, PackagesState},
     error::DiagError,
 };
-use common::{
-    instanceservice::ServiceInstance, instancesystem::SystemInstance, instancetenant::TenantInstance,
-};
+use common::{instanceservice::ServiceInstance, instancesystem::SystemInstance};
 use kube::{Api, Client};
 
-/// Get packages state from all namespaces
+/// Get the cluster-wide packages state.
+///
+/// SECURITY: this deliberately enumerates only the **platform** layer — `ServiceInstance` and
+/// `SystemInstance` — and never `TenantInstance`. Listing tenant instances cluster-wide leaks
+/// every other tenant's workloads to any caller who can reach the diag API for a single instance
+/// they own. The platform inventory is the legitimate remote-debug context; it stays gated behind
+/// the `diagnostic_expose_packages` option (the admin opt-out for stricter setups).
 pub async fn get_packages(client: &Client) -> Result<PackagesState, DiagError> {
     let mut items = Vec::new();
-
-    // Get TenantInstance packages
-    items.extend(get_tenant_packages(client).await?);
 
     // Get ServiceInstance packages
     items.extend(get_service_packages(client).await?);
@@ -21,36 +22,6 @@ pub async fn get_packages(client: &Client) -> Result<PackagesState, DiagError> {
     items.extend(get_system_packages(client).await?);
 
     Ok(PackagesState { items })
-}
-
-/// Get packages from TenantInstance resources
-async fn get_tenant_packages(client: &Client) -> Result<Vec<PackageState>, DiagError> {
-    let api: Api<TenantInstance> = Api::all(client.clone());
-    let list = api
-        .list(&Default::default())
-        .await
-        .map_err(DiagError::KubeError)?;
-
-    Ok(list
-        .items
-        .into_iter()
-        .filter_map(|instance| {
-            let metadata = instance.metadata;
-            let namespace = metadata.namespace?;
-            let name = metadata.name?;
-            let spec = instance.spec;
-            let status = instance.status?;
-
-            Some(PackageState {
-                kind: "TenantInstance".to_string(),
-                namespace,
-                name,
-                package: spec.package,
-                tag: status.tag.clone(),
-                ready: is_ready_tenant(&status),
-            })
-        })
-        .collect())
 }
 
 /// Get packages from ServiceInstance resources
@@ -111,16 +82,6 @@ async fn get_system_packages(client: &Client) -> Result<Vec<PackageState>, DiagE
             })
         })
         .collect())
-}
-
-/// Check if an instance status has Ready=True condition
-fn is_ready_tenant(status: &common::instancetenant::TenantInstanceStatus) -> bool {
-    for condition in &status.conditions {
-        if condition.condition_type == common::instancetenant::ConditionsType::Ready {
-            return condition.status == common::instancetenant::ConditionsStatus::True;
-        }
-    }
-    false
 }
 
 /// Check if an instance status has Ready=True condition

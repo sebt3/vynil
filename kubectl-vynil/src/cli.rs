@@ -106,14 +106,6 @@ pub enum InstanceVerb {
     Scan(InstanceScanArgs),
     /// Collect every diagnostic item into a tar.gz bundle.
     Diagnostic(DiagnosticArgs),
-    /// Print the cluster info diagnostic item to stdout.
-    Clusterinfo(ItemArgs),
-    /// Print the Vynil config diagnostic item to stdout.
-    Vynilconfig(ItemArgs),
-    /// Print the packages diagnostic item to stdout.
-    Packages(ItemArgs),
-    /// Print the instance state diagnostic item to stdout.
-    State(ItemArgs),
     /// Print the children diagnostic item to stdout.
     Children(ItemArgs),
     /// Print the agent log diagnostic item to stdout.
@@ -128,10 +120,6 @@ impl InstanceVerb {
     /// For single-item verbs, returns the diagnostic item name and its transport args.
     pub fn as_item(&self) -> Option<(&'static str, &TransportArgs)> {
         match self {
-            InstanceVerb::Clusterinfo(a) => Some(("clusterinfo", &a.transport)),
-            InstanceVerb::Vynilconfig(a) => Some(("vynilconfig", &a.transport)),
-            InstanceVerb::Packages(a) => Some(("packages", &a.transport)),
-            InstanceVerb::State(a) => Some(("state", &a.transport)),
             InstanceVerb::Children(a) => Some(("children", &a.transport)),
             InstanceVerb::Agentlog(a) => Some(("agentlog", &a.transport)),
             InstanceVerb::Childlogs(a) => Some(("childlogs", &a.transport)),
@@ -262,7 +250,7 @@ mod tests {
             ("serviceinstances", "vsvc"),
             ("systeminstance", "vsi"),
         ] {
-            let cli = Cli::try_parse_from(["kubectl-vynil", argv, "-n", "ns", "x", "state"]).unwrap();
+            let cli = Cli::try_parse_from(["kubectl-vynil", argv, "-n", "ns", "x", "children"]).unwrap();
             let got = match cli.command {
                 Commands::Vti(_) => "vti",
                 Commands::Vsvc(_) => "vsvc",
@@ -283,11 +271,31 @@ mod tests {
     }
 
     #[test]
+    fn cluster_and_state_verbs_are_no_longer_exposed() {
+        // These remain bundle items but must not be standalone instance verbs anymore.
+        for removed in ["state", "clusterinfo", "vynilconfig", "packages"] {
+            assert!(
+                Cli::try_parse_from(["kubectl-vynil", "vti", "-n", "ns", "x", removed]).is_err(),
+                "verb {} should be rejected",
+                removed
+            );
+        }
+        // The interactive log/children verbs stay.
+        for kept in ["children", "agentlog", "childlogs", "operatorlog"] {
+            assert!(
+                Cli::try_parse_from(["kubectl-vynil", "vti", "-n", "ns", "x", kept]).is_ok(),
+                "verb {} should still parse",
+                kept
+            );
+        }
+    }
+
+    #[test]
     fn old_invented_aliases_are_rejected() {
         // The pre-existing ti/si/sysi aliases must no longer be accepted.
         for bad in ["ti", "si", "sysi"] {
             assert!(
-                Cli::try_parse_from(["kubectl-vynil", bad, "-n", "ns", "x", "state"]).is_err(),
+                Cli::try_parse_from(["kubectl-vynil", bad, "-n", "ns", "x", "children"]).is_err(),
                 "{} should be rejected",
                 bad
             );

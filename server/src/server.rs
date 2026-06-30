@@ -303,7 +303,7 @@ async fn instance_handler(
         }
         "agentlog" => {
             let (logs, stats) =
-                get_agent_log(&state.client, &ns, &name, &state.config.vynil_namespace).await?;
+                get_agent_log(&state.client, &kind, &ns, &name, &state.config.vynil_namespace).await?;
 
             let mut response = logs.into_response();
             add_scrub_header(response.headers_mut(), &stats);
@@ -327,7 +327,7 @@ async fn instance_handler(
         }
         "operatorlog" => {
             let (logs, stats) =
-                get_operator_log(&state.client, &ns, &name, &state.config.vynil_namespace).await?;
+                get_operator_log(&state.client, &kind, &ns, &name, &state.config.vynil_namespace).await?;
 
             let mut response = logs.into_response();
             add_scrub_header(response.headers_mut(), &stats);
