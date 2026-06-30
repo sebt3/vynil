@@ -850,7 +850,6 @@ fn gen_package_replace_returns_modified_string() {
     );
 }
 
-
 #[test]
 fn gen_package_clean_metadata_removes_helm_annotations() {
     // Verify clean_metadata removes Helm-specific annotations and preserves others

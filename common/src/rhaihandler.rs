@@ -9,13 +9,14 @@ use crate::{
     jukebox::jukebox_rhai_register,
     jukebox_file::file_jukebox_rhai_register,
     k8sgeneric::k8sgeneric_rhai_register,
-    k8smock::{k8smock_rhai_register, oci_mock_rhai_register},
+    k8smock::k8smock_rhai_register,
     k8sraw::k8sraw_rhai_register,
     k8sworkload::k8sworkload_rhai_register,
     s3handler::s3_rhai_register,
     vynilpackage::package_rhai_register,
     yamlhandler::yaml_ordered_rhai_register,
 };
+use vynil_core::oci_mock::oci_mock_rhai_register;
 
 // ── Re-exports from core ──────────────────────────────────────────────────────
 

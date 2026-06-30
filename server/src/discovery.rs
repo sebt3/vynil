@@ -13,7 +13,6 @@ pub struct APIResource {
     kind: String,
 }
 
-
 /// API resource list response
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct APIResourceList {
