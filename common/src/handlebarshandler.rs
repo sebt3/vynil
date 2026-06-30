@@ -463,4 +463,26 @@ mod tests {
             "empty context must produce empty resources object, got: {result}"
         );
     }
+
+    // ── Régression : new_hbs() en rhai expose les helpers contextuels vynil ──
+    //
+    // Après l'extraction de vynil-core, le moteur Handlebars générique vit dans
+    // vynil-core (sans helpers contextuels). Le binding rhai `new_hbs` doit
+    // construire le `common::HandleBars` COMPLET, sinon tout rendu de package via
+    // `new_hbs().render_*(…, context)` (install_crds, template_crds, schedule_backup…)
+    // perd selector_from_ctx / labels_from_ctx / image_from_ctx / resources_from_ctx.
+    #[test]
+    fn test_new_hbs_rhai_exposes_contextual_helpers() {
+        let mut s = crate::rhaihandler::Script::new(vec![]);
+        let code = r#"
+            let ctx = #{ instance: #{ selector: #{ "app": "demo" } } };
+            let hbs = new_hbs();
+            hbs.render_from("{{#each (selector_from_ctx this)}}{{@key}}={{this}}{{/each}}", ctx)
+        "#;
+        let out = s.eval(code).unwrap().to_string();
+        assert_eq!(
+            out, "app=demo",
+            "new_hbs() en rhai ne voit pas selector_from_ctx — le binding doit produire common::HandleBars"
+        );
+    }
 }
