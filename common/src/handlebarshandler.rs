@@ -1,20 +1,16 @@
-use crate::{Error, Result, RhaiRes, hasheshandlers::Argon, rhai_err};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use handlebars::{Handlebars, handlebars_helper};
+use crate::RhaiRes;
+use handlebars::handlebars_helper;
 pub use handlebars::{
     Path as HbsPath, PathSeg,
     template::{Parameter, Template, TemplateElement},
 };
-use handlebars_misc_helpers::new_hbs;
-use regex::Regex;
-use rhai::Engine;
 pub use serde_json::Value;
+use tracing::*;
 
 /// All helpers available in a HandleBars engine created by HandleBars::new().
-/// Includes: handlebars built-ins, handlebars_misc_helpers (file, path, env, string,
-/// json, jsonnet, regex, uuid features), and vynil-specific helpers.
+/// Includes: core helpers + 7 contextual helpers + render_template/render_file.
 pub const NATIVE_HBS_HELPERS: &[&str] = &[
-    // Handlebars built-ins
+    // Core helpers (from vynil_core::hbs::CORE_HBS_HELPERS)
     "if",
     "unless",
     "each",
@@ -33,7 +29,6 @@ pub const NATIVE_HBS_HELPERS: &[&str] = &[
     "or",
     "not",
     "len",
-    // handlebars string_helpers feature (case helpers)
     "lowerCamelCase",
     "upperCamelCase",
     "snakeCase",
@@ -42,16 +37,12 @@ pub const NATIVE_HBS_HELPERS: &[&str] = &[
     "shoutyKebabCase",
     "titleCase",
     "trainCase",
-    // handlebars_misc_helpers — file (unconditional)
     "read_to_str",
-    // handlebars_misc_helpers — path (unconditional)
     "parent",
     "file_name",
     "extension",
     "canonicalize",
-    // handlebars_misc_helpers — env (unconditional)
     "env_var",
-    // handlebars_misc_helpers — string feature
     "to_lower_case",
     "to_upper_case",
     "trim",
@@ -61,22 +52,17 @@ pub const NATIVE_HBS_HELPERS: &[&str] = &[
     "quote",
     "unquote",
     "first_non_empty",
-    // handlebars_misc_helpers — json feature
     "json_to_str",
     "str_to_json",
     "from_json",
     "to_json",
     "json_query",
     "json_str_query",
-    // handlebars_misc_helpers — jsonnet feature
     "jsonnet",
-    // handlebars_misc_helpers — regex feature
     "regex_captures",
     "regex_is_match",
-    // handlebars_misc_helpers — uuid feature
     "uuid_new_v4",
     "uuid_new_v7",
-    // vynil helpers registered by HandleBars::new()
     "base64_encode",
     "base64_decode",
     "url_encode",
@@ -89,6 +75,7 @@ pub const NATIVE_HBS_HELPERS: &[&str] = &[
     "gen_password_alphanum",
     "gen_private_key",
     "concat",
+    // Contextual helpers (common only)
     "selector_from_ctx",
     "labels_from_ctx",
     "ctx_have_crd",
@@ -99,75 +86,9 @@ pub const NATIVE_HBS_HELPERS: &[&str] = &[
     "render_template",
     "render_file",
 ];
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-use tracing::*;
-use url::form_urlencoded;
-// TODO: improve error management
-handlebars_helper!(base64_decode: |arg:Value| String::from_utf8(STANDARD.decode(arg.as_str().unwrap_or_else(|| {
-    warn!("handlebars::base64_decode received a non-string parameter: {:?}",arg);
-    ""
-})).unwrap_or_else(|e| {
-    warn!("handlebars::base64_decode failed to decode with: {e:?}");
-    vec![]
-})).unwrap_or_else(|e| {
-    warn!("handlebars::base64_decode failed to convert to string with: {e:?}");
-    String::new()
-}));
-handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwrap_or_else(|| {
-    warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
-    ""
-})));
-handlebars_helper!(url_encode: |arg:Value| form_urlencoded::byte_serialize(arg.as_str().unwrap_or_else(|| {
-    warn!("handlebars::url_encode received a non-string parameter: {:?}",arg);
-    ""
-}).as_bytes()).collect::<String>());
-handlebars_helper!(to_decimal: |arg:Value| format!("{}", u32::from_str_radix(arg.as_str().unwrap_or_else(|| {
-    warn!("handlebars::to_decimal received a non-string parameter: {:?}",arg);
-    ""
-}), 8).unwrap_or_else(|_| {
-    warn!("handlebars::to_decimal received a non-string parameter: {:?}",arg);
-    0
-})));
-handlebars_helper!(header_basic: |username:Value, password:Value| format!("Basic {}",STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
-    warn!("handlebars::header_basic received a non-string username: {:?}",username);
-    ""
-}),password.as_str().unwrap_or_else(|| {
-    warn!("handlebars::header_basic received a non-string password: {:?}",password);
-    ""
-})))));
-handlebars_helper!(argon_hash: |password:Value| Argon::new().hash(password.as_str().unwrap_or_else(|| {
-    warn!("handlebars::argon_hash received a non-string password: {:?}",password);
-    ""
-}).to_string()).unwrap_or_else(|e| {
-    warn!("handlebars::argon_hash failed to convert to string with: {e:?}");
-    String::new()
-}));
-handlebars_helper!(bcrypt_hash: |password:Value| crate::hasheshandlers::bcrypt_hash(password.as_str().unwrap_or_else(|| {
-    warn!("handlebars::bcrypt_hash received a non-string password: {:?}",password);
-    ""
-}).to_string()).unwrap_or_else(|e| {
-    warn!("handlebars::bcrypt_hash failed to convert to string with: {e:?}");
-    String::new()
-}));
-handlebars_helper!(crc32_hash: |password:Value| crate::hasheshandlers::crc32_hash(password.as_str().unwrap_or_else(|| {
-    warn!("handlebars::crc32_hash received a non-string password: {:?}",password);
-    ""
-}).to_string()));
-handlebars_helper!(gen_password: |len:u32, {lower:u32=1, upper:u32=1, digits:u32=1, symbols:u32=1}| crate::passwordhandler::generate(len as usize, lower as usize, upper as usize, digits as usize, symbols as usize).unwrap_or_else(|e| {
-    warn!("handlebars::gen_password failed with: {e:?}");
-    String::new()
-}));
-handlebars_helper!(gen_password_alphanum: |len:u32| crate::passwordhandler::generate(len as usize, 1, 1, 1, 0).unwrap_or_else(|e| {
-    warn!("handlebars::gen_password_alphanum failed with: {e:?}");
-    String::new()
-}));
-handlebars_helper!(gen_private_key: |algo:str, {bits:u32=4096}| crate::ed25519handler::gen_private_key(algo, bits).unwrap_or_else(|e| {
-    warn!("handlebars::gen_private_key failed with: {e:?}");
-    String::new()
-}));
+
+// ── Contextual helpers (vynil-specific, stay in common) ────────────────────────
+
 handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
     let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["selector"].as_object().unwrap().clone();
     if !comp.is_empty() {
@@ -197,13 +118,6 @@ handlebars_helper!(have_tenant_service: |ctx: Value, name: String| {
         !v.is_empty()
     } else {false}
 });
-handlebars_helper!(concat: |a: Value, b: Value| format!("{}{}", a.as_str().unwrap_or_else(|| {
-    warn!("handlebars::concat received a non-string parameter: {:?}", a);
-    ""
-}),b.as_str().unwrap_or_else(|| {
-    warn!("handlebars::concat received a non-string parameter: {:?}", b);
-    ""
-})));
 
 handlebars_helper!(render_template: |template: String, data: Value| {
     let mut hbs = HandleBars::new();
@@ -212,7 +126,6 @@ handlebars_helper!(render_template: |template: String, data: Value| {
         String::new()
     })
 });
-
 
 handlebars_helper!(render_file: |file: String, data: Value| {
     let mut hbs = HandleBars::new();
@@ -230,28 +143,32 @@ handlebars_helper!(render_file: |file: String, data: Value| {
     }
 });
 
+// ── Newtype wrapper around vynil_core::HandleBars ──────────────────────────────
+
 #[derive(Clone, Debug)]
-pub struct HandleBars<'a> {
-    engine: Handlebars<'a>,
+pub struct HandleBars<'a>(pub vynil_core::hbs::HandleBars<'a>);
+
+impl<'a> std::ops::Deref for HandleBars<'a> {
+    type Target = vynil_core::hbs::HandleBars<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
+impl<'a> std::ops::DerefMut for HandleBars<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 impl HandleBars<'_> {
     #[must_use]
     pub fn new() -> HandleBars<'static> {
-        let mut engine = new_hbs();
-        engine.register_helper("concat", Box::new(concat));
-        engine.register_helper("to_decimal", Box::new(to_decimal));
+        let mut inner = vynil_core::hbs::HandleBars::new();
+        let engine = inner.engine_mut();
         engine.register_helper("labels_from_ctx", Box::new(labels));
         engine.register_helper("ctx_have_crd", Box::new(have_crd));
         engine.register_helper("selector_from_ctx", Box::new(selector));
-        engine.register_helper("base64_decode", Box::new(base64_decode));
-        engine.register_helper("base64_encode", Box::new(base64_encode));
-        engine.register_helper("header_basic", Box::new(header_basic));
-        engine.register_helper("argon_hash", Box::new(argon_hash));
-        engine.register_helper("bcrypt_hash", Box::new(bcrypt_hash));
-        engine.register_helper("url_encode", Box::new(url_encode));
-        engine.register_helper("gen_password", Box::new(gen_password));
-        engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
-        engine.register_helper("gen_private_key", Box::new(gen_private_key));
         engine.register_helper("have_system_service", Box::new(have_system_service));
         engine.register_helper("have_tenant_service", Box::new(have_tenant_service));
         engine.register_helper("render_template", Box::new(render_template));
@@ -273,113 +190,40 @@ impl HandleBars<'_> {
             if lim.len() != 0 { res[\"limits\"] = lim; }\n\
             res",
         );
-        HandleBars { engine }
-    }
-
-    pub fn register_template(&mut self, name: &str, template: &str) -> Result<()> {
-        self.engine
-            .register_template_string(name, template)
-            .map_err(Error::HbsTemplateError)
-    }
-
-    pub fn rhai_register_template(&mut self, name: String, template: String) -> RhaiRes<()> {
-        self.register_template(name.as_str(), template.as_str())
-            .map_err(|e| format!("{e}").into())
-    }
-
-    pub fn register_helper_dir(&mut self, directory: PathBuf) -> Result<()> {
-        if Path::new(&directory).is_dir() {
-            let re_rhai = Regex::new(r"\.rhai$").unwrap();
-            for file in fs::read_dir(directory).unwrap() {
-                let path = file.unwrap().path();
-                let filename = path.file_name().unwrap().to_str().unwrap();
-                if re_rhai.is_match(filename) {
-                    let name = filename[0..(filename.len() - 5)].to_string();
-                    self.engine
-                        .register_script_helper_file(&name, path)
-                        .map_err(|e| Error::Other(format!("{:?}", e)))?;
-                }
-            }
-            Ok(())
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn rhai_register_helper_dir(&mut self, directory: String) -> RhaiRes<()> {
-        self.register_helper_dir(PathBuf::from(directory))
-            .map_err(rhai_err)
-    }
-
-    pub fn register_partial_dir(&mut self, directory: PathBuf) -> Result<()> {
-        if Path::new(&directory).is_dir() {
-            let re_rhai = Regex::new(r"\.hbs$").unwrap();
-            for file in fs::read_dir(directory).unwrap() {
-                let path = file.unwrap().path();
-                let filename = path.file_name().unwrap().to_str().unwrap();
-                if re_rhai.is_match(filename) {
-                    let name = filename[0..(filename.len() - 4)].to_string();
-                    let tmpl = std::fs::read_to_string(path).map_err(Error::Stdio)?;
-                    tracing::debug!("registering {}", name);
-                    self.register_template(&name, &tmpl)?;
-                }
-            }
-            Ok(())
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn rhai_register_partial_dir(&mut self, directory: String) -> RhaiRes<()> {
-        self.register_partial_dir(PathBuf::from(directory))
-            .map_err(rhai_err)
-    }
-
-    pub fn render(&mut self, template: &str, data: &Value) -> Result<String> {
-        self.engine
-            .render_template(template, data)
-            .map_err(Error::HbsRenderError)
-    }
-
-    pub fn rhai_render(&mut self, template: String, data: rhai::Map) -> RhaiRes<String> {
-        let json_data: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&data).map_err(|e| format!("{e}"))?)
-                .map_err(|e| format!("{e}"))?;
-        self.engine
-            .render_template(template.as_str(), &json_data)
-            .map_err(|e| format!("{e}").into())
-    }
-
-    pub fn render_named(&mut self, name: &str, template: &str, data: &Value) -> Result<String> {
-        self.engine
-            .register_template_string(name, template)
-            .map_err(Error::HbsTemplateError)?;
-        self.engine.render(name, data).map_err(Error::HbsRenderError)
-    }
-
-    pub fn rhai_render_named(&mut self, name: String, template: String, data: rhai::Map) -> RhaiRes<String> {
-        let json_data: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&data).map_err(|e| format!("{e}"))?)
-                .map_err(|e| format!("{e}"))?;
-        self.engine
-            .register_template_string(name.as_str(), template)
-            .map_err(Error::HbsTemplateError)
-            .map_err(rhai_err)?;
-        self.engine
-            .render(name.as_str(), &json_data)
-            .map_err(|e| format!("{e}").into())
+        HandleBars(inner)
     }
 }
 
-pub fn handlebars_rhai_register(engine: &mut Engine) {
+pub fn handlebars_rhai_register(engine: &mut rhai::Engine) {
     engine
-        .register_type_with_name::<HandleBars>("HandleBars")
+        .register_type_with_name::<HandleBars<'_>>("HandleBars")
         .register_fn("new_hbs", HandleBars::new)
-        .register_fn("register_template", HandleBars::rhai_register_template)
-        .register_fn("register_partial_dir", HandleBars::rhai_register_partial_dir)
-        .register_fn("register_helper_dir", HandleBars::rhai_register_helper_dir)
-        .register_fn("render_from", HandleBars::rhai_render)
-        .register_fn("render_named", HandleBars::rhai_render_named);
+        .register_fn(
+            "register_template",
+            |h: &mut HandleBars, name: String, template: String| -> RhaiRes<()> {
+                h.rhai_register_template(name, template)
+            },
+        )
+        .register_fn(
+            "register_partial_dir",
+            |h: &mut HandleBars, directory: String| -> RhaiRes<()> { h.rhai_register_partial_dir(directory) },
+        )
+        .register_fn(
+            "register_helper_dir",
+            |h: &mut HandleBars, directory: String| -> RhaiRes<()> { h.rhai_register_helper_dir(directory) },
+        )
+        .register_fn(
+            "render_from",
+            |h: &mut HandleBars, template: String, data: rhai::Map| -> RhaiRes<String> {
+                h.rhai_render(template, data)
+            },
+        )
+        .register_fn(
+            "render_named",
+            |h: &mut HandleBars, name: String, template: String, data: rhai::Map| -> RhaiRes<String> {
+                h.rhai_render_named(name, template, data)
+            },
+        );
 }
 
 #[cfg(test)]
@@ -463,8 +307,6 @@ mod tests {
             .render("{{gen_private_key \"rsa\" bits=2048}}", &data)
             .unwrap();
         assert!(result.contains("-----BEGIN PRIVATE KEY-----"));
-        // The rendered PEM must parse back intact: guards against HTML-escaping
-        // corrupting the base64 body (e.g. '=' padding turned into '&#x3D;').
         let key = openssl::pkey::PKey::private_key_from_pem(result.as_bytes()).unwrap();
         assert_eq!(key.bits(), 2048);
     }
@@ -507,7 +349,6 @@ mod tests {
     #[test]
     fn test_helper_to_decimal_octal() {
         let mut hbs = HandleBars::new();
-        // 0755 octal = 493 decimal
         let data = serde_json::json!({"v": "755"});
         let result = hbs.render("{{to_decimal v}}", &data).unwrap();
         assert_eq!(result, "493");
@@ -532,7 +373,6 @@ mod tests {
     #[test]
     fn test_helper_header_basic() {
         let mut hbs = HandleBars::new();
-        // "user:pass" → base64 → "dXNlcjpwYXNz"
         let data = serde_json::json!({"u": "user", "p": "pass"});
         let result = hbs.render("{{header_basic u p}}", &data).unwrap();
         assert_eq!(result, "Basic dXNlcjpwYXNz");
@@ -565,9 +405,6 @@ mod tests {
 
     #[test]
     fn test_resources_from_ctx_requests_only_no_limits_key() {
-        // When limits are absent from the instance config, the rendered JSON
-        // must not contain a "limits" key at all — null limits cause Kubernetes
-        // to reject the Deployment with "limit of 0".
         let mut hbs = HandleBars::new();
         let data = serde_json::json!({
             "instance": {
