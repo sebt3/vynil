@@ -184,16 +184,17 @@ pub async fn run_jukebox_scan(name: &str, args: JukeboxScanArgsRef<'_>) -> Resul
 /// trigger a partial scan on its JukeBox.
 pub async fn run_instance_scan(
     info: &InstanceKindInfo,
-    inst: &InstanceArgs,
+    namespace: &str,
+    name: &str,
     args: &InstanceScanArgs,
 ) -> Result<()> {
     let client = Client::try_default()
         .await
         .context("SCAN-ERR-01: failed to create kube client")?;
     let ar = vynil_api_resource(info.kind, info.plural);
-    let inst_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), &inst.namespace, &ar);
+    let inst_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
     let obj = inst_api
-        .get(&inst.name)
+        .get(name)
         .await
         .context("SCAN-ERR-07: failed to read instance")?;
 
@@ -223,14 +224,19 @@ pub async fn run_instance_scan(
 }
 
 /// `kubectl-vynil <kind> -n <ns> <inst> upgrade`.
-pub async fn run_upgrade(info: &InstanceKindInfo, inst: &InstanceArgs, args: &UpgradeArgs) -> Result<()> {
+pub async fn run_upgrade(
+    info: &InstanceKindInfo,
+    namespace: &str,
+    name: &str,
+    args: &UpgradeArgs,
+) -> Result<()> {
     let client = Client::try_default()
         .await
         .context("UPG-ERR-02: failed to create kube client")?;
-    let job_name = format!("{}--{}--{}", info.type_label, inst.namespace, inst.name);
+    let job_name = format!("{}--{}--{}", info.type_label, namespace, name);
 
     let ar = vynil_api_resource(info.kind, info.plural);
-    let inst_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), &inst.namespace, &ar);
+    let inst_api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
     let job_api: Api<Job> = Api::namespaced(client.clone(), &args.vynil_namespace);
 
     let old_uid = job_uid(&job_api, &job_name)
@@ -239,9 +245,9 @@ pub async fn run_upgrade(info: &InstanceKindInfo, inst: &InstanceArgs, args: &Up
 
     eprintln!(
         "annotating {} {}/{} with force-reinstall",
-        info.kind, inst.namespace, inst.name
+        info.kind, namespace, name
     );
-    set_annotation(&inst_api, &inst.name, "vynil.solidite.fr/force-reinstall", "true")
+    set_annotation(&inst_api, name, "vynil.solidite.fr/force-reinstall", "true")
         .await
         .context("UPG-ERR-04: failed to trigger reinstall")?;
 
@@ -257,7 +263,15 @@ pub async fn run_upgrade(info: &InstanceKindInfo, inst: &InstanceArgs, args: &Up
     );
 
     if args.watch {
-        watch_pods(&client, &args.vynil_namespace, info.type_label, inst, deadline).await
+        watch_pods(
+            &client,
+            &args.vynil_namespace,
+            info.type_label,
+            namespace,
+            name,
+            deadline,
+        )
+        .await
     } else {
         match wait_job_terminal(&job_api, &job_name, deadline, "UPG-ERR-06").await? {
             JobOutcome::Complete => {
@@ -275,14 +289,12 @@ async fn watch_pods(
     client: &Client,
     vynil_namespace: &str,
     type_label: &str,
-    inst: &InstanceArgs,
+    namespace: &str,
+    name: &str,
     deadline: Instant,
 ) -> Result<()> {
     let pods: Api<Pod> = Api::namespaced(client.clone(), vynil_namespace);
-    let selector = format!(
-        "type={},namespace={},instance={}",
-        type_label, inst.namespace, inst.name
-    );
+    let selector = format!("type={},namespace={},instance={}", type_label, namespace, name);
     let lp = ListParams::default().labels(&selector);
     let mut last: HashMap<String, String> = HashMap::new();
 
@@ -342,10 +354,11 @@ fn transport_mode(t: &TransportArgs) -> Result<(TransportMode, &'static str)> {
 /// `kubectl-vynil <kind> -n <ns> <inst> diagnostic`: bundle every item into a tar.gz.
 pub async fn run_diagnostic(
     info: &InstanceKindInfo,
-    inst: &InstanceArgs,
+    namespace: &str,
+    name: &str,
     args: &DiagnosticArgs,
 ) -> Result<()> {
-    let target = InstanceTarget::new(&inst.namespace, info.plural, &inst.name);
+    let target = InstanceTarget::new(namespace, info.plural, name);
     let items = resolve_items(args.items.as_deref());
     let (mode, label) = transport_mode(&args.transport)?;
 
@@ -379,11 +392,12 @@ pub async fn run_diagnostic(
 /// `kubectl-vynil <kind> -n <ns> <inst> <item>`: print a single diagnostic item to stdout.
 pub async fn run_item(
     info: &InstanceKindInfo,
-    inst: &InstanceArgs,
+    namespace: &str,
+    name: &str,
     item: &str,
     transport: &TransportArgs,
 ) -> Result<()> {
-    let target = InstanceTarget::new(&inst.namespace, info.plural, &inst.name);
+    let target = InstanceTarget::new(namespace, info.plural, name);
     let (mode, _label) = transport_mode(transport)?;
     let result = get_item(&mode, &target, item).await;
 
@@ -425,16 +439,25 @@ pub async fn run_jukebox(args: &JukeboxArgs) -> Result<()> {
     }
 }
 
-/// Top-level dispatch for the instance kinds.
+/// Top-level dispatch for the instance kinds. Resolves the namespace, defaulting
+/// to the current kubectl context namespace when `-n` is omitted.
 pub async fn run_instance(info: &InstanceKindInfo, args: &InstanceArgs) -> Result<()> {
     use crate::cli::InstanceVerb::*;
+    let namespace = match &args.namespace {
+        Some(ns) => ns.clone(),
+        None => Client::try_default()
+            .await
+            .context("INST-ERR-01: failed to create kube client")?
+            .default_namespace()
+            .to_string(),
+    };
     if let Some((item, transport)) = args.verb.as_item() {
-        return run_item(info, args, item, transport).await;
+        return run_item(info, &namespace, &args.name, item, transport).await;
     }
     match &args.verb {
-        Upgrade(a) => run_upgrade(info, args, a).await,
-        Scan(a) => run_instance_scan(info, args, a).await,
-        Diagnostic(a) => run_diagnostic(info, args, a).await,
+        Upgrade(a) => run_upgrade(info, &namespace, &args.name, a).await,
+        Scan(a) => run_instance_scan(info, &namespace, &args.name, a).await,
+        Diagnostic(a) => run_diagnostic(info, &namespace, &args.name, a).await,
         _ => unreachable!("item verbs handled above"),
     }
 }

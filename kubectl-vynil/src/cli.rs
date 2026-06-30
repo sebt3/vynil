@@ -91,9 +91,9 @@ pub struct JukeboxScanArgs {
 pub struct InstanceArgs {
     /// Instance name.
     pub name: String,
-    /// Namespace of the instance.
+    /// Namespace of the instance. Defaults to the current kubectl context namespace.
     #[arg(short, long)]
-    pub namespace: String,
+    pub namespace: Option<String>,
     #[command(subcommand)]
     pub verb: InstanceVerb,
 }
@@ -247,7 +247,7 @@ mod tests {
         let cli = Cli::try_parse_from(["kubectl-vynil", "vsi", "-n", "toto", "titi", "upgrade"]).unwrap();
         match cli.command {
             Commands::Vsi(a) => {
-                assert_eq!(a.namespace, "toto");
+                assert_eq!(a.namespace.as_deref(), Some("toto"));
                 assert_eq!(a.name, "titi");
                 assert!(matches!(a.verb, InstanceVerb::Upgrade(_)));
             }
