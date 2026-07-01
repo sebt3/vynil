@@ -122,6 +122,18 @@ pub trait InstanceKind:
     fn record_reconcile_failure(&self, ctx: &Context, error: &Error);
 }
 
+// ── Namespace helper ──────────────────────────────────────────────────────────
+
+/// Returns the namespace of a namespaced resource.
+///
+/// `NamespaceResourceScope` guarantees the API server sets `metadata.namespace`
+/// on every object served by a namespaced watch. The `Option` in kube-rs's API
+/// exists only because the crate unifies namespaced and cluster-wide types; for
+/// a type bound to `NamespaceResourceScope` this value is always `Some`.
+fn ns<T: kube::ResourceExt>(inst: &T) -> String {
+    inst.namespace().unwrap_or_default()
+}
+
 // ── Shared recommendation helpers ─────────────────────────────────────────────
 
 /// Builds the CRD and system-service recommendation lists that are common
@@ -307,7 +319,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     tracing::debug!(
         "Reconcilling {}Instance {}/{}",
         T::type_name(),
-        inst.namespace().unwrap(),
+        ns(inst),
         inst.name_any()
     );
     ctx.diagnostics.write().await.last_event = Utc::now();
@@ -322,7 +334,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
         tracing::info!(
             "{}Instance {}/{} is suspended, skipping reconciliation",
             T::type_name(),
-            inst.namespace().unwrap(),
+            ns(inst),
             inst.name_any()
         );
         return Ok(Action::requeue(Duration::from_secs(15 * 60)));
@@ -331,7 +343,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     let mut hbs = ctx.renderer.clone();
     let client = ctx.client.clone();
     let my_ns = ctx.client.default_namespace();
-    let ns = inst.namespace().unwrap();
+    let ns = ns(inst);
     let job_name = format!("{}--{}--{}", T::type_name(), ns, inst.name_any());
     let current_version = inst.current_tag();
 
@@ -456,7 +468,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
         .annotations()
         .contains_key("vynil.solidite.fr/force-reinstall")
     {
-        let api = Api::<T>::namespaced(client.clone(), &inst.namespace().unwrap());
+        let api = Api::<T>::namespaced(client.clone(), &ns);
         let patch = Patch::Json::<()>(
             serde_json::from_value(serde_json::json!([
                 {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-reinstall"}
@@ -467,7 +479,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
             .await
             .map_err(Error::KubeError)?;
         let job = job_api.get_metadata_opt(&job_name).await;
-        if job.is_ok() && job.unwrap().is_some() {
+        if matches!(job, Ok(Some(_))) {
             delete_job_and_wait(&job_api, &job_name).await?;
         }
     }
@@ -487,7 +499,7 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
     let mut hbs = ctx.renderer.clone();
     let client = ctx.client.clone();
     let my_ns = ctx.client.default_namespace();
-    let ns = inst.namespace().unwrap();
+    let ns = ns(inst);
     let job_name = format!("{}--{}--{}", T::type_name(), ns, inst.name_any());
     let current_version = inst.current_tag();
 
@@ -581,7 +593,7 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
     // ── Delete the install job ────────────────────────────────────────────
     let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
     let job = job_api.get_metadata_opt(&job_name).await;
-    if job.is_ok() && job.unwrap().is_some() {
+    if matches!(job, Ok(Some(_))) {
         delete_job_and_wait(&job_api, &job_name).await?;
     }
 

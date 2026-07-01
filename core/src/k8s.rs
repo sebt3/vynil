@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use crate::{Error, Result, RhaiRes, rhai_err};
+use crate::{Error, Result, RhaiRes, rhai_err, rhai_err_str};
 use k8s_openapi::api::{
     apps::v1::{DaemonSet, Deployment, StatefulSet},
     batch::v1::Job,
@@ -168,7 +168,10 @@ impl K8sObject {
 
     pub fn rhai_wait_deleted(&mut self, timeout: i64) -> RhaiRes<()> {
         let name = self.obj.name_any();
-        let uid = self.obj.uid().unwrap();
+        let uid = self
+            .obj
+            .uid()
+            .ok_or_else(|| rhai_err_str(format!("cannot wait for deletion of {name}: uid is missing")))?;
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let cond = await_condition(self.api.clone(), &name, conditions::is_deleted(&uid));
@@ -202,50 +205,17 @@ impl K8sObject {
 
     pub fn is_condition(cond: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj
-                && dynobj.data.is_object()
-                && dynobj
-                    .data
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .collect::<Vec<&String>>()
-                    .contains(&&"status".to_string())
-            {
-                let status = dynobj.data.as_object().unwrap()["status"].clone();
-                if status.is_object()
-                    && status
-                        .as_object()
-                        .unwrap()
-                        .keys()
-                        .collect::<Vec<&String>>()
-                        .contains(&&"conditions".to_string())
-                {
-                    let conditions = status.as_object().unwrap()["conditions"].clone();
-                    if conditions.is_array()
-                        && conditions.as_array().unwrap().iter().any(|c| {
-                            c.is_object()
-                                && c.as_object()
-                                    .unwrap()
-                                    .keys()
-                                    .collect::<Vec<&String>>()
-                                    .contains(&&"type".to_string())
-                                && c.as_object().unwrap()["type"].is_string()
-                                && c.as_object().unwrap()["type"].as_str().unwrap() == cond
-                                && c.as_object()
-                                    .unwrap()
-                                    .keys()
-                                    .collect::<Vec<&String>>()
-                                    .contains(&&"status".to_string())
-                                && c.as_object().unwrap()["status"].is_string()
-                                && c.as_object().unwrap()["status"].as_str().unwrap() == "True"
-                        })
-                    {
-                        return true;
-                    }
-                }
-            }
-            false
+            let Some(conditions) = obj
+                .and_then(|o| o.data.get("status"))
+                .and_then(|s| s.get("conditions"))
+                .and_then(|c| c.as_array())
+            else {
+                return false;
+            };
+            conditions.iter().any(|c| {
+                c.get("type").and_then(|t| t.as_str()) == Some(cond.as_str())
+                    && c.get("status").and_then(|s| s.as_str()) == Some("True")
+            })
         }
     }
 
@@ -267,94 +237,29 @@ impl K8sObject {
 
     pub fn is_status(prop: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj
-                && dynobj.data.is_object()
-                && dynobj
-                    .data
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .collect::<Vec<&String>>()
-                    .contains(&&"status".to_string())
-            {
-                let status = dynobj.data.as_object().unwrap()["status"].clone();
-                if status.is_object()
-                    && status
-                        .as_object()
-                        .unwrap()
-                        .keys()
-                        .collect::<Vec<&String>>()
-                        .contains(&&prop)
-                {
-                    let conditions = status.as_object().unwrap()[&prop].clone();
-                    if conditions.is_boolean() && conditions.as_bool().unwrap() {
-                        return true;
-                    }
-                }
-            }
-            false
+            obj.and_then(|o| o.data.get("status"))
+                .and_then(|s| s.get(prop.as_str()))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
         }
     }
 
     pub fn have_status(prop: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj
-                && dynobj.data.is_object()
-                && dynobj
-                    .data
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .collect::<Vec<&String>>()
-                    .contains(&&"status".to_string())
-            {
-                let status = dynobj.data.as_object().unwrap()["status"].clone();
-                if status.is_object()
-                    && status
-                        .as_object()
-                        .unwrap()
-                        .keys()
-                        .collect::<Vec<&String>>()
-                        .contains(&&prop)
-                {
-                    let conditions = status.as_object().unwrap()[&prop].clone();
-                    if !conditions.is_null() {
-                        return true;
-                    }
-                }
-            }
-            false
+            obj.and_then(|o| o.data.get("status"))
+                .and_then(|s| s.get(prop.as_str()))
+                .map(|v| !v.is_null())
+                .unwrap_or(false)
         }
     }
 
     pub fn have_status_value(prop: String, value: String) -> impl Condition<DynamicObject> {
         move |obj: Option<&DynamicObject>| {
-            if let Some(dynobj) = &obj
-                && dynobj.data.is_object()
-                && dynobj
-                    .data
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .collect::<Vec<&String>>()
-                    .contains(&&"status".to_string())
-            {
-                let status = dynobj.data.as_object().unwrap()["status"].clone();
-                if status.is_object()
-                    && status
-                        .as_object()
-                        .unwrap()
-                        .keys()
-                        .collect::<Vec<&String>>()
-                        .contains(&&prop)
-                {
-                    let conditions = status.as_object().unwrap()[&prop].clone();
-                    if conditions.is_string() {
-                        return conditions.as_str().unwrap() == value;
-                    }
-                }
-            }
-            false
+            obj.and_then(|o| o.data.get("status"))
+                .and_then(|s| s.get(prop.as_str()))
+                .and_then(|v| v.as_str())
+                .map(|v| v == value.as_str())
+                .unwrap_or(false)
         }
     }
 
@@ -674,9 +579,12 @@ impl K8sGeneric {
     }
 
     pub fn rhai_get_obj(&mut self, name: String) -> RhaiRes<K8sObject> {
+        let Some(api) = self.api.clone() else {
+            return Err(rhai_err(Error::UnsupportedMethod));
+        };
         let res = self.get_meta(&name).map_err(rhai_err)?;
         Ok(K8sObject {
-            api: self.api.clone().unwrap(),
+            api,
             obj: res,
             kind: self.kind.clone(),
         })
@@ -703,22 +611,47 @@ impl K8sGeneric {
 
     fn inject_labels_and_owner(
         &self,
-        mut handle: serde_json::Map<String, serde_json::Value>,
+        handle: serde_json::Map<String, serde_json::Value>,
     ) -> serde_json::Map<String, serde_json::Value> {
-        if let Some(labels) = call_get_labels() {
-            if !handle["metadata"].as_object().unwrap().contains_key("labels") {
-                handle["metadata"]
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("labels".to_string(), json!({}));
-            } else if !handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
-                handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
-                handle["metadata"]
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("labels".to_string(), json!({}));
-            }
-            for (k, v) in labels.as_object().unwrap() {
+        prepare_handle(
+            handle,
+            call_get_labels(),
+            call_get_owner(),
+            call_get_owner_ns(),
+            self.ns.clone(),
+            self.scope == Scope::Namespaced,
+        )
+    }
+}
+
+// ── Pure helper — testable without a live K8s client ─────────────────────────
+
+fn prepare_handle(
+    mut handle: serde_json::Map<String, serde_json::Value>,
+    labels: Option<serde_json::Value>,
+    owner: Option<serde_json::Value>,
+    owner_ns: Option<String>,
+    my_ns: Option<String>,
+    is_namespaced: bool,
+) -> serde_json::Map<String, serde_json::Value> {
+    if !handle.contains_key("metadata") || !handle["metadata"].is_object() {
+        handle.insert("metadata".to_string(), json!({}));
+    }
+    if let Some(labels) = labels {
+        if !handle["metadata"].as_object().unwrap().contains_key("labels") {
+            handle["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .insert("labels".to_string(), json!({}));
+        } else if !handle["metadata"].as_object_mut().unwrap()["labels"].is_object() {
+            handle["metadata"].as_object_mut().unwrap().remove_entry("labels");
+            handle["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .insert("labels".to_string(), json!({}));
+        }
+        if let Some(label_map) = labels.as_object() {
+            for (k, v) in label_map {
                 if !handle["metadata"].as_object_mut().unwrap()["labels"]
                     .as_object_mut()
                     .unwrap()
@@ -732,31 +665,33 @@ impl K8sGeneric {
                 }
             }
         }
-        if self.scope == Scope::Namespaced
-            && let Some(owner) = call_get_owner()
-            && let Some(ns) = call_get_owner_ns()
-            && let Some(mine) = self.ns.clone()
-            && ns == mine
-        {
-            if handle["metadata"]
-                .as_object()
-                .unwrap()
-                .contains_key("ownerReferences")
-            {
-                handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(owner);
-            } else {
-                handle["metadata"]
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("ownerReferences".to_string(), vec![owner].into());
-            }
-        }
-        handle
     }
+    if is_namespaced
+        && let Some(owner) = owner
+        && let Some(ns) = owner_ns
+        && let Some(mine) = my_ns
+        && ns == mine
+    {
+        if handle["metadata"]
+            .as_object()
+            .unwrap()
+            .contains_key("ownerReferences")
+        {
+            handle["metadata"].as_object_mut().unwrap()["ownerReferences"]
+                .as_array_mut()
+                .unwrap()
+                .push(owner);
+        } else {
+            handle["metadata"]
+                .as_object_mut()
+                .unwrap()
+                .insert("ownerReferences".to_string(), vec![owner].into());
+        }
+    }
+    handle
+}
 
+impl K8sGeneric {
     pub fn create(&self, data: serde_json::Map<String, serde_json::Value>) -> Result<DynamicObject> {
         if let Some(api) = self.api.clone() {
             let handle = self.inject_labels_and_owner(data);
@@ -819,11 +754,7 @@ impl K8sGeneric {
         patch_data: serde_json::Map<String, serde_json::Value>,
     ) -> Result<DynamicObject> {
         if let Some(api) = self.api.clone() {
-            let mut handle = patch_data;
-            if !handle.contains_key("metadata") || !handle["metadata"].is_object() {
-                handle.insert("metadata".to_string(), json!({}));
-            }
-            let handle = self.inject_labels_and_owner(handle);
+            let handle = self.inject_labels_and_owner(patch_data);
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
                     api.patch(
@@ -858,11 +789,7 @@ impl K8sGeneric {
                 .and_then(|k| k.as_str())
                 .unwrap_or("")
                 .to_string();
-            let mut handle = patch_data;
-            if !handle.contains_key("metadata") || !handle["metadata"].is_object() {
-                handle.insert("metadata".to_string(), json!({}));
-            }
-            let handle = self.inject_labels_and_owner(handle);
+            let handle = self.inject_labels_and_owner(patch_data);
             let api_for_get = api.clone();
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
@@ -1461,5 +1388,219 @@ mod tests {
     fn test_job_is_completed_still_running() {
         let data = serde_json::json!({"status": {"active": 1, "succeeded": 0}});
         assert!(!job_is_completed(&data));
+    }
+
+    // ── prepare_handle ────────────────────────────────────────────────────────
+
+    fn map(v: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        match v {
+            serde_json::Value::Object(m) => m,
+            _ => panic!("expected object"),
+        }
+    }
+
+    #[test]
+    fn prepare_handle_inserts_metadata_when_absent() {
+        let input = map(serde_json::json!({"kind": "ConfigMap", "spec": {}}));
+        let out = prepare_handle(input, None, None, None, None, false);
+        assert!(out.contains_key("metadata"), "metadata must be added");
+        assert!(out["metadata"].is_object());
+    }
+
+    #[test]
+    fn prepare_handle_inserts_metadata_when_not_object() {
+        let input = map(serde_json::json!({"metadata": "bad-string", "kind": "ConfigMap"}));
+        let out = prepare_handle(input, None, None, None, None, false);
+        assert!(
+            out["metadata"].is_object(),
+            "non-object metadata must be replaced with {{}}"
+        );
+    }
+
+    #[test]
+    fn prepare_handle_preserves_existing_metadata() {
+        let input = map(serde_json::json!({"metadata": {"name": "foo"}, "kind": "ConfigMap"}));
+        let out = prepare_handle(input, None, None, None, None, false);
+        assert_eq!(out["metadata"]["name"], "foo");
+    }
+
+    #[test]
+    fn prepare_handle_injects_labels_when_missing() {
+        let input = map(serde_json::json!({"kind": "ConfigMap"}));
+        let labels = serde_json::json!({"app": "myapp", "tier": "backend"});
+        let out = prepare_handle(input, Some(labels), None, None, None, false);
+        assert_eq!(out["metadata"]["labels"]["app"], "myapp");
+        assert_eq!(out["metadata"]["labels"]["tier"], "backend");
+    }
+
+    #[test]
+    fn prepare_handle_labels_do_not_override_existing() {
+        let input = map(serde_json::json!({"metadata": {"labels": {"app": "existing"}}}));
+        let labels = serde_json::json!({"app": "override-attempt", "extra": "v"});
+        let out = prepare_handle(input, Some(labels), None, None, None, false);
+        assert_eq!(
+            out["metadata"]["labels"]["app"], "existing",
+            "existing label must not be overridden"
+        );
+        assert_eq!(
+            out["metadata"]["labels"]["extra"], "v",
+            "new label must be injected"
+        );
+    }
+
+    #[test]
+    fn prepare_handle_owner_ref_injected_when_same_ns() {
+        let input = map(serde_json::json!({"kind": "ConfigMap"}));
+        let owner = serde_json::json!({"apiVersion": "v1", "kind": "Pod", "name": "owner", "uid": "abc"});
+        let out = prepare_handle(
+            input,
+            None,
+            Some(owner.clone()),
+            Some("mynamespace".to_string()),
+            Some("mynamespace".to_string()),
+            true,
+        );
+        let refs = out["metadata"]["ownerReferences"].as_array().unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0]["uid"], "abc");
+    }
+
+    #[test]
+    fn prepare_handle_owner_ref_not_injected_when_different_ns() {
+        let input = map(serde_json::json!({"kind": "ConfigMap"}));
+        let owner = serde_json::json!({"apiVersion": "v1", "kind": "Pod", "name": "owner", "uid": "abc"});
+        let out = prepare_handle(
+            input,
+            None,
+            Some(owner),
+            Some("other-ns".to_string()),
+            Some("mynamespace".to_string()),
+            true,
+        );
+        assert!(
+            out["metadata"]
+                .as_object()
+                .unwrap()
+                .get("ownerReferences")
+                .is_none()
+        );
+    }
+
+    // ── Condition closures ────────────────────────────────────────────────────
+
+    fn dynobj(extra: serde_json::Value) -> DynamicObject {
+        let mut base = serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Foo",
+            "metadata": {"name": "test"}
+        });
+        if let (Some(obj), serde_json::Value::Object(fields)) = (base.as_object_mut(), extra) {
+            obj.extend(fields);
+        }
+        serde_json::from_value(base).unwrap()
+    }
+
+    #[test]
+    fn is_condition_matches_ready_true() {
+        let obj = dynobj(serde_json::json!({
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]}
+        }));
+        assert!(K8sObject::is_condition("Ready".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn is_condition_no_match_wrong_type() {
+        let obj = dynobj(serde_json::json!({
+            "status": {"conditions": [{"type": "Available", "status": "True"}]}
+        }));
+        assert!(!K8sObject::is_condition("Ready".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn is_condition_no_match_status_false() {
+        let obj = dynobj(serde_json::json!({
+            "status": {"conditions": [{"type": "Ready", "status": "False"}]}
+        }));
+        assert!(!K8sObject::is_condition("Ready".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn is_condition_missing_conditions_returns_false() {
+        let obj = dynobj(serde_json::json!({"status": {}}));
+        assert!(!K8sObject::is_condition("Ready".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn is_condition_missing_status_returns_false() {
+        let obj = dynobj(serde_json::json!({}));
+        assert!(!K8sObject::is_condition("Ready".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn is_condition_on_none_returns_false() {
+        assert!(!K8sObject::is_condition("Ready".to_string()).matches_object(None));
+    }
+
+    #[test]
+    fn is_status_true_boolean() {
+        let obj = dynobj(serde_json::json!({"status": {"healthy": true}}));
+        assert!(K8sObject::is_status("healthy".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn is_status_false_boolean() {
+        let obj = dynobj(serde_json::json!({"status": {"healthy": false}}));
+        assert!(!K8sObject::is_status("healthy".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn is_status_missing_prop() {
+        let obj = dynobj(serde_json::json!({"status": {}}));
+        assert!(!K8sObject::is_status("healthy".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn have_status_non_null() {
+        let obj = dynobj(serde_json::json!({"status": {"phase": "Running"}}));
+        assert!(K8sObject::have_status("phase".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn have_status_null_value() {
+        let obj = dynobj(serde_json::json!({"status": {"phase": null}}));
+        assert!(!K8sObject::have_status("phase".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn have_status_missing_prop() {
+        let obj = dynobj(serde_json::json!({"status": {}}));
+        assert!(!K8sObject::have_status("phase".to_string()).matches_object(Some(&obj)));
+    }
+
+    #[test]
+    fn have_status_value_matches() {
+        let obj = dynobj(serde_json::json!({"status": {"phase": "Running"}}));
+        assert!(
+            K8sObject::have_status_value("phase".to_string(), "Running".to_string())
+                .matches_object(Some(&obj))
+        );
+    }
+
+    #[test]
+    fn have_status_value_no_match() {
+        let obj = dynobj(serde_json::json!({"status": {"phase": "Pending"}}));
+        assert!(
+            !K8sObject::have_status_value("phase".to_string(), "Running".to_string())
+                .matches_object(Some(&obj))
+        );
+    }
+
+    #[test]
+    fn have_status_value_missing_prop() {
+        let obj = dynobj(serde_json::json!({"status": {}}));
+        assert!(
+            !K8sObject::have_status_value("phase".to_string(), "Running".to_string())
+                .matches_object(Some(&obj))
+        );
     }
 }
