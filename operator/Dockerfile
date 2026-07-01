@@ -7,7 +7,7 @@ COPY Cargo.lock .
 # hadolint ignore=DL3008,DL3015
 RUN mkdir -p operator/src common/src core/src \
  && echo 'fn main() { println!("Dummy") }' > operator/src/main.rs \
- && touch common/src/lib.rs operator/src/lib.rs \
+ && touch common/src/lib.rs core/src/lib.rs operator/src/lib.rs \
  && DEBIAN_FRONTEND=noninteractive apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y install ${BUILD_DEPS}
 COPY operator/parent.toml ./Cargo.toml
@@ -22,7 +22,7 @@ COPY core core/
 COPY common common/
 COPY operator operator/
 # Update the crates entrypoints so cargo is aware these should rebuild
-RUN touch common/src/lib.rs operator/src/lib.rs operator/src/main.rs \
+RUN touch common/src/lib.rs core/src/lib.rs operator/src/lib.rs operator/src/main.rs \
  && cargo build -r --bin operator \
  && strip target/release/operator
 

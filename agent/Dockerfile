@@ -7,7 +7,7 @@ COPY Cargo.lock .
 # hadolint ignore=DL3008,DL3015
 RUN mkdir -p common/src agent/src core/src \
  && echo 'fn main() { println!("Dummy") }' > agent/src/main.rs \
- && touch common/src/lib.rs agent/src/lib.rs \
+ && touch common/src/lib.rs core/src/lib.rs agent/src/lib.rs \
  && DEBIAN_FRONTEND=noninteractive apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y install ${BUILD_DEPS}
 COPY agent/parent.toml ./Cargo.toml
@@ -23,7 +23,7 @@ COPY core core/
 COPY common common/
 COPY agent/src agent/src/
 # Update the crates entrypoints so cargo is aware these should rebuild
-RUN touch common/src/lib.rs agent/src/lib.rs agent/src/main.rs \
+RUN touch common/src/lib.rs core/src/lib.rs agent/src/lib.rs agent/src/main.rs \
  && cargo build -r --bin agent \
  && strip target/release/agent
 # Then create the intermediary image with run-time dependencies installed
