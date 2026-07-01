@@ -19,14 +19,29 @@ vynil/
 
 ## Components
 
+### vynil-core (library)
+
+The generic, vynil-agnostic toolbox, extracted from `common` so it can be reused outside vynil
+(kuberest, kydah). Developed in-tree (`core/`) as a path dependency of `common` (phase T0); to be
+published to crates.io later (phase T2). See `core/README.md`.
+
+- **Rhai engine**: `Script` (`new_bare`) + generic helpers (datetime, hashes, password, ed25519,
+  semver, glob, shell, serde-YAML, base64/json, file I/O)
+- **Handlebars engine**: `HandleBars` (generic helpers only) + `engine_mut()` extension hook
+- **Handlers**: HTTP (always), and behind features: `k8s` (generic handlers + mocks), `oci`, `s3`
+- **Own `Error`/`Result`/`RhaiRes`**; feature-gated variants for k8s/oci
+
 ### common (library)
 
-Contains all types shared between the operator and the agent:
+Contains all vynil-specific types shared between the operator and the agent, built **on top of
+`vynil-core`** (newtypes `Script`/`HandleBars` with `Deref`, re-exporting the generic modules):
 
 - **Kubernetes CRDs**: definitions of the four custom resources
-- **Rhai engine**: scripting language integration (40+ exposed functions)
-- **Handlebars engine**: template rendering (30+ helpers)
-- **Handlers**: OCI, HTTP, YAML, passwords, semver, hashes
+- **Rhai engine**: vynil layer over `vynil-core::Script` — registers `vynil_owner`, the package and
+  instance/jukebox types, and the order-preserving `yaml_*_ordered` (`YamlDoc`)
+- **Handlebars engine**: vynil layer over `vynil-core::HandleBars` — registers the context-aware
+  helpers (`selector_from_ctx`, `labels_from_ctx`, `image_from_ctx`, …) and the rhai `new_hbs` binding
+- **Handlers**: vynil package model, OCI/k8s mocks for instances and jukebox
 - **Macros**: boilerplate code generation for status conditions
 
 ### operator (controller)
@@ -241,20 +256,24 @@ Key trait methods:
 
 ## YAML strategy
 
-| Usage | Library | Key order |
-|---|---|---|
-| All Rust code (serialization/deserialization) | `serde_yaml` | Alphabetical |
-| `yaml_decode_ordered` / `yaml_encode_ordered` (Rhai) | `rust-yaml` | Preserved |
+| Usage | Library | Key order | Lives in |
+|---|---|---|---|
+| All Rust code (serialization/deserialization) | `serde_yaml` | Alphabetical | `vynil-core` (`core/src/yaml.rs`) |
+| `yaml_decode_ordered` / `yaml_encode_ordered` (Rhai) | `rust-yaml` | Preserved | `common` (`yamlhandler.rs`) |
 
-The `YamlError(String)` type in `common/src/lib.rs` wraps both libraries.
-`rust-yaml` is used only in `update.rhai` to avoid reordering the keys of `package.yaml`.
+The serde-YAML helpers live in `vynil-core`; the order-preserving `YamlDoc` (rust-yaml) stays in
+`common` and is registered by `yaml_ordered_rhai_register`. `rust-yaml` is used only in `update.rhai`
+to avoid reordering the keys of `package.yaml`. The `YamlError(String)` variant exists in both
+`vynil_core::Error` and `common::Error` (the latter wrapping the former via `Core(..)`).
 
 ---
 
 ## Rhai scripts
 
 Rhai scripts are embedded in package OCI images and executed by the agent.
-The Rhai engine is configured in `common/src/rhaihandler.rs`.
+The generic engine is built by `vynil_core::Script::new_bare`; `common/src/rhaihandler.rs` wraps it
+(newtype + `Deref`) and adds the vynil layer through the four constructors
+(`new_core`/`new_file_scan`/`new`/`new_mock`).
 
 Reusable script library (`agent/scripts/lib/`):
 - `secret_dockerconfigjson.rhai` — imagePull secret reading
@@ -279,6 +298,13 @@ Directory: `operator/templates/`
 
 Variables systematically available in context: `tag`, `image`, `registry`,
 `namespace`, `name`, `job_name`, `package_type`, `package_action`, `digest`, `ctrl_values`.
+
+The generic helpers live in `vynil_core::HandleBars`; the context-aware helpers
+(`selector_from_ctx`, `labels_from_ctx`, `ctx_have_crd`, `have_system_service`,
+`have_tenant_service`, `image_from_ctx`, `resources_from_ctx`) and `render_template`/`render_file`
+are registered by `common`. The rhai `new_hbs()` binding builds the **full** `common::HandleBars`
+so that scripts calling `new_hbs().render_*(…, context)` (e.g. `install_crds`, `template_crds`,
+`schedule_backup`) keep access to the context-aware helpers.
 
 ---
 
