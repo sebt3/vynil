@@ -43,7 +43,7 @@ kube = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
 futures = { version = "0.3", optional = true }
 oci-client = { version = "0.15.0", optional = true }
-object_store = { version = "0.11", features = ["aws"], optional = true }
+object_store = { version = "0.14", features = ["aws"], optional = true }
 flate2 = "1.1.4"
 tar = "0.4.46"
 

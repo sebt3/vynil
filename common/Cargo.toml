@@ -26,7 +26,7 @@ handlebars = { version = "6.2.0", features = ["script_helper", "string_helpers"]
 handlebars_misc_helpers = { version = "0.17.0", features = ["string", "json", "jsonnet", "regex", "uuid"] }
 rhai = { version = "1.20.0", features = ["sync", "serde", "internals"] }
 reqwest = { version = "0.12.24", features = ["rustls-tls"] }
-object_store = { version = "0.11", features = ["aws"] }
+object_store = { version = "0.14", features = ["aws"] }
 futures = "0.3"
 rand = "0.10.1"
 lazy_static = "1.5.0"
