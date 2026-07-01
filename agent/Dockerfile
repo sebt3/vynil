@@ -5,19 +5,21 @@ ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential g++"
 WORKDIR /usr/src/agent
 COPY Cargo.lock .
 # hadolint ignore=DL3008,DL3015
-RUN mkdir -p common/src agent/src \
+RUN mkdir -p common/src agent/src core/src \
  && echo 'fn main() { println!("Dummy") }' > agent/src/main.rs \
  && touch common/src/lib.rs agent/src/lib.rs \
  && DEBIAN_FRONTEND=noninteractive apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get -y install ${BUILD_DEPS}
 COPY agent/parent.toml ./Cargo.toml
 COPY src src/
+COPY core/Cargo.toml core/Cargo.toml
 COPY common/Cargo.toml common/Cargo.toml
 COPY agent/Cargo.toml agent/Cargo.toml
 
 # Build the deps for caching purpose
 RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build -r --bin agent
 # Get our sources
+COPY core core/
 COPY common common/
 COPY agent/src agent/src/
 # Update the crates entrypoints so cargo is aware these should rebuild
