@@ -196,7 +196,7 @@ impl Reconciler for JukeBox {
         let job_name = format!("scan-{}", self.name_any());
         let cron_api: Api<CronJob> = Api::namespaced(client.clone(), ns);
         let cron = cron_api.get_metadata_opt(&job_name).await;
-        if cron.is_ok() && cron.unwrap().is_some() {
+        if matches!(cron, Ok(Some(_))) {
             match cron_api.delete(&job_name, &DeleteParams::foreground()).await {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Deleting CronJob {} failed with: {e}", &job_name),
@@ -204,7 +204,7 @@ impl Reconciler for JukeBox {
         }
         let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
         let job = job_api.get_metadata_opt(&job_name).await;
-        if job.is_ok() && job.unwrap().is_some() {
+        if matches!(job, Ok(Some(_))) {
             match job_api.delete(&job_name, &DeleteParams::foreground()).await {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
