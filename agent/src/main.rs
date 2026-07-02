@@ -48,6 +48,8 @@ async fn main() {
     // paniquerait. On installe explicitement le provider ring.
     rustls::crypto::ring::default_provider().install_default().ok();
 
+    common::context::wire_core_k8s();
+
     env_logger::init_from_env(
         env_logger::Env::default()
             .filter_or("LOG_LEVEL", "info")

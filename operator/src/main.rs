@@ -59,6 +59,7 @@ async fn async_main() -> Result<()> {
     tracing::subscriber::set_global_default(collector).unwrap();
 
     common::context::init_k8s();
+    common::context::wire_core_k8s();
     // Start kubernetes controller
     let (manager, controller_jbs, controller_tnts, controller_stms, controller_svcs) = Manager::new().await;
 

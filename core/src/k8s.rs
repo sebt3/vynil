@@ -42,6 +42,15 @@ pub fn set_get_owner_ns(f: Box<dyn Fn() -> Option<String> + Send + Sync>) {
     GET_OWNER_NS.set(f).ok();
 }
 
+/// True if all 5 context accessors have been injected (see common::context::wire_core_k8s).
+pub fn context_is_wired() -> bool {
+    GET_CLIENT.get().is_some()
+        && GET_CLIENT_NAME.get().is_some()
+        && GET_LABELS.get().is_some()
+        && GET_OWNER.get().is_some()
+        && GET_OWNER_NS.get().is_some()
+}
+
 fn call_get_client_name() -> String {
     GET_CLIENT_NAME
         .get()
