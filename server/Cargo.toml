@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 common = { path = "../common" }
 tokio = { version = "1", features = ["full"] }
-axum = "0.7"
+axum = "0.8"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
