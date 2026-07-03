@@ -7,6 +7,10 @@ use serde::Serialize;
 #[derive(Parser, Debug)]
 #[command(name = "kubectl-vynil", version, about, long_about = None)]
 pub struct Cli {
+    /// Name of the kubeconfig context to use (like `kubectl --context`).
+    /// Defaults to the current context. Ignored in `--server-url` direct mode.
+    #[arg(long, global = true)]
+    pub context: Option<String>,
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -227,6 +231,45 @@ mod tests {
             }
             _ => panic!("expected jukebox"),
         }
+    }
+
+    #[test]
+    fn context_defaults_to_none() {
+        let cli = Cli::try_parse_from(["kubectl-vynil", "vsi", "-n", "ns", "x", "upgrade"]).unwrap();
+        assert_eq!(cli.context, None);
+    }
+
+    #[test]
+    fn context_flag_parses_before_subcommand() {
+        let cli = Cli::try_parse_from([
+            "kubectl-vynil",
+            "--context",
+            "prod",
+            "vsi",
+            "-n",
+            "ns",
+            "x",
+            "upgrade",
+        ])
+        .unwrap();
+        assert_eq!(cli.context.as_deref(), Some("prod"));
+    }
+
+    #[test]
+    fn context_flag_parses_after_subcommand() {
+        // Global flag: accepted anywhere on the command line, like `kubectl --context`.
+        let cli = Cli::try_parse_from([
+            "kubectl-vynil",
+            "vsi",
+            "-n",
+            "ns",
+            "x",
+            "upgrade",
+            "--context",
+            "staging",
+        ])
+        .unwrap();
+        assert_eq!(cli.context.as_deref(), Some("staging"));
     }
 
     #[test]

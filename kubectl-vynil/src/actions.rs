@@ -26,7 +26,7 @@ use crate::{
         JukeboxVerb, TransportArgs, UpgradeArgs,
     },
     items::resolve_items,
-    transport::{TransportMode, get_item, read_sa_token},
+    transport::{TransportMode, get_item, make_client, read_sa_token},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -173,8 +173,8 @@ async fn scan_jukebox_and_wait(
 }
 
 /// `kubectl-vynil <box> scan [<cat>[/<pkg>]]`.
-pub async fn run_jukebox_scan(name: &str, args: JukeboxScanArgsRef<'_>) -> Result<()> {
-    let client = Client::try_default()
+pub async fn run_jukebox_scan(name: &str, args: JukeboxScanArgsRef<'_>, context: Option<&str>) -> Result<()> {
+    let client = make_client(context)
         .await
         .context("SCAN-ERR-01: failed to create kube client")?;
     scan_jukebox_and_wait(&client, name, args.package, args.vynil_namespace, args.timeout).await
@@ -187,8 +187,9 @@ pub async fn run_instance_scan(
     namespace: &str,
     name: &str,
     args: &InstanceScanArgs,
+    context: Option<&str>,
 ) -> Result<()> {
-    let client = Client::try_default()
+    let client = make_client(context)
         .await
         .context("SCAN-ERR-01: failed to create kube client")?;
     let ar = vynil_api_resource(info.kind, info.plural);
@@ -229,8 +230,9 @@ pub async fn run_upgrade(
     namespace: &str,
     name: &str,
     args: &UpgradeArgs,
+    context: Option<&str>,
 ) -> Result<()> {
-    let client = Client::try_default()
+    let client = make_client(context)
         .await
         .context("UPG-ERR-02: failed to create kube client")?;
     let job_name = format!("{}--{}--{}", info.type_label, namespace, name);
@@ -330,7 +332,9 @@ async fn watch_pods(
 // ── Diagnostic transport ──────────────────────────────────────────────────────
 
 /// Builds the transport mode from the shared transport flags.
-fn transport_mode(t: &TransportArgs) -> Result<(TransportMode, &'static str)> {
+///
+/// `context` only applies to the aggregation path; direct mode targets the URL as-is.
+fn transport_mode(t: &TransportArgs, context: Option<&str>) -> Result<(TransportMode, &'static str)> {
     match &t.server_url {
         Some(url) => {
             let token = match &t.token {
@@ -347,7 +351,12 @@ fn transport_mode(t: &TransportArgs) -> Result<(TransportMode, &'static str)> {
                 "direct",
             ))
         }
-        None => Ok((TransportMode::Aggregation, "aggregation")),
+        None => Ok((
+            TransportMode::Aggregation {
+                context: context.map(String::from),
+            },
+            "aggregation",
+        )),
     }
 }
 
@@ -357,10 +366,11 @@ pub async fn run_diagnostic(
     namespace: &str,
     name: &str,
     args: &DiagnosticArgs,
+    context: Option<&str>,
 ) -> Result<()> {
     let target = InstanceTarget::new(namespace, info.plural, name);
     let items = resolve_items(args.items.as_deref());
-    let (mode, label) = transport_mode(&args.transport)?;
+    let (mode, label) = transport_mode(&args.transport, context)?;
 
     let mut collected = Vec::new();
     for item in &items {
@@ -396,9 +406,10 @@ pub async fn run_item(
     name: &str,
     item: &str,
     transport: &TransportArgs,
+    context: Option<&str>,
 ) -> Result<()> {
     let target = InstanceTarget::new(namespace, info.plural, name);
-    let (mode, _label) = transport_mode(transport)?;
+    let (mode, _label) = transport_mode(transport, context)?;
     let result = get_item(&mode, &target, item).await;
 
     if let Some((distinct, occurrences)) = result.redactions {
@@ -426,38 +437,42 @@ pub struct JukeboxScanArgsRef<'a> {
 }
 
 /// Top-level dispatch for `kubectl-vynil jukebox …`.
-pub async fn run_jukebox(args: &JukeboxArgs) -> Result<()> {
+pub async fn run_jukebox(args: &JukeboxArgs, context: Option<&str>) -> Result<()> {
     match &args.verb {
         JukeboxVerb::Scan(s) => {
-            run_jukebox_scan(&args.name, JukeboxScanArgsRef {
-                package: s.package.as_deref(),
-                vynil_namespace: &s.vynil_namespace,
-                timeout: s.timeout,
-            })
+            run_jukebox_scan(
+                &args.name,
+                JukeboxScanArgsRef {
+                    package: s.package.as_deref(),
+                    vynil_namespace: &s.vynil_namespace,
+                    timeout: s.timeout,
+                },
+                context,
+            )
             .await
         }
     }
 }
 
 /// Top-level dispatch for the instance kinds. Resolves the namespace, defaulting
-/// to the current kubectl context namespace when `-n` is omitted.
-pub async fn run_instance(info: &InstanceKindInfo, args: &InstanceArgs) -> Result<()> {
+/// to the selected kubectl context namespace when `-n` is omitted.
+pub async fn run_instance(info: &InstanceKindInfo, args: &InstanceArgs, context: Option<&str>) -> Result<()> {
     use crate::cli::InstanceVerb::*;
     let namespace = match &args.namespace {
         Some(ns) => ns.clone(),
-        None => Client::try_default()
+        None => make_client(context)
             .await
             .context("INST-ERR-01: failed to create kube client")?
             .default_namespace()
             .to_string(),
     };
     if let Some((item, transport)) = args.verb.as_item() {
-        return run_item(info, &namespace, &args.name, item, transport).await;
+        return run_item(info, &namespace, &args.name, item, transport, context).await;
     }
     match &args.verb {
-        Upgrade(a) => run_upgrade(info, &namespace, &args.name, a).await,
-        Scan(a) => run_instance_scan(info, &namespace, &args.name, a).await,
-        Diagnostic(a) => run_diagnostic(info, &namespace, &args.name, a).await,
+        Upgrade(a) => run_upgrade(info, &namespace, &args.name, a, context).await,
+        Scan(a) => run_instance_scan(info, &namespace, &args.name, a, context).await,
+        Diagnostic(a) => run_diagnostic(info, &namespace, &args.name, a, context).await,
         _ => unreachable!("item verbs handled above"),
     }
 }

@@ -1,10 +1,36 @@
 use std::str::FromStr;
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use http_body_util::BodyExt;
-use kube::Client;
+use kube::{
+    Client,
+    config::{Config, KubeConfigOptions},
+};
 
 use crate::cli::InstanceTarget;
+
+/// Builds a kube client, optionally targeting a specific kubeconfig context.
+///
+/// `None` keeps the historical `Client::try_default()` behaviour (current context,
+/// or in-cluster config). `Some(ctx)` loads that named context from the kubeconfig.
+pub async fn make_client(context: Option<&str>) -> Result<Client> {
+    match context {
+        Some(ctx) => {
+            let options = KubeConfigOptions {
+                context: Some(ctx.to_string()),
+                cluster: None,
+                user: None,
+            };
+            let config = Config::from_kubeconfig(&options)
+                .await
+                .with_context(|| format!("failed to load kubeconfig context '{}'", ctx))?;
+            Client::try_from(config).context("failed to create kube client")
+        }
+        None => Client::try_default()
+            .await
+            .context("failed to create kube client"),
+    }
+}
 
 /// Result of fetching a single diagnostic item.
 #[derive(Debug)]
@@ -19,7 +45,10 @@ pub struct GetResult {
 #[derive(Debug, Clone)]
 pub enum TransportMode {
     /// Via kube apiserver aggregation (default, production).
-    Aggregation,
+    Aggregation {
+        /// Optional kubeconfig context to target (like `kubectl --context`).
+        context: Option<String>,
+    },
     /// Direct HTTP call to the server (test/dev).
     Direct {
         server_url: String,
@@ -33,7 +62,7 @@ pub async fn get_item(mode: &TransportMode, target: &InstanceTarget, item: &str)
     let path = crate::items::api_path(target, item);
 
     match mode {
-        TransportMode::Aggregation => fetch_aggregation(&path).await,
+        TransportMode::Aggregation { context } => fetch_aggregation(&path, context.as_deref()).await,
         TransportMode::Direct {
             server_url,
             token,
@@ -43,8 +72,8 @@ pub async fn get_item(mode: &TransportMode, target: &InstanceTarget, item: &str)
 }
 
 /// Fetch via kube apiserver aggregation layer.
-async fn fetch_aggregation(path: &str) -> GetResult {
-    let client = match Client::try_default().await {
+async fn fetch_aggregation(path: &str, context: Option<&str>) -> GetResult {
+    let client = match make_client(context).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("warning: failed to create kube client: {}", e);
