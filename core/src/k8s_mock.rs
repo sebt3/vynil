@@ -610,6 +610,11 @@ pub fn k8s_mock_rhai_register(
         new_ns,
         new_group_ns
     );
+    // register_k8s_generic! hardcodes the real k8s::update_cache for
+    // update_k8s_crd_cache, which would spin up a real cluster client. In mock
+    // mode (tests / `agent package test`) there is no cluster: override it with
+    // a no-op so install scripts calling update_k8s_crd_cache() don't panic.
+    engine.register_fn("update_k8s_crd_cache", || {});
 
     register_k8s_raw!(engine, K8sRawMock, K8sRawMock::new);
 
@@ -703,6 +708,19 @@ mod tests {
     fn register_k8s_raw_mock_compiles() {
         let mut engine = rhai::Engine::new();
         register_k8s_raw!(engine, K8sRawMock, K8sRawMock::new);
+    }
+
+    #[test]
+    fn update_k8s_crd_cache_is_noop_in_mock() {
+        // Regression: in mock mode update_k8s_crd_cache() must not reach for a
+        // real cluster client. It should be a no-op (no tokio runtime, no
+        // kubeconfig required) so install scripts can call it during tests.
+        use std::sync::{Arc, Mutex};
+        let mocks: Arc<Mutex<Vec<rhai::Dynamic>>> = Arc::new(Mutex::new(vec![]));
+        let created: Arc<Mutex<Vec<rhai::Dynamic>>> = Arc::new(Mutex::new(vec![]));
+        let mut engine = rhai::Engine::new();
+        k8s_mock_rhai_register(&mut engine, mocks, created);
+        engine.eval::<()>("update_k8s_crd_cache()").unwrap();
     }
 
     #[test]
