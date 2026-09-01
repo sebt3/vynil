@@ -66,8 +66,8 @@ generate-crd:
 	cp box/vynil/crds/crd.yaml deploy/crd/crd.yaml
 
 generate: generate-crd
-	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"operator",/' <Cargo.toml >agent/parent.toml
-	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"agent",/' <Cargo.toml >operator/parent.toml
+	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"operator",|"server",|"kubectl-vynil",/' <Cargo.toml >agent/parent.toml
+	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"agent",|"server",|"kubectl-vynil",/' <Cargo.toml >operator/parent.toml
 
 crd: generate-crd
 	$(KUBECTL) apply -f box/vynil/crds/crd.yaml
@@ -135,8 +135,8 @@ deploy: generate-crd
 	$(KUBECTL) create ns vynil-system || true
 	$(KUBECTL) apply -f deploy/crd/crd.yaml
 	$(KUBECTL) delete job vynil-bootstrap -n vynil-system --ignore-not-found
-	sed \
+	sed -E \
 		-e 's|sebt3|$(PROJECT)|g' \
-		-e 's|0\.3\.1|$(TAG)|g' \
+		-e 's|[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?|$(TAG)|g' \
 		-e 's|maturity: stable|maturity: $(MATURITY)|g' \
 		deploy/bootstrap/bootstrap.yaml | $(KUBECTL) apply -f -

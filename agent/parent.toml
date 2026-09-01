@@ -3,7 +3,6 @@ resolver = "1"
 members = [
     "agent",
     "common",
-    "core",
 ]
 default-members = [
     "agent",
