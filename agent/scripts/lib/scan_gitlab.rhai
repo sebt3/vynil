@@ -14,22 +14,21 @@ fn list_repository(spec, namespace) {
         throw "GitLab registry requires a pull_secret (deploy token or PAT with read_registry + read_api scopes)";
     }
 
-    // Resolve project path to numeric ID: the HTTP client (reqwest/url crate) decodes %2F to /,
-    // breaking the URL-encoded path form. Using the numeric ID avoids the issue entirely.
-    let project_name = project.split("/").pop();
-    let search = gl.get(`api/v4/projects?search=${project_name}&per_page=20`);
-    if search.code != 200 {
-        throw `Unable to search project ${project} on ${url}: HTTP ${search.code}`;
-    }
-    let matches = search.json.filter(|p| p.path_with_namespace == project);
-    if matches.len() < 1 {
-        throw `Project ${project} not found on ${url} (check token scope: read_api required)`;
-    }
-    let project_id = matches[0].id;
+    // GitLab accepts the URL-encoded "namespace/path" directly as the :id path param on every
+    // /projects/:id/* endpoint, so we can address the registry endpoint straight away. This
+    // used to go through a project-search + path_with_namespace filter to resolve a numeric ID,
+    // worked around a suspected %2F-decoding bug — but that search is unscoped (it matches
+    // across all of GitLab, not just projects the token can see) and caps at one page of
+    // results, so it silently fails to find any project whose name is a common word (e.g.
+    // "box"). The encoded-path form was re-verified against the live GitLab API and works.
+    // Rhai's `String::replace` mutates in place and returns () — copy first, then mutate the
+    // copy, or `project` (used below in error messages) would end up encoded too.
+    let encoded_project = project;
+    encoded_project.replace("/", "%2F");
 
-    let initial = gl.get(`api/v4/projects/${project_id}/registry/repositories?per_page=20`);
+    let initial = gl.get(`api/v4/projects/${encoded_project}/registry/repositories?per_page=20`);
     if initial.code != 200 {
-        throw `Unable to list repositories for project ${project} (id: ${project_id}) on ${url}: HTTP ${initial.code}`;
+        throw `Unable to list repositories for project ${project} on ${url}: HTTP ${initial.code} (check the project path and that the token has read_api + read_registry scope)`;
     }
 
     // GitLab paginates via the X-Total-Pages header
@@ -40,7 +39,7 @@ fn list_repository(spec, namespace) {
     let result = initial.json.map(|r| r.location);
 
     for i in 2..(total_pages + 1) {
-        let list = gl.get(`api/v4/projects/${project_id}/registry/repositories?per_page=20&page=${i}`);
+        let list = gl.get(`api/v4/projects/${encoded_project}/registry/repositories?per_page=20&page=${i}`);
         if list.code != 200 {
             throw `Unable to list repositories from ${url} page ${i}: HTTP ${list.code}`;
         }

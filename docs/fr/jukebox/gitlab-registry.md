@@ -117,12 +117,17 @@ Le script `agent/scripts/lib/scan_gitlab.rhai` :
 
 1. Lit le `pull_secret` (dockerconfigjson) → extrait `user:pass`
 2. Utilise `pass` comme Bearer token pour l'API REST GitLab
-3. Résout le project path en ID numérique via `GET {url}/api/v4/projects?search={name}`
-   et filtre sur `path_with_namespace == project`
-   > Note : l'URL-encoding (`/` → `%2F`) dans le path HTTP est silencieusement décodé par
-   > le client HTTP (reqwest/url-crate), ce qui donnait HTTP 404. L'ID numérique contourne ce bug.
-4. `GET {url}/api/v4/projects/{id}/registry/repositories?per_page=20`
-   - La pagination est pilotée par le header `X-Total-Pages`
+3. URL-encode le project path (`/` → `%2F`) et adresse directement l'endpoint registry :
+   `GET {url}/api/v4/projects/{namespace%2Fproject}/registry/repositories?per_page=20`
+   > GitLab accepte le `namespace/path` URL-encodé comme paramètre `:id` sur tous les
+   > endpoints `/projects/:id/*` — inutile de chercher puis filtrer pour résoudre un ID numérique.
+   > Une version précédente passait par `GET /projects?search={name}` + un filtre
+   > `path_with_namespace`, pour contourner un supposé bug de décodage `%2F` côté client HTTP —
+   > mais cette recherche n'est pas scopée (elle porte sur tout GitLab.com, pas seulement les
+   > projets visibles par le token) et se limite à une seule page de résultats, donc elle échoue
+   > silencieusement à trouver tout projet dont le nom est un mot courant (ex : un projet nommé
+   > `box`). Revérifié contre l'API en direct : le `%2F` n'est pas décodé par le client.
+4. La pagination est pilotée par le header `X-Total-Pages`
 5. Retourne la liste des `location` (ex: `registry.gitlab.com/my-group/my-project/my-image`)
 6. Le scan principal (`scan.rhai`) prend le relais : OCI list_tags + lecture des annotations
 
@@ -154,5 +159,5 @@ Identique au pull Harbor : le `pull_secret` (dockerconfigjson) est lu, les crede
 | 3 | Deux URLs distinctes                 | `url` (API) ≠ `registry` (OCI) pour les instances self-hosted      |
 | 4 | PAT lié à un user                    | Préférer project access token en prod pour le Makefile              |
 | 5 | CI_JOB_TOKEN cross-project           | Nécessite l'activation du token allowlist sur le projet cible       |
-| 6 | ID numérique vs path encodé          | `%2F` décodé par reqwest → scan utilise l'ID numérique GitLab      |
+| 6 | Path encodé, pas de recherche        | Projet adressé directement en `namespace%2Fproject` — pas de recherche projet |
 | 7 | GitLab 13.9 minimum                  | Scope `read_api` sur deploy token disponible depuis cette version   |

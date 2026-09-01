@@ -14,7 +14,6 @@ use wiremock::{
     matchers::{method, path, query_param},
 };
 
-const PROJECT_ID: i64 = 99991;
 const PROJECT_PATH: &str = "my-group/my-project";
 const REGISTRY: &str = "registry.gitlab.com";
 const PULL_SECRET: &str = "gitlab-registry-pull";
@@ -74,30 +73,27 @@ fn run_scan(script: &mut Script, jb: K8sJukeBoxMock) -> common::Result<Dynamic> 
     script.run_file(&PathBuf::from(format!("{base}/scripts/boxes/scan.rhai")))
 }
 
-fn project_search_response() -> serde_json::Value {
-    serde_json::json!([{ "id": PROJECT_ID, "path_with_namespace": PROJECT_PATH }])
-}
-
 fn repo_list_response() -> serde_json::Value {
     serde_json::json!([{
         "location": format!("{REGISTRY}/{PROJECT_PATH}/my-image")
     }])
 }
 
+// GitLab accepts the URL-encoded "namespace/path" directly as the :id path param on every
+// /projects/:id/* endpoint, so the scan addresses the registry endpoint straight away —
+// no project-search step to resolve a numeric ID first.
 fn repos_path() -> String {
-    format!("/api/v4/projects/{PROJECT_ID}/registry/repositories")
+    format!(
+        "/api/v4/projects/{}/registry/repositories",
+        PROJECT_PATH.replace('/', "%2F")
+    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scan_gitlab_resolves_project_by_id() {
+async fn scan_gitlab_lists_repositories_via_direct_path() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/v4/projects"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(project_search_response()))
-        .mount(&server)
-        .await;
     Mock::given(method("GET"))
         .and(path(repos_path()))
         .respond_with(
@@ -117,8 +113,10 @@ async fn scan_gitlab_resolves_project_by_id() {
 async fn scan_gitlab_project_not_found_fails() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/api/v4/projects"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .and(path(repos_path()))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(serde_json::json!({"message": "404 Project Not Found"})),
+        )
         .mount(&server)
         .await;
 
@@ -126,45 +124,12 @@ async fn scan_gitlab_project_not_found_fails() {
     let result = run_scan(&mut script, jukebox(&server.uri(), true));
     assert!(result.is_err(), "scan should fail when project is not found");
     let msg = format!("{:?}", result.err());
-    assert!(
-        msg.contains("not found"),
-        "error should mention 'not found', got: {msg}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn scan_gitlab_wrong_project_in_results_fails() {
-    let server = MockServer::start().await;
-    // Search returns a different project — should not match
-    Mock::given(method("GET"))
-        .and(path("/api/v4/projects"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            { "id": PROJECT_ID, "path_with_namespace": "other-group/other-project" }
-        ])))
-        .mount(&server)
-        .await;
-
-    let (mut script, _) = make_gitlab_scan_script(vec![secret_mock("testtoken")]);
-    let result = run_scan(&mut script, jukebox(&server.uri(), true));
-    assert!(
-        result.is_err(),
-        "scan should fail when path_with_namespace does not match"
-    );
-    let msg = format!("{:?}", result.err());
-    assert!(
-        msg.contains("not found"),
-        "error should mention 'not found', got: {msg}"
-    );
+    assert!(msg.contains("404"), "error should mention 404, got: {msg}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn scan_gitlab_registry_api_forbidden_fails() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/v4/projects"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(project_search_response()))
-        .mount(&server)
-        .await;
     Mock::given(method("GET"))
         .and(path(repos_path()))
         .respond_with(
@@ -194,10 +159,10 @@ async fn scan_gitlab_no_pull_secret_fails() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scan_gitlab_search_api_error_fails() {
+async fn scan_gitlab_registry_api_unauthorized_fails() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/api/v4/projects"))
+        .and(path(repos_path()))
         .respond_with(
             ResponseTemplate::new(401).set_body_json(serde_json::json!({"message": "401 Unauthorized"})),
         )
@@ -206,7 +171,7 @@ async fn scan_gitlab_search_api_error_fails() {
 
     let (mut script, _) = make_gitlab_scan_script(vec![secret_mock("badtoken")]);
     let result = run_scan(&mut script, jukebox(&server.uri(), true));
-    assert!(result.is_err(), "scan should fail on HTTP 401 from search API");
+    assert!(result.is_err(), "scan should fail on HTTP 401 from registry API");
     let msg = format!("{:?}", result.err());
     assert!(msg.contains("401"), "error should mention 401, got: {msg}");
 }
@@ -214,11 +179,6 @@ async fn scan_gitlab_search_api_error_fails() {
 #[tokio::test(flavor = "multi_thread")]
 async fn scan_gitlab_pagination_fetches_all_pages() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/v4/projects"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(project_search_response()))
-        .mount(&server)
-        .await;
     // Page 2 — more specific matcher, registered first so wiremock checks it first
     Mock::given(method("GET"))
         .and(path(repos_path()))
