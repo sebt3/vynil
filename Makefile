@@ -31,6 +31,7 @@ endef
 .PHONY: generate-crd generate crd fmt precommit bump-version
 .PHONY: agent-dev agent agent-alpha agent-beta
 .PHONY: operator operator-alpha operator-beta
+.PHONY: server server-alpha server-beta
 .PHONY: box deploy
 
 help:
@@ -52,6 +53,9 @@ help:
 	@echo "  operator       Build and push operator $(VERSION)"
 	@echo "  operator-alpha Build and push operator $(NEXT_PATCH)-alpha"
 	@echo "  operator-beta  Build and push operator $(NEXT_PATCH)-beta"
+	@echo "  server         Build and push server $(VERSION)"
+	@echo "  server-alpha   Build and push server $(NEXT_PATCH)-alpha"
+	@echo "  server-beta    Build and push server $(NEXT_PATCH)-beta"
 	@echo ""
 	@echo "Box (checks images, builds if missing, then packages):"
 	@echo "  box            make box [PROJECT=reivaxm] [VARIANT=alpha|beta]"
@@ -68,6 +72,7 @@ generate-crd:
 generate: generate-crd
 	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"operator",|"server",|"kubectl-vynil",/' <Cargo.toml >agent/parent.toml
 	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"agent",|"server",|"kubectl-vynil",/' <Cargo.toml >operator/parent.toml
+	awk 'BEGIN{p=1}/profile.release/{p=0}p==1&&!/"agent",|"operator",|"kubectl-vynil",/' <Cargo.toml >server/parent.toml
 
 crd: generate-crd
 	$(KUBECTL) apply -f box/vynil/crds/crd.yaml
@@ -114,6 +119,15 @@ operator-alpha: bump-version
 operator-beta: bump-version
 	$(call img-build-push,operator,$(NEXT_PATCH)-beta)
 
+server:
+	$(call img-build-push,server,$(VERSION))
+
+server-alpha: bump-version
+	$(call img-build-push,server,$(NEXT_PATCH)-alpha)
+
+server-beta: bump-version
+	$(call img-build-push,server,$(NEXT_PATCH)-beta)
+
 # ── Box ──────────────────────────────────────────────────────────────────────
 
 BOX_TMP = /tmp/vynil-box
@@ -121,6 +135,7 @@ BOX_TMP = /tmp/vynil-box
 box:
 	$(call img-build-push,agent,$(TAG))
 	$(call img-build-push,operator,$(TAG))
+	$(call img-build-push,server,$(TAG))
 	rm -rf $(BOX_TMP) && cp -r box/vynil $(BOX_TMP)
 	sed -i 's|repository: sebt3/vynil|repository: $(PROJECT)/vynil|g' $(BOX_TMP)/package.yaml
 	sed -i 's|app_version:.*|app_version: $(TAG)|' $(BOX_TMP)/package.yaml

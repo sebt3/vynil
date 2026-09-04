@@ -2,7 +2,6 @@
 resolver = "1"
 members = [
     "common",
-    "core",
     "server",
 ]
 default-members = [
