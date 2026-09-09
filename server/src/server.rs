@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use axum::{
     Json,
     extract::{FromRequestParts, Path, State},
@@ -33,7 +32,6 @@ use crate::{
 // Custom extractor for HeaderMap
 pub struct RequestHeaders(pub HeaderMap);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for RequestHeaders
 where
     S: Send + Sync + 'static,
@@ -49,7 +47,7 @@ pub const API_GROUP: &str = "admin.vynil.solidite.fr";
 pub const API_VERSION: &str = "v1";
 
 const API_PATH: &str = "/apis/admin.vynil.solidite.fr/v1";
-const INSTANCE_PATH: &str = "/apis/admin.vynil.solidite.fr/v1/namespaces/:ns/:kind/:name/:item";
+const INSTANCE_PATH: &str = "/apis/admin.vynil.solidite.fr/v1/namespaces/{ns}/{kind}/{name}/{item}";
 
 /// Valid kinds for the diagnostic API
 const VALID_KINDS: [&str; 3] = ["tenantinstances", "serviceinstances", "systeminstances"];
