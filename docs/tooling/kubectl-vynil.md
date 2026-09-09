@@ -28,8 +28,8 @@ kubectl-vynil [--context <ctx>] [-n <namespace>] <kind> <name> <verb> [args]
 |---|---|
 | `jukebox` (box) | `scan` — trigger a package scan of the JukeBox source. |
 | `vti` (TenantInstance) | `upgrade`, `scan`, `diagnostic`, `children`, `agentlog`, `childlogs`, `operatorlog`. |
-| `vsvc` (ServiceInstance) | `upgrade`, `scan`, `diagnostic`, `children`, `agentlog`, `childlogs`, `operatorlog`. |
-| `vsi` (SystemInstance) | `upgrade`, `scan`, `diagnostic`, `agentlog`, `operatorlog`. |
+| `vsvc` (ServiceInstance) | same as `vti`. |
+| `vsi` (SystemInstance) | same as `vti`. |
 
 ## Dynamic shell completion
 
@@ -42,4 +42,5 @@ Completion works in two modes:
    source <(kubectl-vynil completion bash)  # or: zsh
    ```
 
-See [Completion design](../conception/completion.md) for technical details on the completion protocol and architecture.
+Both modes reach the same engine: the hidden `kubectl-vynil __complete` verb, which emits Cobra-format
+completions and queries the cluster for live resource names.
