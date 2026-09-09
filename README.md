@@ -33,6 +33,26 @@ kubectl create ns vynil-system
 kubectl apply -k github.com/sebt3/vynil//deploy
 ```
 
+## Shell completion
+
+`kubectl-vynil` ships as a `kubectl` plugin and supports dynamic shell completion for
+`kubectl vynil …` (resource kinds, live resource names, verbs and flags).
+
+1. Put **both** `kubectl-vynil` and `kubectl_complete-vynil` somewhere on your `PATH`
+   (they are in the same release archive):
+
+   ```sh
+   install -m 0755 kubectl-vynil kubectl_complete-vynil ~/.local/bin/
+   ```
+
+2. Make sure kubectl's own completion is loaded (bash example):
+
+   ```sh
+   source <(kubectl completion bash)
+   ```
+
+`kubectl vynil <TAB>` now completes dynamically.
+
 ## Documentation
 
 Full documentation lives in [`docs/`](docs/index.md) (English, source of truth). A French

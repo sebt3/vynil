@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# kubectl plugin completion shim: kubectl invokes `kubectl_complete-<name>` and expects
+# Cobra `__complete` output. Delegate straight to the real binary.
+exec kubectl-vynil __complete "$@"
