@@ -80,7 +80,7 @@ its content embeds Handlebars templates and Rhai scripts describing its lifecycl
 - **Build a distribution** → [Distribution](distribution.md), [The OCI package](packages/portability.md)
 - **Write a package** → [Package format](packages/format.md), [Lifecycle](packages/lifecycle.md), [Generation](gen-package.md)
 - **Publish packages** → [JukeBox sources](jukebox/sources.md), [Build & signing](build-signing.md), [Registry maintenance](jukebox/registry-maintenance.md)
-- **Tooling** → [Agent CLI reference](cli.md), [Lint](tooling/lint.md), [Package tests](tooling/test.md)
+- **Tooling** → [Agent CLI reference](cli.md), [kubectl-vynil](tooling/kubectl-vynil.md), [Lint](tooling/lint.md), [Package tests](tooling/test.md)
 - **Operations** → [Security & threat model](operations/security.md), [Troubleshooting](operations/troubleshooting.md), [Reference](operations/reference.md)
 
 ## Note for AI assistants (LLM)

@@ -59,6 +59,8 @@ For completion when calling the binary directly (`kubectl-vynil <TAB>`, outside 
 source <(kubectl-vynil completion bash)   # or: zsh
 ```
 
+See [kubectl-vynil documentation](docs/tooling/kubectl-vynil.md) for the full CLI syntax and available verbs.
+
 ## Documentation
 
 Full documentation lives in [`docs/`](docs/index.md) (English, source of truth). A French
