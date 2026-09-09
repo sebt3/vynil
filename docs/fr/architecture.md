@@ -62,9 +62,9 @@ affiche les logs. Embarque un shim `kubectl_complete-vynil` pour la complétion 
 ## Complétion shell
 
 Le shim `kubectl_complete-vynil` implémente la complétion shell dynamique pour `kubectl vynil …` via le
-protocole Cobra `__complete` (kubectl 1.26+). Le binaire `kubectl-vynil` embarque une sous-commande
-`completion <shell>` pour sourcer les scripts de complétion lors d'appels directs au binaire. Voir
-[Conception de la complétion](conception/completion.md) pour les détails du protocole.
+protocole Cobra `__complete` (kubectl 1.26+) : kubectl invoque le shim, qui délègue au verbe caché
+`kubectl-vynil __complete`. Le binaire `kubectl-vynil` embarque aussi une sous-commande
+`completion <shell>` pour sourcer les scripts de complétion lors d'appels directs au binaire.
 
 ---
 

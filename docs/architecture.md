@@ -76,9 +76,9 @@ Ships a `kubectl_complete-vynil` shim for dynamic shell completion (see [Shell c
 ## Shell completion
 
 The `kubectl_complete-vynil` shim implements dynamic shell completion for `kubectl vynil …` via the
-Cobra `__complete` protocol (kubectl 1.26+). The `kubectl-vynil` binary hosts a `completion <shell>`
-subcommand for sourcing completion scripts when invoking the binary directly. See
-[Completion design](conception/completion.md) for protocol details.
+Cobra `__complete` protocol (kubectl 1.26+): kubectl invokes the shim, which delegates to the hidden
+`kubectl-vynil __complete` verb. The `kubectl-vynil` binary also hosts a `completion <shell>`
+subcommand for sourcing completion scripts when invoking the binary directly.
 
 ---
 
