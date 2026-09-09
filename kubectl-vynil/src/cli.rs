@@ -34,6 +34,26 @@ pub enum Commands {
     /// Operate on a SystemInstance.
     #[command(name = "vsi", visible_alias = "systeminstance", alias = "systeminstances")]
     Vsi(InstanceArgs),
+    /// Output a shell completion script for direct `kubectl-vynil` invocation.
+    ///
+    /// For `kubectl vynil <TAB>` completion, install `kubectl_complete-vynil` on your PATH
+    /// instead (see the README).
+    Completion(CompletionArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct CompletionArgs {
+    /// Target shell.
+    #[arg(value_enum)]
+    pub shell: CompletionShell,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionShell {
+    /// Bash shell
+    Bash,
+    /// Zsh shell
+    Zsh,
 }
 
 // ── Kind table ────────────────────────────────────────────────────────────────
@@ -314,6 +334,7 @@ mod tests {
                 Commands::Vsvc(_) => "vsvc",
                 Commands::Vsi(_) => "vsi",
                 Commands::Jukebox(_) => "box",
+                Commands::Completion(_) => panic!("unexpected completion command in alias test"),
             };
             assert_eq!(got, expect, "alias {} should map to {}", argv, expect);
         }
@@ -358,5 +379,28 @@ mod tests {
                 bad
             );
         }
+    }
+
+    #[test]
+    fn parses_completion_bash() {
+        let cli = Cli::try_parse_from(["kubectl-vynil", "completion", "bash"]).unwrap();
+        match cli.command {
+            Commands::Completion(a) => assert_eq!(a.shell, CompletionShell::Bash),
+            _ => panic!("expected completion"),
+        }
+    }
+
+    #[test]
+    fn parses_completion_zsh() {
+        let cli = Cli::try_parse_from(["kubectl-vynil", "completion", "zsh"]).unwrap();
+        match cli.command {
+            Commands::Completion(a) => assert_eq!(a.shell, CompletionShell::Zsh),
+            _ => panic!("expected completion"),
+        }
+    }
+
+    #[test]
+    fn rejects_completion_invalid_shell() {
+        assert!(Cli::try_parse_from(["kubectl-vynil", "completion", "tcsh"]).is_err());
     }
 }

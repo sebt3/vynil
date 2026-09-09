@@ -53,6 +53,12 @@ kubectl apply -k github.com/sebt3/vynil//deploy
 
 `kubectl vynil <TAB>` now completes dynamically.
 
+For completion when calling the binary directly (`kubectl-vynil <TAB>`, outside kubectl):
+
+```sh
+source <(kubectl-vynil completion bash)   # or: zsh
+```
+
 ## Documentation
 
 Full documentation lives in [`docs/`](docs/index.md) (English, source of truth). A French
