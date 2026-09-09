@@ -38,7 +38,7 @@ enum JobOutcome {
 }
 
 /// Builds an `ApiResource` for a `vynil.solidite.fr/v1` kind.
-fn vynil_api_resource(kind: &str, plural: &str) -> ApiResource {
+pub(crate) fn vynil_api_resource(kind: &str, plural: &str) -> ApiResource {
     ApiResource {
         group: "vynil.solidite.fr".to_string(),
         version: "v1".to_string(),

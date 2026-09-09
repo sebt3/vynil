@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
     let _bin = argv.next();
     if argv.next().as_deref() == Some("__complete") {
         let words: Vec<String> = argv.collect();
-        kubectl_vynil::completion::run(words);
+        kubectl_vynil::completion::run(words).await;
         return Ok(());
     }
 
