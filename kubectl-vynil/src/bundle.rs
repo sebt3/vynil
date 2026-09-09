@@ -83,13 +83,10 @@ pub async fn build_bundle(
         };
 
         if let Some((d, o)) = result.redactions {
-            per_item_redactions.insert(
-                item_name.to_string(),
-                RedactionCounts {
-                    distinct: d,
-                    occurrences: o,
-                },
-            );
+            per_item_redactions.insert(item_name.to_string(), RedactionCounts {
+                distinct: d,
+                occurrences: o,
+            });
             total_distinct += d;
             total_occurrences += o;
         }
@@ -333,20 +330,14 @@ mod tests {
     #[test]
     fn test_redaction_report_serialization() {
         let mut per_item = HashMap::new();
-        per_item.insert(
-            "state".to_string(),
-            RedactionCounts {
-                distinct: 2,
-                occurrences: 5,
-            },
-        );
-        per_item.insert(
-            "agentlog".to_string(),
-            RedactionCounts {
-                distinct: 1,
-                occurrences: 3,
-            },
-        );
+        per_item.insert("state".to_string(), RedactionCounts {
+            distinct: 2,
+            occurrences: 5,
+        });
+        per_item.insert("agentlog".to_string(), RedactionCounts {
+            distinct: 1,
+            occurrences: 3,
+        });
         let report = RedactionReport {
             per_item,
             total: RedactionCounts {
