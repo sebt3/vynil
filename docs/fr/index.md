@@ -81,7 +81,7 @@ cycle de vie.
 - **Construire une distribution** → [Distribution](distribution.md), [Le paquet OCI](packages/portability.md)
 - **Écrire un paquet** → [Format d'un paquet](packages/format.md), [Cycle de vie](packages/lifecycle.md), [Génération](gen-package.md)
 - **Publier des paquets** → [Sources de JukeBox](jukebox/sources.md), [Build & signature](build-signing.md), [Maintenance du registre](jukebox/registry-maintenance.md)
-- **Outiller** → [Référence CLI de l'agent](cli.md), [Lint](tooling/lint.md), [Tests de paquet](tooling/test.md)
+- **Outiller** → [Référence CLI de l'agent](cli.md), [kubectl-vynil](tooling/kubectl-vynil.md), [Lint](tooling/lint.md), [Tests de paquet](tooling/test.md)
 - **Exploiter** → [Sécurité & modèle de menace](operations/security.md), [Dépannage](operations/troubleshooting.md), [Référence](operations/reference.md)
 
 ## Note pour les assistants (LLM)

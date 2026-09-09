@@ -65,6 +65,21 @@ Main subcommands:
 - `box`, `template`, `run` — utilities
 - `box file-scan` — standalone scan to files (without K8s)
 
+### kubectl-vynil (CLI plugin)
+
+Binary `kubectl-vynil` — client-side `kubectl` plugin (`kubectl vynil …`). Drives the operator
+from the user's kubeconfig context: trigger upgrades/scans, pull diagnostics, tail logs.
+Ships a `kubectl_complete-vynil` shim for dynamic shell completion (see [Shell completion](#shell-completion) below).
+
+---
+
+## Shell completion
+
+The `kubectl_complete-vynil` shim implements dynamic shell completion for `kubectl vynil …` via the
+Cobra `__complete` protocol (kubectl 1.26+). The `kubectl-vynil` binary hosts a `completion <shell>`
+subcommand for sourcing completion scripts when invoking the binary directly. See
+[Completion design](conception/completion.md) for protocol details.
+
 ---
 
 ## Custom Kubernetes resources
