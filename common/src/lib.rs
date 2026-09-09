@@ -71,11 +71,6 @@ pub enum Error {
     #[error("Stdio error {0}")]
     Stdio(#[from] std::io::Error),
 
-    #[error("OCI jukebox error {0}")]
-    OCIDistrib(#[from] oci_client::errors::OciDistributionError),
-    #[error("OCI parse error {0}")]
-    OCIParseError(#[from] oci_client::ParseError),
-
     #[error("Base64 decode error {0}")]
     Base64DecodeError(#[from] base64::DecodeError),
 

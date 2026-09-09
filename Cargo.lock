@@ -847,8 +847,6 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "lazy_static",
- "object_store",
- "oci-client",
  "openapiv3",
  "openssl",
  "rand 0.10.1",
