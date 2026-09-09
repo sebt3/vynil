@@ -9,6 +9,14 @@ use kubectl_vynil::{
 async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider().install_default().ok();
 
+    let mut argv = std::env::args();
+    let _bin = argv.next();
+    if argv.next().as_deref() == Some("__complete") {
+        let words: Vec<String> = argv.collect();
+        kubectl_vynil::completion::run(words);
+        return Ok(());
+    }
+
     let cli = Cli::parse();
     let context = cli.context.as_deref();
     let namespace = cli.namespace.as_deref();
