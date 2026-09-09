@@ -26,5 +26,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Vti(args) => run_instance(&TENANT_INSTANCE, args, context, namespace).await,
         Commands::Vsvc(args) => run_instance(&SERVICE_INSTANCE, args, context, namespace).await,
         Commands::Vsi(args) => run_instance(&SYSTEM_INSTANCE, args, context, namespace).await,
+        Commands::Completion(args) => {
+            kubectl_vynil::completion::emit_script(args.shell);
+            Ok(())
+        }
     }
 }

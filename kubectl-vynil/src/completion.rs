@@ -384,6 +384,14 @@ pub async fn run(words: Vec<String>) {
     emit(&candidates, &parsed.to_complete);
 }
 
+pub fn emit_script(shell: crate::cli::CompletionShell) {
+    let s = match shell {
+        crate::cli::CompletionShell::Bash => include_str!("../completions/bash.sh"),
+        crate::cli::CompletionShell::Zsh => include_str!("../completions/zsh.sh"),
+    };
+    print!("{s}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,5 +663,19 @@ mod tests {
         // Test with an invalid context: should timeout and return empty vec.
         let result = list_names(KindId::Vti, None, Some("nonexistent-context-xyz")).await;
         assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn emit_script_bash_is_not_empty() {
+        let bash_script = include_str!("../completions/bash.sh");
+        assert!(!bash_script.is_empty());
+        assert!(bash_script.contains("__complete"));
+    }
+
+    #[test]
+    fn emit_script_zsh_is_not_empty() {
+        let zsh_script = include_str!("../completions/zsh.sh");
+        assert!(!zsh_script.is_empty());
+        assert!(zsh_script.contains("__complete"));
     }
 }
