@@ -1,4 +1,7 @@
-use crate::{Error, JukeBox, Reconciler, Result, get_client_name, manager::Context, telemetry};
+use crate::{
+    Error, JukeBox, Reconciler, Result, get_client_name, instance_common::is_job_terminal, manager::Context,
+    telemetry,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
@@ -225,16 +228,6 @@ fn inject_package_filter(context: &mut Value, filter_value: &str) {
             .unwrap()
             .insert("package_filter".to_string(), filter_value.to_string().into());
     }
-}
-
-fn is_job_terminal(job: &Job) -> bool {
-    let Some(status) = &job.status else { return false };
-    let Some(conditions) = &status.conditions else {
-        return false;
-    };
-    conditions
-        .iter()
-        .any(|c| c.status == "True" && (c.type_ == "Complete" || c.type_ == "Failed"))
 }
 
 #[must_use]

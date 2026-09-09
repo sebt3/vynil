@@ -135,6 +135,12 @@ pub async fn reconcile(inst: Arc<SystemInstance>, ctx: Arc<Context>) -> Result<A
 
 #[must_use]
 pub fn error_policy(inst: Arc<SystemInstance>, error: &Error, ctx: Arc<Context>) -> Action {
+    // A still-running delete job is an expected transient state, not a failure:
+    // requeue quickly without polluting failure metrics.
+    if matches!(error, Error::CleanupInProgress(_)) {
+        return Action::requeue(Duration::from_secs(30));
+    }
+
     tracing::warn!(
         "reconcile failed for SystemInstance '{:?}.{:?}': {:?}",
         inst.metadata.namespace,

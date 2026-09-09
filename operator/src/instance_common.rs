@@ -19,7 +19,7 @@ use kube::{
         conditions,
         controller::Action,
         finalizer::{Event as Finalizer, finalizer},
-        wait::await_condition,
+        wait::{Condition, await_condition},
     },
 };
 use opentelemetry::trace::TraceId;
@@ -227,6 +227,31 @@ pub async fn resolve_init_version<T: InstanceKind>(
 }
 
 // ── Job helpers ───────────────────────────────────────────────────────────────
+
+/// True if the Job has a `Complete` or `Failed` condition set to "True".
+pub fn is_job_terminal(job: &Job) -> bool {
+    let Some(status) = &job.status else { return false };
+    let Some(conditions) = &status.conditions else {
+        return false;
+    };
+    conditions
+        .iter()
+        .any(|c| c.status == "True" && (c.type_ == "Complete" || c.type_ == "Failed"))
+}
+
+/// True if the Job has a `Failed` condition set to "True".
+pub fn is_job_failed(job: &Job) -> bool {
+    job.status
+        .as_ref()
+        .and_then(|s| s.conditions.as_ref())
+        .map(|cs| cs.iter().any(|c| c.status == "True" && c.type_ == "Failed"))
+        .unwrap_or(false)
+}
+
+/// A [`Condition`] that matches once the Job is terminal (Complete or Failed).
+pub fn is_job_terminal_cond() -> impl Condition<Job> {
+    |obj: Option<&Job>| obj.map(is_job_terminal).unwrap_or(false)
+}
 
 /// Deletes a Job using foreground deletion and waits until it disappears.
 pub async fn delete_job_and_wait(job_api: &Api<Job>, job_name: &str) -> Result<()> {
@@ -607,18 +632,40 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
         .await
         .map_err(Error::KubeError)?;
 
-    // Wait for the delete job to complete
-    let cond = await_condition(job_api.clone(), &job_name, conditions::is_job_completed());
-    tokio::time::timeout(std::time::Duration::from_secs(10 * 60), cond)
-        .await
-        .map_err(Error::Elapsed)?
-        .map_err(Error::KubeWaitError)?;
-
-    // Delete the delete job
-    match job_api.delete(&job_name, &DeleteParams::foreground()).await {
-        Ok(_) => {}
-        Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
+    // Wait for the delete job to reach a terminal state (Complete or Failed).
+    let cond = await_condition(job_api.clone(), &job_name, is_job_terminal_cond());
+    match tokio::time::timeout(std::time::Duration::from_secs(3 * 60), cond).await {
+        Ok(res) => {
+            res.map_err(Error::KubeWaitError)?;
+            let failed = job_api
+                .get_opt(&job_name)
+                .await
+                .map_err(Error::KubeError)?
+                .as_ref()
+                .map(is_job_failed)
+                .unwrap_or(false);
+            // Purge the delete job in every terminal case (success or failure).
+            if let Err(e) = job_api.delete(&job_name, &DeleteParams::foreground()).await {
+                tracing::warn!("Deleting Job {} failed with: {e}", &job_name);
+            }
+            if failed {
+                // Keep the finalizer (return Err) so the uninstall is retried, but fail
+                // fast with a clear message instead of waiting out the full timeout.
+                return Err(Error::CleanupJobFailed(job_name));
+            }
+        }
+        Err(_elapsed) => {
+            // Still Active past the window: expected for slow uninstalls. Keep the
+            // finalizer, but error_policy treats this as transient (short requeue,
+            // no failure metric).
+            tracing::info!(
+                "CLEANUP-JOB-002 delete job {} still running, will re-check",
+                &job_name
+            );
+            return Err(Error::CleanupInProgress(job_name));
+        }
     }
+
     Ok(Action::await_change())
 }
 
@@ -633,6 +680,7 @@ mod tests {
         instancetenant::{InitFrom, TenantInstanceSpec, TenantInstanceStatus},
         vynilpackage::{VynilPackage, VynilPackageMeta, VynilPackageType},
     };
+    use k8s_openapi::api::batch::v1::{Job, JobCondition, JobStatus};
 
     fn make_tenant(version: Option<&str>, installed_tag: Option<&str>) -> TenantInstance {
         TenantInstance {
@@ -696,6 +744,87 @@ mod tests {
         rustls::crypto::ring::default_provider().install_default().ok();
         let config = kube::Config::new("http://localhost:9999".parse().unwrap());
         kube::Client::try_from(config).unwrap()
+    }
+
+    fn make_job_with_conditions(conds: &[(&str, &str)]) -> Job {
+        Job {
+            status: Some(JobStatus {
+                conditions: Some(
+                    conds
+                        .iter()
+                        .map(|(type_, status)| JobCondition {
+                            type_: (*type_).to_string(),
+                            status: (*status).to_string(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // ── Tests is_job_terminal() and is_job_failed() ───────────────────────
+
+    #[test]
+    fn test_is_job_terminal_complete() {
+        let job = make_job_with_conditions(&[("Complete", "True")]);
+        assert!(is_job_terminal(&job));
+    }
+
+    #[test]
+    fn test_is_job_terminal_failed() {
+        let job = make_job_with_conditions(&[("Failed", "True")]);
+        assert!(is_job_terminal(&job));
+    }
+
+    #[test]
+    fn test_is_job_terminal_active() {
+        let job = make_job_with_conditions(&[]);
+        assert!(!is_job_terminal(&job));
+    }
+
+    #[test]
+    fn test_is_job_terminal_no_status() {
+        let job = Job::default();
+        assert!(!is_job_terminal(&job));
+    }
+
+    #[test]
+    fn test_is_job_terminal_failed_not_yet_true() {
+        let job = make_job_with_conditions(&[("Failed", "False")]);
+        assert!(!is_job_terminal(&job));
+    }
+
+    #[test]
+    fn test_is_job_failed_true() {
+        let job = make_job_with_conditions(&[("Failed", "True")]);
+        assert!(is_job_failed(&job));
+    }
+
+    #[test]
+    fn test_is_job_failed_complete() {
+        let job = make_job_with_conditions(&[("Complete", "True")]);
+        assert!(!is_job_failed(&job));
+    }
+
+    #[test]
+    fn test_is_job_failed_active() {
+        let job = make_job_with_conditions(&[]);
+        assert!(!is_job_failed(&job));
+    }
+
+    #[test]
+    fn test_is_job_failed_no_status() {
+        let job = Job::default();
+        assert!(!is_job_failed(&job));
+    }
+
+    #[test]
+    fn test_is_job_failed_not_yet_true() {
+        let job = make_job_with_conditions(&[("Failed", "False")]);
+        assert!(!is_job_failed(&job));
     }
 
     // ── Tests init_from_version() ─────────────────────────────────────────

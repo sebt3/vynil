@@ -94,6 +94,12 @@ pub enum Error {
     #[error("INIT-VERSION-001 Init version {0} not found in registry")]
     MissingInitVersion(String),
 
+    #[error("CLEANUP-JOB-001 Delete job failed for {0}")]
+    CleanupJobFailed(String),
+
+    #[error("CLEANUP-JOB-002 Delete job still running for {0}")]
+    CleanupInProgress(String),
+
     #[error("Error: {0}")]
     Other(String),
 
