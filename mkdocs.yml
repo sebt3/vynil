@@ -96,6 +96,7 @@ nav:
       - Registry maintenance: jukebox/registry-maintenance.md
   - Tooling:
       - CLI reference: cli.md
+      - kubectl-vynil: tooling/kubectl-vynil.md
       - Lint: tooling/lint.md
       - Package tests: tooling/test.md
   - Operations:
