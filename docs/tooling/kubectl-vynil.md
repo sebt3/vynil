@@ -5,8 +5,9 @@ It is invoked as `kubectl vynil …` or directly as `kubectl-vynil …`.
 
 ## Installation
 
-See [Shell completion](../README.md#shell-completion) in the main README for installation instructions.
-Both the `kubectl-vynil` binary and the `kubectl_complete-vynil` completion shim must be placed on your `PATH`.
+`kubectl-vynil` and its `kubectl_complete-vynil` completion shim ship in the same CLI release
+archive. Put **both** on your `PATH` (e.g. `install -m 0755 kubectl-vynil kubectl_complete-vynil
+~/.local/bin/`). The shim is what `kubectl` invokes for `kubectl vynil <TAB>` completion.
 
 ## Command syntax
 
