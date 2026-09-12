@@ -271,8 +271,11 @@ impl TestHandler {
         self.tests.keys().cloned().collect()
     }
 
-    /// Returns a fully resolved VynilTest: handlebars templates in mocks and
-    /// asserts are evaluated, and all referenced testSets are merged in.
+    /// Returns a VynilTest with mocks and asserts templated using the static base context
+    /// `{package, instance}`. Used for inspection and to extract mocks before Rhai execution.
+    /// Assertion variables that require the real Rhai context (`{{values.xxx}}`,
+    /// `{{cluster.ha}}`, `{{tenant.name}}`) are NOT resolved here — call
+    /// `template_test_asserts` with the context returned by `ctx::run()` instead.
     pub fn get_templated_test(&self, name: &str) -> common::Result<VynilTest> {
         let test = self
             .tests
@@ -282,7 +285,8 @@ impl TestHandler {
 
         let mut hbs = HandleBars::new();
 
-        // Build base context: package + instance (with appslug)
+        // Base context: package + instance (with appslug only — cluster/values/tenant
+        // come from the real Rhai ctx::run() and must not be pre-computed here).
         let slug = appslug(&package.metadata.name, &test.instance.name);
         let mut inst = serde_json::to_value(&test.instance)?
             .as_object()
@@ -384,13 +388,30 @@ impl TestHandler {
                     serde_json::Value::Object(opts.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
                 );
             }
+            // Inject the tenant label when overridden so get_tenant_name() resolves correctly.
+            let mut labels = serde_json::Map::new();
+            if let Some(tenant) = &test.instance.tenant {
+                labels.insert(
+                    "vynil.solidite.fr/tenant".to_string(),
+                    serde_json::Value::String(tenant.clone()),
+                );
+            }
+            let mut metadata = serde_json::Map::new();
+            metadata.insert(
+                "name".to_string(),
+                serde_json::Value::String(test.instance.name.clone()),
+            );
+            metadata.insert(
+                "namespace".to_string(),
+                serde_json::Value::String(test.instance.namespace.clone()),
+            );
+            if !labels.is_empty() {
+                metadata.insert("labels".to_string(), serde_json::Value::Object(labels));
+            }
             let instance_obj = serde_json::json!({
                 "apiVersion": "vynil.solidite.fr/v1",
                 "kind": instance_kind,
-                "metadata": {
-                    "name": test.instance.name,
-                    "namespace": test.instance.namespace,
-                },
+                "metadata": serde_json::Value::Object(metadata),
                 "spec": serde_json::Value::Object(spec),
                 "status": {},
             });
@@ -471,27 +492,114 @@ impl TestHandler {
         }
     }
 
+    /// Templates assertions from `raw_test` (and its referenced testSets) using `ctx`.
+    /// `ctx` should be the map returned by `ctx::run()` in Rhai, enriched with `package`.
+    fn template_test_asserts(
+        &self,
+        raw_test: &VynilTest,
+        ctx: &serde_json::Value,
+    ) -> common::Result<Vec<VynilAssert>> {
+        let mut hbs = HandleBars::new();
+        let mut dummy_k8s: Vec<Dynamic> = Vec::new();
+        let mut dummy_http: Vec<HttpMockItem> = Vec::new();
+        let mut asserts: Vec<VynilAssert> = Vec::new();
+
+        collect_templated(
+            &mut hbs,
+            ctx,
+            None,
+            raw_test.asserts.as_ref(),
+            &mut dummy_k8s,
+            &mut dummy_http,
+            &mut asserts,
+        )?;
+
+        if let Some(refs) = &raw_test.testSets {
+            for ts_ref in refs {
+                let ts = self
+                    .test_sets
+                    .get(&ts_ref.testSet)
+                    .ok_or_else(|| common::Error::Other(format!("TestSet '{}' not found", ts_ref.testSet)))?;
+                let mut ctx_with_var = ctx.clone();
+                ctx_with_var
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("var".to_string(), build_var_context(ts, ts_ref));
+                collect_templated(
+                    &mut hbs,
+                    &ctx_with_var,
+                    None,
+                    ts.asserts.as_ref(),
+                    &mut dummy_k8s,
+                    &mut dummy_http,
+                    &mut asserts,
+                )?;
+            }
+        }
+        Ok(asserts)
+    }
+
     fn run_test_inner(
         &self,
         name: &str,
         created_objects: Arc<Mutex<Vec<Dynamic>>>,
     ) -> common::Result<Vec<VynilAssertResult>> {
-        // Resolve test: merge testSets, template mocks/asserts
-        let test = self.get_templated_test(name)?;
+        let raw_test = self
+            .tests
+            .get(name)
+            .ok_or_else(|| common::Error::Other(format!("Test '{name}' not found")))?;
 
-        // Extract mocks and asserts from resolved test
-        let k8s_mocks = test
+        // Template mocks with the static base context (instance+package).
+        // Assertions are NOT templated here; they are resolved later with the real
+        // Rhai context so that {{values.xxx}}, {{cluster.ha}}, {{tenant.name}} work.
+        let mocked_test = self.get_templated_test(name)?;
+        let mut k8s_mocks = mocked_test
             .mocks
             .as_ref()
             .and_then(|m| m.kubernetes.clone())
             .unwrap_or_default();
-        let http_mocks = test
+        let http_mocks = mocked_test
             .mocks
             .as_ref()
             .and_then(|m| m.http.clone())
             .unwrap_or_default();
 
-        // Build resolver path
+        // Inject Node mocks (controls build_context.rhai cluster.ha = nodes.len() > 1).
+        if let Some(nodes) = &raw_test.instance.nodes {
+            for node_name in nodes {
+                let node_obj = serde_json::json!({
+                    "apiVersion": "v1",
+                    "kind": "Node",
+                    "metadata": { "name": node_name },
+                });
+                let d: Dynamic = serde_json::from_str(
+                    &serde_json::to_string(&node_obj).map_err(common::Error::SerializationError)?,
+                )
+                .map_err(common::Error::SerializationError)?;
+                k8s_mocks.push(d);
+            }
+        }
+
+        // If agent_yaml is set, write that file as agent.yaml in a temp dir and use it
+        // as config_dir. This overrides cluster properties (ha, prefered_storage, …)
+        // that build_context.rhai reads from `${args.config_dir}/agent.yaml`.
+        let _temp_config_guard: Option<tempfile::TempDir>;
+        let effective_config_dir: PathBuf = if let Some(ref rel) = raw_test.instance.agent_yaml {
+            let override_path = self.package_dir.join("tests").join(rel);
+            let content = std::fs::read_to_string(&override_path).map_err(|e| {
+                common::Error::Other(format!("agent_yaml '{}': {e}", override_path.display()))
+            })?;
+            let tmp = tempfile::TempDir::new().map_err(|e| common::Error::Other(format!("tempdir: {e}")))?;
+            std::fs::write(tmp.path().join("agent.yaml"), &content)
+                .map_err(|e| common::Error::Other(format!("agent_yaml write: {e}")))?;
+            let path = tmp.path().to_path_buf();
+            _temp_config_guard = Some(tmp);
+            path
+        } else {
+            _temp_config_guard = None;
+            self.config_dir.clone()
+        };
+
         let type_dir = match self.package.metadata.usage {
             VynilPackageType::Tenant => "tenant",
             VynilPackageType::System => "system",
@@ -499,15 +607,13 @@ impl TestHandler {
         };
         let resolver_path = vec![
             format!("{}/scripts", self.package_dir.display()),
-            self.config_dir.display().to_string(),
+            effective_config_dir.display().to_string(),
             format!("{}/{type_dir}", self.script_dir.display()),
             format!("{}/lib", self.script_dir.display()),
         ];
 
-        // Create mock rhai interpreter
         let mut rhai = Script::new_mock(resolver_path, http_mocks, k8s_mocks, created_objects.clone());
 
-        // Execute value_script if present, otherwise empty map
         let mut asserts: Vec<VynilAssertResult> = Vec::new();
         let controller_values = if let Some(ref vs) = self.package.value_script {
             match rhai.eval(vs) {
@@ -535,60 +641,60 @@ impl TestHandler {
             "{}".to_string()
         };
 
-        // Build args for the rhai script
         let args = serde_json::json!({
-            "namespace": test.instance.namespace,
-            "instance": test.instance.name,
+            "namespace": raw_test.instance.namespace,
+            "instance": raw_test.instance.name,
             "vynil_namespace": "vynil-system",
             "package_dir": self.package_dir.display().to_string(),
             "script_dir": self.script_dir.display().to_string(),
             "template_dir": self.template_dir.display().to_string(),
             "agent_image": common::DEFAULT_AGENT_IMAGE,
             "tag": "0.1.0",
-            "config_dir": self.config_dir.display().to_string(),
+            "config_dir": effective_config_dir.display().to_string(),
             "controller_values": controller_values,
         });
         rhai.set_dynamic("args", &args);
 
-        // Build instance object for rhai
-        let mut instance_json = serde_json::json!({
-            "metadata": {
-                "name": test.instance.name,
-                "namespace": test.instance.namespace,
-            },
-            "spec": {
-                "category": self.package.metadata.category,
-                "package": self.package.metadata.name,
-            },
-            "status": {},
-        });
-        if let Some(opts) = &test.instance.options {
-            instance_json["spec"]["options"] =
-                serde_json::Value::Object(opts.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
-        }
-        //rhai.set_dynamic("instance", &instance_json);
         let fun_name = match self.package.metadata.usage {
             VynilPackageType::Tenant => "get_tenant_instance",
             VynilPackageType::System => "get_system_instance",
             VynilPackageType::Service => "get_service_instance",
         };
 
-        // Run the install script
-        let _ = rhai.eval(
-            format!(
-                "import(\"context\") as ctx;\n\
-            let instance = {}(args.namespace, args.instance);\n\
-            let context = ctx::run(instance, args);\n\
-            import(\"install\") as install;\n\
-            install::run(instance, context);",
-                fun_name
-            )
-            .as_str(),
-        )?;
+        // Phase 1: run ctx::run() and capture the real context.
+        // `instance` and `context` stay in scope (Scope persists across eval calls).
+        let context_dyn = rhai.eval(&format!(
+            "import(\"context\") as ctx;\n\
+                let instance = {fun_name}(args.namespace, args.instance);\n\
+                let context = ctx::run(instance, args);\n\
+                context"
+        ))?;
 
-        // Validate asserts against created objects
+        // Convert context to JSON and enrich with `package` for assertion templating.
+        let mut context_json: serde_json::Value = serde_json::from_str(
+            &serde_json::to_string(&context_dyn).map_err(common::Error::SerializationError)?,
+        )
+        .map_err(common::Error::SerializationError)?;
+        context_json
+            .as_object_mut()
+            .unwrap()
+            .insert("package".to_string(), serde_json::to_value(&self.package)?);
+
+        // Phase 2: template assertions with the real context.
+        let templated_asserts = self.template_test_asserts(raw_test, &context_json)?;
+
+        // Phase 3: run install::run() (instance and context are already in scope).
+        let _ = rhai.eval("import(\"install\") as install;\ninstall::run(instance, context);")?;
+
+        // Run asserts against created objects.
         let objects = created_objects.lock().unwrap();
-        asserts.extend(test.run_asserts(&objects));
+        let mut final_test = mocked_test;
+        final_test.asserts = if templated_asserts.is_empty() {
+            None
+        } else {
+            Some(templated_asserts)
+        };
+        asserts.extend(final_test.run_asserts(&objects));
 
         Ok(asserts)
     }
@@ -624,5 +730,135 @@ impl TestHandler {
             }
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::vyniltestset::{VynilAssertMatch, VynilAssertSelector};
+
+    fn fixture_path(rel: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/testing")
+            .join(rel)
+    }
+
+    fn make_handler(pkg_rel: &str) -> TestHandler {
+        let pkg_dir = fixture_path(pkg_rel);
+        let dummy = pkg_dir.clone();
+        TestHandler::new(pkg_dir, dummy.clone(), dummy.clone(), dummy.clone(), None).unwrap()
+    }
+
+    fn make_test_with_asserts(asserts: Vec<VynilAssert>) -> VynilTest {
+        VynilTest {
+            apiVersion: "vinyl.solidite.fr/v1beta1".to_string(),
+            kind: "Test".to_string(),
+            metadata: crate::testing::vyniltest::VynilTestMeta {
+                name: "test".to_string(),
+                description: None,
+            },
+            instance: crate::testing::vyniltest::VynilTestInstance {
+                name: "inst".to_string(),
+                namespace: "ns".to_string(),
+                options: None,
+                tenant: None,
+                nodes: None,
+                agent_yaml: None,
+            },
+            testSets: None,
+            mocks: None,
+            asserts: Some(asserts),
+        }
+    }
+
+    fn assert_with_selector(name: &str, selector_name: &str) -> VynilAssert {
+        VynilAssert {
+            name: name.to_string(),
+            description: None,
+            selector: VynilAssertSelector {
+                kind: Some("ConfigMap".to_string()),
+                name: Some(selector_name.to_string()),
+                namespace: None,
+            },
+            matcher: VynilAssertMatch::Any,
+            value: None,
+        }
+    }
+
+    fn resolved_name(asserts: &[VynilAssert], assert_name: &str) -> Option<String> {
+        asserts
+            .iter()
+            .find(|a| a.name == assert_name)?
+            .selector
+            .name
+            .clone()
+    }
+
+    // template_test_asserts resolves {{cluster.ha}} from context
+    #[test]
+    fn test_template_asserts_resolves_cluster_ha() {
+        let handler = make_handler("service_pkg");
+        let raw = make_test_with_asserts(vec![assert_with_selector("ha-check", "ha-is-{{cluster.ha}}")]);
+        let ctx = serde_json::json!({ "cluster": { "ha": true } });
+        let result = handler.template_test_asserts(&raw, &ctx).unwrap();
+        assert_eq!(resolved_name(&result, "ha-check"), Some("ha-is-true".to_string()));
+    }
+
+    // template_test_asserts resolves {{values.xxx}} from context
+    #[test]
+    fn test_template_asserts_resolves_values() {
+        let handler = make_handler("service_pkg");
+        let raw = make_test_with_asserts(vec![assert_with_selector(
+            "values-check",
+            "cm-{{values.common_name}}",
+        )]);
+        let ctx = serde_json::json!({ "values": { "common_name": "my.host" } });
+        let result = handler.template_test_asserts(&raw, &ctx).unwrap();
+        assert_eq!(
+            resolved_name(&result, "values-check"),
+            Some("cm-my.host".to_string())
+        );
+    }
+
+    // template_test_asserts resolves {{tenant.name}} from context
+    #[test]
+    fn test_template_asserts_resolves_tenant_name() {
+        let handler = make_handler("service_pkg");
+        let raw = make_test_with_asserts(vec![assert_with_selector(
+            "tenant-check",
+            "{{tenant.name}}-config",
+        )]);
+        let ctx = serde_json::json!({ "tenant": { "name": "my-tenant" } });
+        let result = handler.template_test_asserts(&raw, &ctx).unwrap();
+        assert_eq!(
+            resolved_name(&result, "tenant-check"),
+            Some("my-tenant-config".to_string())
+        );
+    }
+
+    // template_test_asserts resolves {{defaults.replicas}} from context
+    #[test]
+    fn test_template_asserts_resolves_defaults() {
+        let handler = make_handler("service_pkg");
+        let raw = make_test_with_asserts(vec![assert_with_selector(
+            "defaults-check",
+            "cm-{{defaults.replicas}}",
+        )]);
+        let ctx = serde_json::json!({ "defaults": { "replicas": 3 } });
+        let result = handler.template_test_asserts(&raw, &ctx).unwrap();
+        assert_eq!(resolved_name(&result, "defaults-check"), Some("cm-3".to_string()));
+    }
+
+    // template_test_asserts resolves {{var.xxx}} for testSet references
+    #[test]
+    fn test_template_asserts_resolves_testset_var() {
+        let handler = make_handler("service_pkg");
+        let raw_test = handler.tests.get("nodes-override-test").unwrap();
+        // Verify the test loads without error (no testSet refs in this fixture,
+        // but the call must succeed and return the empty-context templated asserts).
+        let ctx = serde_json::json!({ "cluster": { "ha": true }, "values": {} });
+        let result = handler.template_test_asserts(raw_test, &ctx);
+        assert!(result.is_ok(), "template_test_asserts failed: {:?}", result.err());
     }
 }

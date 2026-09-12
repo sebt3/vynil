@@ -1,0 +1,17 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Test
+metadata:
+  name: nodes-override-test
+instance:
+  name: my-app
+  namespace: test-ns
+  nodes:
+    - master01
+    - worker01
+asserts:
+  - name: ha-cm-exists
+    selector:
+      kind: ConfigMap
+      name: ha-cm
+    matcher: any

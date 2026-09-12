@@ -1,0 +1,14 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Test
+metadata:
+  name: values-test
+instance:
+  name: my-app
+  namespace: test-ns
+asserts:
+  - name: values-common-name-resolves
+    selector:
+      kind: ConfigMap
+      name: "cm-{{values.common_name}}"
+    matcher: any

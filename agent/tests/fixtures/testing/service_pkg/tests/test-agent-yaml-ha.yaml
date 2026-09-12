@@ -1,0 +1,15 @@
+---
+apiVersion: vinyl.solidite.fr/v1beta1
+kind: Test
+metadata:
+  name: agent-yaml-ha-test
+instance:
+  name: my-app
+  namespace: test-ns
+  agent_yaml: agent-ha.yaml
+asserts:
+  - name: ha-cm-exists
+    selector:
+      kind: ConfigMap
+      name: ha-cm
+    matcher: any
