@@ -1,0 +1,62 @@
+# Directory spec for the `server` crate: the diagnostic API. Submodules are specified by
+# nearer same-basename specs.
+
+Spec: server
+
+Platform: Rust/Kubernetes
+
+Purpose:
+  The diagnostic HTTP API (`vynil-server`). It exposes cluster package/instance state to
+  `kubectl-vynil` and dashboards: authentication, authorization, discovery, log and event
+  collection, and DTO serialization, with tenant-scoped access and payload anonymization.
+
+Structure:
+  ./src/main.rs: Entrypoint, rustls provider pin, server bootstrap
+  ./src/lib.rs: Library root declaring the API modules
+  ./src/server.rs: Axum router and endpoint wiring
+  ./src/auth.rs: Request authentication
+  ./src/authz.rs: Tenant-scoped authorization
+  ./src/discovery.rs: Package and instance discovery
+  ./src/collect/: Log and event collection
+  ./src/dto.rs: Response DTOs
+  ./src/error.rs: API `@Error` mapping
+  ./src/anonymize.rs: Tenant payload anonymization
+  ./src/config.rs: Server configuration
+  ./src/state.rs: Shared `@AppState`
+  ./parent.toml: Standalone workspace manifest for the image build (generated)
+  ./Dockerfile: Runtime image build (contract in ./Dockerfile.sdd)
+
+Owns:
+  ./src/main.rs
+  ./src/lib.rs
+  ./src/server.rs
+  ./src/auth.rs
+  ./src/authz.rs
+  ./src/discovery.rs
+  ./src/dto.rs
+  ./src/error.rs
+  ./src/anonymize.rs
+  ./src/config.rs
+  ./src/state.rs
+  ./Cargo.toml
+  ./parent.toml
+
+Must:
+  Authorize every read against the requesting tenant scope before returning cluster data.
+  Anonymize secrets in returned payloads.
+  Pin the rustls crypto provider to `ring` before the Kubernetes client is built.
+
+Must not:
+  Enforce package lifecycle rules; reconciliation belongs to the `operator` crate.
+  Depend on the `agent` or `operator` crates.
+
+Depends on:
+  ./common/common.sdd
+  `axum`, `kube`, `k8s-openapi`
+
+Done when:
+  Each API module has a reviewed spec and `cargo test -p server` is green.
+
+Tasks:
+  [ ] #0 Spec `./src/authz.rs` and `./src/collect/`.
+  [ ] #1 Spec `./src/discovery.rs`, `./src/anonymize.rs`, and `./src/dto.rs`.

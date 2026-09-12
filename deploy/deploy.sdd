@@ -1,0 +1,35 @@
+# Directory spec for the cluster deployment manifests.
+
+Spec: deploy
+
+Purpose:
+  The raw Kubernetes manifests used to install Vynil into a cluster: the CRD bundle and the
+  bootstrap overlay that creates the operator's namespace, RBAC, and initial `@JukeBox`.
+
+Structure:
+  ./kustomization.yaml: Root Kustomization composing the CRD and bootstrap overlays
+  ./crd/crd.yaml: CRD bundle copied from the shipped box during generation
+  ./crd/kustomization.yaml: CRD overlay
+  ./bootstrap/bootstrap.sdd: Namespace, service account, RBAC, and starter JukeBox
+
+Owns:
+  ./kustomization.yaml
+  ./crd/crd.yaml
+  ./crd/kustomization.yaml
+
+Must:
+  Keep ./crd/crd.yaml identical to the generated box CRD bundle that /Cargo.toml's `cargo cmd
+    generate_crd` just produced.
+  Compose deployment only from `./crd/` and `./bootstrap/`.
+
+Must not:
+  Define reconciliation behaviour that lives in the operator; deployment describes what is applied,
+    never how instances converge.
+
+References:
+  ./bootstrap/bootstrap.sdd
+  /box/vynil/vynil.sdd
+
+Done when:
+  `kustomize build ./deploy` renders only the CRDs and the bootstrap resources and applies cleanly
+    on an empty cluster.

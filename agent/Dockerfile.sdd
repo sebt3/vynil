@@ -1,0 +1,40 @@
+# File spec for the agent runtime image.
+
+Spec: agent Dockerfile
+
+Platform: Docker
+
+Purpose:
+  Build the multi-arch `vynil-agent` image: the agent binary plus the external command-line
+  tools and packaged scripts that a dispatched Job needs at runtime, running as an unprivileged
+  user.
+
+Owns:
+  ./Dockerfile
+
+Must:
+  Compile the `agent` binary against `./parent.toml` with a dependency-cache pre-build before the
+    real sources are copied.
+  Install, at pinned verified versions, `kubectl`, `helm`, `opentofu` (as `terraform`),
+    `mongodump`/`mongorestore`, `restic`, `cosign`, and the database and archive client
+    toolchain.
+  Pre-seed the OpenTofu providers from `./providers.tf` into the runtime cache.
+  Copy `./scripts` and `./templates` into `/usr/lib/vynil` and export `SCRIPT_DIRECTORY`,
+    `TEMPLATE_DIRECTORY`, `PACKAGE_DIRECTORY`, `CONFIG_DIR`, and `XDG_CACHE_HOME`.
+  Drop privileges to `nobody` and run `/work` as the working directory.
+  Honor the `RUST_VERSION` and `DEBIAN_VERSION` build args.
+
+Must not:
+  Run the agent as root, or world-writable the key directory `/var/lib/vynil/keys`.
+  Fetch kubectl, helm, tofu, mongodb-tools, or cosign without a checksum or version pin.
+
+Depends on:
+  ./parent.toml
+  ./providers.tf
+
+References:
+  ./agent.sdd
+
+Done when:
+  The image builds under `docker/buildx` for `linux/amd64` and `linux/arm64` and the `agent`
+    entrypoint reports its version.

@@ -1,0 +1,32 @@
+# File spec for the diagnostic server runtime image.
+
+Spec: server Dockerfile
+
+Platform: Docker
+
+Purpose:
+  Build the multi-arch `vynil-server` image: the diagnostic API binary running as an unprivileged
+  user with only the TLS trust store present.
+
+Owns:
+  ./Dockerfile
+
+Must:
+  Compile the `server` binary against `./parent.toml` with a dependency-cache pre-build.
+  Base the runtime on a slim Debian image with `openssl` and `ca-certificates` installed.
+  Drop privileges to `nobody` with `/work` as the working directory.
+  Honor the `RUST_VERSION` and `DEBIAN_VERSION` build args.
+
+Must not:
+  Bundle the operator templates or the agent toolchain into this image.
+  Run the server as root.
+
+Depends on:
+  ./parent.toml
+
+References:
+  ./server.sdd
+
+Done when:
+  The image builds for `linux/amd64` and `linux/arm64` and the `server` entrypoint serves the
+    diagnostic API.

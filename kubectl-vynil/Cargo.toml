@@ -32,3 +32,6 @@ rustls = { version = "0.23", features = ["ring"] }
 k8s-openapi = { workspace = true, features = ["latest"] }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

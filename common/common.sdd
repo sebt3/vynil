@@ -1,0 +1,57 @@
+# Directory spec for the `common` crate. Coarse boundary only; each domain module
+# (jukebox, package model, engines) is specified by its own same-basename spec.
+
+Spec: common
+
+Platform: Rust
+
+Purpose:
+  Shared library crate carrying every Vynil-specific type used by the agent, operator, and
+  server. It wraps the external `vynil-core` toolbox into the Vynil layer: the four CRD
+  models, the package model, the context-aware Handlebars helpers, the Vynil Rhai bindings,
+  the order-preserving YAML helpers, and the status-condition macros.
+
+Structure:
+  ./src/lib.rs: Crate root — `@Error`, `@Result`, `@RhaiRes`, shared constants
+  ./src/context.rs: `@VynilContext` reconcile context and async client helpers
+  ./src/jukebox.rs: `@JukeBox` model, source variants, package cache
+  ./src/jukebox_file.rs: file-scan JukeBox variant (no cluster connection)
+  ./src/vynilpackage.rs: `@VynilPackage` model, requirements, waypoint selection
+  ./src/instanceservice.rs: `@ServiceInstance` model and Rhai bridge
+  ./src/instancesystem.rs: `@SystemInstance` model
+  ./src/instancetenant.rs: `@TenantInstance` model
+  ./src/instance_macros.rs: `impl_condition_common!` status-condition codegen
+  ./src/handlebarshandler.rs: Vynil Handlebars layer and context-aware helpers
+  ./src/rhaihandler.rs: Vynil Rhai constructors and bindings
+  ./src/yamlhandler.rs: order-preserving `@YamlDoc` helpers
+  ./src/tools.rs: base64/gzip and misc helpers
+  ./src/ttl_cache.rs: `@TtlCache` async TTL cache
+  ./src/k8smock.rs: test-support Kubernetes/OCI mock re-exports
+
+Owns:
+  ./src/lib.rs
+  ./Cargo.toml
+
+Must:
+  Expose only types and helpers genuinely shared across two or more consuming crates.
+  Keep the serde-YAML path order-preserving only through `./src/yamlhandler.rs`; elsewhere rely
+    on `vynil-core` alphabetical serde.
+  Re-export the generic `vynil-core` engines behind Vynil newtypes so consumers do not select
+    the engine layer themselves.
+
+Must not:
+  Depend on `agent`, `operator`, or `server`.
+  Duplicate generic engine helpers already provided by `vynil-core`.
+
+Depends on:
+  `vynil-core`
+  `kube`, `k8s-openapi`, `handlebars`, `rhai`, `serde_yaml`, `rust-yaml`
+
+Done when:
+  Each domain module above has a reviewed same-basename spec and `cargo test -p common` is green.
+
+Tasks:
+  [ ] #0 Spec `./src/vynilpackage.rs` (package model, requirements, waypoint selection).
+  [ ] #1 Spec the four instance-model modules and `./src/instance_macros.rs`.
+  [ ] #2 Spec `./src/jukebox.rs` and `./src/jukebox_file.rs`.
+  [ ] #3 Spec the Handlebars, Rhai, and YAML handler modules.

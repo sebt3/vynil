@@ -1,0 +1,64 @@
+# Directory spec for the `agent` crate: shipped binary + reusable library + package
+# tooling assets. Submodules and asset trees are specified by nearer specs.
+
+Spec: agent
+
+Platform: Rust/Kubernetes
+
+Purpose:
+  The `agent` binary run inside Kubernetes Jobs and the developer CLI. It performs the actual
+  work a Job is dispatched for: the package OCI lifecycle (build, update, test, validate,
+  lint), instance operations (install, delete, backup, restore) for the three instance kinds,
+  CRD generation, and box/template/run utilities.
+
+Structure:
+  ./src/main.rs: Binary entrypoint and clap `@Commands` dispatch
+  ./src/lib.rs: Library root re-exporting the test harness
+  ./src/package/: Package lifecycle subcommands, lint, and OCI packaging
+  ./src/{system,service,tenant}/: Per-kind instance operations
+  ./src/linting/: Static lint of package structure, Handlebars, and Rhai
+  ./src/testing/: `agent package test` engine and Rhai regression harness
+  ./src/boxes/: box and file-scan operations
+  ./src/crdgen.rs: CRD manifest generation
+  ./src/run.rs: `agent run` script runner
+  ./src/template/: `agent template` render helper
+  ./src/version.rs: version subcommand
+  ./templates/: Job/package Handlebars templates packaged into the image
+  ./scripts/: Rhai scripts packaged into the image
+  ./tests/: Rust integration and Rhai regression tests
+  ./Dockerfile: Runtime image build (contract in ./Dockerfile.sdd)
+  ./parent.toml: Standalone workspace manifest used only by the image build (generated)
+  ./providers.tf: OpenTofu provider pins pre-seeded into the image
+
+Owns:
+  ./src/main.rs
+  ./src/lib.rs
+  ./Cargo.toml
+  ./parent.toml
+  ./providers.tf
+  ./templates/**
+  ./scripts/**
+
+Must:
+  Build the standalone workspace through `./parent.toml` so the image builds without the other
+    binaries in the workspace.
+  Ship `./templates/` and `./scripts/` into the image under the paths set by `TEMPLATE_DIRECTORY`
+    and `SCRIPT_DIRECTORY`.
+  Keep the CLI flags and exit codes described in `/docs/cli.md` stable unless the owning
+    subcommand spec changes them.
+
+Must not:
+  Depend on the `operator` or `server` crates.
+  Hand-edit `./parent.toml`; regenerate it with `cargo cmd generate`.
+
+Depends on:
+  ./common/common.sdd
+
+Done when:
+  Each subcommand submodule has a reviewed same-basename or nested directory spec, and
+    `cargo test -p agent` is green.
+
+Tasks:
+  [ ] #0 Spec the `./src/package/` and `./src/linting/` submodules.
+  [ ] #1 Spec the instance-operation submodules and `./src/testing/` harness.
+  [ ] #2 Spec the packaged `./scripts/` Rhai library under its own spec.

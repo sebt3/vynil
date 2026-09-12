@@ -38,3 +38,6 @@ path = "src/main.rs"
 [lib]
 name = "client"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

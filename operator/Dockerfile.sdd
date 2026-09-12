@@ -1,0 +1,33 @@
+# File spec for the operator runtime image.
+
+Spec: operator Dockerfile
+
+Platform: Docker
+
+Purpose:
+  Build the multi-arch `vynil-operator` controller image: the operator binary and the Handlebars
+  Job templates it renders, running as an unprivileged user.
+
+Owns:
+  ./Dockerfile
+
+Must:
+  Compile the `operator` binary against `./parent.toml` with a dependency-cache pre-build.
+  Copy `./templates` to `/usr/lib/vynil/templates` and set `CONTROLLER_BASE_DIR=/usr/lib/vynil`.
+  Base the runtime on a slim Debian image with only the TLS system dependency installed.
+  Drop privileges to `nobody` with `/work` as the working directory.
+  Honor the `RUST_VERSION` and `DEBIAN_VERSION` build args.
+
+Must not:
+  Install the agent's heavyweight toolchain (kubectl, helm, tofu, restic) into this image.
+  Run the controller as root.
+
+Depends on:
+  ./parent.toml
+
+References:
+  ./operator.sdd
+
+Done when:
+  The image builds for `linux/amd64` and `linux/arm64` and the `operator` entrypoint starts its
+    controllers and metrics server.

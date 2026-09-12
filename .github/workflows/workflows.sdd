@@ -1,0 +1,47 @@
+# Directory spec for Continuous Integration. One same-basename file spec per workflow file
+# may be added if a pipeline grows substantial behaviour; the jobs stay described here.
+
+Spec: workflows
+
+Platform: GitHub Actions
+
+Purpose:
+  Continuous integration for the workspace: it gates every change on tests, formatting, lint,
+  and coverage, and publishes container images, the kubectl plugin release, and the docs parity
+  check on the right triggers.
+
+Structure:
+  ./test.yml: Gate job set — test, fmt, clippy, coverage
+  ./agent.yml: Build and publish the agent image on tag
+  ./operator.yml: Build and publish the operator image on tag
+  ./server.yml: Build and publish the server image on tag
+  ./cli.yml: Build and release the kubectl-vynil plugin on tag
+  ./docker-agent-test.yml: Build-only smoke of the agent and operator Dockerfiles
+  ./docs.yml: English/French documentation parity check
+  ../scripts/check-docs-parity.sh: EN/FR parity checker invoked by docs.yml
+
+Owns:
+  ./*.yml
+  ../scripts/check-docs-parity.sh
+
+Must:
+  Run `cargo test`, `cargo fmt --check` on nightly, `cargo clippy -- -D warnings`, and a
+    `cargo tarpaulin` coverage gate on every push to `main` and every pull request.
+  Publish images to both Docker Hub and `ghcr.io` for `linux/amd64` and `linux/arm64` on tag push.
+  Build the plugin for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and
+    `x86_64-pc-windows-msvc`, scoping cargo to `kubectl-vynil/Cargo.toml`.
+  Build each image from its own crate Dockerfile under `/`.
+
+Must not:
+  Gate a change that only touches documentation on the Rust build jobs.
+  Publish a mutable tag other than `latest` and the `github.ref_name` tag.
+
+Depends on:
+  /agent/Dockerfile.sdd
+  /operator/Dockerfile.sdd
+  /server/Dockerfile.sdd
+
+Tasks:
+  [ ] #0 Get `cargo clippy -- -D warnings` green under the strict harness so the Clippy job can
+    stop failing.
+  [ ] #1 Keep the pinned Rust toolchain aligned with each Dockerfile `RUST_VERSION`.
