@@ -1,0 +1,39 @@
+# Directory spec for the project documentation site.
+
+Spec: docs
+
+Platform: Markdown/mkdocs
+
+Purpose:
+  The user and operator documentation published with mkdocs: concepts, CRD reference, package
+  format and lifecycle, JukeBox sources, CLI reference, operations, and an English/French mirror.
+
+Structure:
+  ./*.md: Top-level English pages (index, concepts, architecture, crds, cli, installation,
+    distribution, reconciliation, build-signing, gen-package)
+  ./packages/: Package format, lifecycle, and portability
+  ./jukebox/: Source types and registry maintenance
+  ./operations/: Operations and security guidance
+  ./tooling/: Package lint and test tooling
+  ./fr/: French mirror, same structure and filenames
+
+Owns:
+  ./*.md
+  ./tooling/**
+  ./jukebox/**
+  ./operations/**
+  ./packages/**
+  ./fr/**
+
+Must:
+  Keep the French mirror in structural parity with English: same paths and filenames, enforced by
+    the CI parity check in /.github/workflows/workflows.sdd.
+  Treat ./architecture.md as the authoritative description of crate responsibilities and the
+    reconciliation flow.
+  Describe the security posture of the cluster-admin agent and unverified package signatures.
+
+Must not:
+  Treat the retired ./conception/ directory as documentation; it is not owned and not published.
+
+Depends on:
+  ../mkdocs.yml

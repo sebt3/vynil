@@ -51,3 +51,6 @@ wiremock = "0.6"
 [lib]
 name = "common"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

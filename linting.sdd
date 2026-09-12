@@ -1,0 +1,67 @@
+# Static-analysis and formatting harness. This spec describes the contract; the machine-
+# readable settings live in /Cargo.toml and ./rustfmt.toml. Crate and file specs inherit this
+# harness through the root wynil spec and never restate its rule levels.
+
+Spec: linting
+
+Platform: Rust/clippy/rustfmt
+
+Purpose:
+  Define the static-analysis and formatting harness that every crate obeys so agents and humans
+  get the same strict, deterministic guidance, with the harshest rules aimed squarely at new
+  code. The harness is a contract for implementation, not documentation of taste.
+
+Structure:
+  /Cargo.toml: Defines the [workspace.lints.clippy] and [workspace.lints.rust] levels shared
+    by every crate
+  ./rustfmt.toml: Shared nightly rustfmt settings
+  ./specdd/bootstrap.project.md: Records the operational rule tying code to clippy-clean
+    verification (not a spec target)
+
+Owns:
+  ./rustfmt.toml
+
+Can modify:
+  /Cargo.toml: the [workspace.lints] block only
+
+Must:
+  Deny `clippy::pedantic` at workspace level and warn `clippy::nursery`, with pedantic prioritised
+    so nursery does not override it.
+  Deny `clippy::dbg_macro`, `clippy::todo`, and `clippy::unimplemented` at workspace level.
+  Warn `unsafe_code` and `missing_debug_implementations` at workspace level.
+  Carry, at each crate root, a `#![cfg_attr(not(test), deny(clippy::unwrap_used,
+    clippy::expect_used))]` attribute so tests keep unwrap and expect and product code may not.
+  Carry at each crate root a warn for `clippy::arithmetic_side_effects` and
+    `clippy::indexing_slicing`, and promote either to deny per-file once the sites are addressed.
+  Require clippy and fmt as part of every verification loop, so code that changes is code that
+    passes both.
+
+Must not:
+  Silence a harness rule with an `#[allow(...)]` in product code unless the owning file spec
+    records the concrete reason.
+  Set `unwrap_used` or `expect_used` in the `[workspace.lints]` table; the per-crate cfg_attr form
+    is what keeps them test-exempt.
+
+Depends on:
+  /Cargo.toml
+  nightly rustfmt
+
+Done when:
+  Every crate opts into the workspace lints, every crate root carries the deny and warn
+    attributes, and every `Scenario` below has a test or is covered by tooling.
+
+Scenario: product unwrap is refused
+  Given a product-code call site uses `unwrap()`
+  And the crate root carries the deny attributes
+  When `cargo clippy --all-targets -- -D warnings` runs
+  Then the lint fails the build
+
+Scenario: test unwrap is allowed
+  Given a `#[cfg(test)]` test uses `unwrap()`
+  When `cargo clippy --all-targets -- -D warnings` runs
+  Then the test code emits no unwrap warning
+
+Scenario: pedantic is a hard error
+  Given new code introduces a pedantic-level clippy warning
+  When clippy runs with the workspace lints table
+  Then the check fails at deny

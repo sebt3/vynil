@@ -1,3 +1,6 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

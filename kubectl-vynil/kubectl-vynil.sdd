@@ -1,0 +1,57 @@
+# Directory spec for the `kubectl-vynil` crate: the kubectl plugin CLI. Its sources are
+# specified once they are drafted.
+
+Spec: kubectl-vynil
+
+Platform: Rust/Kubernetes
+
+Purpose:
+  Client-side `kubectl` plugin (`kubectl vynil …`). It drives the operator from the user's
+  kubeconfig context: trigger scans and upgrades, pull diagnostics, and tail logs. It also
+  hosts shell completion for the plugin.
+
+Structure:
+  ./src/main.rs: Entrypoint and `__complete`/completion dispatch
+  ./src/lib.rs: Library root
+  ./src/cli.rs: clap command tree and resource-kind constants
+  ./src/actions.rs: Instance and JukeBox operations against the cluster
+  ./src/bundle.rs: Diagnostic bundle pull and archive
+  ./src/completion.rs: Dynamic `__complete` protocol handler
+  ./src/items.rs: Resource listing and rendering
+  ./src/transport.rs: HTTP transport to the diagnostic server
+  ./kubectl_complete-vynil: Cobra-protocol shim invoked by kubectl
+  ./completions/: Sourced completion scripts per shell
+
+Owns:
+  ./src/main.rs
+  ./src/lib.rs
+  ./src/cli.rs
+  ./src/actions.rs
+  ./src/bundle.rs
+  ./src/completion.rs
+  ./src/items.rs
+  ./src/transport.rs
+  ./Cargo.toml
+  ./kubectl_complete-vynil
+  ./completions/**
+
+Must:
+  Speak the Cobra `__complete` protocol so `kubectl vynil <TAB>` completes dynamically.
+  Build statically-friendly with pure rustls so the released binary needs no libssl at runtime.
+  Cross-compile for the release targets declared by the CI release job in
+    `/.github/workflows/workflows.sdd`.
+
+Must not:
+  Reconcile or mutate package lifecycle beyond triggering an action the operator owns.
+  Depend on `agent`, `operator`, or `server`.
+
+Depends on:
+  `kube`, `k8s-openapi`, `reqwest`, `clap`, `anyhow`
+
+Done when:
+  The actions, bundle, and completion modules have reviewed specs and `cargo test -p kubectl-vynil`
+    is green.
+
+Tasks:
+  [ ] #0 Spec `./src/actions.rs`, `./src/bundle.rs`, and `./src/transport.rs`.
+  [ ] #1 Spec `./src/completion.rs` and the shim.

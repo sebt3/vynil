@@ -1,0 +1,64 @@
+# Directory spec for the `operator` crate: the reconciling Kubernetes controller.
+# Submodules are specified by nearer same-basename specs.
+
+Spec: operator
+
+Platform: Rust/Kubernetes
+
+Purpose:
+  The Vynil controller. It watches the four custom resources, caches packages from JukeBox
+  scans, selects the package for each instance, checks requirements, and renders and applies
+  the Job that runs the agent. It also serves Prometheus metrics and health over Actix on
+  port 9000.
+
+Structure:
+  ./src/main.rs: Entrypoint, Actix metrics/health server, controller wiring
+  ./src/lib.rs: Library root re-exporting the controllers and `@InstanceKind`
+  ./src/manager.rs: `@Manager` shared context and the four controllers
+  ./src/instance_common.rs: `@InstanceKind` trait and the shared `@do_reconcile`/`@do_cleanup`
+    algorithm
+  ./src/{instanceservice,instancesystem,instancetenant}.rs: Per-kind `@InstanceKind` impls
+  ./src/jukebox.rs: JukeBox scan reconciliation and package cache update
+  ./src/metrics.rs: Prometheus registries and reconciliation metrics
+  ./src/telemetry.rs: OpenTelemetry tracing, behind the `telemetry` feature
+  ./templates/: Job and scan Job Handlebars templates
+  ./parent.toml: Standalone workspace manifest for the image build (generated)
+  ./Dockerfile: Runtime image build (contract in ./Dockerfile.sdd)
+
+Owns:
+  ./src/main.rs
+  ./src/lib.rs
+  ./src/manager.rs
+  ./src/instance_common.rs
+  ./src/metrics.rs
+  ./src/telemetry.rs
+  ./Cargo.toml
+  ./parent.toml
+  ./templates/**
+
+Must:
+  Reconcile all three instance kinds through the single `@InstanceKind` algorithm, so new kinds
+    share install, requirement-check, and cleanup behaviour.
+  Requeue an instance every 15 minutes and honour the suspend and force-reinstall control
+    annotations.
+  Render every Job through Handlebars templates in `./templates/`.
+  Expose reconciliation duration, success/failure counters, and last-event timestamp on
+    `GET /metrics`.
+
+Must not:
+  Deploy or uninstall applications directly; the controller only creates the Job that launches
+    the agent.
+  Depend on the `agent` or `server` crates.
+
+Depends on:
+  ./common/common.sdd
+  `kube`, `k8s-openapi`, `actix-web`, `prometheus-client`
+
+Done when:
+  `./src/instance_common.rs` and each per-kind module have reviewed specs, and
+    `cargo test -p operator` is green.
+
+Tasks:
+  [ ] #0 Spec `./src/instance_common.rs` (the shared reconcile/cleanup algorithm and annotations).
+  [ ] #1 Spec `./src/jukebox.rs` and the three per-kind impl modules.
+  [ ] #2 Spec `./src/manager.rs` and `./src/metrics.rs`.

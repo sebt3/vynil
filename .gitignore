@@ -1,8 +1,8 @@
 /target
 /scripts
-CLAUDE.md
 .claude/
 .kydah/
+# Retired docs/conception/.tasks workflow — remove these directories and these entries.
 .tasks/
 docs/conception/
 agent/tests/tmp/*
