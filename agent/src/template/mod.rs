@@ -21,17 +21,17 @@ pub enum Commands {
     System(system::Parameters),
 }
 
-pub async fn run(cmd: &Parameters) {
+pub fn run(cmd: &Parameters) {
     match &cmd.command {
-        Commands::Tenant(args) => tenant::run(args).await.unwrap_or_else(|e| {
+        Commands::Tenant(args) => tenant::run(args).unwrap_or_else(|e| {
             tracing::error!("Templating a tenant package failed with: {e:}");
             process::exit(1)
         }),
-        Commands::Service(args) => service::run(args).await.unwrap_or_else(|e| {
+        Commands::Service(args) => service::run(args).unwrap_or_else(|e| {
             tracing::error!("Templating a service package failed with: {e:}");
             process::exit(1)
         }),
-        Commands::System(args) => system::run(args).await.unwrap_or_else(|e| {
+        Commands::System(args) => system::run(args).unwrap_or_else(|e| {
             tracing::error!("Templating a system package failed with: {e:}");
             process::exit(3)
         }),

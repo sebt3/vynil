@@ -5,6 +5,11 @@ use common::{
 use kube::{Api, Client};
 use serde_yaml;
 
+///
+/// # Errors
+///
+/// Propagates the underlying [`DiagError`] raised by the Kubernetes API calls or by
+/// serialization of the collected resources.
 /// Get instance state for a specific instance
 pub async fn get_instance_state(
     client: &Client,
@@ -38,7 +43,7 @@ pub async fn get_instance_state(
     Ok((scrubbed, stats))
 }
 
-/// Get TenantInstance by name and namespace, stripping sensitive fields
+/// Get `TenantInstance` by name and namespace, stripping sensitive fields
 async fn get_tenant_instance(
     client: &Client,
     namespace: &str,
@@ -57,7 +62,7 @@ async fn get_tenant_instance(
     Ok(stripped)
 }
 
-/// Get ServiceInstance by name and namespace, stripping sensitive fields
+/// Get `ServiceInstance` by name and namespace, stripping sensitive fields
 async fn get_service_instance(
     client: &Client,
     namespace: &str,
@@ -76,7 +81,7 @@ async fn get_service_instance(
     Ok(stripped)
 }
 
-/// Get SystemInstance by name and namespace, stripping sensitive fields
+/// Get `SystemInstance` by name and namespace, stripping sensitive fields
 async fn get_system_instance(
     client: &Client,
     namespace: &str,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// All known diagnostic items in collection order.
 pub const ALL_ITEMS: &[&str] = &[
@@ -14,13 +14,14 @@ pub const ALL_ITEMS: &[&str] = &[
 ];
 
 /// Returns the list of items to collect, respecting the optional filter.
+#[must_use]
 pub fn resolve_items(filter: Option<&[String]>) -> Vec<&'static str> {
     match filter {
         Some(items) if !items.is_empty() => {
-            let requested: HashMap<&str, ()> = items.iter().map(|s| (s.as_str(), ())).collect();
+            let requested: HashSet<&str> = items.iter().map(String::as_str).collect();
             ALL_ITEMS
                 .iter()
-                .filter(|item| requested.contains_key(*item))
+                .filter(|item| requested.contains(*item))
                 .copied()
                 .collect()
         }
@@ -29,7 +30,13 @@ pub fn resolve_items(filter: Option<&[String]>) -> Vec<&'static str> {
 }
 
 /// Maps an item name to its path within the bundle.
+///
 /// The extension will be appended based on Content-Type.
+///
+/// # Panics
+///
+/// Panics when `item` is not one of the known diagnostic items (`ALL_ITEMS`).
+#[must_use]
 pub fn item_path(item: &str) -> &'static str {
     match item {
         "clusterinfo" => "cluster/clusterinfo",
@@ -41,11 +48,12 @@ pub fn item_path(item: &str) -> &'static str {
         "agentlog" => "logs/agentlog",
         "childlogs" => "logs/childlogs",
         "operatorlog" => "logs/operatorlog",
-        _ => panic!("unknown item: {}", item),
+        _ => panic!("unknown item: {item}"),
     }
 }
 
 /// Maps Content-Type to file extension.
+#[must_use]
 pub fn extension_for_content_type(content_type: &str) -> &'static str {
     let ct = content_type.to_lowercase();
     if ct.contains("application/json") {
@@ -60,6 +68,7 @@ pub fn extension_for_content_type(content_type: &str) -> &'static str {
 }
 
 /// Builds the full API path for a given item.
+#[must_use]
 pub fn api_path(target: &crate::cli::InstanceTarget, item: &str) -> String {
     format!(
         "/apis/admin.vynil.solidite.fr/v1/namespaces/{}/{}/{}/{}",

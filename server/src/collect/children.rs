@@ -11,6 +11,11 @@ use kube::{Api, Client};
 use serde_json;
 
 /// Get children information for an instance
+///
+/// # Errors
+///
+/// Returns [`DiagError::UnknownKind`] for an unmapped kind, or the Kubernetes/serialization
+/// error raised while reading the instance and its children.
 pub async fn get_children(
     client: &Client,
     kind: &str,
@@ -28,20 +33,26 @@ pub async fn get_children(
 
     // Get current state for each child
     let mut result = Vec::new();
-    let mut total_stats = ScrubStats::default();
+    let mut accumulated = ScrubStats::default();
 
     for child in children {
-        let (state, stats) = get_child_state(client, &child, namespace, vynil_namespace).await?;
-        total_stats.distinct += stats.distinct;
-        total_stats.occurrences += stats.occurrences;
+        let (child_state, child_scrub_stats) =
+            get_child_state(client, &child, namespace, vynil_namespace).await?;
+        accumulated.distinct = accumulated.distinct.saturating_add(child_scrub_stats.distinct);
+        accumulated.occurrences = accumulated
+            .occurrences
+            .saturating_add(child_scrub_stats.occurrences);
 
-        result.push(ChildWithState { child, state });
+        result.push(ChildWithState {
+            child,
+            state: child_state,
+        });
     }
 
-    Ok((result, total_stats))
+    Ok((result, accumulated))
 }
 
-/// Extract children from a TenantInstance
+/// Extract children from a `TenantInstance`
 async fn get_tenant_children(
     client: &Client,
     namespace: &str,
@@ -50,10 +61,10 @@ async fn get_tenant_children(
     let api: Api<TenantInstance> = Api::namespaced(client.clone(), namespace);
     let instance = api.get(name).await.map_err(DiagError::KubeError)?;
 
-    extract_children_from_instance(&instance)
+    Ok(extract_children_from_instance(&instance))
 }
 
-/// Extract children from a ServiceInstance
+/// Extract children from a `ServiceInstance`
 async fn get_service_children(
     client: &Client,
     namespace: &str,
@@ -62,10 +73,10 @@ async fn get_service_children(
     let api: Api<ServiceInstance> = Api::namespaced(client.clone(), namespace);
     let instance = api.get(name).await.map_err(DiagError::KubeError)?;
 
-    extract_children_from_instance(&instance)
+    Ok(extract_children_from_instance(&instance))
 }
 
-/// Extract children from a SystemInstance
+/// Extract children from a `SystemInstance`
 async fn get_system_children(
     client: &Client,
     namespace: &str,
@@ -74,11 +85,11 @@ async fn get_system_children(
     let api: Api<SystemInstance> = Api::namespaced(client.clone(), namespace);
     let instance = api.get(name).await.map_err(DiagError::KubeError)?;
 
-    extract_children_from_instance(&instance)
+    Ok(extract_children_from_instance(&instance))
 }
 
 /// Status categories that hold `Children` lists across all instance kinds.
-/// `systems` is SystemInstance-specific — omitting it dropped all SystemInstance children.
+/// `systems` is SystemInstance-specific — omitting it dropped all `SystemInstance` children.
 const CHILD_CATEGORIES: &[&str] = &[
     "befores",
     "vitals",
@@ -90,6 +101,7 @@ const CHILD_CATEGORIES: &[&str] = &[
 ];
 
 /// Extract every child from an instance's `status`, across all categories, from its JSON form.
+#[must_use]
 pub fn all_children_from_status(instance_json: &serde_json::Value) -> Vec<Children> {
     let Some(status) = instance_json.get("status").and_then(|s| s.as_object()) else {
         return Vec::new();
@@ -103,14 +115,12 @@ pub fn all_children_from_status(instance_json: &serde_json::Value) -> Vec<Childr
     children
 }
 
-/// Extract children from an instance using serde_json to handle the different status shapes.
-fn extract_children_from_instance(
-    instance: &(impl serde::Serialize + std::fmt::Debug),
-) -> Result<Vec<Children>, DiagError> {
-    match serde_json::to_value(instance) {
-        Ok(json) => Ok(all_children_from_status(&json)),
-        Err(_) => Ok(Vec::new()),
-    }
+/// Extract children from an instance using `serde_json` to handle the different status shapes.
+/// Serialisation of an in-memory model cannot realistically fail; fall back to no children.
+fn extract_children_from_instance(instance: &(impl serde::Serialize + std::fmt::Debug)) -> Vec<Children> {
+    serde_json::to_value(instance)
+        .map(|json| all_children_from_status(&json))
+        .unwrap_or_default()
 }
 
 /// Extract Children from a JSON array (entries that don't shape as Children are skipped).
@@ -140,7 +150,7 @@ async fn get_child_state(
             match api.get(&child.name).await {
                 Ok(deployment) => {
                     let (scrubbed, stats) = scrub_json(
-                        serde_json::to_value(deployment).unwrap(),
+                        serde_json::to_value(deployment).map_err(DiagError::SerializationError)?,
                         client,
                         namespace,
                         vynil_namespace,
@@ -157,7 +167,7 @@ async fn get_child_state(
             match api.get(&child.name).await {
                 Ok(statefulset) => {
                     let (scrubbed, stats) = scrub_json(
-                        serde_json::to_value(statefulset).unwrap(),
+                        serde_json::to_value(statefulset).map_err(DiagError::SerializationError)?,
                         client,
                         namespace,
                         vynil_namespace,
@@ -174,7 +184,7 @@ async fn get_child_state(
             match api.get(&child.name).await {
                 Ok(daemonset) => {
                     let (scrubbed, stats) = scrub_json(
-                        serde_json::to_value(daemonset).unwrap(),
+                        serde_json::to_value(daemonset).map_err(DiagError::SerializationError)?,
                         client,
                         namespace,
                         vynil_namespace,
@@ -191,7 +201,7 @@ async fn get_child_state(
             match api.get(&child.name).await {
                 Ok(service) => {
                     let (scrubbed, stats) = scrub_json(
-                        serde_json::to_value(service).unwrap(),
+                        serde_json::to_value(service).map_err(DiagError::SerializationError)?,
                         client,
                         namespace,
                         vynil_namespace,
@@ -208,7 +218,7 @@ async fn get_child_state(
             match api.get(&child.name).await {
                 Ok(configmap) => {
                     let (scrubbed, stats) = scrub_json(
-                        serde_json::to_value(configmap).unwrap(),
+                        serde_json::to_value(configmap).map_err(DiagError::SerializationError)?,
                         client,
                         namespace,
                         vynil_namespace,

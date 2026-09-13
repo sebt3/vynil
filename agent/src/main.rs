@@ -60,20 +60,17 @@ async fn main() {
     );
     let args = Parameters::parse();
     match &args.command {
-        Commands::Version(args) => version::run(args).await.unwrap_or_else(|e| {
-            tracing::error!("Version failed with: {e:}");
-            process::exit(1)
-        }),
-        Commands::Run(args) => run::run(args).await.unwrap_or_else(|e| {
+        Commands::Version(args) => version::run(args),
+        Commands::Run(args) => run::run(args).unwrap_or_else(|e| {
             tracing::error!("Run failed with: {e:}");
             process::exit(1)
         }),
-        Commands::Crdgen(args) => crdgen::run(args).await.unwrap_or_else(|e| {
+        Commands::Crdgen(args) => crdgen::run(args).unwrap_or_else(|e| {
             tracing::error!("CRD generation failed with: {e:}");
             process::exit(2)
         }),
-        Commands::Template(args) => template::run(args).await,
-        Commands::Package(args) => package::run(args).await,
+        Commands::Template(args) => template::run(args),
+        Commands::Package(args) => package::run(args),
         Commands::System(args) => system::run(args).await,
         Commands::Service(args) => service::run(args).await,
         Commands::Tenant(args) => tenant::run(args).await,

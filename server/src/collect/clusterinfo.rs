@@ -3,8 +3,13 @@ use crate::{
     error::DiagError,
 };
 use k8s_openapi::api::{core::v1::Node, networking::v1::IngressClass, storage::v1::StorageClass};
-use kube::{Api, Client};
+use kube::{Api, Client, api::ListParams};
 
+///
+/// # Errors
+///
+/// Propagates the underlying [`DiagError`] raised by the Kubernetes API calls or by
+/// serialization of the collected resources.
 /// Get cluster information
 pub async fn get_cluster_info(client: &Client, vynil_namespace: &str) -> Result<ClusterInfo, DiagError> {
     // Get nodes
@@ -39,7 +44,7 @@ pub async fn get_cluster_info(client: &Client, vynil_namespace: &str) -> Result<
 async fn get_nodes(client: &Client) -> Result<Vec<NodeInfo>, DiagError> {
     let api: Api<Node> = Api::all(client.clone());
     let node_list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 
@@ -123,7 +128,7 @@ async fn detect_distribution(client: &Client) -> Result<String, DiagError> {
     // Check for GKE labels
     let api: Api<Node> = Api::all(client.clone());
     let node_list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 
@@ -162,7 +167,7 @@ async fn get_vynil_version(client: &Client, vynil_namespace: &str) -> Result<Opt
     use k8s_openapi::api::apps::v1::Deployment;
 
     let api: Api<Deployment> = Api::namespaced(client.clone(), vynil_namespace);
-    match api.list(&Default::default()).await {
+    match api.list(&ListParams::default()).await {
         Ok(list) => {
             for deployment in list.items {
                 if let Some(labels) = &deployment.metadata.labels
@@ -206,7 +211,7 @@ async fn get_vynil_version(client: &Client, vynil_namespace: &str) -> Result<Opt
 async fn get_storage_classes(client: &Client) -> Result<Vec<StorageClassInfo>, DiagError> {
     let api: Api<StorageClass> = Api::all(client.clone());
     let sc_list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 
@@ -235,7 +240,7 @@ async fn get_storage_classes(client: &Client) -> Result<Vec<StorageClassInfo>, D
 async fn get_ingress_classes(client: &Client) -> Result<Vec<String>, DiagError> {
     let api: Api<IngressClass> = Api::all(client.clone());
     let ic_list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 

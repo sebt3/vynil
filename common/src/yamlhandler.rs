@@ -24,7 +24,7 @@ fn new_yaml() -> Yaml {
 
 // ── Order-preserving YAML document type (rust-yaml) ───────────────────────────
 
-/// A YAML document that preserves key insertion order (backed by IndexMap).
+/// A YAML document that preserves key insertion order (backed by `IndexMap`).
 #[derive(Debug, Clone)]
 pub struct YamlDoc(pub Value);
 
@@ -37,34 +37,37 @@ impl std::str::FromStr for YamlDoc {
 }
 
 impl YamlDoc {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read or the YAML cannot be deserialized.
     pub fn to_yaml_string(&self) -> Result<String, String> {
         new_yaml().dump_str(&self.0).map_err(|e| e.to_string())
     }
 
     // ── Rhai indexer get ──────────────────────────────────────────────────
     pub fn idx_get(&mut self, key: ImmutableString) -> Dynamic {
+        let key: String = key.into();
         match &self.0 {
             Value::Mapping(m) => {
-                let k = Value::String(key.to_string());
-                m.get(&k)
-                    .map(|v| value_to_dynamic(v.clone()))
-                    .unwrap_or(Dynamic::UNIT)
+                let k = Value::String(key);
+                m.get(&k).map_or(Dynamic::UNIT, |v| value_to_dynamic(v.clone()))
             }
             Value::Sequence(s) => key
                 .parse::<usize>()
                 .ok()
                 .and_then(|i| s.get(i))
-                .map(|v| value_to_dynamic(v.clone()))
-                .unwrap_or(Dynamic::UNIT),
+                .map_or(Dynamic::UNIT, |v| value_to_dynamic(v.clone())),
             _ => Dynamic::UNIT,
         }
     }
 
     // ── Rhai indexer set ──────────────────────────────────────────────────
     pub fn idx_set(&mut self, key: ImmutableString, val: Dynamic) {
+        let key: String = key.into();
         let yaml_val = dynamic_to_value(val);
         if let Value::Mapping(m) = &mut self.0 {
-            m.insert(Value::String(key.to_string()), yaml_val);
+            m.insert(Value::String(key), yaml_val);
         }
     }
 
@@ -93,21 +96,25 @@ impl YamlDoc {
         }
     }
 
+    #[must_use]
     pub fn contains_key(&self, key: ImmutableString) -> bool {
+        let key: String = key.into();
         match &self.0 {
-            Value::Mapping(m) => m.contains_key(&Value::String(key.to_string())),
+            Value::Mapping(m) => m.contains_key(&Value::String(key)),
             _ => false,
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> i64 {
         match &self.0 {
-            Value::Mapping(m) => m.len() as i64,
-            Value::Sequence(s) => s.len() as i64,
+            Value::Mapping(m) => i64::try_from(m.len()).unwrap_or(i64::MAX),
+            Value::Sequence(s) => i64::try_from(s.len()).unwrap_or(i64::MAX),
             _ => 0,
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -156,8 +163,7 @@ pub fn dynamic_to_value(d: Dynamic) -> Value {
         serde_json::to_string(&d)
             .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .map(serde_json_value_to_yaml_value)
-            .unwrap_or(Value::Null)
+            .map_or(Value::Null, serde_json_value_to_yaml_value)
     }
 }
 
@@ -165,15 +171,11 @@ fn serde_json_value_to_yaml_value(v: serde_json::Value) -> Value {
     match v {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::String(n.to_string())
-            }
-        }
+        serde_json::Value::Number(n) => match (n.as_i64(), n.as_f64()) {
+            (Some(i), _) => Value::Int(i),
+            (None, Some(f)) => Value::Float(f),
+            _ => Value::String(n.to_string()),
+        },
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Array(a) => {
             Value::Sequence(a.into_iter().map(serde_json_value_to_yaml_value).collect())
@@ -205,14 +207,14 @@ pub fn yaml_ordered_rhai_register(engine: &mut Engine) {
                 new_yaml()
                     .dump_str(&yaml_val)
                     .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
-                    .map(|s| s.into())
+                    .map(std::convert::Into::into)
             },
         )
         .register_fn("yaml_encode_ordered", |yd: YamlDoc| -> RhaiRes<ImmutableString> {
             new_yaml()
                 .dump_str(&yd.0)
                 .map_err(|e| rhai_err(Error::YamlError(e.to_string())))
-                .map(|s| s.into())
+                .map(std::convert::Into::into)
         });
 
     engine

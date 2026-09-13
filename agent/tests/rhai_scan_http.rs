@@ -86,7 +86,7 @@ async fn scan_http_source_finds_package() {
         1,
         "expected 1 package found via Http source"
     );
-    let pkg_tag = script.eval(r#"box.status.packages[0].tag"#).unwrap();
+    let pkg_tag = script.eval(r"box.status.packages[0].tag").unwrap();
     assert_eq!(pkg_tag.into_string().unwrap(), "1.0.0", "expected tag 1.0.0");
 }
 

@@ -10,7 +10,7 @@ use actix_web::{
 };
 
 #[get("/metrics")]
-async fn metrics(c: Data<Manager>, _req: HttpRequest) -> impl Responder {
+async fn metrics(c: Data<Manager>) -> impl Responder {
     let metrics = c.metrics();
     HttpResponse::Ok()
         .content_type("application/openmetrics-text; version=1.0.0; charset=utf-8")
@@ -18,23 +18,26 @@ async fn metrics(c: Data<Manager>, _req: HttpRequest) -> impl Responder {
 }
 
 #[get("/health")]
-async fn health(_: HttpRequest) -> impl Responder {
+async fn health() -> impl Responder {
     HttpResponse::Ok().json("healthy")
 }
 
 #[get("/")]
-async fn index(c: Data<Manager>, _req: HttpRequest) -> impl Responder {
+async fn index(c: Data<Manager>) -> impl Responder {
     let d = c.diagnostics().await;
     HttpResponse::Ok().json(&d)
 }
 
 fn main() -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(8 * 1024 * 1024) // kube 2.0 + async_trait : state machines en debug sont larges
         .build()
-        .expect("Failed to build Tokio runtime")
-        .block_on(async_main())
+    {
+        Ok(runtime) => runtime,
+        Err(e) => panic!("failed to build Tokio runtime: {e}"),
+    };
+    runtime.block_on(async_main())
 }
 
 async fn async_main() -> Result<()> {
@@ -49,7 +52,7 @@ async fn async_main() -> Result<()> {
     let logger = tracing_subscriber::fmt::layer();
     let env_filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
+        .unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Decide on layers
     #[cfg(feature = "telemetry")]
@@ -58,7 +61,9 @@ async fn async_main() -> Result<()> {
     let collector = Registry::default().with(logger).with(env_filter);
 
     // Initialize tracing
-    tracing::subscriber::set_global_default(collector).unwrap();
+    if let Err(e) = tracing::subscriber::set_global_default(collector) {
+        panic!("failed to install the global tracing subscriber: {e}");
+    }
 
     common::context::init_k8s();
     common::context::wire_core_k8s();
@@ -75,14 +80,14 @@ async fn async_main() -> Result<()> {
             .service(metrics)
     })
     .bind("0.0.0.0:9000")
-    .expect("Can not bind to 0.0.0.0:9000")
+    .map_err(|e| Error::Other(format!("can not bind to 0.0.0.0:9000: {e}")))?
     .shutdown_timeout(5);
 
     tokio::select! {
-        _ = controller_jbs => tracing::warn!("JukeBox controller exited"),
-        _ = controller_tnts => tracing::warn!("TenantInstance controller exited"),
-        _ = controller_stms => tracing::warn!("SystemInstance controller exited"),
-        _ = controller_svcs => tracing::warn!("ServiceInstance controller exited"),
+        () = controller_jbs => tracing::warn!("JukeBox controller exited"),
+        () = controller_tnts => tracing::warn!("TenantInstance controller exited"),
+        () = controller_stms => tracing::warn!("SystemInstance controller exited"),
+        () = controller_svcs => tracing::warn!("ServiceInstance controller exited"),
         _ = server.run() => tracing::info!("actix exited"),
     }
     Ok(())

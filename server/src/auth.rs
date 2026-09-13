@@ -1,6 +1,6 @@
 use axum::http::{HeaderMap, header::AUTHORIZATION};
 use k8s_openapi::api::authentication::v1::TokenReview;
-use kube::{Api, Client};
+use kube::{Api, Client, api::PostParams};
 
 use crate::error::DiagError;
 
@@ -20,6 +20,11 @@ pub struct Identity {
 ///    this code already proves the request came from the aggregation layer. When the flag is off,
 ///    these headers are **completely ignored** (otherwise anyone could impersonate any user).
 /// 2. **Bearer token** → `TokenReview` (direct in-cluster / test path).
+///
+/// # Errors
+///
+/// Returns [`DiagError::AuthenticationRequired`] when no usable identity is present in the
+/// request headers.
 pub async fn extract_identity(
     client: &Client,
     headers: &HeaderMap,
@@ -42,6 +47,7 @@ pub async fn extract_identity(
 }
 
 /// Pure parse of front-proxy identity headers (no trust decision here).
+#[must_use]
 pub fn request_header_identity(headers: &HeaderMap) -> Option<Identity> {
     let user = headers.get("X-Remote-User")?.to_str().ok()?.to_string();
     if user.is_empty() {
@@ -51,12 +57,17 @@ pub fn request_header_identity(headers: &HeaderMap) -> Option<Identity> {
         .get_all("X-Remote-Group")
         .iter()
         .filter_map(|h| h.to_str().ok())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
     Some(Identity { user, groups })
 }
 
-/// Validate a bearer token via the Kubernetes TokenReview API.
+/// Validate a bearer token via the Kubernetes `TokenReview` API.
+///
+/// # Errors
+///
+/// Returns [`DiagError::AuthenticationRequired`] when the token review call fails or the token
+/// is not authenticated.
 pub async fn validate_token(client: &Client, token: &str) -> Result<Identity, DiagError> {
     let api: Api<TokenReview> = Api::all(client.clone());
     let review = TokenReview {
@@ -67,7 +78,7 @@ pub async fn validate_token(client: &Client, token: &str) -> Result<Identity, Di
         ..Default::default()
     };
 
-    let result = api.create(&Default::default(), &review).await.map_err(|e| {
+    let result = api.create(&PostParams::default(), &review).await.map_err(|e| {
         tracing::error!("TokenReview failed: {}", e);
         DiagError::AuthenticationRequired
     })?;

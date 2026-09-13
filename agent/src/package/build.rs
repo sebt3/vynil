@@ -107,13 +107,14 @@ pub struct Parameters {
     signing_key: String,
 }
 
-pub async fn run(args: &Parameters) -> Result<()> {
+pub fn run(args: &Parameters) -> Result<()> {
     let mut rhai = Script::new(vec![
         format!("{}/scripts", args.source.to_string_lossy()),
         format!("{}/packages", args.script_dir.display()),
         format!("{}/lib", args.script_dir.display()),
     ]);
-    rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
+    let args_json = serde_json::to_value(args).map_err(common::Error::SerializationError)?;
+    rhai.set_dynamic("args", &args_json);
     let _ = rhai.eval(
         "import(\"build\") as build;\n\
         build::run(args);",

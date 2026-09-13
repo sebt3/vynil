@@ -2,6 +2,7 @@ use common::rhaihandler::Script;
 use rhai::Dynamic;
 use std::sync::{Arc, Mutex};
 
+#[must_use]
 pub fn make_service_script(k8s_mocks: Vec<Dynamic>) -> (Script, Arc<Mutex<Vec<Dynamic>>>) {
     let base = env!("CARGO_MANIFEST_DIR");
     let created = Arc::new(Mutex::new(vec![]));
@@ -14,6 +15,10 @@ pub fn make_service_script(k8s_mocks: Vec<Dynamic>) -> (Script, Arc<Mutex<Vec<Dy
     (script, created)
 }
 
+/// Builds a mocked `ServiceInstance` object from its identifying fields.
+///
+/// # Panics
+/// Panics if the constructed JSON cannot round-trip through `serde_json`.
 pub fn build_service_instance_mock(ns: &str, name: &str, category: &str, package: &str) -> Dynamic {
     let json = serde_json::json!({
         "apiVersion": "vynil.solidite.fr/v1",
@@ -25,6 +30,7 @@ pub fn build_service_instance_mock(ns: &str, name: &str, category: &str, package
     serde_json::from_str(&serde_json::to_string(&json).unwrap()).unwrap()
 }
 
+#[must_use]
 pub fn build_args(ns: &str, instance: &str) -> serde_json::Value {
     let base = env!("CARGO_MANIFEST_DIR");
     serde_json::json!({

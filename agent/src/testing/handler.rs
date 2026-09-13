@@ -19,7 +19,7 @@ const API_VERSION: &str = "vinyl.solidite.fr/v1beta1";
 
 // ── Templating helpers (private) ────────────────────────────────────────────
 
-/// Recursively templates all string keys and string values inside a serde_json::Value.
+/// Recursively templates all string keys and string values inside a `serde_json::Value`.
 fn template_json(
     hbs: &mut HandleBars,
     ctx: &serde_json::Value,
@@ -43,7 +43,7 @@ fn template_json(
     }
 }
 
-/// Templates all strings inside a rhai::Dynamic (via JSON round-trip).
+/// Templates all strings inside a `rhai::Dynamic` (via JSON round-trip).
 fn template_dynamic(hbs: &mut HandleBars, ctx: &serde_json::Value, d: &Dynamic) -> common::Result<Dynamic> {
     let json: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(d).map_err(common::Error::SerializationError)?)
@@ -53,7 +53,7 @@ fn template_dynamic(hbs: &mut HandleBars, ctx: &serde_json::Value, d: &Dynamic) 
         .map_err(common::Error::SerializationError)
 }
 
-/// Templates all string keys and values inside a rhai::Map.
+/// Templates all string keys and values inside a `rhai::Map`.
 fn template_rhai_map(hbs: &mut HandleBars, ctx: &serde_json::Value, map: &Map) -> common::Result<Map> {
     let d = template_dynamic(hbs, ctx, &Dynamic::from_map(map.clone()))?;
     d.try_cast::<Map>()
@@ -91,11 +91,7 @@ fn template_assert(
                 .transpose()?,
         },
         matcher: a.matcher.clone(),
-        value: if a.value.is_some() {
-            Some(template_json(hbs, ctx, a.value.clone().unwrap())?)
-        } else {
-            None
-        },
+        value: a.value.clone().map(|v| template_json(hbs, ctx, v)).transpose()?,
     })
 }
 
@@ -137,10 +133,9 @@ fn collect_templated(
     asserts_out: &mut Vec<VynilAssert>,
 ) -> common::Result<()> {
     let mut context = ctx.clone();
-    context
-        .as_object_mut()
-        .unwrap()
-        .insert("context".into(), ctx.clone());
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("context".into(), ctx.clone());
+    }
 
     if let Some(m) = mocks {
         if let Some(k8s) = &m.kubernetes {
@@ -162,6 +157,86 @@ fn collect_templated(
     Ok(())
 }
 
+/// True when `k8s_mocks` already contains a mock of `instance_kind` named `instance.name`
+/// in `instance.namespace`.
+fn instance_already_mocked(
+    k8s_mocks: &[Dynamic],
+    instance_kind: &str,
+    instance: &super::vyniltest::VynilTestInstance,
+) -> bool {
+    k8s_mocks.iter().any(|m| {
+        let Ok(map) = m.as_map_ref() else { return false };
+        let kind_ok = map
+            .get("kind")
+            .and_then(|v| v.clone().into_string().ok())
+            .as_deref()
+            == Some(instance_kind);
+        if !kind_ok {
+            return false;
+        }
+        let Some(meta) = map.get("metadata") else {
+            return false;
+        };
+        let Ok(meta_map) = meta.as_map_ref() else {
+            return false;
+        };
+        let name_ok = meta_map
+            .get("name")
+            .and_then(|v| v.clone().into_string().ok())
+            .as_deref()
+            == Some(instance.name.as_str());
+        let ns_ok = meta_map
+            .get("namespace")
+            .and_then(|v| v.clone().into_string().ok())
+            .as_deref()
+            == Some(instance.namespace.as_str());
+        name_ok && ns_ok
+    })
+}
+
+/// Builds the virtual instance mock (`Dynamic`) for the tested instance.
+///
+/// # Errors
+///
+/// Returns a [`common::Error`] when the instance object cannot round-trip through JSON.
+fn virtual_instance_dynamic(
+    package: &VynilPackageSource,
+    instance: &super::vyniltest::VynilTestInstance,
+) -> common::Result<Dynamic> {
+    let instance_kind = match &package.metadata.usage {
+        VynilPackageType::Service => "ServiceInstance",
+        VynilPackageType::System => "SystemInstance",
+        VynilPackageType::Tenant => "TenantInstance",
+    };
+    let mut spec = serde_json::Map::new();
+    spec.insert(
+        "category".to_string(),
+        serde_json::Value::String(package.metadata.category.clone()),
+    );
+    spec.insert(
+        "package".to_string(),
+        serde_json::Value::String(package.metadata.name.clone()),
+    );
+    if let Some(opts) = &instance.options {
+        spec.insert(
+            "options".to_string(),
+            serde_json::Value::Object(opts.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        );
+    }
+    let instance_obj = serde_json::json!({
+        "apiVersion": "vynil.solidite.fr/v1",
+        "kind": instance_kind,
+        "metadata": {
+            "name": instance.name,
+            "namespace": instance.namespace,
+        },
+        "spec": serde_json::Value::Object(spec),
+        "status": {},
+    });
+    let text = serde_json::to_string(&instance_obj).map_err(common::Error::SerializationError)?;
+    serde_json::from_str(&text).map_err(common::Error::SerializationError)
+}
+
 // ── TestHandler ─────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -177,6 +252,10 @@ pub struct TestHandler {
 }
 
 impl TestHandler {
+    /// # Errors
+    ///
+    /// Returns a [`common::Error`] when `package.yaml` cannot be read or when scanning or
+    /// parsing the test directories fails.
     pub fn new(
         package_dir: PathBuf,
         script_dir: PathBuf,
@@ -205,7 +284,7 @@ impl TestHandler {
     }
 
     /// Scans a directory for .yml/.yaml files (potentially multi-document)
-    /// and loads all matching Test and TestSet objects.
+    /// and loads all matching Test and `TestSet` objects.
     /// Objects with a different apiVersion or kind are silently ignored.
     /// Errors if a Test/TestSet name collides or if parsing fails.
     fn load_tests_from_dir(&mut self, dir: &Path) -> common::Result<()> {
@@ -213,7 +292,7 @@ impl TestHandler {
             match api_kind.as_str() {
                 "Test" => {
                     let test: VynilTest = serde_json::from_value(json)
-                        .map_err(|e| common::Error::YamlError(format!("{}: {e}", file)))?;
+                        .map_err(|e| common::Error::YamlError(format!("{file}: {e}")))?;
                     let name = test.metadata.name.clone();
                     if self.tests.contains_key(&name) {
                         return Err(common::Error::YamlError(format!(
@@ -224,7 +303,7 @@ impl TestHandler {
                 }
                 "TestSet" => {
                     let ts: VynilTestSet = serde_json::from_value(json)
-                        .map_err(|e| common::Error::YamlError(format!("{}: {e}", file)))?;
+                        .map_err(|e| common::Error::YamlError(format!("{file}: {e}")))?;
                     let name = ts.metadata.name.clone();
                     if self.test_sets.contains_key(&name) {
                         return Err(common::Error::YamlError(format!(
@@ -239,15 +318,15 @@ impl TestHandler {
         Ok(())
     }
 
-    /// Scans a directory for .yml/.yaml files and loads only TestSet objects.
-    /// Errors if a TestSet name collides or if parsing fails.
+    /// Scans a directory for .yml/.yaml files and loads only `TestSet` objects.
+    /// Errors if a `TestSet` name collides or if parsing fails.
     fn load_testsets_from_dir(&mut self, dir: &Path) -> common::Result<()> {
         for (api_kind, json, file) in Self::scan_yaml_dir(dir)? {
             if api_kind != "TestSet" {
                 continue;
             }
-            let ts: VynilTestSet = serde_json::from_value(json)
-                .map_err(|e| common::Error::YamlError(format!("{}: {e}", file)))?;
+            let ts: VynilTestSet =
+                serde_json::from_value(json).map_err(|e| common::Error::YamlError(format!("{file}: {e}")))?;
             let name = ts.metadata.name.clone();
             if self.test_sets.contains_key(&name) {
                 return Err(common::Error::YamlError(format!(
@@ -259,20 +338,28 @@ impl TestHandler {
         Ok(())
     }
 
+    #[must_use]
     pub fn get_test(&self, name: &str) -> Option<&VynilTest> {
         self.tests.get(name)
     }
 
+    #[must_use]
     pub fn get_test_set(&self, name: &str) -> Option<&VynilTestSet> {
         self.test_sets.get(name)
     }
 
+    #[must_use]
     pub fn list_tests(&self) -> Vec<String> {
         self.tests.keys().cloned().collect()
     }
 
-    /// Returns a fully resolved VynilTest: handlebars templates in mocks and
+    /// Returns a fully resolved `VynilTest`: handlebars templates in mocks and
     /// asserts are evaluated, and all referenced testSets are merged in.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`common::Error`] when the test or a referenced testSet is missing, when
+    /// templating fails, or when the virtual instance mock cannot be serialized.
     pub fn get_templated_test(&self, name: &str) -> common::Result<VynilTest> {
         let test = self
             .tests
@@ -317,9 +404,9 @@ impl TestHandler {
                     .get(&ts_ref.testSet)
                     .ok_or_else(|| common::Error::Other(format!("TestSet '{}' not found", ts_ref.testSet)))?;
                 let mut ctx = base_ctx.clone();
-                ctx.as_object_mut()
-                    .unwrap()
-                    .insert("var".to_string(), build_var_context(ts, ts_ref));
+                if let Some(obj) = ctx.as_object_mut() {
+                    obj.insert("var".to_string(), build_var_context(ts, ts_ref));
+                }
 
                 collect_templated(
                     &mut hbs,
@@ -340,62 +427,8 @@ impl TestHandler {
             VynilPackageType::System => "SystemInstance",
             VynilPackageType::Tenant => "TenantInstance",
         };
-        let already_mocked = k8s_mocks.iter().any(|m| {
-            let Ok(map) = m.as_map_ref() else { return false };
-            let kind_ok = map
-                .get("kind")
-                .and_then(|v| v.clone().into_string().ok())
-                .as_deref()
-                == Some(instance_kind);
-            if !kind_ok {
-                return false;
-            }
-            let Some(meta) = map.get("metadata") else {
-                return false;
-            };
-            let Ok(meta_map) = meta.as_map_ref() else {
-                return false;
-            };
-            let name_ok = meta_map
-                .get("name")
-                .and_then(|v| v.clone().into_string().ok())
-                .as_deref()
-                == Some(&test.instance.name);
-            let ns_ok = meta_map
-                .get("namespace")
-                .and_then(|v| v.clone().into_string().ok())
-                .as_deref()
-                == Some(&test.instance.namespace);
-            name_ok && ns_ok
-        });
-        if !already_mocked {
-            let mut spec = serde_json::Map::new();
-            spec.insert(
-                "category".to_string(),
-                serde_json::Value::String(package.metadata.category.clone()),
-            );
-            spec.insert(
-                "package".to_string(),
-                serde_json::Value::String(package.metadata.name.clone()),
-            );
-            if let Some(opts) = &test.instance.options {
-                spec.insert(
-                    "options".to_string(),
-                    serde_json::Value::Object(opts.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
-                );
-            }
-            let instance_obj = serde_json::json!({
-                "apiVersion": "vynil.solidite.fr/v1",
-                "kind": instance_kind,
-                "metadata": {
-                    "name": test.instance.name,
-                    "namespace": test.instance.namespace,
-                },
-                "spec": serde_json::Value::Object(spec),
-                "status": {},
-            });
-            let d: Dynamic = serde_json::from_str(&serde_json::to_string(&instance_obj).unwrap()).unwrap();
-            k8s_mocks.push(d);
+        if !instance_already_mocked(&k8s_mocks, instance_kind, &test.instance) {
+            k8s_mocks.push(virtual_instance_dynamic(package, &test.instance)?);
         }
 
         Ok(VynilTest {
@@ -424,7 +457,11 @@ impl TestHandler {
         })
     }
 
-    /// Validates that every TestSet referenced in a Test's testSets exists.
+    /// Validates that every `TestSet` referenced in a Test's testSets exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`common::Error`] when a referenced testSet is not loaded.
     pub fn validate_refs(&self) -> common::Result<()> {
         for (test_name, test) in &self.tests {
             if let Some(refs) = &test.testSets {
@@ -445,12 +482,12 @@ impl TestHandler {
         let names = self.list_tests();
         for name in &names {
             // Shared vec where the mock k8s layer records created objects
-            let created_objects: Arc<Mutex<Vec<Dynamic>>> = Default::default();
-            self.run_test(name, created_objects);
+            let created_objects: Arc<Mutex<Vec<Dynamic>>> = Arc::default();
+            self.run_test(name, &created_objects);
         }
     }
 
-    pub fn run_test(&mut self, name: &str, created_objects: Arc<Mutex<Vec<Dynamic>>>) {
+    pub fn run_test(&mut self, name: &str, created_objects: &Arc<Mutex<Vec<Dynamic>>>) {
         let start = std::time::Instant::now();
         let result = self.run_test_inner(name, created_objects);
         let duration = start.elapsed();
@@ -474,7 +511,7 @@ impl TestHandler {
     fn run_test_inner(
         &self,
         name: &str,
-        created_objects: Arc<Mutex<Vec<Dynamic>>>,
+        created_objects: &Arc<Mutex<Vec<Dynamic>>>,
     ) -> common::Result<Vec<VynilAssertResult>> {
         // Resolve test: merge testSets, template mocks/asserts
         let test = self.get_templated_test(name)?;
@@ -536,7 +573,41 @@ impl TestHandler {
         };
 
         // Build args for the rhai script
-        let args = serde_json::json!({
+        let args = self.build_test_args(&test, &controller_values);
+        rhai.set_dynamic("args", &args);
+
+        // Build instance object for rhai (kept out of the runtime wiring on purpose)
+        let _instance_json = self.build_test_instance(&test);
+        let fun_name = match self.package.metadata.usage {
+            VynilPackageType::Tenant => "get_tenant_instance",
+            VynilPackageType::System => "get_system_instance",
+            VynilPackageType::Service => "get_service_instance",
+        };
+
+        // Run the install script
+        let _ = rhai.eval(
+            format!(
+                "import(\"context\") as ctx;\n\
+            let instance = {fun_name}(args.namespace, args.instance);\n\
+            let context = ctx::run(instance, args);\n\
+            import(\"install\") as install;\n\
+            install::run(instance, context);"
+            )
+            .as_str(),
+        )?;
+
+        // Validate asserts against created objects
+        let objects = created_objects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        asserts.extend(test.run_asserts(&objects));
+
+        Ok(asserts)
+    }
+
+    /// Builds the rhai `args` object exposed to the install scripts during a test run.
+    fn build_test_args(&self, test: &VynilTest, controller_values: &str) -> serde_json::Value {
+        serde_json::json!({
             "namespace": test.instance.namespace,
             "instance": test.instance.name,
             "vynil_namespace": "vynil-system",
@@ -547,10 +618,11 @@ impl TestHandler {
             "tag": "0.1.0",
             "config_dir": self.config_dir.display().to_string(),
             "controller_values": controller_values,
-        });
-        rhai.set_dynamic("args", &args);
+        })
+    }
 
-        // Build instance object for rhai
+    /// Builds the instance JSON view handed to the rhai scripts during a test run.
+    fn build_test_instance(&self, test: &VynilTest) -> serde_json::Value {
         let mut instance_json = serde_json::json!({
             "metadata": {
                 "name": test.instance.name,
@@ -562,39 +634,21 @@ impl TestHandler {
             },
             "status": {},
         });
-        if let Some(opts) = &test.instance.options {
-            instance_json["spec"]["options"] =
-                serde_json::Value::Object(opts.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+        if let Some(opts) = &test.instance.options
+            && let Some(spec) = instance_json
+                .get_mut("spec")
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            spec.insert(
+                "options".to_string(),
+                serde_json::Value::Object(opts.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+            );
         }
-        //rhai.set_dynamic("instance", &instance_json);
-        let fun_name = match self.package.metadata.usage {
-            VynilPackageType::Tenant => "get_tenant_instance",
-            VynilPackageType::System => "get_system_instance",
-            VynilPackageType::Service => "get_service_instance",
-        };
-
-        // Run the install script
-        let _ = rhai.eval(
-            format!(
-                "import(\"context\") as ctx;\n\
-            let instance = {}(args.namespace, args.instance);\n\
-            let context = ctx::run(instance, args);\n\
-            import(\"install\") as install;\n\
-            install::run(instance, context);",
-                fun_name
-            )
-            .as_str(),
-        )?;
-
-        // Validate asserts against created objects
-        let objects = created_objects.lock().unwrap();
-        asserts.extend(test.run_asserts(&objects));
-
-        Ok(asserts)
+        instance_json
     }
 
     /// Reads all .yml/.yaml files in `dir`, parses multi-doc YAML,
-    /// and yields (kind, serde_json::Value, filename) for each document
+    /// and yields (kind, `serde_json::Value`, filename) for each document
     /// matching our apiVersion.
     fn scan_yaml_dir(dir: &Path) -> common::Result<Vec<(String, serde_json::Value, String)>> {
         let mut results = Vec::new();

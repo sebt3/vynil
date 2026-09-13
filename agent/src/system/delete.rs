@@ -66,7 +66,8 @@ pub async fn run(args: &Parameters) -> Result<()> {
     let context = SystemInstance::get(args.namespace.clone(), args.instance.clone()).await?;
     set_system(context.clone());
     rhai.ctx.set_value("instance", context);
-    rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
+    let args_json = serde_json::to_value(args).map_err(common::Error::SerializationError)?;
+    rhai.set_dynamic("args", &args_json);
     let _ = rhai.eval(
         "import(\"context\") as ctx;\n\
         let context = ctx::run(instance, args);\n\

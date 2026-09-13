@@ -16,6 +16,7 @@ use std::{
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[must_use]
 pub fn get_vynil_version() -> String {
     VERSION.to_string()
 }
@@ -45,7 +46,7 @@ pub enum VynilPackageFeature {
 }
 
 /// Vynil Package Meta
-#[derive(Deserialize, Serialize, Clone, PartialEq, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq, Debug, JsonSchema)]
 pub struct VynilPackageMeta {
     /// Package name
     pub name: String,
@@ -81,12 +82,12 @@ pub enum VynilPackageRequirement {
     SystemService(String),
     /// Name of a Tenant Service that should be installed before current package
     TenantService(String),
-    /// SystemPackage that should be installed before current package
+    /// `SystemPackage` that should be installed before current package
     SystemPackage {
         category: String,
         name: String,
     },
-    /// TenantPackage that should be installed before current package in the current Tenant
+    /// `TenantPackage` that should be installed before current package in the current Tenant
     TenantPackage {
         category: String,
         name: String,
@@ -113,10 +114,38 @@ pub enum VynilPackageRequirement {
     // MB, Sum of all requests (Informative only)
     Disk(u64),
 }
+/// Extracts the `(major, minor)` pair from an api-server version response.
+///
+/// # Errors
+///
+/// Returns `Error::Other` when the response is not a JSON object or lacks a `major`/`minor`
+/// field, and a parse error when those fields are not integers.
+fn parse_cluster_api_version(ver: &serde_json::Value) -> Result<(u64, u64)> {
+    let obj = ver
+        .as_object()
+        .ok_or_else(|| Error::Other("api-server version response is not a JSON object".to_string()))?;
+    let field = |name: &str| -> Result<u64> {
+        let value = obj
+            .get(name)
+            .ok_or_else(|| Error::Other(format!("api-server version response has no `{name}` field")))?;
+        serde_json::to_string(value)
+            .map_err(Error::SerializationError)?
+            .parse()
+            .map_err(Error::ParseInt)
+    };
+    Ok((field("major")?, field("minor")?))
+}
+
 impl VynilPackageRequirement {
+    /// Evaluates the requirement against the given instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the check cannot run (Kubernetes API call, rhai script
+    /// evaluation, semver parsing, or an unreadable api-server version response).
     pub async fn check_system(&self, inst: &SystemInstance, client: Client) -> Result<(bool, String, u64)> {
         match self {
-            VynilPackageRequirement::VynilVersion(v) => {
+            Self::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
                 Ok((
@@ -127,17 +156,10 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::ClusterVersion { major, minor } => {
+            Self::ClusterVersion { major, minor } => {
                 let raw = crate::k8sraw::K8sRaw::new();
                 let ver = raw.get_api_version().await?;
-                let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
-                    .map_err(Error::SerializationError)?
-                    .parse()
-                    .map_err(Error::ParseInt)?;
-                let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
-                    .map_err(Error::SerializationError)?
-                    .parse()
-                    .map_err(Error::ParseInt)?;
+                let (maj, min) = parse_cluster_api_version(&ver)?;
                 Ok((
                     maj > *major || (maj == *major && min >= *minor),
                     format!(
@@ -146,12 +168,12 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::CustomResourceDefinition(crd) => {
+            Self::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(Error::KubeError)?;
                 Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
             }
-            VynilPackageRequirement::Prefly { script, name } => {
+            Self::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
                 Ok((
@@ -160,7 +182,7 @@ impl VynilPackageRequirement {
                     5 * 60,
                 ))
             }
-            VynilPackageRequirement::SystemPackage { category, name } => {
+            Self::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
                 let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
                 Ok((
@@ -171,7 +193,7 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::TenantPackage { category, name } => {
+            Self::TenantPackage { category, name } => {
                 tracing::warn!("TenantPackage Requirement for a system package is invalid, skipping");
                 Ok((
                     true,
@@ -179,20 +201,20 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::StorageCapability(capa) => {
+            Self::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
                 Ok((
                     true,
-                    format!("Storage capability {:?} isn't available", capa),
+                    format!("Storage capability {capa:?} isn't available"),
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::MinimumPreviousVersion(_) => {
+            Self::MinimumPreviousVersion(_) => {
                 // Guaranteed satisfied by is_min_version_ok() at package-selection time.
                 Ok((true, String::new(), 15 * 60))
             }
-            VynilPackageRequirement::SystemService(svc) => {
+            Self::SystemService(svc) => {
                 let lst = ServiceInstance::get_all_services_names().await?;
                 Ok((
                     lst.iter().any(|i| svc == i),
@@ -200,13 +222,19 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            _ => Ok((true, "".to_string(), 15 * 60)),
+            _ => Ok((true, String::new(), 15 * 60)),
         }
     }
 
+    /// Evaluates the requirement against the given instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the check cannot run (Kubernetes API call, rhai script
+    /// evaluation, semver parsing, or an unreadable api-server version response).
     pub async fn check_tenant(&self, inst: &TenantInstance, client: Client) -> Result<(bool, String, u64)> {
         match self {
-            VynilPackageRequirement::VynilVersion(v) => {
+            Self::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
                 Ok((
@@ -217,17 +245,10 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::ClusterVersion { major, minor } => {
+            Self::ClusterVersion { major, minor } => {
                 let raw = crate::k8sraw::K8sRaw::new();
                 let ver = raw.get_api_version().await?;
-                let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
-                    .map_err(Error::SerializationError)?
-                    .parse()
-                    .map_err(Error::ParseInt)?;
-                let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
-                    .map_err(Error::SerializationError)?
-                    .parse()
-                    .map_err(Error::ParseInt)?;
+                let (maj, min) = parse_cluster_api_version(&ver)?;
                 Ok((
                     maj > *major || (maj == *major && min >= *minor),
                     format!(
@@ -236,12 +257,12 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::CustomResourceDefinition(crd) => {
+            Self::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(Error::KubeError)?;
                 Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
             }
-            VynilPackageRequirement::Prefly { script, name } => {
+            Self::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
                 Ok((
@@ -250,7 +271,7 @@ impl VynilPackageRequirement {
                     5 * 60,
                 ))
             }
-            VynilPackageRequirement::SystemPackage { category, name } => {
+            Self::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
                 let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
                 Ok((
@@ -261,7 +282,7 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::TenantPackage { category, name } => {
+            Self::TenantPackage { category, name } => {
                 let allowed = inst.get_tenant_namespaces().await?;
                 let api: Api<TenantInstance> = Api::all(client);
                 let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
@@ -269,13 +290,13 @@ impl VynilPackageRequirement {
                     lst.items.into_iter().any(|i| {
                         i.spec.category == *category
                             && i.spec.package == *name
-                            && allowed.contains(&i.metadata.namespace.unwrap())
+                            && i.metadata.namespace.is_some_and(|ns| allowed.contains(&ns))
                     }),
                     format!("Tenant package {category}/{name} is not installed"),
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::TenantService(svc) => Ok((
+            Self::TenantService(svc) => Ok((
                 inst.get_tenant_services_names()
                     .await?
                     .into_iter()
@@ -283,20 +304,20 @@ impl VynilPackageRequirement {
                 format!("Tenant service {svc} is not installed"),
                 15 * 60,
             )),
-            VynilPackageRequirement::StorageCapability(capa) => {
+            Self::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
                 Ok((
                     true,
-                    format!("Storage capability {:?} isn't available", capa),
+                    format!("Storage capability {capa:?} isn't available"),
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::MinimumPreviousVersion(_) => {
+            Self::MinimumPreviousVersion(_) => {
                 // Guaranteed satisfied by is_min_version_ok() at package-selection time.
                 Ok((true, String::new(), 15 * 60))
             }
-            VynilPackageRequirement::SystemService(svc) => {
+            Self::SystemService(svc) => {
                 let lst = ServiceInstance::get_all_services_names().await?;
                 Ok((
                     lst.iter().any(|i| svc == i),
@@ -304,13 +325,19 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            _ => Ok((true, "".to_string(), 15 * 60)),
+            _ => Ok((true, String::new(), 15 * 60)),
         }
     }
 
+    /// Evaluates the requirement against the given instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the check cannot run (Kubernetes API call, rhai script
+    /// evaluation, semver parsing, or an unreadable api-server version response).
     pub async fn check_service(&self, inst: &ServiceInstance, client: Client) -> Result<(bool, String, u64)> {
         match self {
-            VynilPackageRequirement::VynilVersion(v) => {
+            Self::VynilVersion(v) => {
                 let requested = Semver::parse(v)?;
                 let current = Semver::parse(VERSION)?;
                 Ok((
@@ -321,17 +348,10 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::ClusterVersion { major, minor } => {
+            Self::ClusterVersion { major, minor } => {
                 let raw = crate::k8sraw::K8sRaw::new();
                 let ver = raw.get_api_version().await?;
-                let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
-                    .map_err(Error::SerializationError)?
-                    .parse()
-                    .map_err(Error::ParseInt)?;
-                let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
-                    .map_err(Error::SerializationError)?
-                    .parse()
-                    .map_err(Error::ParseInt)?;
+                let (maj, min) = parse_cluster_api_version(&ver)?;
                 Ok((
                     maj > *major || (maj == *major && min >= *minor),
                     format!(
@@ -340,12 +360,12 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::CustomResourceDefinition(crd) => {
+            Self::CustomResourceDefinition(crd) => {
                 let api: Api<CustomResourceDefinition> = Api::all(client);
                 let r = api.get_metadata_opt(crd).await.map_err(Error::KubeError)?;
                 Ok((r.is_some(), format!("CRD {crd} is not installed"), 5 * 60))
             }
-            VynilPackageRequirement::Prefly { script, name } => {
+            Self::Prefly { script, name } => {
                 let mut rhai = Script::new(vec![]);
                 rhai.ctx.set_value("instance", inst.clone());
                 Ok((
@@ -354,7 +374,7 @@ impl VynilPackageRequirement {
                     5 * 60,
                 ))
             }
-            VynilPackageRequirement::SystemPackage { category, name } => {
+            Self::SystemPackage { category, name } => {
                 let api: Api<SystemInstance> = Api::all(client);
                 let lst = api.list(&ListParams::default()).await.map_err(Error::KubeError)?;
                 Ok((
@@ -365,20 +385,20 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::StorageCapability(capa) => {
+            Self::StorageCapability(capa) => {
                 //TODO: implement StorageCapability
                 tracing::warn!("StorageCapability Requirement is a TODO");
                 Ok((
                     true,
-                    format!("Storage capability {:?} isn't available", capa),
+                    format!("Storage capability {capa:?} isn't available"),
                     15 * 60,
                 ))
             }
-            VynilPackageRequirement::MinimumPreviousVersion(_) => {
+            Self::MinimumPreviousVersion(_) => {
                 // Guaranteed satisfied by is_min_version_ok() at package-selection time.
                 Ok((true, String::new(), 15 * 60))
             }
-            VynilPackageRequirement::SystemService(svc) => {
+            Self::SystemService(svc) => {
                 let lst = ServiceInstance::get_all_services_names().await?;
                 Ok((
                     lst.iter().any(|i| svc == i),
@@ -386,13 +406,13 @@ impl VynilPackageRequirement {
                     15 * 60,
                 ))
             }
-            _ => Ok((true, "".to_string(), 15 * 60)),
+            _ => Ok((true, String::new(), 15 * 60)),
         }
     }
 }
 
 /// Vynil Package Recommandation
-#[derive(Serialize, Deserialize, PartialEq, Clone, Debug, JsonSchema)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VynilPackageRecommandation {
     /// Name of a crd that is required before installing this package
@@ -403,7 +423,7 @@ pub enum VynilPackageRecommandation {
     TenantService(String),
 }
 
-/// Vynil Package in JukeBox status
+/// Vynil Package in `JukeBox` status
 #[derive(Deserialize, Serialize, PartialEq, Clone, Debug, JsonSchema)]
 pub struct VynilPackage {
     /// Registry
@@ -424,6 +444,7 @@ pub struct VynilPackage {
     pub value_script: Option<String>,
 }
 impl VynilPackage {
+    #[must_use]
     pub fn get_min_version(&self) -> Option<String> {
         for rec in &self.requirements {
             if let VynilPackageRequirement::MinimumPreviousVersion(v) = rec {
@@ -433,6 +454,7 @@ impl VynilPackage {
         None
     }
 
+    #[must_use]
     pub fn get_vynil_version(&self) -> Option<String> {
         for rec in &self.requirements {
             if let VynilPackageRequirement::VynilVersion(v) = rec {
@@ -442,6 +464,7 @@ impl VynilPackage {
         None
     }
 
+    #[must_use]
     pub fn get_cluster_version(&self) -> Option<(u64, u64)> {
         for rec in &self.requirements {
             if let VynilPackageRequirement::ClusterVersion { major, minor } = rec {
@@ -451,51 +474,48 @@ impl VynilPackage {
         None
     }
 
-    pub fn is_min_version_ok(&self, current: String) -> bool {
-        if let Ok(cur) = Semver::parse(&current) {
-            if let Some(target) = self.get_min_version() {
-                if let Ok(target_parsed) = Semver::parse(&target) {
-                    cur >= target_parsed
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        } else {
-            true
-        }
+    /// Returns true when `current` satisfies the package minimum previous version.
+    #[must_use]
+    pub fn is_min_version_ok(&self, current: &str) -> bool {
+        let Ok(cur) = Semver::parse(current) else {
+            return true;
+        };
+        let Some(target) = self.get_min_version() else {
+            return true;
+        };
+        let Ok(target_parsed) = Semver::parse(&target) else {
+            return true;
+        };
+        cur >= target_parsed
     }
 
+    /// Returns true when the running vynil version satisfies the package requirement.
+    #[must_use]
     pub fn is_vynil_version_ok(&self) -> bool {
-        if let Ok(cur) = Semver::parse(VERSION) {
-            if let Some(target) = self.get_vynil_version() {
-                if let Ok(target_parsed) = Semver::parse(&target) {
-                    cur >= target_parsed
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        } else {
-            true
-        }
+        let Ok(cur) = Semver::parse(VERSION) else {
+            return true;
+        };
+        let Some(target) = self.get_vynil_version() else {
+            return true;
+        };
+        let Ok(target_parsed) = Semver::parse(&target) else {
+            return true;
+        };
+        cur >= target_parsed
     }
 
+    /// Returns true when the api-server version satisfies the package requirement.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Other` when the api-server version response lacks its `major`/`minor`
+    /// fields, and `Error::KubeError` when the version cannot be fetched.
     pub fn is_cluster_version_ok(&self) -> Result<bool> {
         let raw = crate::k8sraw::K8sRaw::new();
         let ver = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move { raw.get_api_version().await })
         })?;
-        let maj: u64 = serde_json::to_string(&ver.as_object().unwrap()["major"])
-            .map_err(Error::SerializationError)?
-            .parse()
-            .map_err(Error::ParseInt)?;
-        let min: u64 = serde_json::to_string(&ver.as_object().unwrap()["minor"])
-            .map_err(Error::SerializationError)?
-            .parse()
-            .map_err(Error::ParseInt)?;
+        let (maj, min) = parse_cluster_api_version(&ver)?;
         if let Some((major, minor)) = self.get_cluster_version() {
             Ok(maj > major || (maj == major && min >= minor))
         } else {
@@ -505,7 +525,7 @@ impl VynilPackage {
 }
 
 /// Image definitions
-#[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Clone, Debug)]
 pub struct Image {
     /// Current tag
     pub tag: Option<String>,
@@ -516,7 +536,7 @@ pub struct Image {
 }
 
 /// Resource item definitions
-#[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Clone, Debug)]
 pub struct ResourceItem {
     /// Cpu ressource
     pub cpu: Option<String>,
@@ -527,7 +547,7 @@ pub struct ResourceItem {
 }
 
 /// Resource scaler definitions
-#[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub struct ResourceScaler {
     /// Maximum replicas count
@@ -537,7 +557,7 @@ pub struct ResourceScaler {
 }
 
 /// Resource definition definitions
-#[derive(Deserialize, Serialize, PartialEq, Clone, Debug)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Clone, Debug)]
 pub struct Resource {
     /// Ressources requests
     pub requests: Option<ResourceItem>,
@@ -570,6 +590,10 @@ pub struct VynilPackageSource {
     pub value_script: Option<String>,
 }
 impl VynilPackageSource {
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
         let v = serde_json::to_string(&self.metadata)
             .map_err(Error::JsonError)
@@ -579,6 +603,10 @@ impl VynilPackageSource {
             .map_err(rhai_err)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_requirements(&mut self) -> RhaiRes<Dynamic> {
         let v = serde_json::to_string(&self.requirements)
             .map_err(Error::JsonError)
@@ -588,6 +616,10 @@ impl VynilPackageSource {
             .map_err(rhai_err)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_recommandations(&mut self) -> RhaiRes<Dynamic> {
         if let Some(recos) = self.recommandations.clone() {
             let v = serde_json::to_string(&recos)
@@ -601,6 +633,10 @@ impl VynilPackageSource {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_options(&mut self) -> RhaiRes<Dynamic> {
         if let Some(opt) = self.options.clone() {
             let v = serde_json::to_string(&opt)
@@ -614,14 +650,18 @@ impl VynilPackageSource {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_value_script(&mut self) -> RhaiRes<String> {
-        if let Some(val) = self.value_script.clone() {
-            Ok(val)
-        } else {
-            Ok("".into())
-        }
+        Ok(self.value_script.clone().unwrap_or_default())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_images(&mut self) -> RhaiRes<Dynamic> {
         if let Some(opt) = self.images.clone() {
             let v = serde_json::to_string(&opt)
@@ -635,6 +675,10 @@ impl VynilPackageSource {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_resources(&mut self) -> RhaiRes<Dynamic> {
         if let Some(opt) = self.resources.clone() {
             let v = serde_json::to_string(&opt)
@@ -648,26 +692,43 @@ impl VynilPackageSource {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the underlying operation fails.
     pub fn validate_options(&mut self) -> RhaiRes<()> {
         if let Some(options) = self.options.clone() {
             for val in options.values() {
-                let _schema: &Schema = &serde_json::from_str(serde_json::to_string(val).unwrap().as_str())
-                    .map_err(Error::JsonError)
-                    .map_err(rhai_err)?;
+                let _schema: &Schema = &serde_json::from_str(
+                    serde_json::to_string(val)
+                        .map_err(Error::JsonError)
+                        .map_err(rhai_err)?
+                        .as_str(),
+                )
+                .map_err(Error::JsonError)
+                .map_err(rhai_err)?;
             }
         }
         Ok(())
     }
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read or the YAML cannot be deserialized.
 pub fn read_package_yaml(file: &PathBuf) -> Result<VynilPackageSource> {
     let f = fs::File::open(Path::new(&file)).map_err(Error::Stdio)?;
     let deserializer = serde_yaml::Deserializer::from_reader(f);
     serde_yaml::with::singleton_map_recursive::deserialize(deserializer)
         .map_err(|e| Error::YamlError(e.to_string()))
 }
+///
+/// # Errors
+///
+/// Returns a Rhai error when the underlying operation fails.
 pub fn rhai_read_package_yaml(file: String) -> RhaiRes<VynilPackageSource> {
-    read_package_yaml(&PathBuf::from(&file)).map_err(rhai_err)
+    read_package_yaml(&PathBuf::from(file)).map_err(rhai_err)
 }
 
 pub fn package_rhai_register(engine: &mut Engine) {
@@ -983,8 +1044,8 @@ resources:
         let pkg = make_package(vec![VynilPackageRequirement::MinimumPreviousVersion(
             "1.0.0".into(),
         )]);
-        assert!(pkg.is_min_version_ok("1.0.1".into()));
-        assert!(pkg.is_min_version_ok("2.0.0".into()));
+        assert!(pkg.is_min_version_ok("1.0.1"));
+        assert!(pkg.is_min_version_ok("2.0.0"));
     }
 
     #[test]
@@ -992,7 +1053,7 @@ resources:
         let pkg = make_package(vec![VynilPackageRequirement::MinimumPreviousVersion(
             "1.0.0".into(),
         )]);
-        assert!(pkg.is_min_version_ok("1.0.0".into()));
+        assert!(pkg.is_min_version_ok("1.0.0"));
     }
 
     #[test]
@@ -1000,14 +1061,14 @@ resources:
         let pkg = make_package(vec![VynilPackageRequirement::MinimumPreviousVersion(
             "1.0.0".into(),
         )]);
-        assert!(!pkg.is_min_version_ok("0.9.9".into()));
+        assert!(!pkg.is_min_version_ok("0.9.9"));
     }
 
     #[test]
     fn test_is_min_version_ok_no_requirement() {
         let pkg = make_package(vec![]);
         // No MinimumPreviousVersion → always OK
-        assert!(pkg.is_min_version_ok("0.1.0".into()));
+        assert!(pkg.is_min_version_ok("0.1.0"));
     }
 
     #[test]
@@ -1062,7 +1123,7 @@ resources:
             metadata: VynilPackageMeta {
                 name: "test".into(),
                 category: "cat".into(),
-                description: "".into(),
+                description: String::new(),
                 app_version: None,
                 usage: VynilPackageType::Tenant,
                 features: vec![],
@@ -1078,7 +1139,7 @@ resources:
     fn select_from(packages: &[VynilPackage], current: &str) -> Option<String> {
         packages
             .iter()
-            .find(|p| p.is_min_version_ok(current.to_string()))
+            .find(|p| p.is_min_version_ok(current))
             .map(|p| p.tag.clone())
     }
 

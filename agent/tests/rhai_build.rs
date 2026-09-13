@@ -6,7 +6,7 @@ fn make_build_script() -> Script {
         vec![format!("{base}/scripts/packages"), format!("{base}/scripts/lib")],
         vec![],
         vec![],
-        Default::default(),
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     )
 }
 
@@ -21,7 +21,7 @@ fn build_security_filter_cosign_tag_no_error_log() {
     // Old code: log_error("sha256-deadbeef.sig") → mock throws → test fails.
     // New code: starts with 's' → returns false silently → test passes.
     let mut script = make_build_script();
-    script.add_code(r#"fn log_error(msg) { throw `unexpected error log: ${msg}`; }"#);
+    script.add_code(r"fn log_error(msg) { throw `unexpected error log: ${msg}`; }");
     let result = script.eval(r#"import "build" as b; b::security_filter("sha256-deadbeef.sig")"#);
     assert!(result.is_ok(), "Expected no error log: {:?}", result.err());
     assert!(
@@ -34,7 +34,7 @@ fn build_security_filter_cosign_tag_no_error_log() {
 fn build_security_filter_trivy_tag_no_error_log() {
     // trivy-* tags must be silently rejected.
     let mut script = make_build_script();
-    script.add_code(r#"fn log_error(msg) { throw `unexpected error log: ${msg}`; }"#);
+    script.add_code(r"fn log_error(msg) { throw `unexpected error log: ${msg}`; }");
     let result = script.eval(r#"import "build" as b; b::security_filter("trivy--apps-auth")"#);
     assert!(result.is_ok(), "Expected no error log: {:?}", result.err());
     assert!(
@@ -47,7 +47,7 @@ fn build_security_filter_trivy_tag_no_error_log() {
 fn build_security_filter_latest_tag_no_error_log() {
     // "latest" and other non-versioned tags must be silently rejected.
     let mut script = make_build_script();
-    script.add_code(r#"fn log_error(msg) { throw `unexpected error log: ${msg}`; }"#);
+    script.add_code(r"fn log_error(msg) { throw `unexpected error log: ${msg}`; }");
     let result = script.eval(r#"import "build" as b; b::security_filter("latest")"#);
     assert!(result.is_ok(), "Expected no error log: {:?}", result.err());
     assert!(!result.unwrap().as_bool().unwrap(), "Expected false for 'latest'");
@@ -57,7 +57,7 @@ fn build_security_filter_latest_tag_no_error_log() {
 fn build_security_filter_semver_tag_accepted() {
     // Valid semver tags (starting with digit) must return true.
     let mut script = make_build_script();
-    script.add_code(r#"fn log_error(msg) { throw `unexpected error log: ${msg}`; }"#);
+    script.add_code(r"fn log_error(msg) { throw `unexpected error log: ${msg}`; }");
     let result = script.eval(r#"import "build" as b; b::security_filter("1.2.3")"#);
     assert!(result.is_ok(), "Expected success: {:?}", result.err());
     assert!(result.unwrap().as_bool().unwrap(), "Expected true for '1.2.3'");
@@ -67,7 +67,7 @@ fn build_security_filter_semver_tag_accepted() {
 fn build_security_filter_v_prefixed_semver_accepted() {
     // Tags starting with 'v' followed by semver must return true.
     let mut script = make_build_script();
-    script.add_code(r#"fn log_error(msg) { throw `unexpected error log: ${msg}`; }"#);
+    script.add_code(r"fn log_error(msg) { throw `unexpected error log: ${msg}`; }");
     let result = script.eval(r#"import "build" as b; b::security_filter("v2.0.0")"#);
     assert!(result.is_ok(), "Expected success: {:?}", result.err());
     assert!(result.unwrap().as_bool().unwrap(), "Expected true for 'v2.0.0'");
@@ -76,7 +76,7 @@ fn build_security_filter_v_prefixed_semver_accepted() {
 #[test]
 fn build_security_filter_empty_string_rejected() {
     let mut script = make_build_script();
-    script.add_code(r#"fn log_error(msg) { throw `unexpected error log: ${msg}`; }"#);
+    script.add_code(r"fn log_error(msg) { throw `unexpected error log: ${msg}`; }");
     let result = script.eval(r#"import "build" as b; b::security_filter("")"#);
     assert!(result.is_ok(), "Expected success: {:?}", result.err());
     assert!(

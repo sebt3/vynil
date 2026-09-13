@@ -23,7 +23,8 @@ pub struct TestResultCollector {
 }
 
 impl TestResultCollector {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { results: Vec::new() }
     }
 
@@ -35,14 +36,17 @@ impl TestResultCollector {
         });
     }
 
-    pub fn total_tests(&self) -> usize {
+    #[must_use]
+    pub const fn total_tests(&self) -> usize {
         self.results.len()
     }
 
+    #[must_use]
     pub fn total_asserts(&self) -> usize {
         self.results.iter().map(|r| r.asserts.len()).sum()
     }
 
+    #[must_use]
     pub fn total_passed(&self) -> usize {
         self.results
             .iter()
@@ -51,6 +55,7 @@ impl TestResultCollector {
             .count()
     }
 
+    #[must_use]
     pub fn total_failed(&self) -> usize {
         self.results
             .iter()
@@ -59,40 +64,46 @@ impl TestResultCollector {
             .count()
     }
 
+    #[must_use]
     pub fn all_passed(&self) -> bool {
         self.results.iter().all(|r| r.asserts.iter().all(|a| a.passed))
     }
 
+    #[must_use]
     pub fn to_text(&self) -> String {
+        use std::fmt::Write as _;
         let mut out = String::new();
         for result in &self.results {
-            out.push_str(&format!(
-                "Test: {} ({:.3}s)\n",
+            let _ = writeln!(
+                out,
+                "Test: {} ({:.3}s)",
                 result.test_name,
                 result.duration.as_secs_f64()
-            ));
+            );
             for a in &result.asserts {
                 let status = if a.passed { "PASS" } else { "FAIL" };
                 match &a.description {
                     Some(desc) if !desc.is_empty() => {
-                        out.push_str(&format!("  [{status}] {} ({desc}): {}\n", a.name, a.message));
+                        let _ = writeln!(out, "  [{status}] {} ({desc}): {}", a.name, a.message);
                     }
                     _ => {
-                        out.push_str(&format!("  [{status}] {}: {}\n", a.name, a.message));
+                        let _ = writeln!(out, "  [{status}] {}: {}", a.name, a.message);
                     }
                 }
             }
             out.push('\n');
         }
-        out.push_str(&format!(
-            "Results: {} passed, {} failed, {} total\n",
+        let _ = writeln!(
+            out,
+            "Results: {} passed, {} failed, {} total",
             self.total_passed(),
             self.total_failed(),
             self.total_asserts()
-        ));
+        );
         out
     }
 
+    #[must_use]
     pub fn to_json(&self) -> String {
         let output = serde_json::json!({
             "tests": self.results,
@@ -106,17 +117,21 @@ impl TestResultCollector {
         serde_json::to_string_pretty(&output).unwrap_or_default()
     }
 
+    /// # Panics
+    ///
+    /// Panics if the `JUnit` XML report cannot be written into the in-memory buffer or is not
+    /// valid UTF-8 (neither can happen for in-memory `String` test data).
+    #[must_use]
     pub fn to_junit(&self) -> String {
         let mut report_builder = ReportBuilder::new();
         for result in &self.results {
             let mut suite = TestSuiteBuilder::new(&result.test_name);
             let nanos = result.duration.as_nanos();
-            let assert_count = result.asserts.len().max(1) as u128;
-            let per_assert_nanos = nanos / assert_count;
-            let tc_dur = Duration::new(
-                (per_assert_nanos / 1_000_000_000) as i64,
-                (per_assert_nanos % 1_000_000_000) as i32,
-            );
+            let assert_count = u128::try_from(result.asserts.len().max(1)).unwrap_or(1);
+            let per_assert_nanos = nanos.checked_div(assert_count).unwrap_or(0);
+            let secs = i64::try_from(per_assert_nanos / 1_000_000_000).unwrap_or(i64::MAX);
+            let nanos_part = i32::try_from(per_assert_nanos % 1_000_000_000).unwrap_or(i32::MAX);
+            let tc_dur = Duration::new(secs, nanos_part);
             for a in &result.asserts {
                 let tc = if a.passed {
                     TestCase::success(&a.name, tc_dur)
@@ -129,8 +144,13 @@ impl TestResultCollector {
         }
         let report = report_builder.build();
         let mut buf: Vec<u8> = Vec::new();
-        report.write_xml(&mut buf).expect("failed to write JUnit XML");
-        String::from_utf8(buf).expect("JUnit XML is not valid UTF-8")
+        if let Err(e) = report.write_xml(&mut buf) {
+            panic!("failed to write JUnit XML: {e}");
+        }
+        match String::from_utf8(buf) {
+            Ok(text) => text,
+            Err(e) => panic!("JUnit XML is not valid UTF-8: {e}"),
+        }
     }
 }
 

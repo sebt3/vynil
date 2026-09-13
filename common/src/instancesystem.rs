@@ -57,11 +57,11 @@ pub enum ConditionsStatus {
     False,
 }
 
-/// ApplicationCondition contains details about an application condition, which is usually an error or warning
+/// `ApplicationCondition` contains details about an application condition, which is usually an error or warning
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationCondition {
-    /// LastTransitionTime is the time the condition was last observed
+    /// `LastTransitionTime` is the time the condition was last observed
     pub last_transition_time: Option<DateTime<Utc>>,
     /// Message contains human-readable message indicating details about condition
     pub message: String,
@@ -78,8 +78,9 @@ impl_condition_common!();
 impl_condition_crds!();
 
 impl ApplicationCondition {
-    pub fn system_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
+    #[must_use]
+    pub fn system_ko(message: &str, generation: i64) -> Self {
+        Self::new(
             message,
             ConditionsStatus::False,
             ConditionsType::SystemApplied,
@@ -87,8 +88,9 @@ impl ApplicationCondition {
         )
     }
 
-    pub fn system_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
+    #[must_use]
+    pub fn system_ok(generation: i64) -> Self {
+        Self::new(
             "Templates applied succesfully",
             ConditionsStatus::True,
             ConditionsType::SystemApplied,
@@ -100,7 +102,7 @@ impl ApplicationCondition {
 /// The status object of `SystemInstance`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct SystemInstanceStatus {
-    /// SystemInstance Conditions
+    /// `SystemInstance` Conditions
     pub conditions: Vec<ApplicationCondition>,
     /// Current tag
     pub tag: Option<String>,
@@ -117,6 +119,7 @@ pub struct SystemInstanceStatus {
 }
 
 impl SystemInstance {
+    #[must_use]
     pub fn have_child(&self) -> bool {
         if let Some(status) = self.status.clone() {
             if status.rhaistate.is_some() {
@@ -130,7 +133,7 @@ impl SystemInstance {
             {
                 return true;
             }
-            if let Some(child) = status.crds.clone()
+            if let Some(child) = status.crds
                 && !child.is_empty()
             {
                 return true;
@@ -139,6 +142,10 @@ impl SystemInstance {
         false
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn set_status_ready(&mut self, tag: String) -> crate::Result<Self> {
         let client = crate::context::get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
@@ -170,6 +177,10 @@ impl SystemInstance {
         Ok(result)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn set_status_systems(&mut self, systems: Vec<crate::Children>) -> crate::Result<Self> {
         let count = systems.len();
         let client = crate::context::get_client_async().await;
@@ -186,7 +197,7 @@ impl SystemInstance {
         self.send_event(client, Event {
             type_: EventType::Normal,
             reason: "SystemApplySucceed".to_string(),
-            note: Some(format!("Applied {} Objects", count)),
+            note: Some(format!("Applied {count} Objects")),
             action: "SystemApply".to_string(),
             secondary: None,
         })
@@ -194,6 +205,10 @@ impl SystemInstance {
         Ok(result)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn set_status_system_failed(&mut self, reason: String) -> crate::Result<Self> {
         let client = crate::context::get_client_async().await;
         let generation: i64 = self.metadata.generation.unwrap_or(1);
@@ -227,17 +242,26 @@ impl SystemInstance {
         Ok(result)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the rhai argument cannot be converted or the underlying
+    /// operation fails.
     pub fn rhai_set_status_systems(&mut self, list: rhai::Dynamic) -> crate::RhaiRes<Self> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let v = serde_json::to_string(&list).map_err(crate::Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(crate::Error::SerializationError)?;
-                self.set_status_systems(lst).await
+                let parsed = serde_json::from_str(&v).map_err(crate::Error::SerializationError)?;
+                self.set_status_systems(parsed).await
             })
         })
         .map_err(crate::rhai_err)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the underlying operation fails.
     pub fn rhai_set_status_system_failed(&mut self, reason: String) -> crate::RhaiRes<Self> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()

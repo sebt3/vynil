@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
-/// Vynil CLI — operate on Vynil instances and JukeBoxes from your kubectl context.
+/// Vynil CLI — operate on Vynil instances and `JukeBoxes` from your kubectl context.
 ///
 /// `-n` and `--context` are global flags accepted anywhere, like `kubectl` itself.
 /// Grammar: `kubectl-vynil [-n <ns>] <kind> <name> <verb> [args]`.
@@ -22,16 +22,16 @@ pub struct Cli {
 /// Select the resource kind to act upon.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Operate on a JukeBox (cluster-scoped package source).
+    /// Operate on a `JukeBox` (cluster-scoped package source).
     #[command(visible_alias = "box")]
     Jukebox(JukeboxArgs),
-    /// Operate on a TenantInstance.
+    /// Operate on a `TenantInstance`.
     #[command(name = "vti", visible_alias = "tenantinstance", alias = "tenantinstances")]
     Vti(InstanceArgs),
-    /// Operate on a ServiceInstance.
+    /// Operate on a `ServiceInstance`.
     #[command(name = "vsvc", visible_alias = "serviceinstance", alias = "serviceinstances")]
     Vsvc(InstanceArgs),
-    /// Operate on a SystemInstance.
+    /// Operate on a `SystemInstance`.
     #[command(name = "vsi", visible_alias = "systeminstance", alias = "systeminstances")]
     Vsi(InstanceArgs),
     /// Output a shell completion script for direct `kubectl-vynil` invocation.
@@ -89,7 +89,7 @@ pub const SYSTEM_INSTANCE: InstanceKindInfo = InstanceKindInfo {
 
 #[derive(Args, Debug)]
 pub struct JukeboxArgs {
-    /// JukeBox name.
+    /// `JukeBox` name.
     pub name: String,
     #[command(subcommand)]
     pub verb: JukeboxVerb,
@@ -143,12 +143,13 @@ pub enum InstanceVerb {
 
 impl InstanceVerb {
     /// For single-item verbs, returns the diagnostic item name and its transport args.
-    pub fn as_item(&self) -> Option<(&'static str, &TransportArgs)> {
+    #[must_use]
+    pub const fn as_item(&self) -> Option<(&'static str, &TransportArgs)> {
         match self {
-            InstanceVerb::Children(a) => Some(("children", &a.transport)),
-            InstanceVerb::Agentlog(a) => Some(("agentlog", &a.transport)),
-            InstanceVerb::Childlogs(a) => Some(("childlogs", &a.transport)),
-            InstanceVerb::Operatorlog(a) => Some(("operatorlog", &a.transport)),
+            Self::Children(a) => Some(("children", &a.transport)),
+            Self::Agentlog(a) => Some(("agentlog", &a.transport)),
+            Self::Childlogs(a) => Some(("childlogs", &a.transport)),
+            Self::Operatorlog(a) => Some(("operatorlog", &a.transport)),
             _ => None,
         }
     }
@@ -220,8 +221,9 @@ pub struct InstanceTarget {
 }
 
 impl InstanceTarget {
+    #[must_use]
     pub fn new(namespace: &str, kind_plural: &str, name: &str) -> Self {
-        InstanceTarget {
+        Self {
             namespace: namespace.to_string(),
             kind: kind_plural.to_string(),
             name: name.to_string(),
@@ -336,7 +338,7 @@ mod tests {
                 Commands::Jukebox(_) => "box",
                 Commands::Completion(_) => panic!("unexpected completion command in alias test"),
             };
-            assert_eq!(got, expect, "alias {} should map to {}", argv, expect);
+            assert_eq!(got, expect, "alias {argv} should map to {expect}");
         }
     }
 
@@ -355,16 +357,14 @@ mod tests {
         for removed in ["state", "clusterinfo", "vynilconfig", "packages"] {
             assert!(
                 Cli::try_parse_from(["kubectl-vynil", "vti", "-n", "ns", "x", removed]).is_err(),
-                "verb {} should be rejected",
-                removed
+                "verb {removed} should be rejected"
             );
         }
         // The interactive log/children verbs stay.
         for kept in ["children", "agentlog", "childlogs", "operatorlog"] {
             assert!(
                 Cli::try_parse_from(["kubectl-vynil", "vti", "-n", "ns", "x", kept]).is_ok(),
-                "verb {} should still parse",
-                kept
+                "verb {kept} should still parse"
             );
         }
     }
@@ -375,8 +375,7 @@ mod tests {
         for bad in ["ti", "si", "sysi"] {
             assert!(
                 Cli::try_parse_from(["kubectl-vynil", bad, "-n", "ns", "x", "children"]).is_err(),
-                "{} should be rejected",
-                bad
+                "{bad} should be rejected"
             );
         }
     }

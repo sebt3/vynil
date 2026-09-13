@@ -2,7 +2,7 @@ use common::{httpmock::HttpMockItem, rhaihandler::Dynamic};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Vynil TestSet
+/// Vynil `TestSet`
 #[allow(non_snake_case)]
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct VynilTestSet {
@@ -34,7 +34,7 @@ pub struct VynilTestSetVariable {
     pub default: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VynilAssertMatch {
     /// Exactly <count> of the selected objects should match the value

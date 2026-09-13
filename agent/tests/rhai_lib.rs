@@ -2,16 +2,18 @@ use common::rhaihandler::Script;
 use rhai::Dynamic;
 use std::sync::{Arc, Mutex};
 
+#[must_use]
 pub fn make_lib_script() -> Script {
     let base = env!("CARGO_MANIFEST_DIR");
     Script::new_mock(
         vec![format!("{base}/scripts/lib")],
         vec![],
         vec![],
-        Default::default(),
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     )
 }
 
+#[must_use]
 pub fn make_lib_script_with_k8s(k8s_mocks: Vec<Dynamic>) -> (Script, Arc<Mutex<Vec<Dynamic>>>) {
     let base = env!("CARGO_MANIFEST_DIR");
     let created = Arc::new(Mutex::new(vec![]));
@@ -24,8 +26,14 @@ pub fn make_lib_script_with_k8s(k8s_mocks: Vec<Dynamic>) -> (Script, Arc<Mutex<V
     (script, created)
 }
 
+/// Round-trips a JSON value through its string form into a Rhai `Dynamic`.
+///
+/// # Panics
+/// Panics if the value cannot round-trip through `serde_json`.
 pub fn dynamic_from_json(json: serde_json::Value) -> Dynamic {
-    serde_json::from_str(&serde_json::to_string(&json).unwrap()).unwrap()
+    let text = serde_json::to_string(&json).unwrap();
+    drop(json);
+    serde_json::from_str(&text).unwrap()
 }
 
 fn k8s_object(kind: &str, namespace: &str, name: &str) -> Dynamic {
@@ -517,7 +525,7 @@ fn install_from_dir_applies_multiple_yamls() {
     // Verify install() reads multiple YAML files and creates objects in K8s
     // Tests: file I/O (read_dir, file_read), YAML parsing, filtering, K8s apply
     let base = env!("CARGO_MANIFEST_DIR");
-    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/basic", base);
+    let fixture_dir = format!("{base}/tests/fixtures/install_from_dir/basic");
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
@@ -535,12 +543,11 @@ fn install_from_dir_applies_multiple_yamls() {
             package_dir: ""
         }};
 
-        let applied = install::install(instance, context, "{}", true, false);
+        let applied = install::install(instance, context, "{fixture_dir}", true, false);
 
         // Should have applied ConfigMap and Deployment (2 objects)
         applied.len()
-    "#,
-            fixture_dir
+    "#
         ))
         .unwrap();
 
@@ -548,15 +555,15 @@ fn install_from_dir_applies_multiple_yamls() {
     assert_eq!(count, 2);
 
     // Verify objects were created in mock K8s
-    let created_objs = created.lock().unwrap();
-    assert_eq!(created_objs.len(), 2);
+    let created_count = created.lock().unwrap().len();
+    assert_eq!(created_count, 2);
 }
 
 #[test]
 fn install_from_dir_empty_directory_no_objects() {
     // Verify install() handles empty directory without error and returns empty list
     let base = env!("CARGO_MANIFEST_DIR");
-    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/empty", base);
+    let fixture_dir = format!("{base}/tests/fixtures/install_from_dir/empty");
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
@@ -574,27 +581,26 @@ fn install_from_dir_empty_directory_no_objects() {
             package_dir: ""
         }};
 
-        let applied = install::install(instance, context, "{}", true, false);
+        let applied = install::install(instance, context, "{fixture_dir}", true, false);
 
         // Empty directory should return empty list
         applied.len()
-    "#,
-            fixture_dir
+    "#
         ))
         .unwrap();
 
     let count = result.as_int().unwrap();
     assert_eq!(count, 0);
 
-    let created_objs = created.lock().unwrap();
-    assert_eq!(created_objs.len(), 0);
+    let created_count = created.lock().unwrap().len();
+    assert_eq!(created_count, 0);
 }
 
 #[test]
 fn install_from_dir_respects_namespace_parameter() {
     // Verify force_ns=true forces namespace on all objects regardless of YAML
     let base = env!("CARGO_MANIFEST_DIR");
-    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/basic", base);
+    let fixture_dir = format!("{base}/tests/fixtures/install_from_dir/basic");
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
@@ -613,11 +619,10 @@ fn install_from_dir_respects_namespace_parameter() {
         }};
 
         // force_ns=true should override YAML namespace (test-ns -> forced-ns)
-        let applied = install::install(instance, context, "{}", true, true);
+        let applied = install::install(instance, context, "{fixture_dir}", true, true);
 
         applied.len()
-    "#,
-            fixture_dir
+    "#
         ))
         .unwrap();
 
@@ -625,8 +630,9 @@ fn install_from_dir_respects_namespace_parameter() {
     assert_eq!(count, 2);
 
     // Verify objects have forced namespace
+    let created_count = created.lock().unwrap().len();
+    assert_eq!(created_count, 2);
     let created_objs = created.lock().unwrap();
-    assert_eq!(created_objs.len(), 2);
     for obj in created_objs.iter() {
         if let Ok(map) = obj.as_map_ref()
             && let Some(meta) = map.get("metadata")
@@ -636,6 +642,7 @@ fn install_from_dir_respects_namespace_parameter() {
             assert_eq!(ns.to_string(), "forced-ns");
         }
     }
+    drop(created_objs);
 }
 
 #[test]
@@ -643,7 +650,7 @@ fn install_from_dir_respects_ordering() {
     // Verify get_first() kinds (ConfigMap) are applied before get_last() kinds (Deployment)
     // Tests the 3-phase ordering logic: first, middle, last
     let base = env!("CARGO_MANIFEST_DIR");
-    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/basic", base);
+    let fixture_dir = format!("{base}/tests/fixtures/install_from_dir/basic");
 
     let (mut rhai, _created) = make_lib_script_with_k8s(vec![]);
 
@@ -661,14 +668,13 @@ fn install_from_dir_respects_ordering() {
             package_dir: ""
         }};
 
-        let applied = install::install(instance, context, "{}", true, false);
+        let applied = install::install(instance, context, "{fixture_dir}", true, false);
 
         // Check that objects list contains both ConfigMap (first) and Deployment (last)
         applied.len() == 2 &&
         applied.some(|o| o.kind == "ConfigMap") &&
         applied.some(|o| o.kind == "Deployment")
-    "#,
-            fixture_dir
+    "#
         ))
         .unwrap();
 
@@ -680,7 +686,7 @@ fn install_from_dir_applies_job_in_last_phase() {
     // Nominal: a Job fixture is applied and appears in the result list
     // Job belongs to get_last() so it is applied after ConfigMap (get_first())
     let base = env!("CARGO_MANIFEST_DIR");
-    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/with-job", base);
+    let fixture_dir = format!("{base}/tests/fixtures/install_from_dir/with-job");
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
@@ -698,14 +704,13 @@ fn install_from_dir_applies_job_in_last_phase() {
             package_dir: ""
         }};
 
-        let applied = install::install(instance, context, "{}", true, false);
+        let applied = install::install(instance, context, "{fixture_dir}", true, false);
 
         // Should have applied ConfigMap and Job (2 objects)
         applied.len() == 2 &&
         applied.some(|o| o.kind == "ConfigMap") &&
         applied.some(|o| o.kind == "Job")
-    "#,
-            fixture_dir
+    "#
         ))
         .unwrap();
 
@@ -714,8 +719,8 @@ fn install_from_dir_applies_job_in_last_phase() {
         "install must apply both ConfigMap and Job"
     );
 
-    let created_objs = created.lock().unwrap();
-    assert_eq!(created_objs.len(), 2);
+    let created_count = created.lock().unwrap().len();
+    assert_eq!(created_count, 2);
 }
 
 #[test]
@@ -723,7 +728,7 @@ fn install_from_dir_job_applied_after_configmap() {
     // Edge case / ordering: Job (get_last) must be applied strictly after ConfigMap (get_first)
     // Verifies the 3-phase ordering: first → middle → last
     let base = env!("CARGO_MANIFEST_DIR");
-    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/with-job", base);
+    let fixture_dir = format!("{base}/tests/fixtures/install_from_dir/with-job");
 
     let (mut rhai, _created) = make_lib_script_with_k8s(vec![]);
 
@@ -741,14 +746,13 @@ fn install_from_dir_job_applied_after_configmap() {
             package_dir: ""
         }};
 
-        let applied = install::install(instance, context, "{}", true, false);
+        let applied = install::install(instance, context, "{fixture_dir}", true, false);
 
         // ConfigMap must appear at index 0, Job at index 1 (first-phase before last-phase)
         applied.len() == 2 &&
         applied[0].kind == "ConfigMap" &&
         applied[1].kind == "Job"
-    "#,
-            fixture_dir
+    "#
         ))
         .unwrap();
 
@@ -762,7 +766,7 @@ fn install_from_dir_job_applied_after_configmap() {
 fn install_from_dir_job_applied_to_instance_namespace() {
     // Nominal: Job in fixture gets the instance namespace applied (force_ns=true)
     let base = env!("CARGO_MANIFEST_DIR");
-    let fixture_dir = format!("{}/tests/fixtures/install_from_dir/with-job", base);
+    let fixture_dir = format!("{base}/tests/fixtures/install_from_dir/with-job");
 
     let (mut rhai, created) = make_lib_script_with_k8s(vec![]);
 
@@ -781,10 +785,9 @@ fn install_from_dir_job_applied_to_instance_namespace() {
         }};
 
         // force_ns=true forces all objects into the instance namespace
-        let applied = install::install(instance, context, "{}", true, true);
+        let applied = install::install(instance, context, "{fixture_dir}", true, true);
         applied.some(|o| o.kind == "Job" && o.namespace == "forced-ns")
-    "#,
-            fixture_dir
+    "#
         ))
         .unwrap();
 
@@ -1732,9 +1735,8 @@ fn gen_package_apply_selector_expressions_replaces_markers_in_file() {
         .eval(&format!(
             r#"
         import "gen_package" as gen;
-        gen::apply_selector_expressions("{tmp}", "mycomp");
-    "#,
-            tmp = tmp_path
+        gen::apply_selector_expressions("{tmp_path}", "mycomp");
+    "#
         ))
         .unwrap();
 
@@ -1775,9 +1777,8 @@ fn gen_crd_yaml_writes_yamllint_header() {
             spec: #{{ group: "example.com" }}
         }};
 
-        gen::gen_crd_yaml("{tmp}", data);
-    "#,
-            tmp = tmp_path
+        gen::gen_crd_yaml("{tmp_path}", data);
+    "#
         ))
         .unwrap();
 
@@ -1806,9 +1807,8 @@ fn gen_yaml_does_not_write_yamllint_header() {
 
         let data = #{{ kind: "ConfigMap", metadata: #{{ name: "my-config" }} }};
 
-        gen::gen_yaml("{tmp}", data);
-    "#,
-            tmp = tmp_path
+        gen::gen_yaml("{tmp_path}", data);
+    "#
         ))
         .unwrap();
 
@@ -1825,7 +1825,7 @@ fn gen_yaml_does_not_write_yamllint_header() {
 fn gen_system_crd_without_webhook_has_yamllint_header() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_crd", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_crd");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let _ = rhai
@@ -1840,13 +1840,12 @@ fn gen_system_crd_without_webhook_has_yamllint_header() {
             spec: #{{ group: "example.com" }}
         }}];
 
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let crd_path = format!("{}/get_crds/foos.example.com.yaml", tmp_dir);
+    let crd_path = format!("{tmp_dir}/get_crds/foos.example.com.yaml");
     let content = std::fs::read_to_string(&crd_path).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
@@ -1860,7 +1859,7 @@ fn gen_system_crd_without_webhook_has_yamllint_header() {
 fn gen_system_crd_with_webhook_has_yamllint_header() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_crd_webhook", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_crd_webhook");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let _ = rhai
@@ -1885,13 +1884,12 @@ fn gen_system_crd_with_webhook_has_yamllint_header() {
             }}
         }}];
 
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let crd_path = format!("{}/get_crds/bars.example.com.yaml.hbs", tmp_dir);
+    let crd_path = format!("{tmp_dir}/get_crds/bars.example.com.yaml.hbs");
     let content = std::fs::read_to_string(&crd_path).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
@@ -1905,7 +1903,7 @@ fn gen_system_crd_with_webhook_has_yamllint_header() {
 fn gen_service_crd_without_webhook_has_yamllint_header() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_service_crd", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_service_crd");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let _ = rhai
@@ -1920,13 +1918,12 @@ fn gen_service_crd_without_webhook_has_yamllint_header() {
             spec: #{{ group: "example.com" }}
         }}];
 
-        gen::gen_service("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_service("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let crd_path = format!("{}/get_crds/widgets.example.com.yaml", tmp_dir);
+    let crd_path = format!("{tmp_dir}/get_crds/widgets.example.com.yaml");
     let content = std::fs::read_to_string(&crd_path).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
@@ -1943,7 +1940,7 @@ fn gen_system_crd_has_no_helm_labels_or_annotations() {
     // seules les annotations non-helm.sh conservées.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_crd_no_labels", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_crd_no_labels");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let _ = rhai
@@ -1970,13 +1967,12 @@ fn gen_system_crd_has_no_helm_labels_or_annotations() {
             }},
             spec: #{{ group: "example.com" }}
         }}];
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let content = std::fs::read_to_string(format!("{}/get_crds/foos.example.com.yaml", tmp_dir)).unwrap();
+    let content = std::fs::read_to_string(format!("{tmp_dir}/get_crds/foos.example.com.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2008,11 +2004,11 @@ fn update_package_yaml_starts_with_document_separator() {
     // Verify the rewritten package.yaml starts with "---"
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_separator", base);
+    let tmp_dir = format!("{base}/tests/tmp/pkg_yaml_separator");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2030,13 +2026,12 @@ fn update_package_yaml_starts_with_document_separator() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "myapp");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "myapp");
+    "#
         ))
         .unwrap();
 
-    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2052,12 +2047,12 @@ fn update_package_yaml_preserves_top_level_key_order() {
     // must appear in that order and NOT be moved inside metadata.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_key_order", base);
+    let tmp_dir = format!("{base}/tests/tmp/pkg_yaml_key_order");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     // package.yaml with top-level keys in a specific order
     let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  type: system\nrequirements: []\nimages:\n  existing:\n    registry: docker.io\n    repository: existing\nresources: {}\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2075,13 +2070,12 @@ fn update_package_yaml_preserves_top_level_key_order() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "myapp");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "myapp");
+    "#
         ))
         .unwrap();
 
-    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     // requirements must appear BEFORE images and NOT inside metadata
@@ -2109,12 +2103,12 @@ fn update_package_yaml_preserves_metadata_structure() {
     // Verify that metadata fields (including features array and app_version) are not corrupted.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_metadata", base);
+    let tmp_dir = format!("{base}/tests/tmp/pkg_yaml_metadata");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     // Exact structure from user's real file including "description: >" folded block scalar
     let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  type: system\n  category: core\n  description: >\n    Traefik is a modern HTTP reverse proxy and load balancer made\n    to deploy microservices with ease.\n  features:\n  - upgrade\n  - auto_config\n  app_version: 40.2.0\nrequirements: []\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2132,13 +2126,12 @@ fn update_package_yaml_preserves_metadata_structure() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "traefik");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "traefik");
+    "#
         ))
         .unwrap();
 
-    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2167,14 +2160,13 @@ fn run_block_scalar_test(scalar_header: &str, scalar_body: &str) {
         .replace('|', "pipe")
         .replace('-', "strip")
         .replace(' ', "");
-    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_scalar_{}", base, safe_name);
+    let tmp_dir = format!("{base}/tests/tmp/pkg_yaml_scalar_{safe_name}");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = format!(
-        "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  description: {}\n{}\n  app_version: 40.2.0\nrequirements: []\n",
-        scalar_header, scalar_body
+        "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  description: {scalar_header}\n{scalar_body}\n  app_version: 40.2.0\nrequirements: []\n"
     );
-    std::fs::write(format!("{}/package.yaml", tmp_dir), &pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), &pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2192,34 +2184,30 @@ fn run_block_scalar_test(scalar_header: &str, scalar_body: &str) {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "traefik");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "traefik");
+    "#
         ))
         .unwrap();
 
-    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(content.starts_with("---\n"), "doit commencer par ---");
     assert!(!content.contains("? ["), "pas de clé complexe YAML");
     assert!(
         content.contains("app_version"),
-        "app_version doit rester présent (scalar: {})",
-        scalar_header
+        "app_version doit rester présent (scalar: {scalar_header})"
     );
     assert!(
         content.contains("40.2.0"),
-        "valeur app_version préservée (scalar: {})",
-        scalar_header
+        "valeur app_version préservée (scalar: {scalar_header})"
     );
     // requirements must be top-level (not inside metadata)
     let req_pos = content.find("\nrequirements:").unwrap_or(usize::MAX);
     let meta_pos = content.find("\nmetadata:").unwrap_or(0);
     assert!(
         req_pos > meta_pos,
-        "requirements doit être top-level, pas imbriqué dans metadata (scalar: {})",
-        scalar_header
+        "requirements doit être top-level, pas imbriqué dans metadata (scalar: {scalar_header})"
     );
 }
 
@@ -2261,12 +2249,12 @@ fn update_package_yaml_colon_in_key_name_not_corrupted() {
     // or moved inside metadata after the update.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/pkg_yaml_colon_key", base);
+    let tmp_dir = format!("{base}/tests/tmp/pkg_yaml_colon_key");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     // Exact structure from the user's file (including the quirky "recommandations:" key)
     let pkg_yaml = "---\napiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  type: system\n  features:\n  - upgrade\n  - auto_config\n  app_version: 40.2.0\nrequirements: []\n\"recommandations:\": []\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2284,13 +2272,12 @@ fn update_package_yaml_colon_in_key_name_not_corrupted() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "traefik");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "traefik");
+    "#
         ))
         .unwrap();
 
-    let content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2377,11 +2364,11 @@ fn parse_image_quay_registry_with_path() {
 fn gen_system_deployment_extracts_image_to_package_yaml() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_extract_images", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_extract_images");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: my-release\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2408,15 +2395,14 @@ fn gen_system_deployment_extracts_image_to_package_yaml() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let pkg_content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     let hbs_content =
-        std::fs::read_to_string(format!("{}/get_systems/Deployment_app.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/Deployment_app.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2445,11 +2431,11 @@ fn gen_system_deployment_extracts_image_to_package_yaml() {
 fn gen_system_deployment_extracts_image_from_args() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_extract_args_image", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_extract_args_image");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: cert-manager\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2476,15 +2462,14 @@ fn gen_system_deployment_extracts_image_from_args() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "cert-manager");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "cert-manager");
+    "#
         ))
         .unwrap();
 
-    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let pkg_content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     let hbs_content =
-        std::fs::read_to_string(format!("{}/get_systems/Deployment_app.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/Deployment_app.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2505,11 +2490,11 @@ fn gen_system_deployment_extracts_image_from_args() {
 fn gen_system_overwrites_existing_images_on_regeneration() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_overwrite", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_overwrite");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: my-release\n  category: core\n  type: system\nimages:\n  traefik:\n    registry: docker.io\n    repository: traefik\n    tag: v3.6.0\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2529,13 +2514,12 @@ fn gen_system_overwrites_existing_images_on_regeneration() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let pkg_content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2548,12 +2532,12 @@ fn gen_system_overwrites_existing_images_on_regeneration() {
 fn gen_system_keeps_existing_resources_when_container_has_none() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_keep_resources", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_keep_resources");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     // package.yaml already has resources for "traefik"
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: my-release\n  category: core\n  type: system\nresources:\n  traefik:\n    requests:\n      cpu: 20m\n      memory: 128Mi\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2574,13 +2558,12 @@ fn gen_system_keeps_existing_resources_when_container_has_none() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let pkg_content = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
+    let pkg_content = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2597,11 +2580,11 @@ fn gen_system_filename_does_not_contain_release_name_placeholder() {
     // ne contienne pas le placeholder du release name.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_filename_placeholder", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_filename_placeholder");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2621,13 +2604,12 @@ fn gen_system_filename_does_not_contain_release_name_placeholder() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "v3fdf80f5");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "v3fdf80f5");
+    "#
         ))
         .unwrap();
 
-    let systems_dir = format!("{}/get_systems", tmp_dir);
+    let systems_dir = format!("{tmp_dir}/get_systems");
     let files: Vec<_> = std::fs::read_dir(&systems_dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -2646,11 +2628,11 @@ fn gen_system_args_replace_release_name_with_appslug() {
     // le placeholder remplacé par {{instance.appslug}}.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_args_release", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_args_release");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2677,14 +2659,12 @@ fn gen_system_args_replace_release_name_with_appslug() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "v3fdf80f5");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "v3fdf80f5");
+    "#
         ))
         .unwrap();
 
-    let hbs =
-        std::fs::read_to_string(format!("{}/get_systems/Deployment_traefik.yaml.hbs", tmp_dir)).unwrap();
+    let hbs = std::fs::read_to_string(format!("{tmp_dir}/get_systems/Deployment_traefik.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2703,11 +2683,11 @@ fn gen_system_release_name_replaced_in_annotation_values() {
     // contenant le release name placeholder doivent être remplacées par {{instance.appslug}}.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_annotation_release", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_annotation_release");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: cert-manager\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2731,15 +2711,13 @@ fn gen_system_release_name_replaced_in_annotation_values() {
                 sideEffects: "None"
             }}]
         }}];
-        gen::gen_system("{dir}", docs, "v3fdf80f5", "v56abc12");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "v3fdf80f5", "v56abc12");
+    "#
         ))
         .unwrap();
 
     let hbs = std::fs::read_to_string(format!(
-        "{}/get_systems/MutatingWebhookConfiguration_cert-manager-webhook.yaml.hbs",
-        tmp_dir
+        "{tmp_dir}/get_systems/MutatingWebhookConfiguration_cert-manager-webhook.yaml.hbs"
     ))
     .unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
@@ -2764,11 +2742,11 @@ fn gen_system_networkpolicy_uses_selector_expression() {
     // par l'expression selector_from_ctx, pas laisser les labels Helm bruts.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_netpol_selector", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_netpol_selector");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2799,15 +2777,13 @@ fn gen_system_networkpolicy_uses_selector_expression() {
                 }}
             }}
         ];
-        gen::gen_system("{dir}", docs, "v3fdf80f5");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "v3fdf80f5");
+    "#
         ))
         .unwrap();
 
     let hbs = std::fs::read_to_string(format!(
-        "{}/get_systems/NetworkPolicy_allow-egress.yaml.hbs",
-        tmp_dir
+        "{tmp_dir}/get_systems/NetworkPolicy_allow-egress.yaml.hbs"
     ))
     .unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
@@ -2833,11 +2809,11 @@ fn gen_system_tsc_matchlabels_replaced_with_selector_expression() {
     // Bug : tsc.labelSelector.matchLabels = marker (2 niveaux sur copie) ne persiste pas.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_tsc_selector", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_tsc_selector");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2865,14 +2841,13 @@ fn gen_system_tsc_matchlabels_replaced_with_selector_expression() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "v3fdf80f5");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "v3fdf80f5");
+    "#
         ))
         .unwrap();
 
     let hbs =
-        std::fs::read_to_string(format!("{}/get_systems/Deployment_controller.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/Deployment_controller.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2896,11 +2871,11 @@ fn gen_system_pod_template_labels_include_comp_for_selector_match() {
     // puisse matcher les pods → sinon kube-linter mismatching-selector.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_labels_comp", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_labels_comp");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2918,14 +2893,13 @@ fn gen_system_pod_template_labels_include_comp_for_selector_match() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "v3fdf80f5");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "v3fdf80f5");
+    "#
         ))
         .unwrap();
 
     let hbs =
-        std::fs::read_to_string(format!("{}/get_systems/Deployment_controller.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/Deployment_controller.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     // Le pod template labels doit passer comp pour matcher le selector
@@ -2941,11 +2915,11 @@ fn gen_system_image_key_strips_release_name_prefix() {
     // Helm nomme les conteneurs <release>-<component> ; la clé doit être juste <component>.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_img_key", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_img_key");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -2968,15 +2942,13 @@ fn gen_system_image_key_strips_release_name_prefix() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "v3fdf80f5");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "v3fdf80f5");
+    "#
         ))
         .unwrap();
 
-    let pkg = std::fs::read_to_string(format!("{}/package.yaml", tmp_dir)).unwrap();
-    let hbs =
-        std::fs::read_to_string(format!("{}/get_systems/Deployment_traefik.yaml.hbs", tmp_dir)).unwrap();
+    let pkg = std::fs::read_to_string(format!("{tmp_dir}/package.yaml")).unwrap();
+    let hbs = std::fs::read_to_string(format!("{tmp_dir}/get_systems/Deployment_traefik.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -2995,11 +2967,11 @@ fn gen_system_file_name_strips_release_prefix_to_component() {
     // "Deployment_controller.yaml.hbs" (prefix strippé, pas le fallback "app").
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_strip_prefix", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_strip_prefix");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -3017,13 +2989,12 @@ fn gen_system_file_name_strips_release_prefix_to_component() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let systems_dir = format!("{}/get_systems", tmp_dir);
+    let systems_dir = format!("{tmp_dir}/get_systems");
     let files: Vec<_> = std::fs::read_dir(&systems_dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -3076,7 +3047,7 @@ fn gen_package_clean_metadata_removes_labels() {
 fn gen_system_non_crd_has_no_metadata_labels() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_no_labels", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_no_labels");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let _ = rhai
@@ -3097,13 +3068,12 @@ fn gen_system_non_crd_has_no_metadata_labels() {
             rules: []
         }}];
 
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
-    let obj_path = format!("{}/get_systems/ClusterRole_viewer.yaml.hbs", tmp_dir);
+    let obj_path = format!("{tmp_dir}/get_systems/ClusterRole_viewer.yaml.hbs");
     let content = std::fs::read_to_string(&obj_path).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
@@ -3121,7 +3091,7 @@ fn gen_system_non_crd_has_no_metadata_labels() {
 fn gen_system_deployment_metadata_has_no_labels_key() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_deploy_no_labels", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_deploy_no_labels");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let _ = rhai
@@ -3148,14 +3118,13 @@ fn gen_system_deployment_metadata_has_no_labels_key() {
             }}
         }}];
 
-        gen::gen_system("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
     // doc_name == release_name → clean_file_name retourne "app" (fallback)
-    let obj_path = format!("{}/get_systems/Deployment_app.yaml.hbs", tmp_dir);
+    let obj_path = format!("{tmp_dir}/get_systems/Deployment_app.yaml.hbs");
     let content = std::fs::read_to_string(&obj_path).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
@@ -3175,9 +3144,10 @@ fn gen_system_deployment_metadata_has_no_labels_key() {
             in_top_metadata = false;
             in_spec = true;
         }
-        if in_top_metadata && line.trim_start().starts_with("labels:") {
-            panic!("Le metadata top-level du Deployment contient 'labels:' — doit être supprimé");
-        }
+        assert!(
+            !(in_top_metadata && line.trim_start().starts_with("labels:")),
+            "Le metadata top-level du Deployment contient 'labels:' — doit être supprimé"
+        );
     }
 }
 
@@ -3185,7 +3155,7 @@ fn gen_system_deployment_metadata_has_no_labels_key() {
 fn gen_tenant_objects_have_no_metadata_labels() {
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_tenant_no_labels", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_tenant_no_labels");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let _ = rhai
@@ -3227,18 +3197,17 @@ fn gen_tenant_objects_have_no_metadata_labels() {
             }}
         ];
 
-        gen::gen_tenant("{dir}", docs, "my-release");
-    "#,
-            dir = tmp_dir
+        gen::gen_tenant("{tmp_dir}", docs, "my-release");
+    "#
         ))
         .unwrap();
 
     // "my-release-config" → strip "my-release-" prefix → "config"
-    let cm_path = format!("{}/get_others/ConfigMap_config.yaml.hbs", tmp_dir);
+    let cm_path = format!("{tmp_dir}/get_others/ConfigMap_config.yaml.hbs");
     let cm_content = std::fs::read_to_string(&cm_path).unwrap();
 
     // "my-release" == release_name → fallback "app"
-    let deploy_path = format!("{}/get_scalables/Deployment_app.yaml.hbs", tmp_dir);
+    let deploy_path = format!("{tmp_dir}/get_scalables/Deployment_app.yaml.hbs");
     let deploy_content = std::fs::read_to_string(&deploy_path).unwrap();
 
     std::fs::remove_dir_all(&tmp_dir).unwrap();
@@ -3267,9 +3236,10 @@ fn gen_tenant_objects_have_no_metadata_labels() {
             in_top_metadata = false;
             in_spec = true;
         }
-        if in_top_metadata && line.trim_start().starts_with("labels:") {
-            panic!("gen_tenant Deployment metadata top-level contient 'labels:' — doit être supprimé");
-        }
+        assert!(
+            !(in_top_metadata && line.trim_start().starts_with("labels:")),
+            "gen_tenant Deployment metadata top-level contient 'labels:' — doit être supprimé"
+        );
     }
 }
 
@@ -3364,14 +3334,13 @@ fn placeholder_is_kubernetes_valid() {
         "placeholder doit contenir uniquement [a-z0-9-], got: {s}"
     );
     assert!(
-        s.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false),
+        s.chars().next().is_some_and(|c| c.is_ascii_lowercase()),
         "placeholder doit commencer par une lettre minuscule, got: {s}"
     );
     assert!(
         s.chars()
             .last()
-            .map(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-            .unwrap_or(false),
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
         "placeholder doit terminer par une lettre ou chiffre, got: {s}"
     );
 }
@@ -3384,11 +3353,11 @@ fn gen_system_namespace_replaced_in_clusterrole_name() {
     //   2. remplacer le placeholder ns dans le contenu par {{instance.namespace}}
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_ns_replace", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_ns_replace");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -3400,15 +3369,14 @@ fn gen_system_namespace_replaced_in_clusterrole_name() {
             metadata: #{{ name: "vrel1234-traefik-vns5678" }},
             rules: []
         }}];
-        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "vrel1234", "vns5678");
+    "#
         ))
         .unwrap();
 
     // Nom stable : strip préfixe UUID release + strip suffixe UUID ns → "traefik"
     let hbs_content =
-        std::fs::read_to_string(format!("{}/get_systems/ClusterRole_traefik.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/ClusterRole_traefik.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -3426,11 +3394,11 @@ fn gen_system_namespace_not_replaced_without_param() {
     // Compat descendante : gen_system à 3 args ne remplace pas le namespace
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_system_no_ns_param", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_system_no_ns_param");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: traefik\n  category: core\n  type: system\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -3442,14 +3410,13 @@ fn gen_system_namespace_not_replaced_without_param() {
             metadata: #{{ name: "traefik-vynil-apps" }},
             rules: []
         }}];
-        gen::gen_system("{dir}", docs, "traefik");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "traefik");
+    "#
         ))
         .unwrap();
 
     let hbs_content =
-        std::fs::read_to_string(format!("{}/get_systems/ClusterRole_vynil-apps.yaml.hbs", tmp_dir)).unwrap();
+        std::fs::read_to_string(format!("{tmp_dir}/get_systems/ClusterRole_vynil-apps.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -3464,11 +3431,11 @@ fn gen_tenant_namespace_replaced_in_generated_files() {
     // et le contenu doit remplacer l'UUID ns par {{instance.namespace}}.
     let mut rhai = make_lib_script();
     let base = env!("CARGO_MANIFEST_DIR");
-    let tmp_dir = format!("{}/tests/tmp/gen_tenant_ns_replace", base);
+    let tmp_dir = format!("{base}/tests/tmp/gen_tenant_ns_replace");
     std::fs::create_dir_all(&tmp_dir).unwrap();
 
     let pkg_yaml = "apiVersion: vinyl.solidite.fr/v1beta1\nkind: Package\nmetadata:\n  name: myapp\n  category: apps\n  type: tenant\n";
-    std::fs::write(format!("{}/package.yaml", tmp_dir), pkg_yaml).unwrap();
+    std::fs::write(format!("{tmp_dir}/package.yaml"), pkg_yaml).unwrap();
 
     let _ = rhai
         .eval(&format!(
@@ -3480,14 +3447,13 @@ fn gen_tenant_namespace_replaced_in_generated_files() {
             metadata: #{{ name: "vrel1234-myapp-vns5678" }},
             rules: []
         }}];
-        gen::gen_tenant("{dir}", docs, "vrel1234", "vns5678");
-    "#,
-            dir = tmp_dir
+        gen::gen_tenant("{tmp_dir}", docs, "vrel1234", "vns5678");
+    "#
         ))
         .unwrap();
 
     // Nom stable : strip préfixe UUID release + strip suffixe UUID ns → "myapp"
-    let hbs_content = std::fs::read_to_string(format!("{}/get_others/Role_myapp.yaml.hbs", tmp_dir)).unwrap();
+    let hbs_content = std::fs::read_to_string(format!("{tmp_dir}/get_others/Role_myapp.yaml.hbs")).unwrap();
     std::fs::remove_dir_all(&tmp_dir).unwrap();
 
     assert!(
@@ -3750,8 +3716,7 @@ spec:
 
     let _ = rhai
         .eval(&format!(
-            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{dir}", "cert-manager");"#,
-            dir = tmp_dir
+            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{tmp_dir}", "cert-manager");"#
         ))
         .unwrap();
 
@@ -3782,8 +3747,7 @@ fn apply_dedup_to_generated_no_change_when_no_redundancy() {
 
     let _ = rhai
         .eval(&format!(
-            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{dir}", "cert-manager");"#,
-            dir = tmp_dir
+            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{tmp_dir}", "cert-manager");"#
         ))
         .unwrap();
 
@@ -3810,8 +3774,7 @@ fn apply_dedup_to_generated_noop_when_pkg_name_unit() {
 
     let _ = rhai
         .eval(&format!(
-            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{dir}", ());"#,
-            dir = tmp_dir
+            r#"import "gen_package" as gen; gen::apply_dedup_to_generated("{tmp_dir}", ());"#
         ))
         .unwrap();
 
@@ -3907,9 +3870,8 @@ fn gen_system_clusterrole_name_has_no_double_namespace() {
             metadata: #{{ name: "vrel1234-traefik-vns5678" }},
             rules: []
         }}];
-        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "vrel1234", "vns5678");
+    "#
         ))
         .unwrap();
 
@@ -3958,9 +3920,8 @@ fn gen_system_clusterrolebinding_rolref_matches_clusterrole_name() {
                 subjects: [#{{ kind: "ServiceAccount", name: "vrel1234-traefik", namespace: "vns5678" }}]
             }}
         ];
-        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "vrel1234", "vns5678");
+    "#
         ))
         .unwrap();
 
@@ -4022,9 +3983,8 @@ fn gen_system_deployment_no_env_extraction() {
                 }}
             }}
         }}];
-        gen::gen_system("{dir}", docs, "vrel1234", "vns5678");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "vrel1234", "vns5678");
+    "#
         ))
         .unwrap();
 
@@ -4075,9 +4035,8 @@ fn gen_tenant_deployment_extracts_env_to_configmap() {
                 }}
             }}
         }}];
-        gen::gen_tenant("{dir}", docs, "myapp");
-    "#,
-            dir = tmp_dir
+        gen::gen_tenant("{tmp_dir}", docs, "myapp");
+    "#
         ))
         .unwrap();
 
@@ -4117,9 +4076,8 @@ fn gen_system_no_duplicate_appslug_when_upstream_name_prefixed() {
             kind: "ServiceAccount",
             metadata: #{{ name: "reloader-reloader" }}
         }}];
-        gen::gen_system("{dir}", docs, "reloader");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "reloader");
+    "#
         ))
         .unwrap();
 
@@ -4128,7 +4086,7 @@ fn gen_system_no_duplicate_appslug_when_upstream_name_prefixed() {
             std::fs::read_dir(format!("{tmp_dir}/get_systems"))
                 .ok()
                 .and_then(|d| {
-                    d.filter_map(|e| e.ok())
+                    d.filter_map(std::result::Result::ok)
                         .find(|e| e.file_name().to_string_lossy().contains("ServiceAccount"))
                         .and_then(|e| std::fs::read_to_string(e.path()).ok())
                 })
@@ -4182,15 +4140,14 @@ fn gen_system_clusterrole_no_duplicate_when_upstream_prefixed() {
                 subjects: []
             }}
         ];
-        gen::gen_system("{dir}", docs, "reloader");
-    "#,
-            dir = tmp_dir
+        gen::gen_system("{tmp_dir}", docs, "reloader");
+    "#
         ))
         .unwrap();
 
     let cr_files: Vec<_> = std::fs::read_dir(format!("{tmp_dir}/get_systems"))
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_name().to_string_lossy().contains("ClusterRole"))
         .collect();
 

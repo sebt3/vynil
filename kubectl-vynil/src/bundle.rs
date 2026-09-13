@@ -7,6 +7,9 @@ use tar::Builder;
 
 use crate::{cli::InstanceTarget, transport::GetResult};
 
+/// Marker appended by the server when a body was truncated.
+const TRUNC_MARKER: &[u8] = b"... [truncated]";
+
 /// Metadata for a single collected item in the manifest.
 #[derive(Debug, Serialize)]
 pub struct ManifestItem {
@@ -17,7 +20,7 @@ pub struct ManifestItem {
     pub bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub redactions: Option<RedactionCounts>,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
 }
 
@@ -44,7 +47,32 @@ pub struct RedactionReport {
     pub total: RedactionCounts,
 }
 
+/// Appends one byte slice entry to the diagnostic tar archive.
+///
+/// # Errors
+///
+/// Returns an error when the archive entry cannot be written.
+fn append_entry(
+    tar: &mut Builder<GzEncoder<std::fs::File>>,
+    rel_path: &str,
+    bytes: &[u8],
+) -> anyhow::Result<()> {
+    let mut header = tar::Header::new_gnu();
+    header.set_size(bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_username("vynil").ok();
+    header.set_cksum();
+    tar.append_data(&mut header, rel_path, Cursor::new(bytes))?;
+    Ok(())
+}
+
 /// Builds the tar.gz bundle.
+///
+/// # Errors
+///
+/// Returns an error when the output file cannot be created or the tar.gz archive
+/// cannot be written.
 pub async fn build_bundle(
     target: &InstanceTarget,
     transport_label: &str,
@@ -65,8 +93,7 @@ pub async fn build_bundle(
     for (item_name, result) in &items {
         let ext = crate::items::extension_for_content_type(&result.content_type);
         let base_path = crate::items::item_path(item_name);
-        let file_path = format!("{}{}", base_path, ext);
-        const TRUNC_MARKER: &[u8] = b"... [truncated]";
+        let file_path = format!("{base_path}{ext}");
         let truncated = result.body.windows(TRUNC_MARKER.len()).any(|w| w == TRUNC_MARKER);
 
         let manifest_item = ManifestItem {
@@ -87,8 +114,8 @@ pub async fn build_bundle(
                 distinct: d,
                 occurrences: o,
             });
-            total_distinct += d;
-            total_occurrences += o;
+            total_distinct = total_distinct.saturating_add(d);
+            total_occurrences = total_occurrences.saturating_add(o);
         }
 
         manifest_items.push(manifest_item);
@@ -117,66 +144,34 @@ pub async fn build_bundle(
     let mut tar = Builder::new(encoder);
 
     // Add artefact files
-    for (_item_name, result) in &items {
+    for (item_name, result) in &items {
         let ext = crate::items::extension_for_content_type(&result.content_type);
-        let base_path = crate::items::item_path(_item_name);
+        let base_path = crate::items::item_path(item_name);
         // ext is a suffix, not a path segment: "<root>/cluster/clusterinfo.json".
-        let file_path = format!("{}/{}{}", root_dir, base_path, ext);
+        let file_path = format!("{root_dir}/{base_path}{ext}");
 
-        let mut header = tar::Header::new_gnu();
-        header.set_size(result.body.len() as u64);
-        header.set_mode(0o644);
-        header.set_mtime(0);
-        header.set_username("vynil").ok();
-        header.set_cksum();
-        tar.append_data(&mut header, file_path.as_str(), Cursor::new(&result.body))?;
+        append_entry(&mut tar, file_path.as_str(), &result.body)?;
     }
 
     // Add manifest.yaml
     {
         let manifest_yaml = serde_yaml::to_string(&manifest)?;
-        let file_path = format!("{}/manifest.yaml", root_dir);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(manifest_yaml.len() as u64);
-        header.set_mode(0o644);
-        header.set_mtime(0);
-        header.set_username("vynil").ok();
-        header.set_cksum();
-        tar.append_data(
-            &mut header,
-            file_path.as_str(),
-            Cursor::new(manifest_yaml.as_bytes()),
-        )?;
+        let file_path = format!("{root_dir}/manifest.yaml");
+        append_entry(&mut tar, file_path.as_str(), manifest_yaml.as_bytes())?;
     }
 
     // Add redactions.json
     {
         let redactions_json = serde_json::to_string(&redaction_report)?;
-        let file_path = format!("{}/redactions.json", root_dir);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(redactions_json.len() as u64);
-        header.set_mode(0o644);
-        header.set_mtime(0);
-        header.set_username("vynil").ok();
-        header.set_cksum();
-        tar.append_data(
-            &mut header,
-            file_path.as_str(),
-            Cursor::new(redactions_json.as_bytes()),
-        )?;
+        let file_path = format!("{root_dir}/redactions.json");
+        append_entry(&mut tar, file_path.as_str(), redactions_json.as_bytes())?;
     }
 
     // Add SUMMARY.md
     {
         let summary = build_summary(target, &tool_version, &ts, &items, &redaction_report);
-        let file_path = format!("{}/SUMMARY.md", root_dir);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(summary.len() as u64);
-        header.set_mode(0o644);
-        header.set_mtime(0);
-        header.set_username("vynil").ok();
-        header.set_cksum();
-        tar.append_data(&mut header, file_path.as_str(), Cursor::new(summary.as_bytes()))?;
+        let file_path = format!("{root_dir}/SUMMARY.md");
+        append_entry(&mut tar, file_path.as_str(), summary.as_bytes())?;
     }
 
     tar.finish()?;
@@ -197,16 +192,13 @@ pub async fn build_bundle(
 }
 
 /// Bundle build summary for stdout output.
+#[derive(Debug)]
 pub struct BundleSummary {
     pub output_path: std::path::PathBuf,
     pub item_count: usize,
     pub total_redactions_distinct: usize,
     pub total_redactions_occurrences: usize,
     pub error_items: Vec<String>,
-}
-
-fn is_false(v: &bool) -> bool {
-    !v
 }
 
 fn build_summary(
@@ -216,14 +208,16 @@ fn build_summary(
     items: &[(&str, GetResult)],
     redaction_report: &RedactionReport,
 ) -> String {
+    use std::fmt::Write as _;
     let mut md = String::new();
-    md.push_str("# Vynil Diagnostic Bundle\n\n");
-    md.push_str(&format!(
-        "- **Instance**: `{}/{}/{}`\n",
+    let _ = writeln!(md, "# Vynil Diagnostic Bundle\n");
+    let _ = writeln!(
+        md,
+        "- **Instance**: `{}/{}/{}`",
         target.kind, target.namespace, target.name
-    ));
-    md.push_str(&format!("- **Collected**: {}\n", ts));
-    md.push_str(&format!("- **Tool version**: {}\n\n", tool_version));
+    );
+    let _ = writeln!(md, "- **Collected**: {ts}");
+    let _ = writeln!(md, "- **Tool version**: {tool_version}\n");
 
     md.push_str("## Collected Items\n\n");
     md.push_str("| Item | File | HTTP Status | Bytes | Redactions (distinct / occurrences) |\n");
@@ -232,30 +226,30 @@ fn build_summary(
     for (item_name, result) in items {
         let ext = crate::items::extension_for_content_type(&result.content_type);
         let base_path = crate::items::item_path(item_name);
-        let file_path = format!("{}{}", base_path, ext);
+        let file_path = format!("{base_path}{ext}");
         let redactions_str = match result.redactions {
-            Some((d, o)) => format!("{}/{}", d, o),
+            Some((d, o)) => format!("{d}/{o}"),
             None => "—".to_string(),
         };
-        md.push_str(&format!(
-            "| {} | {} | {} | {} | {} |\n",
-            item_name,
-            file_path,
+        let _ = writeln!(
+            md,
+            "| {item_name} | {file_path} | {} | {} | {redactions_str} |",
             result.status,
             result.body.len(),
-            redactions_str
-        ));
+        );
     }
 
     md.push_str("\n## Redactions Summary\n\n");
-    md.push_str(&format!(
-        "- **Total distinct values redacted**: {}\n",
+    let _ = writeln!(
+        md,
+        "- **Total distinct values redacted**: {}",
         redaction_report.total.distinct
-    ));
-    md.push_str(&format!(
-        "- **Total occurrences replaced**: {}\n\n",
+    );
+    let _ = writeln!(
+        md,
+        "- **Total occurrences replaced**: {}\n",
         redaction_report.total.occurrences
-    ));
+    );
 
     md.push_str("## How to Read This Bundle\n\n");
     md.push_str("1. `instance/state` — instance conditions, tags, Terraform/Rhai state (anonymized).\n");
@@ -281,10 +275,7 @@ fn build_summary(
             let cstatus = cond.get("status").and_then(|v| v.as_str()).unwrap_or("—");
             let creason = cond.get("reason").and_then(|v| v.as_str()).unwrap_or("—");
             let cmessage = cond.get("message").and_then(|v| v.as_str()).unwrap_or("—");
-            md.push_str(&format!(
-                "| {} | {} | {} | {} |\n",
-                ctype, cstatus, creason, cmessage
-            ));
+            let _ = writeln!(md, "| {ctype} | {cstatus} | {creason} | {cmessage} |");
         }
     }
 

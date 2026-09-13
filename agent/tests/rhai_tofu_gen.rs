@@ -7,7 +7,7 @@ fn make_lib_script() -> Script {
         vec![format!("{base}/scripts/lib")],
         vec![],
         vec![],
-        Default::default(),
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     )
 }
 

@@ -3,8 +3,9 @@ use opentelemetry::trace::TraceId;
 use tracing::Instrument;
 use tracing_subscriber::{EnvFilter, Registry, prelude::*};
 
-///  Fetch an opentelemetry::trace::TraceId as hex through the full tracing stack
-pub fn get_trace_id() -> TraceId {
+///  Fetch an `opentelemetry::trace::TraceId` as hex through the full tracing stack
+#[must_use]
+pub const fn get_trace_id() -> TraceId {
     use opentelemetry::trace::TraceContextExt as _; // opentelemetry::Context -> opentelemetry::trace::Span
     use tracing_opentelemetry::OpenTelemetrySpanExt as _; // tracing::Span to opentelemetry::Context
 
@@ -35,24 +36,38 @@ async fn init_tracer() -> opentelemetry::sdk::trace::Tracer {
         .unwrap()
 }
 
-/// Initialize tracing
+/// Build the [`EnvFilter`] from env, defaulting to `info`.
+fn env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
+/// Install the subscriber exactly once; a double registration is not fatal.
+fn install<S: tracing::Subscriber + Send + Sync + 'static>(collector: S) {
+    // Called once at process startup; if a subscriber is already set the
+    // previous one stays active, which is acceptable.
+    let _ = tracing::subscriber::set_global_default(collector);
+}
+
+/// Initialize tracing.
+#[cfg(feature = "telemetry")]
 pub async fn init() {
-    // Setup tracing layers
-    #[cfg(feature = "telemetry")]
     let telemetry = tracing_opentelemetry::layer().with_tracer(init_tracer().await);
     let logger = tracing_subscriber::fmt::layer().compact();
-    let env_filter = EnvFilter::try_from_default_env()
-        .or(EnvFilter::try_new("info"))
-        .unwrap();
+    let collector = Registry::default()
+        .with(telemetry)
+        .with(logger)
+        .with(env_filter());
+    install(collector);
+}
 
-    // Decide on layers
-    #[cfg(feature = "telemetry")]
-    let collector = Registry::default().with(telemetry).with(logger).with(env_filter);
-    #[cfg(not(feature = "telemetry"))]
-    let collector = Registry::default().with(logger).with(env_filter);
-
-    // Initialize tracing
-    tracing::subscriber::set_global_default(collector).unwrap();
+/// Initialize tracing.
+#[cfg(not(feature = "telemetry"))]
+pub fn init() {
+    let logger = tracing_subscriber::fmt::layer().compact();
+    let collector = Registry::default().with(logger).with(env_filter());
+    install(collector);
 }
 
 #[cfg(test)]

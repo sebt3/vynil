@@ -1,5 +1,4 @@
 use crate::linting::LintLevel;
-use common::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -26,24 +25,28 @@ pub struct FileRule {
 }
 
 impl LintConfig {
-    /// Load .vynil-lint.yaml from package_dir, return Default if absent
-    pub fn load(package_dir: &Path) -> Result<Self> {
+    /// Load .vynil-lint.yaml from `package_dir`, return Default if absent.
+    ///
+    /// A missing, unreadable or invalid config file is not an error: it falls back to the
+    /// default lint configuration (with a warning).
+    #[must_use]
+    pub fn load(package_dir: &Path) -> Self {
         let config_path = package_dir.join(".vynil-lint.yaml");
         if !config_path.exists() {
-            return Ok(Self::default());
+            return Self::default();
         }
 
         match std::fs::read_to_string(&config_path) {
-            Ok(content) => match serde_yaml::from_str::<LintConfig>(&content) {
-                Ok(config) => Ok(config),
+            Ok(content) => match serde_yaml::from_str::<Self>(&content) {
+                Ok(config) => config,
                 Err(e) => {
-                    tracing::warn!("Invalid .vynil-lint.yaml: {}, using defaults", e);
-                    Ok(Self::default())
+                    tracing::warn!("Invalid .vynil-lint.yaml: {e}, using defaults");
+                    Self::default()
                 }
             },
             Err(e) => {
-                tracing::warn!("Failed to read .vynil-lint.yaml: {}, using defaults", e);
-                Ok(Self::default())
+                tracing::warn!("Failed to read .vynil-lint.yaml: {e}, using defaults");
+                Self::default()
             }
         }
     }
@@ -71,12 +74,7 @@ impl LintConfig {
             return None;
         }
 
-        let mut level = default_level;
-
-        // Apply global override
-        if let Some(&override_level) = self.override_.get(rule) {
-            level = override_level;
-        }
+        let mut level = self.override_.get(rule).copied().unwrap_or(default_level);
 
         // Apply file glob override (first matching)
         for file_rule in &self.files {
@@ -130,7 +128,7 @@ pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
     let mut active_blocks: HashSet<String> = HashSet::new();
 
     for (line_num, line) in source.lines().enumerate() {
-        let line_number = line_num + 1; // 1-based
+        let line_number = line_num.saturating_add(1); // 1-based
         let trimmed = line.trim();
 
         // Block-mode disable: comment alone on this line
@@ -159,7 +157,7 @@ pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
 
         // Rhai: // vynil-lint-disable
         if let Some(pos) = line.find("// vynil-lint-disable") {
-            let rest = &line[pos + 21..];
+            let rest = line.get(pos.saturating_add(21)..).unwrap_or("");
             let rules = parse_rules(rest);
             if !rules.is_empty() {
                 result.entry(line_number).or_default().extend(rules);
@@ -169,7 +167,7 @@ pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
 
         // HBS: {{!-- vynil-lint-disable
         if let Some(pos) = line.find("{{!-- vynil-lint-disable") {
-            let rest = &line[pos + 24..];
+            let rest = line.get(pos.saturating_add(24)..).unwrap_or("");
             let rules = parse_rules(rest);
             if !rules.is_empty() {
                 result.entry(line_number).or_default().extend(rules);
@@ -179,7 +177,7 @@ pub fn parse_inline_disables(source: &str) -> HashMap<usize, HashSet<String>> {
 
         // YAML: # vynil-lint-disable
         if let Some(pos) = line.find("# vynil-lint-disable") {
-            let rest = &line[pos + 20..];
+            let rest = line.get(pos.saturating_add(20)..).unwrap_or("");
             let rules = parse_rules(rest);
             if !rules.is_empty() {
                 result.entry(line_number).or_default().extend(rules);
@@ -221,7 +219,7 @@ mod tests {
 
     #[test]
     fn load_returns_default_when_file_absent() {
-        let config = LintConfig::load(Path::new("/nonexistent/path")).unwrap();
+        let config = LintConfig::load(Path::new("/nonexistent/path"));
         assert!(config.disable.is_empty());
         assert!(config.override_.is_empty());
         assert!(config.files.is_empty());

@@ -3,7 +3,7 @@ use crate::{
     error::DiagError,
 };
 use common::{instanceservice::ServiceInstance, instancesystem::SystemInstance};
-use kube::{Api, Client};
+use kube::{Api, Client, api::ListParams};
 
 /// Get the cluster-wide packages state.
 ///
@@ -12,6 +12,9 @@ use kube::{Api, Client};
 /// every other tenant's workloads to any caller who can reach the diag API for a single instance
 /// they own. The platform inventory is the legitimate remote-debug context; it stays gated behind
 /// the `diagnostic_expose_packages` option (the admin opt-out for stricter setups).
+/// # Errors
+///
+/// Propagates the [`DiagError`] raised while listing platform instances.
 pub async fn get_packages(client: &Client) -> Result<PackagesState, DiagError> {
     let mut items = Vec::new();
 
@@ -24,11 +27,11 @@ pub async fn get_packages(client: &Client) -> Result<PackagesState, DiagError> {
     Ok(PackagesState { items })
 }
 
-/// Get packages from ServiceInstance resources
+/// Get packages from `ServiceInstance` resources
 async fn get_service_packages(client: &Client) -> Result<Vec<PackageState>, DiagError> {
     let api: Api<ServiceInstance> = Api::all(client.clone());
     let list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 
@@ -54,11 +57,11 @@ async fn get_service_packages(client: &Client) -> Result<Vec<PackageState>, Diag
         .collect())
 }
 
-/// Get packages from SystemInstance resources
+/// Get packages from `SystemInstance` resources
 async fn get_system_packages(client: &Client) -> Result<Vec<PackageState>, DiagError> {
     let api: Api<SystemInstance> = Api::all(client.clone());
     let list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 

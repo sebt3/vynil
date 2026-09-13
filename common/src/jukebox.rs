@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::{runtime::Handle, task::block_in_place};
 
-/// JukeBox Source type
+/// `JukeBox` Source type
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JukeBoxDef {
@@ -26,7 +26,7 @@ pub enum JukeBoxDef {
     Harbor { registry: String, project: String },
     /// GitLab Container Registry project to list images from
     Gitlab {
-        /// GitLab instance API URL (e.g. https://gitlab.com)
+        /// GitLab instance API URL (e.g. <https://gitlab.com>)
         url: String,
         /// OCI registry URL (e.g. registry.gitlab.com)
         registry: String,
@@ -48,7 +48,7 @@ pub enum JukeBoxDef {
         region: String,
         /// Prefix in the bucket (e.g. "vynil/packages/")
         prefix: Option<String>,
-        /// S3-compatible endpoint (MinIO, OVH, etc.)
+        /// S3-compatible endpoint (`MinIO`, OVH, etc.)
         endpoint: Option<String>,
         /// K8s Opaque secret: keys `access_key_id` and `secret_access_key`
         /// Absent = IAM role / instance profile
@@ -61,7 +61,7 @@ impl Default for JukeBoxDef {
     }
 }
 
-/// JukeBox Maturity
+/// `JukeBox` Maturity
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum JukeBoxMaturity {
@@ -91,7 +91,7 @@ pub struct JukeBoxSpec {
     pub source: Option<JukeBoxDef>,
     /// Jukebox maturity (stable/beta/alpha)
     pub maturity: Option<JukeBoxMaturity>,
-    /// ImagePullSecret name in the vynil-system namespace
+    /// `ImagePullSecret` name in the vynil-system namespace
     pub pull_secret: Option<String>,
     /// Actual cron-type expression that defines the interval of the updates.
     pub schedule: String,
@@ -111,11 +111,11 @@ pub enum ConditionsStatus {
     False,
 }
 
-/// ApplicationCondition contains details about an application condition, which is usually an error or warning
+/// `ApplicationCondition` contains details about an application condition, which is usually an error or warning
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationCondition {
-    /// LastTransitionTime is the time the condition was last observed
+    /// `LastTransitionTime` is the time the condition was last observed
     pub last_transition_time: Option<DateTime<Utc>>,
     /// Message contains human-readable message indicating details about condition
     pub message: String,
@@ -135,8 +135,8 @@ impl ApplicationCondition {
         status: ConditionsStatus,
         condition_type: ConditionsType,
         generation: i64,
-    ) -> ApplicationCondition {
-        ApplicationCondition {
+    ) -> Self {
+        Self {
             last_transition_time: Some(chrono::offset::Utc::now()),
             status,
             condition_type,
@@ -145,8 +145,9 @@ impl ApplicationCondition {
         }
     }
 
-    pub fn ready_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
+    #[must_use]
+    pub fn ready_ok(generation: i64) -> Self {
+        Self::new(
             "Updated succesfully",
             ConditionsStatus::True,
             ConditionsType::Ready,
@@ -154,8 +155,9 @@ impl ApplicationCondition {
         )
     }
 
-    pub fn ready_ko(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
+    #[must_use]
+    pub fn ready_ko(generation: i64) -> Self {
+        Self::new(
             "No successful update",
             ConditionsStatus::False,
             ConditionsType::Ready,
@@ -163,8 +165,9 @@ impl ApplicationCondition {
         )
     }
 
-    pub fn updated_ko(message: &str, generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
+    #[must_use]
+    pub fn updated_ko(message: &str, generation: i64) -> Self {
+        Self::new(
             message,
             ConditionsStatus::False,
             ConditionsType::Updated,
@@ -172,8 +175,9 @@ impl ApplicationCondition {
         )
     }
 
-    pub fn updated_ok(generation: i64) -> ApplicationCondition {
-        ApplicationCondition::new(
+    #[must_use]
+    pub fn updated_ok(generation: i64) -> Self {
+        Self::new(
             "Updated succesfully",
             ConditionsStatus::True,
             ConditionsType::Updated,
@@ -185,35 +189,47 @@ impl ApplicationCondition {
 /// The status object of `JukeBox`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct JukeBoxStatus {
-    /// JukeBox Conditions
+    /// `JukeBox` Conditions
     pub conditions: Vec<ApplicationCondition>,
     /// Vynil packages for this box
     pub packages: Vec<VynilPackage>,
 }
 
 impl JukeBox {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn get(name: String) -> Result<Self> {
         let api = Api::<Self>::all(get_client_async().await);
         api.get(&name).await.map_err(Error::KubeError)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn list() -> Result<ObjectList<Self>> {
         let api = Api::<Self>::all(get_client_async().await);
         let lp = ListParams::default();
         api.list(&lp).await.map_err(Error::KubeError)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn list_with_client(cl: Client) -> Result<ObjectList<Self>> {
         let api = Api::<Self>::all(cl);
         let lp = ListParams::default();
         api.list(&lp).await.map_err(Error::KubeError)
     }
 
-    fn get_conditions_excluding(&self, exclude: Vec<ConditionsType>) -> Vec<ApplicationCondition> {
+    fn get_conditions_excluding(&self, exclude: &[ConditionsType]) -> Vec<ApplicationCondition> {
         let mut ret = Vec::new();
         if let Some(status) = self.status.clone() {
             for c in status.conditions {
-                if !exclude.clone().into_iter().any(|exc| c.condition_type == exc) {
+                if !exclude.contains(&c.condition_type) {
                     ret.push(c);
                 }
             }
@@ -221,9 +237,13 @@ impl JukeBox {
         ret
     }
 
-    async fn patch_status(&mut self, client: Client, patch: serde_json::Value) -> Result<Self> {
+    async fn patch_status(&self, client: Client, patch: serde_json::Value) -> Result<Self> {
         let api = Api::<Self>::all(client.clone());
-        let name = self.metadata.name.clone().unwrap();
+        let name = self
+            .metadata
+            .name
+            .clone()
+            .ok_or_else(|| Error::Other("JukeBox has no name".to_string()))?;
         let new_status: Patch<serde_json::Value> = Patch::Merge(json!({
             "apiVersion": "vynil.solidite.fr/v1",
             "kind": "JukeBox",
@@ -235,11 +255,11 @@ impl JukeBox {
             .map_err(Error::KubeError)
     }
 
-    async fn send_event(&mut self, client: Client, ev: Event) -> Result<()> {
+    async fn send_event(&self, client: Client, ev: Event) -> Result<()> {
         let recorder = Recorder::new(client.clone(), get_reporter());
         let oref = self.object_ref(&());
         match recorder.publish(&ev, &oref).await {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(e) => match e {
                 kube::Error::Api(src) => {
                     if !src
@@ -257,6 +277,10 @@ impl JukeBox {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn set_status_updated(&mut self, packages: Vec<VynilPackage>) -> Result<Self> {
         let count = packages.len();
         let client = get_client_async().await;
@@ -277,7 +301,7 @@ impl JukeBox {
         self.send_event(client, Event {
             type_: EventType::Normal,
             reason: "ScanSucceed".to_string(),
-            note: Some(format!("Found {} packages", count)),
+            note: Some(format!("Found {count} packages")),
             action: "Scan".to_string(),
             secondary: None,
         })
@@ -285,11 +309,15 @@ impl JukeBox {
         Ok(result)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn set_status_failed(&mut self, reason: String) -> Result<Self> {
         let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
         let mut conditions: Vec<ApplicationCondition> =
-            self.get_conditions_excluding(vec![ConditionsType::Updated]);
+            self.get_conditions_excluding(&[ConditionsType::Updated]);
         conditions.push(ApplicationCondition::updated_ko(&reason, generation));
         if !conditions
             .clone()
@@ -325,47 +353,80 @@ impl JukeBox {
         Ok(result)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the underlying operation fails.
     pub fn rhai_get(name: String) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { Self::get(name).await })).map_err(rhai_err)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the underlying operation fails.
     pub fn rhai_list() -> RhaiRes<Vec<Self>> {
         block_in_place(|| Handle::current().block_on(async move { Self::list().await }))
             .map_err(rhai_err)
             .map(|lst| lst.into_iter().collect())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
         let v = serde_json::to_string(&self.metadata).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_spec(&mut self) -> RhaiRes<Dynamic> {
         let v = serde_json::to_string(&self.spec).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_status(&mut self) -> RhaiRes<Dynamic> {
         let v = serde_json::to_string(&self.status).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the rhai argument cannot be converted or the underlying
+    /// operation fails.
     pub fn rhai_set_status_updated(&mut self, list: Dynamic) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move {
                 let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
-                self.set_status_updated(lst).await
+                let parsed = serde_json::from_str(&v).map_err(Error::SerializationError)?;
+                self.set_status_updated(parsed).await
             })
         })
         .map_err(rhai_err)
     }
 
-    pub fn rhai_set_status_failed(&mut self, reason: String) -> RhaiRes<JukeBox> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the underlying operation fails.
+    pub fn rhai_set_status_failed(&mut self, reason: String) -> RhaiRes<Self> {
         block_in_place(|| Handle::current().block_on(async move { self.set_status_failed(reason).await }))
             .map_err(rhai_err)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn set_status_packages_merge(
         &mut self,
         filter: String,
@@ -374,11 +435,15 @@ impl JukeBox {
         let client = get_client_async().await;
         let generation = self.metadata.generation.unwrap_or(1);
 
-        let (filter_category, filter_name): (String, Option<String>) = if let Some(pos) = filter.find('/') {
-            (filter[..pos].to_string(), Some(filter[pos + 1..].to_string()))
-        } else {
-            (filter.clone(), None)
-        };
+        let (filter_category, filter_name): (String, Option<String>) = filter.find('/').map_or_else(
+            || (filter.clone(), None),
+            |pos| {
+                (
+                    filter[..pos].to_string(),
+                    filter.get(pos.saturating_add(1)..).map(ToString::to_string),
+                )
+            },
+        );
 
         let existing = self
             .status
@@ -404,7 +469,7 @@ impl JukeBox {
         self.send_event(client, Event {
             type_: EventType::Normal,
             reason: "ScanSucceed".to_string(),
-            note: Some(format!("Partial scan updated filter: {}", filter)),
+            note: Some(format!("Partial scan updated filter: {filter}")),
             action: "Scan".to_string(),
             secondary: None,
         })
@@ -412,12 +477,17 @@ impl JukeBox {
         Ok(result)
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the rhai argument cannot be converted or the underlying
+    /// operation fails.
     pub fn rhai_set_status_packages_merge(&mut self, filter: String, list: Dynamic) -> RhaiRes<Self> {
         block_in_place(|| {
             Handle::current().block_on(async move {
                 let v = serde_json::to_string(&list).map_err(Error::SerializationError)?;
-                let lst = serde_json::from_str(&v).map_err(Error::SerializationError)?;
-                self.set_status_packages_merge(filter, lst).await
+                let parsed = serde_json::from_str(&v).map_err(Error::SerializationError)?;
+                self.set_status_packages_merge(filter, parsed).await
             })
         })
         .map_err(rhai_err)
@@ -432,7 +502,7 @@ fn filter_packages(
 ) -> Vec<VynilPackage> {
     existing.retain(|p| {
         let cat_match = p.metadata.category == filter_category;
-        let name_match = filter_name.map(|n| p.metadata.name == n).unwrap_or(true);
+        let name_match = filter_name.is_none_or(|n| p.metadata.name == n);
         !(cat_match && name_match)
     });
     existing.extend(new_packages);

@@ -8,7 +8,10 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use kube::Client;
 use regex::Regex;
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, LazyLock},
+};
 
 use crate::{
     auth::extract_identity,
@@ -30,6 +33,7 @@ use crate::{
 };
 
 // Custom extractor for HeaderMap
+#[derive(Debug)]
 pub struct RequestHeaders(pub HeaderMap);
 
 impl<S> FromRequestParts<S> for RequestHeaders
@@ -39,7 +43,7 @@ where
     type Rejection = DiagError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        Ok(RequestHeaders(parts.headers.clone()))
+        Ok(Self(parts.headers.clone()))
     }
 }
 
@@ -66,14 +70,14 @@ const VALID_ITEMS: [&str; 9] = [
 ];
 
 /// DNS-1123 regex for validating namespace and name
-fn dns1123_regex() -> Regex {
-    Regex::new(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$").unwrap()
-}
+static DNS_1123_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
+        .unwrap_or_else(|e| panic!("invalid static DNS-1123 pattern: {e}"))
+});
 
 /// Validate namespace and name format
 fn validate_dns1123(name: &str) -> bool {
-    let regex = dns1123_regex();
-    regex.is_match(name)
+    DNS_1123_RE.is_match(name)
 }
 
 /// Create the main router with state
@@ -86,13 +90,18 @@ pub fn create_router(state: AppState) -> Router {
 }
 
 /// Run the server
+///
+/// # Errors
+///
+/// Returns [`DiagError::InternalError`] when the bind address is invalid or TLS material cannot
+/// be loaded, and aborts startup when trusting front-proxy headers is requested without TLS.
 pub async fn run_server(state: AppState, config: Config) -> Result<(), DiagError> {
     let router = create_router(state.clone());
 
     let addr: SocketAddr = config
         .bind
         .parse()
-        .map_err(|e| DiagError::InternalError(format!("Invalid bind address: {}", e)))?;
+        .map_err(|e| DiagError::InternalError(format!("Invalid bind address: {e}")))?;
 
     // SECURITY guardrail: trusting front-proxy identity headers is only safe behind mandatory
     // mTLS verification of the apiserver client-cert. Refuse to start without TLS.
@@ -112,11 +121,11 @@ pub async fn run_server(state: AppState, config: Config) -> Result<(), DiagError
         axum::serve(
             tokio::net::TcpListener::bind(addr)
                 .await
-                .map_err(|e| DiagError::InternalError(format!("HTTP bind error: {}", e)))?,
+                .map_err(|e| DiagError::InternalError(format!("HTTP bind error: {e}")))?,
             router,
         )
         .await
-        .map_err(|e| DiagError::InternalError(format!("HTTP server error: {}", e)))?;
+        .map_err(|e| DiagError::InternalError(format!("HTTP server error: {e}")))?;
         return Ok(());
     }
 
@@ -134,20 +143,20 @@ pub async fn run_server(state: AppState, config: Config) -> Result<(), DiagError
         tracing::info!("Starting HTTPS server (server-side TLS) on {}", addr);
         RustlsConfig::from_pem_file(tls_cert, tls_key)
             .await
-            .map_err(|e| DiagError::InternalError(format!("TLS config error: {}", e)))?
+            .map_err(|e| DiagError::InternalError(format!("TLS config error: {e}")))?
     };
 
     axum_server::bind_rustls(addr, tls_config)
         .serve(router.into_make_service())
         .await
-        .map_err(|e| DiagError::InternalError(format!("HTTPS server error: {}", e)))?;
+        .map_err(|e| DiagError::InternalError(format!("HTTPS server error: {e}")))?;
 
     Ok(())
 }
 
 /// Load the front-proxy CA used to verify the apiserver's client cert (LEG 2 of the aggregation
-/// mTLS). Default: self-load from the `extension-apiserver-authentication` ConfigMap in
-/// `kube-system` (requires the `extension-apiserver-authentication-reader` RoleBinding). A file
+/// mTLS). Default: self-load from the `extension-apiserver-authentication` `ConfigMap` in
+/// `kube-system` (requires the `extension-apiserver-authentication-reader` `RoleBinding`). A file
 /// path via `--requestheader-client-ca` overrides it (escape hatch / offline).
 async fn load_requestheader_ca(client: &Client, config: &Config) -> Result<String, DiagError> {
     if let Some(path) = &config.requestheader_ca {
@@ -274,10 +283,10 @@ async fn instance_handler(
         }
         "vynilconfig" => {
             // Generic tier - no instance-specific authorization required
-            let (vynil_config, stats) =
+            let (vynil_config, scrub_stats) =
                 get_vynil_config(&state.client, &state.config.vynil_namespace, &ns).await?;
             let mut response = yaml_response(vynil_config);
-            add_scrub_header(response.headers_mut(), &stats);
+            add_scrub_header(response.headers_mut(), &scrub_stats);
             Ok(response)
         }
         "packages" => {
@@ -291,31 +300,31 @@ async fn instance_handler(
             Ok((StatusCode::OK, Json(popularity)).into_response())
         }
         "state" => {
-            let (yaml, stats) =
+            let (yaml, scrub_stats) =
                 get_instance_state(&state.client, &kind, &ns, &name, &state.config.vynil_namespace).await?;
 
             let mut response = yaml_response(yaml);
-            add_scrub_header(response.headers_mut(), &stats);
+            add_scrub_header(response.headers_mut(), &scrub_stats);
             Ok(response)
         }
         "children" => {
-            let (children, stats) =
+            let (children, scrub_stats) =
                 get_children(&state.client, &kind, &ns, &name, &state.config.vynil_namespace).await?;
 
             let mut response = Json(children).into_response();
-            add_scrub_header(response.headers_mut(), &stats);
+            add_scrub_header(response.headers_mut(), &scrub_stats);
             Ok(response)
         }
         "agentlog" => {
-            let (logs, stats) =
+            let (logs, scrub_stats) =
                 get_agent_log(&state.client, &kind, &ns, &name, &state.config.vynil_namespace).await?;
 
             let mut response = logs.into_response();
-            add_scrub_header(response.headers_mut(), &stats);
+            add_scrub_header(response.headers_mut(), &scrub_stats);
             Ok(response)
         }
         "childlogs" => {
-            let (logs, stats) = get_child_logs(
+            let (logs, scrub_stats) = get_child_logs(
                 &state.client,
                 &kind,
                 &ns,
@@ -327,15 +336,15 @@ async fn instance_handler(
             .await?;
 
             let mut response = logs.into_response();
-            add_scrub_header(response.headers_mut(), &stats);
+            add_scrub_header(response.headers_mut(), &scrub_stats);
             Ok(response)
         }
         "operatorlog" => {
-            let (logs, stats) =
+            let (logs, scrub_stats) =
                 get_operator_log(&state.client, &kind, &ns, &name, &state.config.vynil_namespace).await?;
 
             let mut response = logs.into_response();
-            add_scrub_header(response.headers_mut(), &stats);
+            add_scrub_header(response.headers_mut(), &scrub_stats);
             Ok(response)
         }
         _ => Err(DiagError::UnknownItem),
@@ -385,7 +394,12 @@ fn yaml_response(body: String) -> Response {
 }
 
 /// Add scrub statistics header to response
-fn add_scrub_header(headers: &mut HeaderMap, stats: &ScrubStats) {
-    let header_value = format!("distinct={};occurrences={}", stats.distinct, stats.occurrences);
-    headers.insert("X-Diag-Redactions", header_value.parse().unwrap());
+fn add_scrub_header(headers: &mut HeaderMap, scrub_stats: &ScrubStats) {
+    let header_value = format!(
+        "distinct={};occurrences={}",
+        scrub_stats.distinct, scrub_stats.occurrences
+    );
+    if let Ok(value) = axum::http::HeaderValue::from_str(&header_value) {
+        headers.insert("X-Diag-Redactions", value);
+    }
 }

@@ -8,11 +8,11 @@ use rhai::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// InitFrom contains the informations for the backup to use to initialize the installation
+/// `InitFrom` contains the informations for the backup to use to initialize the installation
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InitFrom {
-    /// Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"
+    /// Name of the secret containing: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BASE_REPO_URL` and `RESTIC_PASSWORD`. Default to "backup-settings"
     pub secret_name: Option<String>,
     /// Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
     pub sub_path: Option<String>,
@@ -83,11 +83,11 @@ pub enum ConditionsStatus {
     False,
 }
 
-/// ApplicationCondition contains details about an application condition, which is usually an error or warning
+/// `ApplicationCondition` contains details about an application condition, which is usually an error or warning
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationCondition {
-    /// LastTransitionTime is the time the condition was last observed
+    /// `LastTransitionTime` is the time the condition was last observed
     pub last_transition_time: Option<DateTime<Utc>>,
     /// Message contains human-readable message indicating details about condition
     pub message: String,
@@ -107,7 +107,7 @@ impl_condition_crds!();
 /// The status object of `ServiceInstance`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct ServiceInstanceStatus {
-    /// ServiceInstance Conditions
+    /// `ServiceInstance` Conditions
     pub conditions: Vec<ApplicationCondition>,
     /// Current tag
     pub tag: Option<String>,
@@ -134,6 +134,7 @@ pub struct ServiceInstanceStatus {
 }
 
 impl ServiceInstance {
+    #[must_use]
     pub fn have_child(&self) -> bool {
         if let Some(status) = self.status.clone() {
             if status.rhaistate.is_some() {
@@ -167,7 +168,7 @@ impl ServiceInstance {
             {
                 return true;
             }
-            if let Some(child) = status.crds.clone()
+            if let Some(child) = status.crds
                 && !child.is_empty()
             {
                 return true;
@@ -176,17 +177,20 @@ impl ServiceInstance {
         false
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the Kubernetes API call fails.
     pub async fn get_all_services_names() -> Result<Vec<String>> {
-        lazy_static::lazy_static! {
-            static ref CACHE: TtlCache<Vec<String>> = TtlCache::new(std::time::Duration::from_secs(30));
-        }
+        static CACHE: std::sync::LazyLock<TtlCache<Vec<String>>> =
+            std::sync::LazyLock::new(|| TtlCache::new(std::time::Duration::from_secs(30)));
         CACHE
             .get_or_refresh(|| async {
                 let client = get_client_async().await;
                 let lp = ListParams::default();
                 let all_instances = tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    Api::<ServiceInstance>::all(client).list(&lp),
+                    Api::<Self>::all(client).list(&lp),
                 )
                 .await
                 .map_err(|_| {
@@ -204,6 +208,10 @@ impl ServiceInstance {
             .await
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the underlying operation fails.
     pub fn rhai_list_services_names() -> RhaiRes<Vec<String>> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move { Self::get_all_services_names().await })

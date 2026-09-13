@@ -24,7 +24,7 @@ pub struct Config {
 
     /// Optional override for the front-proxy CA (PEM file) used to verify the apiserver client
     /// cert. By default the server self-loads it from the extension-apiserver-authentication
-    /// ConfigMap in kube-system, so this is only an escape hatch / offline use.
+    /// `ConfigMap` in kube-system, so this is only an escape hatch / offline use.
     #[arg(long, env = "REQUESTHEADER_CLIENT_CA")]
     pub requestheader_ca: Option<PathBuf>,
 

@@ -50,35 +50,34 @@ pub enum DiagError {
 }
 
 impl DiagError {
-    pub fn code(&self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
-            DiagError::AuthorizationDenied => "DIAG-001",
-            DiagError::InstanceNotFound => "DIAG-002",
-            DiagError::InvalidNameFormat => "DIAG-003",
-            DiagError::UnknownKind => "DIAG-004",
-            DiagError::UnknownItem => "DIAG-005",
-            DiagError::AuthenticationRequired => "DIAG-006",
-            DiagError::PackagesDisabled => "DIAG-007",
-            DiagError::InternalError(_) => "DIAG-500",
-            DiagError::KubeError(_) => "DIAG-500",
-            DiagError::SerializationError(_) => "DIAG-500",
-            DiagError::YamlError(_) => "DIAG-500",
+            Self::AuthorizationDenied => "DIAG-001",
+            Self::InstanceNotFound => "DIAG-002",
+            Self::InvalidNameFormat => "DIAG-003",
+            Self::UnknownKind => "DIAG-004",
+            Self::UnknownItem => "DIAG-005",
+            Self::AuthenticationRequired => "DIAG-006",
+            Self::PackagesDisabled => "DIAG-007",
+            Self::InternalError(_)
+            | Self::KubeError(_)
+            | Self::SerializationError(_)
+            | Self::YamlError(_) => "DIAG-500",
         }
     }
 
-    pub fn status_code(&self) -> StatusCode {
+    pub const fn status_code(&self) -> StatusCode {
         match self {
-            DiagError::AuthorizationDenied => StatusCode::FORBIDDEN,
-            DiagError::InstanceNotFound => StatusCode::NOT_FOUND,
-            DiagError::InvalidNameFormat => StatusCode::BAD_REQUEST,
-            DiagError::UnknownKind => StatusCode::NOT_FOUND,
-            DiagError::UnknownItem => StatusCode::NOT_FOUND,
-            DiagError::AuthenticationRequired => StatusCode::UNAUTHORIZED,
-            DiagError::PackagesDisabled => StatusCode::NOT_FOUND,
-            DiagError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            DiagError::KubeError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            DiagError::SerializationError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            DiagError::YamlError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::AuthorizationDenied => StatusCode::FORBIDDEN,
+            Self::InvalidNameFormat => StatusCode::BAD_REQUEST,
+            Self::InstanceNotFound | Self::UnknownKind | Self::UnknownItem | Self::PackagesDisabled => {
+                StatusCode::NOT_FOUND
+            }
+            Self::AuthenticationRequired => StatusCode::UNAUTHORIZED,
+            Self::InternalError(_)
+            | Self::KubeError(_)
+            | Self::SerializationError(_)
+            | Self::YamlError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 #[derive(Args, Debug, Serialize, Deserialize)]
 pub struct Parameters {
-    /// Fichier YAML de spec JukeBox (source + pull_secret)
+    /// Fichier YAML de spec `JukeBox` (source + `pull_secret`)
     #[arg(short = 'S', long = "spec")]
     spec: PathBuf,
     /// Répertoire de sortie du cache

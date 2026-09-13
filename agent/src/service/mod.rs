@@ -37,11 +37,11 @@ pub async fn run(cmd: &Parameters) {
             tracing::error!("Deleting a package failed with: {e:}");
             process::exit(3)
         }),
-        Commands::Backup(args) => backup::run(args).await.unwrap_or_else(|e| {
+        Commands::Backup(args) => backup::run(args).unwrap_or_else(|e| {
             tracing::error!("Backup of a package failed with: {e:}");
             process::exit(4)
         }),
-        Commands::Restore(args) => restore::run(args).await.unwrap_or_else(|e| {
+        Commands::Restore(args) => restore::run(args).unwrap_or_else(|e| {
             tracing::error!("Restore of a package failed with: {e:}");
             process::exit(5)
         }),

@@ -9,7 +9,7 @@ use prometheus_client::{
 use std::sync::Arc;
 use tokio::time::Instant;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Metrics {
     pub jukebox: ReconcileMetricsJukebox,
     pub system_instance: ReconcileMetricsSystemInstance,
@@ -61,6 +61,7 @@ pub struct LabelInstance {
 /// Smart function duration measurer
 ///
 /// Relies on Drop to calculate duration and register the observation in the histogram
+#[derive(Debug)]
 pub struct ReconcileMeasurerBox {
     start: Instant,
     labels: LabelBox,
@@ -86,7 +87,7 @@ pub struct TraceLabel {
 impl TryFrom<&TraceId> for TraceLabel {
     type Error = Error;
 
-    fn try_from(id: &TraceId) -> Result<TraceLabel, Error> {
+    fn try_from(id: &TraceId) -> Result<Self, Error> {
         if std::matches!(id, &TraceId::INVALID) {
             Err(Error::Other("Invalid trace ID".to_string()))
         } else {
@@ -98,6 +99,7 @@ impl TryFrom<&TraceId> for TraceLabel {
 /// Smart function duration measurer
 ///
 /// Relies on Drop to calculate duration and register the observation in the histogram
+#[derive(Debug)]
 pub struct ReconcileMeasurerInstance {
     start: Instant,
     labels: LabelInstance,
@@ -132,7 +134,7 @@ pub struct ErrorLabelsInstance {
     pub error: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReconcileMetricsJukebox {
     pub runs: Family<LabelBox, Counter>,
     pub failures: Family<ErrorLabels, Counter>,
@@ -186,7 +188,7 @@ impl ReconcileMetricsJukebox {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReconcileMetricsSystemInstance {
     pub runs: Family<LabelInstance, Counter>,
     pub failures: Family<ErrorLabelsInstance, Counter>,
@@ -250,7 +252,7 @@ impl ReconcileMetricsSystemInstance {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReconcileMetricsTenantInstance {
     pub runs: Family<LabelInstance, Counter>,
     pub failures: Family<ErrorLabelsInstance, Counter>,
@@ -314,7 +316,7 @@ impl ReconcileMetricsTenantInstance {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReconcileMetricsServiceInstance {
     pub runs: Family<LabelInstance, Counter>,
     pub failures: Family<ErrorLabelsInstance, Counter>,

@@ -4,7 +4,7 @@ pub mod rhai_checker;
 
 use junit_report::{ReportBuilder, TestCase, TestSuiteBuilder};
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, str::FromStr};
+use std::{fmt::Write as _, path::PathBuf, str::FromStr};
 
 pub use config::{LintConfig, parse_inline_disables};
 
@@ -18,9 +18,9 @@ pub enum LintLevel {
 impl std::fmt::Display for LintLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LintLevel::Error => write!(f, "ERROR"),
-            LintLevel::Warn => write!(f, "WARN"),
-            LintLevel::Info => write!(f, "INFO"),
+            Self::Error => write!(f, "ERROR"),
+            Self::Warn => write!(f, "WARN"),
+            Self::Info => write!(f, "INFO"),
         }
     }
 }
@@ -30,10 +30,10 @@ impl FromStr for LintLevel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "error" => Ok(LintLevel::Error),
-            "warn" => Ok(LintLevel::Warn),
-            "info" => Ok(LintLevel::Info),
-            _ => Err(format!("Unknown lint level: {}", s)),
+            "error" => Ok(Self::Error),
+            "warn" => Ok(Self::Warn),
+            "info" => Ok(Self::Info),
+            _ => Err(format!("Unknown lint level: {s}")),
         }
     }
 }
@@ -52,7 +52,7 @@ pub struct LintResultCollector {
 }
 
 impl LintResultCollector {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { findings: Vec::new() }
     }
 
@@ -83,15 +83,12 @@ impl LintResultCollector {
         for finding in filtered {
             let file_str = finding.file.display().to_string();
             let location = match finding.line {
-                Some(l) => format!("{}:{}", file_str, l),
+                Some(l) => format!("{file_str}:{l}"),
                 None => file_str,
             };
 
-            out.push_str(&format!(
-                "[{:<5}] {}  {}\n",
-                finding.level, finding.rule, location
-            ));
-            out.push_str(&format!("        {}\n", finding.message));
+            let _ = writeln!(out, "[{:<5}] {}  {}", finding.level, finding.rule, location);
+            let _ = writeln!(out, "        {}", finding.message);
             out.push('\n');
         }
 
@@ -105,12 +102,13 @@ impl LintResultCollector {
             .iter()
             .filter(|f| f.level == LintLevel::Warn)
             .count();
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "Résultat : {} erreur{}, {} warning",
             error_count,
-            if error_count != 1 { "s" } else { "" },
+            if error_count == 1 { "" } else { "s" },
             warn_count
-        ));
+        );
 
         out
     }
@@ -134,6 +132,10 @@ impl LintResultCollector {
         serde_json::to_string_pretty(&output).unwrap_or_default()
     }
 
+    /// # Panics
+    ///
+    /// Panics if the `JUnit` XML report cannot be written or is not valid UTF-8 (cannot happen
+    /// for in-memory finding data).
     pub fn to_junit(&self) -> String {
         let mut report_builder = ReportBuilder::new();
         let mut suites: std::collections::BTreeMap<String, Vec<&LintFinding>> =
@@ -160,8 +162,13 @@ impl LintResultCollector {
 
         let report = report_builder.build();
         let mut buf: Vec<u8> = Vec::new();
-        report.write_xml(&mut buf).expect("failed to write JUnit XML");
-        String::from_utf8(buf).expect("JUnit XML is not valid UTF-8")
+        if let Err(e) = report.write_xml(&mut buf) {
+            panic!("failed to write JUnit XML: {e}");
+        }
+        match String::from_utf8(buf) {
+            Ok(text) => text,
+            Err(e) => panic!("JUnit XML is not valid UTF-8: {e}"),
+        }
     }
 }
 
@@ -175,9 +182,9 @@ pub fn find_section_key_line_numbers(
         return map;
     };
 
-    let section_header = format!("{}:", section);
+    let section_header = format!("{section}:");
     let mut in_section = false;
-    let mut section_indent: Option<usize> = None;
+    let mut section_indent = 0_usize;
     let mut key_indent: Option<usize> = None;
 
     for (i, line) in content.lines().enumerate() {
@@ -185,15 +192,10 @@ pub fn find_section_key_line_numbers(
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        let indent = line.len() - trimmed.len();
+        let indent = line.len().saturating_sub(trimmed.len());
 
-        if !in_section {
-            if trimmed == section_header || trimmed.starts_with(&format!("{} ", section_header)) {
-                in_section = true;
-                section_indent = Some(indent);
-            }
-        } else {
-            let sec_indent = section_indent.unwrap();
+        if in_section {
+            let sec_indent = section_indent;
             if indent <= sec_indent {
                 break;
             }
@@ -205,9 +207,12 @@ pub fn find_section_key_line_numbers(
             {
                 let key = key.trim().to_string();
                 if !key.is_empty() {
-                    map.insert(key, i + 1);
+                    map.insert(key, i.saturating_add(1));
                 }
             }
+        } else if trimmed == section_header || trimmed.starts_with(&format!("{section_header} ")) {
+            in_section = true;
+            section_indent = indent;
         }
     }
     map
