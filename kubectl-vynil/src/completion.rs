@@ -40,7 +40,7 @@ impl KindId {
     }
 
     /// Name of the corresponding `clap` subcommand in `enum Commands`.
-    fn subcommand_name(self) -> &'static str {
+    const fn subcommand_name(self) -> &'static str {
         match self {
             Self::Jukebox => "jukebox",
             Self::Vti => "vti",
@@ -49,7 +49,7 @@ impl KindId {
         }
     }
 
-    fn kind_str(self) -> &'static str {
+    const fn kind_str(self) -> &'static str {
         match self {
             Self::Jukebox => "JukeBox",
             Self::Vti => crate::cli::TENANT_INSTANCE.kind,
@@ -58,7 +58,7 @@ impl KindId {
         }
     }
 
-    fn plural(self) -> &'static str {
+    const fn plural(self) -> &'static str {
         match self {
             Self::Jukebox => "jukeboxes",
             Self::Vti => crate::cli::TENANT_INSTANCE.plural,
@@ -67,7 +67,7 @@ impl KindId {
         }
     }
 
-    fn is_namespaced(self) -> bool {
+    const fn is_namespaced(self) -> bool {
         !matches!(self, Self::Jukebox)
     }
 }
@@ -90,7 +90,7 @@ struct Parsed {
     context: Option<String>,
 }
 
-/// Splits the already-typed words into (slot, to_complete, ns, context).
+/// Splits the already-typed words into (slot, `to_complete`, ns, context).
 fn classify(words: &[String]) -> Parsed {
     let Some((to_complete, typed)) = words.split_last() else {
         return Parsed {
@@ -106,55 +106,45 @@ fn classify(words: &[String]) -> Parsed {
     let mut positionals: Vec<&str> = Vec::new();
     let mut ns: Option<String> = None;
     let mut context: Option<String> = None;
-    let mut i = 0;
     let mut prev_bare_global = false;
+    let mut words_iter = typed.iter();
 
-    while i < typed.len() {
-        let w = typed[i].as_str();
+    while let Some(word) = words_iter.next() {
+        let w = word.as_str();
         prev_bare_global = false;
 
         if w == "-n" || w == "--namespace" {
-            i += 1;
-            if i < typed.len() {
-                ns = Some(typed[i].clone());
-                i += 1;
-            } else {
-                prev_bare_global = true;
+            match words_iter.next() {
+                Some(v) => ns = Some(v.clone()),
+                None => prev_bare_global = true,
             }
             continue;
         }
 
         if w == "--context" {
-            i += 1;
-            if i < typed.len() {
-                context = Some(typed[i].clone());
-                i += 1;
-            } else {
-                prev_bare_global = true;
+            match words_iter.next() {
+                Some(v) => context = Some(v.clone()),
+                None => prev_bare_global = true,
             }
             continue;
         }
 
-        if w.starts_with("--namespace=") {
-            ns = Some(w.strip_prefix("--namespace=").unwrap().to_string());
-            i += 1;
+        if let Some(v) = w.strip_prefix("--namespace=") {
+            ns = Some(v.to_string());
             continue;
         }
 
-        if w.starts_with("--context=") {
-            context = Some(w.strip_prefix("--context=").unwrap().to_string());
-            i += 1;
+        if let Some(v) = w.strip_prefix("--context=") {
+            context = Some(v.to_string());
             continue;
         }
 
         if w.starts_with('-') {
             // unknown flag: skip it, don't treat as positional
-            i += 1;
             continue;
         }
 
         positionals.push(w);
-        i += 1;
     }
 
     if prev_bare_global {
@@ -168,16 +158,12 @@ fn classify(words: &[String]) -> Parsed {
 
     // Completing a flag?
     if to_complete.starts_with('-') {
-        let slot = match positionals.len() {
-            0 | 1 => Slot::Kind,
-            2 => Slot::Kind,
-            _ => {
-                let k = KindId::parse(positionals[0]);
-                match k {
-                    Some(k) => Slot::VerbFlag(k, positionals[2].to_string()),
-                    None => Slot::None,
-                }
-            }
+        let slot = match (
+            positionals.first().and_then(|&p| KindId::parse(p)),
+            positionals.get(2),
+        ) {
+            (Some(k), Some(verb)) if positionals.len() > 2 => Slot::VerbFlag(k, verb.to_string()),
+            _ => Slot::Kind,
         };
         return Parsed {
             slot,
@@ -189,14 +175,14 @@ fn classify(words: &[String]) -> Parsed {
 
     let slot = match positionals.len() {
         0 => Slot::Kind,
-        1 => match KindId::parse(positionals[0]) {
-            Some(k) => Slot::Name(k),
-            None => Slot::None,
-        },
-        2 => match KindId::parse(positionals[0]) {
-            Some(k) => Slot::Verb(k),
-            None => Slot::None,
-        },
+        1 => positionals
+            .first()
+            .and_then(|&p| KindId::parse(p))
+            .map_or(Slot::None, Slot::Name),
+        2 => positionals
+            .first()
+            .and_then(|&p| KindId::parse(p))
+            .map_or(Slot::None, Slot::Verb),
         _ => Slot::None,
     };
 
@@ -309,9 +295,7 @@ async fn namespace_of_context(context: Option<&str>) -> String {
         Config::infer().await.ok()
     };
 
-    config
-        .map(|cfg| cfg.default_namespace)
-        .unwrap_or_else(|| "default".to_string())
+    config.map_or_else(|| "default".to_string(), |cfg| cfg.default_namespace)
 }
 
 /// List resource names from a cluster for the given kind and namespace.
@@ -353,12 +337,17 @@ async fn list_names(kind: KindId, ns: Option<&str>, context: Option<&str>) -> Ve
 fn render(candidates: &[Candidate], to_complete: &str) -> String {
     let mut out = String::new();
     for c in candidates.iter().filter(|c| c.value.starts_with(to_complete)) {
-        match &c.description {
-            Some(d) if !d.is_empty() => out.push_str(&format!("{}\t{}\n", c.value, d)),
-            _ => out.push_str(&format!("{}\n", c.value)),
+        out.push_str(&c.value);
+        if let Some(d) = &c.description
+            && !d.is_empty()
+        {
+            out.push('\t');
+            out.push_str(d);
         }
+        out.push('\n');
     }
-    out.push_str(&format!(":{NO_FILE_COMP}\n"));
+    out.push(':');
+    let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{NO_FILE_COMP}\n"));
     out
 }
 
@@ -370,11 +359,11 @@ pub async fn run(words: Vec<String>) {
     let parsed = classify(&words);
     let candidates = match parsed.slot {
         Slot::Kind => {
-            let mut c = kind_candidates();
             if parsed.to_complete.starts_with('-') {
-                c = global_flag_candidates();
+                global_flag_candidates()
+            } else {
+                kind_candidates()
             }
-            c
         }
         Slot::Verb(k) => verb_candidates(k),
         Slot::VerbFlag(k, ref v) => verb_flag_candidates(k, v),
@@ -397,7 +386,7 @@ mod tests {
     use super::*;
 
     fn args(strs: &[&str]) -> Vec<String> {
-        strs.iter().map(|s| s.to_string()).collect()
+        strs.iter().map(std::string::ToString::to_string).collect()
     }
 
     // ── Automate tests (classify) ──────────────────────────────────────────
@@ -593,7 +582,7 @@ mod tests {
             "operatorlog",
         ];
         for verb in &expected {
-            assert!(values.contains(verb), "verb {} should be in VTI candidates", verb);
+            assert!(values.contains(verb), "verb {verb} should be in VTI candidates");
         }
         assert_eq!(
             values.len(),

@@ -32,7 +32,7 @@ pub struct Parameters {
         default_value = "./agent/scripts"
     )]
     script_dir: PathBuf,
-    /// Filtre partiel : "<category>" ou "<category>/<package_name>"
+    /// Filtre partiel : "<category>" ou "<category>/<`package_name`>"
     #[arg(
         short = 'f',
         long = "filter",
@@ -58,7 +58,7 @@ async fn resolve_http_secret(name: &str, namespace: &str, client: &kube::Client)
         .get("password")
         .and_then(|b| String::from_utf8(b.0.clone()).ok())
         .unwrap_or_default();
-    Ok(("basic".to_string(), format!("{}:{}", user, pass)))
+    Ok(("basic".to_string(), format!("{user}:{pass}")))
 }
 
 async fn resolve_s3_secret(name: &str, namespace: &str, client: &kube::Client) -> Result<(String, String)> {
@@ -84,7 +84,8 @@ pub async fn run(args: &Parameters) -> Result<()> {
     let context = JukeBox::get(args.jukebox.clone()).await?;
     set_box(context.clone());
     rhai.ctx.set_value("box", context.clone());
-    rhai.set_dynamic("args", &serde_json::to_value(args).unwrap());
+    let args_json = serde_json::to_value(args).map_err(common::Error::SerializationError)?;
+    rhai.set_dynamic("args", &args_json);
     if let Some(JukeBoxDef::Http { secret, .. }) = &context.spec.source
         && let Some(secret_name) = secret
     {

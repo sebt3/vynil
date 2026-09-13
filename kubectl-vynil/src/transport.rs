@@ -13,6 +13,10 @@ use crate::cli::InstanceTarget;
 ///
 /// `None` keeps the historical `Client::try_default()` behaviour (current context,
 /// or in-cluster config). `Some(ctx)` loads that named context from the kubeconfig.
+///
+/// # Errors
+///
+/// Returns an error when the kubeconfig cannot be read or the requested context is unknown.
 pub async fn make_client(context: Option<&str>) -> Result<Client> {
     match context {
         Some(ctx) => {
@@ -23,7 +27,7 @@ pub async fn make_client(context: Option<&str>) -> Result<Client> {
             };
             let config = Config::from_kubeconfig(&options)
                 .await
-                .with_context(|| format!("failed to load kubeconfig context '{}'", ctx))?;
+                .with_context(|| format!("failed to load kubeconfig context '{ctx}'"))?;
             Client::try_from(config).context("failed to create kube client")
         }
         None => Client::try_default()
@@ -76,10 +80,10 @@ async fn fetch_aggregation(path: &str, context: Option<&str>) -> GetResult {
     let client = match make_client(context).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("warning: failed to create kube client: {}", e);
+            eprintln!("warning: failed to create kube client: {e}");
             return GetResult {
                 status: 0,
-                body: format!("DIAG-ERR: {}", e).into_bytes(),
+                body: format!("DIAG-ERR: {e}").into_bytes(),
                 content_type: "text/plain".to_string(),
                 redactions: None,
             };
@@ -89,10 +93,10 @@ async fn fetch_aggregation(path: &str, context: Option<&str>) -> GetResult {
     let req = match http::Request::get(path).body(kube::client::Body::empty()) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("warning: failed to build request: {}", e);
+            eprintln!("warning: failed to build request: {e}");
             return GetResult {
                 status: 0,
-                body: format!("DIAG-ERR: {}", e).into_bytes(),
+                body: format!("DIAG-ERR: {e}").into_bytes(),
                 content_type: "text/plain".to_string(),
                 redactions: None,
             };
@@ -112,7 +116,7 @@ async fn fetch_aggregation(path: &str, context: Option<&str>) -> GetResult {
             let body = match BodyExt::collect(resp.into_body()).await {
                 Ok(aggregated) => aggregated.to_bytes().to_vec(),
                 Err(e) => {
-                    eprintln!("warning: failed to read response body: {}", e);
+                    eprintln!("warning: failed to read response body: {e}");
                     Vec::new()
                 }
             };
@@ -124,10 +128,10 @@ async fn fetch_aggregation(path: &str, context: Option<&str>) -> GetResult {
             }
         }
         Err(e) => {
-            eprintln!("warning: aggregation request failed: {}", e);
+            eprintln!("warning: aggregation request failed: {e}");
             GetResult {
                 status: 0,
-                body: format!("DIAG-ERR: {}", e).into_bytes(),
+                body: format!("DIAG-ERR: {e}").into_bytes(),
                 content_type: "text/plain".to_string(),
                 redactions: None,
             }
@@ -147,10 +151,10 @@ async fn fetch_direct(server_url: &str, path: &str, token: &str, insecure: bool)
     let client = match builder.build() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("warning: failed to build HTTP client: {}", e);
+            eprintln!("warning: failed to build HTTP client: {e}");
             return GetResult {
                 status: 0,
-                body: format!("DIAG-ERR: {}", e).into_bytes(),
+                body: format!("DIAG-ERR: {e}").into_bytes(),
                 content_type: "text/plain".to_string(),
                 redactions: None,
             };
@@ -159,7 +163,7 @@ async fn fetch_direct(server_url: &str, path: &str, token: &str, insecure: bool)
 
     match client
         .get(&url)
-        .header(http::header::AUTHORIZATION, format!("Bearer {}", token))
+        .header(http::header::AUTHORIZATION, format!("Bearer {token}"))
         .send()
         .await
     {
@@ -175,7 +179,7 @@ async fn fetch_direct(server_url: &str, path: &str, token: &str, insecure: bool)
             let body = match resp.bytes().await {
                 Ok(bytes) => bytes.to_vec(),
                 Err(e) => {
-                    eprintln!("warning: failed to read response body: {}", e);
+                    eprintln!("warning: failed to read response body: {e}");
                     Vec::new()
                 }
             };
@@ -187,10 +191,10 @@ async fn fetch_direct(server_url: &str, path: &str, token: &str, insecure: bool)
             }
         }
         Err(e) => {
-            eprintln!("warning: direct request failed: {}", e);
+            eprintln!("warning: direct request failed: {e}");
             GetResult {
                 status: 0,
-                body: format!("DIAG-ERR: {}", e).into_bytes(),
+                body: format!("DIAG-ERR: {e}").into_bytes(),
                 content_type: "text/plain".to_string(),
                 redactions: None,
             }
@@ -199,6 +203,7 @@ async fn fetch_direct(server_url: &str, path: &str, token: &str, insecure: bool)
 }
 
 /// Parses `X-Diag-Redactions: distinct=N;occurrences=M` header.
+#[must_use]
 pub fn parse_redactions_header(headers: &http::HeaderMap) -> Option<(usize, usize)> {
     let header = headers.get("X-Diag-Redactions")?;
     let value = header.to_str().ok()?;
@@ -206,6 +211,7 @@ pub fn parse_redactions_header(headers: &http::HeaderMap) -> Option<(usize, usiz
 }
 
 /// Parses `distinct=N;occurrences=M` into `(N, M)`.
+#[must_use]
 pub fn parse_redactions(value: &str) -> Option<(usize, usize)> {
     let mut distinct: Option<usize> = None;
     let mut occurrences: Option<usize> = None;
@@ -226,6 +232,10 @@ pub fn parse_redactions(value: &str) -> Option<(usize, usize)> {
 }
 
 /// Reads the in-cluster service account token.
+///
+/// # Errors
+///
+/// Returns an error when the service account token file cannot be read.
 pub fn read_sa_token() -> anyhow::Result<String> {
     let token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token";
     std::fs::read_to_string(token_path).context("cannot read SA token")

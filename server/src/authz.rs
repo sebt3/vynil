@@ -1,13 +1,18 @@
 use crate::{auth::Identity, error::DiagError};
 use k8s_openapi::api::authorization::v1::SubjectAccessReview;
-use kube::{Api, Client};
+use kube::{Api, Client, api::PostParams};
 
 /// Check if the identity has permission to access the instance resource
 ///
 /// For instance-scoped items (state, children, agentlog, childlogs, operatorlog),
-/// we need to verify the caller can read the instance via SubjectAccessReview.
+/// we need to verify the caller can read the instance via `SubjectAccessReview`.
 ///
 /// For generic items (clusterinfo, vynilconfig, packages), no SAR is needed.
+///
+/// # Errors
+///
+/// Returns [`DiagError::UnknownKind`] for an unmapped kind, or
+/// [`DiagError::InternalError`] when the SAR call fails.
 pub async fn check_instance_access(
     client: &Client,
     identity: &Identity,
@@ -42,15 +47,16 @@ pub async fn check_instance_access(
         ..Default::default()
     };
 
-    let result = sar_api.create(&Default::default(), &sar).await.map_err(|e| {
+    let result = sar_api.create(&PostParams::default(), &sar).await.map_err(|e| {
         tracing::error!("SubjectAccessReview failed: {}", e);
-        DiagError::InternalError(format!("SubjectAccessReview failed: {}", e))
+        DiagError::InternalError(format!("SubjectAccessReview failed: {e}"))
     })?;
 
     Ok(result.status.as_ref().is_some_and(|s| s.allowed))
 }
 
 /// Check if the item requires instance-scoped authorization
+#[must_use]
 pub fn is_instance_scoped_item(item: &str) -> bool {
     matches!(
         item,
@@ -60,7 +66,12 @@ pub fn is_instance_scoped_item(item: &str) -> bool {
 
 /// Check authorization for a given item
 ///
-/// Returns Ok(()) if authorized, or DiagError::AuthorizationDenied if not.
+/// Returns Ok(()) if authorized, or `DiagError::AuthorizationDenied` if not.
+///
+/// # Errors
+///
+/// Returns [`DiagError::AuthorizationDenied`] when the SAR check denies access, or
+/// [`DiagError::PackagesDisabled`] when the item is served by the disabled packages endpoint.
 pub async fn check_item_access(
     client: &Client,
     identity: &Identity,

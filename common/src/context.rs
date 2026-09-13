@@ -5,6 +5,7 @@ use crate::{
 use kube::{client::Client, runtime::events::Reporter};
 use tokio::sync::RwLock;
 
+#[derive(Debug)]
 pub enum VynilContext {
     JukeBox(JukeBox),
     ServiceInstance(ServiceInstance),
@@ -13,37 +14,37 @@ pub enum VynilContext {
     None,
 }
 
-lazy_static::lazy_static! {
-    pub static ref CONTEXT: RwLock<VynilContext> = RwLock::new(VynilContext::None);
-}
+static CONTEXT: std::sync::LazyLock<RwLock<VynilContext>> =
+    std::sync::LazyLock::new(|| RwLock::new(VynilContext::None));
 pub fn set_tenant(i: TenantInstance) {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             *CONTEXT.write().await = VynilContext::TenantInstance(i);
-        })
-    })
+        });
+    });
 }
 pub fn set_service(i: ServiceInstance) {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             *CONTEXT.write().await = VynilContext::ServiceInstance(i);
-        })
-    })
+        });
+    });
 }
 pub fn set_system(i: SystemInstance) {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             *CONTEXT.write().await = VynilContext::SystemInstance(i);
-        })
-    })
+        });
+    });
 }
 pub fn set_box(jb: JukeBox) {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             *CONTEXT.write().await = VynilContext::JukeBox(jb);
-        })
-    })
+        });
+    });
 }
+#[must_use]
 pub fn get_owner_ns() -> Option<String> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
@@ -57,6 +58,7 @@ pub fn get_owner_ns() -> Option<String> {
         })
     })
 }
+#[must_use]
 pub fn get_owner() -> Option<serde_json::Value> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
@@ -98,6 +100,7 @@ pub fn get_owner() -> Option<serde_json::Value> {
         })
     })
 }
+#[must_use]
 pub fn get_labels() -> Option<serde_json::Value> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
@@ -150,41 +153,59 @@ fn get_prog_name() -> Option<String> {
         .into()
 }
 
+#[must_use]
 pub fn get_client_name() -> String {
-    match get_prog_name() {
-        None => "vynil.solidite.fr".to_string(),
-        Some(p) => {
-            if p == "agent" {
-                "agent.vynil.solidite.fr".to_string()
-            } else if p == "operator" {
-                "controller.vynil.solidite.fr".to_string()
-            } else {
-                "vynil.solidite.fr".to_string()
-            }
-        }
-    }
+    get_prog_name().map_or_else(
+        || "vynil.solidite.fr".to_string(),
+        |p| match p.as_str() {
+            "agent" => "agent.vynil.solidite.fr".to_string(),
+            "operator" => "controller.vynil.solidite.fr".to_string(),
+            _ => "vynil.solidite.fr".to_string(),
+        },
+    )
 }
+#[must_use]
 pub fn get_short_name() -> String {
     let long = get_client_name();
-    let lst = long.split(".").collect::<Vec<&str>>();
-    if lst.len() > 3 {
-        format!("{}-{}", lst[1], lst[0])
-    } else {
-        "vynil".to_string()
+    let lst = long.split('.').collect::<Vec<&str>>();
+    match (lst.get(1), lst.first()) {
+        (Some(second), Some(first)) if lst.len() > 3 => format!("{second}-{first}"),
+        _ => "vynil".to_string(),
     }
 }
 
-pub fn init_k8s() {}
+pub const fn init_k8s() {}
 
+/// Returns the shared Kubernetes client.
+///
+/// # Panics
+///
+/// Panics when the Kubernetes client cannot be created from the in-cluster or kubeconfig
+/// settings.
+#[must_use]
 pub fn get_client() -> Client {
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async move { Client::try_default().await.expect("create client") })
+        tokio::runtime::Handle::current().block_on(async move {
+            match Client::try_default().await {
+                Ok(client) => client,
+                Err(e) => panic!("cannot create the Kubernetes client: {e}"),
+            }
+        })
     })
 }
+/// Returns the shared Kubernetes client.
+///
+/// # Panics
+///
+/// Panics when the Kubernetes client cannot be created from the in-cluster or kubeconfig
+/// settings.
 pub async fn get_client_async() -> Client {
-    Client::try_default().await.expect("create client")
+    match Client::try_default().await {
+        Ok(client) => client,
+        Err(e) => panic!("cannot create the Kubernetes client: {e}"),
+    }
 }
+#[must_use]
 pub fn get_reporter() -> Reporter {
     Reporter {
         controller: get_short_name(),
@@ -193,7 +214,7 @@ pub fn get_reporter() -> Reporter {
 }
 
 /// Injects vynil context accessors into vynil-core (k8s module).
-/// Idempotent (OnceLock::set().ok()). Call once at startup of every binary
+/// Idempotent (`OnceLock::set().ok()`). Call once at startup of every binary
 /// that applies k8s objects, BEFORE the first reconcile.
 pub fn wire_core_k8s() {
     vynil_core::k8s::set_get_client(Box::new(get_client));

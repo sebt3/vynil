@@ -27,6 +27,8 @@ pub use vynil_core::engine::{
 
 // ── Newtype wrapper around vynil_core::Script ─────────────────────────────────
 
+/// Wrapper preserving the historical `common::Script` API over `vynil_core::engine::Script`.
+#[derive(Debug)]
 pub struct Script(pub vynil_core::engine::Script);
 
 impl std::ops::Deref for Script {
@@ -44,16 +46,16 @@ impl std::ops::DerefMut for Script {
 
 fn vynil_owner_register(engine: &mut Engine) {
     engine.register_fn("vynil_owner", || -> Dynamic {
-        match context::get_owner() {
-            Some(o) => serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap(),
-            None => serde_json::from_str("{}").unwrap(),
-        }
+        context::get_owner()
+            .and_then(|o| to_dynamic(&o).ok())
+            .unwrap_or_else(|| Dynamic::from_map(Map::new()))
     });
 }
 
 impl Script {
-    pub fn new_core(resolver_path: Vec<String>) -> Script {
-        let mut script = Script(vynil_core::engine::Script::new_bare(resolver_path));
+    #[must_use]
+    pub fn new_core(resolver_path: Vec<String>) -> Self {
+        let mut script = Self(vynil_core::engine::Script::new_bare(resolver_path));
         vynil_owner_register(&mut script.engine);
         yaml_ordered_rhai_register(&mut script.engine);
         package_rhai_register(&mut script.engine);
@@ -61,7 +63,8 @@ impl Script {
         script
     }
 
-    pub fn new_file_scan(resolver_path: Vec<String>) -> Script {
+    #[must_use]
+    pub fn new_file_scan(resolver_path: Vec<String>) -> Self {
         let mut script = Self::new_core(resolver_path);
         http_rhai_register(&mut script.engine);
         s3_rhai_register(&mut script.engine);
@@ -69,7 +72,8 @@ impl Script {
         script
     }
 
-    pub fn new(resolver_path: Vec<String>) -> Script {
+    #[must_use]
+    pub fn new(resolver_path: Vec<String>) -> Self {
         let mut script = Self::new_core(resolver_path);
         http_rhai_register(&mut script.engine);
         s3_rhai_register(&mut script.engine);
@@ -88,7 +92,7 @@ impl Script {
         http_mocks: Vec<HttpMockItem>,
         k8s_mocks: Vec<Dynamic>,
         created_objects: std::sync::Arc<std::sync::Mutex<Vec<Dynamic>>>,
-    ) -> Script {
+    ) -> Self {
         let mut script = Self::new_core(resolver_path);
         oci_mock_rhai_register(&mut script.engine);
         httpmock_rhai_register(&mut script.engine, http_mocks);
@@ -98,18 +102,38 @@ impl Script {
 
     // ── Error-converting wrappers (vynil_core::Result → common::Result) ─────
 
+    /// Runs the rhai script stored in `file`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read or the script fails to parse or run.
     pub fn run_file(&mut self, file: &std::path::PathBuf) -> crate::Result<Dynamic> {
         self.0.run_file(file).map_err(Into::into)
     }
 
+    /// Evaluates a rhai script and returns its result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the script fails to parse or run.
     pub fn eval(&mut self, script: &str) -> crate::Result<Dynamic> {
         self.0.eval(script).map_err(Into::into)
     }
 
+    /// Evaluates a rhai script expecting a boolean result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the script fails to parse, run, or return a boolean.
     pub fn eval_truth(&mut self, script: &str) -> crate::Result<bool> {
         self.0.eval_truth(script).map_err(Into::into)
     }
 
+    /// Evaluates a rhai script expecting a string result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the script fails to parse, run, or return a string.
     pub fn eval_map_string(&mut self, script: &str) -> crate::Result<String> {
         self.0.eval_map_string(script).map_err(Into::into)
     }
@@ -151,9 +175,7 @@ mod tests {
             orig_lines.len(),
             enc_lines.len(),
             "Le nombre de lignes a changé — des clés ont été perdues ou ajoutées.\n\
-             Original:\n{}\nRésultat:\n{}",
-            original,
-            encoded
+             Original:\n{original}\nRésultat:\n{encoded}"
         );
 
         let changed: Vec<usize> = orig_lines

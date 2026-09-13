@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
 
+#[derive(Debug)]
 pub struct JukeCacheItem {
     pub pull_secret: Option<String>,
     pub packages: Vec<VynilPackage>,
@@ -37,14 +38,26 @@ pub struct Context {
     /// Packages cache
     pub packages: Arc<RwLock<BTreeMap<String, JukeCacheItem>>>,
 }
+
+impl std::fmt::Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context")
+            .field("client", &"kube::Client")
+            .field("diagnostics", &self.diagnostics)
+            .field("metrics", &self.metrics)
+            .field("renderer", &"handlebars::HandleBars")
+            .field("base_context", &self.base_context)
+            .field("packages", &self.packages)
+            .finish()
+    }
+}
 pub(crate) fn cache_entry_differs(cache: &BTreeMap<String, JukeCacheItem>, jukebox: &JukeBox) -> bool {
     let Some(status) = &jukebox.status else {
         return false;
     };
-    match cache.get(&jukebox.name_any()) {
-        Some(entry) => entry.packages != status.packages || entry.pull_secret != jukebox.spec.pull_secret,
-        None => true,
-    }
+    cache.get(&jukebox.name_any()).is_none_or(|entry| {
+        entry.packages != status.packages || entry.pull_secret != jukebox.spec.pull_secret
+    })
 }
 
 pub(crate) fn upsert_cache_entry(cache: &mut BTreeMap<String, JukeCacheItem>, jukebox: &JukeBox) {
@@ -84,26 +97,26 @@ impl Context {
             .items
             .clone()
             .iter()
-            .map(|j| j.name_any())
+            .map(kube::ResourceExt::name_any)
             .reduce(|j, r| format!("{j},{r}"))
             .unwrap_or(String::new());
-        if !cache.is_empty() {
+        if cache.is_empty() {
+            tracing::warn!("No packages found from the jukebox list ({jukes}) to update the cache");
+        } else {
             let len = cache.len();
-            let mut count = 0;
+            let mut count = 0usize;
             for items in cache.values() {
-                count += items.packages.len();
+                count = count.saturating_add(items.packages.len());
             }
             tracing::info!("Updating packages cache with {count} packages from {len} jukebox: {jukes}");
             *self.packages.write().await = cache;
             tracing::debug!("Updating packages cache done");
-        } else {
-            tracing::warn!("No packages found from the jukebox list ({jukes}) to update the cache");
         }
     }
 }
 
 /// Diagnostics to be exposed by the web server
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Diagnostics {
     #[serde(deserialize_with = "from_ts")]
     pub last_event: DateTime<Utc>,
@@ -120,7 +133,7 @@ impl Default for Diagnostics {
 }
 
 /// Data owned by the Manager
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Manager {
     /// Diagnostics populated by the reconciler
     diagnostics: Arc<RwLock<Diagnostics>>,
@@ -128,8 +141,12 @@ pub struct Manager {
     metrics: Arc<Metrics>,
 }
 
-/// Manager that owns a Controller for JukeBox, SystemInstance, and TenantInstance
+/// Manager that owns a Controller for `JukeBox`, `SystemInstance`, and `TenantInstance`
 impl Manager {
+    /// # Panics
+    ///
+    /// Panics if the Kubernetes client cannot be created, or if one of the four CRDs is not
+    /// installed in the cluster.
     pub async fn new() -> (
         Self,
         BoxFuture<'static, ()>,
@@ -137,69 +154,31 @@ impl Manager {
         BoxFuture<'static, ()>,
         BoxFuture<'static, ()>,
     ) {
-        let client = Client::try_default().await.expect("create client");
-        let manager = Manager::default();
-        let controller_dir = std::env::var("CONTROLLER_BASE_DIR").unwrap_or("./operator".to_string());
-        let mut hbs = HandleBars::new();
-        match hbs.register_partial_dir(PathBuf::from(format!("{}/templates", controller_dir))) {
-            Ok(_) => (),
-            Err(e) => tracing::warn!("Registering template generated: {e}"),
-        }
-        let packages: Arc<RwLock<BTreeMap<String, JukeCacheItem>>> = Arc::default();
-        match JukeBox::list().await {
-            Ok(list) => {
-                let mut cache = BTreeMap::new();
-                for juke in list.items.clone() {
-                    if let Some(status) = juke.status.clone() {
-                        cache.insert(juke.name_any(), JukeCacheItem {
-                            pull_secret: juke.spec.pull_secret.clone(),
-                            packages: status.packages,
-                        });
-                    }
-                }
-                tracing::debug!("Initialize packages cache");
-                *packages.write().await = cache;
-                tracing::debug!("Initialize packages cache done");
-            }
-            Err(e) => tracing::warn!("While listing jukebox: {:?}", e),
+        let client = match Client::try_default().await {
+            Ok(c) => c,
+            Err(e) => panic!("cannot create the Kubernetes client: {e}"),
         };
-
-        let context = Arc::new(Context {
-            client: client.clone(),
-            metrics: manager.metrics.clone(),
-            diagnostics: manager.diagnostics.clone(),
-            renderer: hbs,
-            base_context: json!({
-                "vynil_namespace": std::env::var("VYNIL_NAMESPACE").unwrap_or_else(|_| "vynil-system".to_string()),
-                "agent_image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| common::DEFAULT_AGENT_IMAGE.to_string()),
-                "service_account": std::env::var("AGENT_ACCOUNT").unwrap_or_else(|_| "vynil-agent".to_string()),
-                "log_level": std::env::var("AGENT_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
-                "label_key": std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string()),
-            }),
-            packages,
-        });
+        let manager = Self::default();
+        let context = Self::build_context(&manager, &client).await;
 
         let jbs = Api::<JukeBox>::all(client.clone());
         let tnts = Api::<TenantInstance>::all(client.clone());
         let svcs = Api::<ServiceInstance>::all(client.clone());
         let stms = Api::<SystemInstance>::all(client);
         // Ensure CRD is installed before loop-watching
-        let _r = jbs
-            .list(&ListParams::default().limit(1))
-            .await
-            .expect("is the crd installed?");
-        let _r = tnts
-            .list(&ListParams::default().limit(1))
-            .await
-            .expect("is the crd installed?");
-        let _r = stms
-            .list(&ListParams::default().limit(1))
-            .await
-            .expect("is the crd installed?");
-        let _r = svcs
-            .list(&ListParams::default().limit(1))
-            .await
-            .expect("is the crd installed?");
+        let limit1 = ListParams::default().limit(1);
+        if let Err(e) = jbs.list(&limit1).await {
+            panic!("is a CRD installed? {e}");
+        }
+        if let Err(e) = tnts.list(&limit1).await {
+            panic!("is a CRD installed? {e}");
+        }
+        if let Err(e) = stms.list(&limit1).await {
+            panic!("is a CRD installed? {e}");
+        }
+        if let Err(e) = svcs.list(&limit1).await {
+            panic!("is a CRD installed? {e}");
+        }
 
         // All good. Start controller and return its future.
         let controller_jbs = Controller::new(jbs, Config::default().any_semantic())
@@ -243,14 +222,67 @@ impl Manager {
         )
     }
 
+    /// Build the shared reconciler context: renderer, base env, initial jukebox package cache.
+    async fn build_context(manager: &Self, client: &Client) -> Arc<Context> {
+        let controller_dir =
+            std::env::var("CONTROLLER_BASE_DIR").unwrap_or_else(|_| "./operator".to_string());
+        let mut hbs = HandleBars::new();
+        match hbs.register_partial_dir(PathBuf::from(format!("{controller_dir}/templates"))) {
+            Ok(()) => (),
+            Err(e) => tracing::warn!("Registering template generated: {e}"),
+        }
+        let packages: Arc<RwLock<BTreeMap<String, JukeCacheItem>>> = Arc::default();
+        match JukeBox::list().await {
+            Ok(list) => {
+                let mut cache = BTreeMap::new();
+                for juke in list.items.clone() {
+                    if let Some(status) = juke.status.clone() {
+                        cache.insert(juke.name_any(), JukeCacheItem {
+                            pull_secret: juke.spec.pull_secret.clone(),
+                            packages: status.packages,
+                        });
+                    }
+                }
+                tracing::debug!("Initialize packages cache");
+                *packages.write().await = cache;
+                tracing::debug!("Initialize packages cache done");
+            }
+            Err(e) => tracing::warn!("While listing jukebox: {:?}", e),
+        }
+
+        Arc::new(Context {
+            client: client.clone(),
+            metrics: manager.metrics.clone(),
+            diagnostics: manager.diagnostics.clone(),
+            renderer: hbs,
+            base_context: json!({
+                "vynil_namespace": std::env::var("VYNIL_NAMESPACE").unwrap_or_else(|_| "vynil-system".to_string()),
+                "agent_image": std::env::var("AGENT_IMAGE").unwrap_or_else(|_| common::DEFAULT_AGENT_IMAGE.to_string()),
+                "service_account": std::env::var("AGENT_ACCOUNT").unwrap_or_else(|_| "vynil-agent".to_string()),
+                "log_level": std::env::var("AGENT_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
+                "label_key": std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string()),
+            }),
+            packages,
+        })
+    }
+
     /// Metrics getter
+    #[must_use]
     pub fn metrics(&self) -> String {
         let mut buffer = String::new();
-        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_box).unwrap();
-        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_sys).unwrap();
-        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_svc).unwrap();
-        prometheus_client::encoding::text::encode_registry(&mut buffer, &self.metrics.reg_tnt).unwrap();
-        prometheus_client::encoding::text::encode_eof(&mut buffer).unwrap();
+        for reg in [
+            &self.metrics.reg_box,
+            &self.metrics.reg_sys,
+            &self.metrics.reg_svc,
+            &self.metrics.reg_tnt,
+        ] {
+            if let Err(e) = prometheus_client::encoding::text::encode_registry(&mut buffer, reg) {
+                tracing::error!("encoding prometheus registry failed: {e}");
+            }
+        }
+        if let Err(e) = prometheus_client::encoding::text::encode_eof(&mut buffer) {
+            tracing::error!("encoding prometheus EOF failed: {e}");
+        }
         buffer
     }
 

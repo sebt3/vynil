@@ -6,7 +6,7 @@ fn make_tenant_script() -> Script {
         vec![format!("{base}/scripts/lib"), format!("{base}/scripts/tenant")],
         vec![],
         vec![],
-        Default::default(),
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     )
 }
 

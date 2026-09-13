@@ -1,8 +1,9 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 #![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+#[must_use]
+pub const fn add(left: usize, right: usize) -> usize {
+    left.saturating_add(right)
 }
 
 #[cfg(test)]

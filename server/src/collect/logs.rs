@@ -5,6 +5,7 @@ use common::{
 };
 use k8s_openapi::api::{batch::v1::Job as BatchJob, core::v1::Pod};
 use kube::{Api, Client, api::ListParams};
+use std::fmt::Write as _;
 
 /// Map a kind plural to the CamelCase Kind used by the kube controller-runtime in its
 /// `object.ref` span field (e.g. `tenantinstances` → `TenantInstance`).
@@ -55,6 +56,10 @@ fn filter_operator_lines(logs: &str, object_ref: &str) -> String {
 ///
 /// The agent install job runs in the operator namespace (`vynil_namespace`), not in the instance
 /// namespace. We locate it by label selector and read its pods' logs there.
+///
+/// # Errors
+///
+/// Propagates the [`DiagError`] raised while listing jobs or reading pod logs.
 pub async fn get_agent_log(
     client: &Client,
     kind: &str,
@@ -80,9 +85,7 @@ pub async fn get_agent_log(
             let pod_name = pod.metadata.name.clone().unwrap_or_default();
             let logs = get_pod_logs(client, vynil_namespace, &pod_name, None).await?;
             if !logs.is_empty() {
-                all_logs.push_str(&format!("=== pod/{} ===\n", pod_name));
-                all_logs.push_str(&logs);
-                all_logs.push('\n');
+                let _ = write!(all_logs, "=== pod/{pod_name} ===\n{logs}\n");
             }
         }
     }
@@ -101,7 +104,7 @@ pub async fn get_agent_log(
 async fn get_job_pods(client: &Client, namespace: &str, job_name: &str) -> Result<Vec<Pod>, DiagError> {
     let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let pod_list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 
@@ -109,13 +112,11 @@ async fn get_job_pods(client: &Client, namespace: &str, job_name: &str) -> Resul
         .items
         .into_iter()
         .filter(|pod| {
-            if let Some(owner_refs) = &pod.metadata.owner_references {
+            pod.metadata.owner_references.as_ref().is_some_and(|owner_refs| {
                 owner_refs
                     .iter()
                     .any(|owner| owner.kind == "Job" && owner.name == job_name)
-            } else {
-                false
-            }
+            })
         })
         .collect())
 }
@@ -132,7 +133,7 @@ async fn get_pod_logs(
     // Current container logs (previous=false). `previous=true` would only return the *prior*
     // terminated instance — never the running container — which left every log endpoint empty.
     let params = kube::api::LogParams {
-        container: container.map(|s| s.to_string()),
+        container: container.map(std::string::ToString::to_string),
         previous: false,
         since_seconds: None,
         tail_lines: None,
@@ -149,6 +150,10 @@ async fn get_pod_logs(
 }
 
 /// Get child logs for an instance
+///
+/// # Errors
+///
+/// Propagates the [`DiagError`] raised while resolving children or reading their pod logs.
 pub async fn get_child_logs(
     client: &Client,
     kind: &str,
@@ -180,12 +185,11 @@ pub async fn get_child_logs(
                 .await?;
 
                 if !logs.is_empty() {
-                    all_logs.push_str(&format!(
-                        "=== pod/{} ({}/{}) ===\n",
-                        pod_name, child.kind, child.name
-                    ));
-                    all_logs.push_str(&logs);
-                    all_logs.push('\n');
+                    let _ = write!(
+                        all_logs,
+                        "=== pod/{pod_name} ({}/{}) ===\n{logs}\n",
+                        child.kind, child.name
+                    );
                 }
             }
         }
@@ -203,7 +207,7 @@ pub async fn get_child_logs(
 
 /// Get all children of an instance, across every status category (befores/vitals/scalables/
 /// others/posts for tenant & service ; systems for system). Generic JSON walk so a per-kind
-/// schema difference (SystemInstance uses `systems`) does not silently drop children.
+/// schema difference (`SystemInstance` uses `systems`) does not silently drop children.
 async fn get_instance_children(
     client: &Client,
     kind: &str,
@@ -303,7 +307,8 @@ async fn get_pod_logs_with_options(
 ) -> Result<String, DiagError> {
     let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
 
-    let since_seconds = (log_since_hours * 3600) as i64;
+    let since_seconds = log_since_hours.saturating_mul(3600);
+    let since_seconds = i64::try_from(since_seconds).unwrap_or(i64::MAX);
 
     // Get logs for all containers in the pod
     let mut all_logs = String::new();
@@ -323,9 +328,12 @@ async fn get_pod_logs_with_options(
             };
             match api.logs(pod_name, &params).await {
                 Ok(logs) if !logs.is_empty() => {
-                    all_logs.push_str(&format!("=== container/{} ===\n", container.name));
-                    all_logs.push_str(&cap(&logs, log_cap_bytes));
-                    all_logs.push('\n');
+                    let _ = write!(
+                        all_logs,
+                        "=== container/{} ===\n{}\n",
+                        container.name,
+                        cap(&logs, log_cap_bytes)
+                    );
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!("logs {}/{}: {}", pod_name, container.name, e),
@@ -342,9 +350,12 @@ async fn get_pod_logs_with_options(
             if let Ok(logs) = api.logs(pod_name, &prev).await
                 && !logs.is_empty()
             {
-                all_logs.push_str(&format!("=== container/{} (previous) ===\n", container.name));
-                all_logs.push_str(&cap(&logs, log_cap_bytes));
-                all_logs.push('\n');
+                let _ = write!(
+                    all_logs,
+                    "=== container/{} (previous) ===\n{}\n",
+                    container.name,
+                    cap(&logs, log_cap_bytes)
+                );
             }
         }
     }
@@ -359,7 +370,7 @@ fn cap(logs: &str, max: usize) -> String {
     }
     let mut end = max;
     while end > 0 && !logs.is_char_boundary(end) {
-        end -= 1;
+        end = end.saturating_sub(1);
     }
     format!("{}\n... [truncated]", &logs[..end])
 }
@@ -369,6 +380,11 @@ fn cap(logs: &str, max: usize) -> String {
 /// Filtering is anchored on the `object.ref` span token the controller-runtime stamps on every
 /// reconcile line — precise and leak-free. A few unattributable lines (e.g. raw `K8s error:`
 /// dumps logged outside any reconcile span) carry no `object.ref` and are intentionally dropped.
+///
+/// # Errors
+///
+/// Returns [`DiagError::UnknownKind`] for an unmapped kind, or the [`DiagError`] raised while
+/// reading operator pod logs.
 pub async fn get_operator_log(
     client: &Client,
     kind: &str,
@@ -382,7 +398,7 @@ pub async fn get_operator_log(
     // Get pods in the vynil namespace with the vynil label
     let api: Api<Pod> = Api::namespaced(client.clone(), vynil_namespace);
     let pod_list = api
-        .list(&Default::default())
+        .list(&ListParams::default())
         .await
         .map_err(DiagError::KubeError)?;
 
@@ -401,9 +417,7 @@ pub async fn get_operator_log(
             let filtered_logs = filter_operator_lines(&logs, &object_ref);
 
             if !filtered_logs.is_empty() {
-                all_logs.push_str(&format!("=== pod/{} ===\n", pod_name));
-                all_logs.push_str(&filtered_logs);
-                all_logs.push('\n');
+                let _ = write!(all_logs, "=== pod/{pod_name} ===\n{filtered_logs}\n");
             }
         }
     }
@@ -413,8 +427,7 @@ pub async fn get_operator_log(
     if all_logs.is_empty() {
         return Ok((
             format!(
-                "# no operator log lines matched instance {}/{} in the retained window\n",
-                instance_namespace, instance_name
+                "# no operator log lines matched instance {instance_namespace}/{instance_name} in the retained window\n"
             ),
             ScrubStats::default(),
         ));

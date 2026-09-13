@@ -28,10 +28,15 @@ pub struct FileJukeBox {
 }
 
 impl FileJukeBox {
-    pub fn new(spec: FileScanSpec, cache_dir: PathBuf) -> Self {
+    #[must_use]
+    pub const fn new(spec: FileScanSpec, cache_dir: PathBuf) -> Self {
         Self { spec, cache_dir }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_spec(&mut self) -> RhaiRes<Dynamic> {
         let v = serde_json::json!({
             "source": self.spec.source,
@@ -42,6 +47,10 @@ impl FileJukeBox {
         serde_json::from_value(v).map_err(|e| rhai_err(Error::SerializationError(e)))
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the section cannot be converted into a rhai `Dynamic`.
     pub fn get_status(&mut self) -> RhaiRes<Dynamic> {
         let packages = self.read_all_from_cache().map_err(rhai_err)?;
         let v = serde_json::json!({ "conditions": [], "packages": packages });
@@ -87,7 +96,7 @@ impl FileJukeBox {
         };
 
         for ((category, name), pkgs) in &grouped {
-            let filename = format!("{}_{}.yaml", category, name);
+            let filename = format!("{category}_{name}.yaml");
             let pkg_path = self.cache_dir.join(&filename);
             let yaml = serde_yaml::to_string(pkgs).map_err(|e| Error::YamlError(e.to_string()))?;
             std::fs::write(&pkg_path, yaml).map_err(Error::Stdio)?;
@@ -112,27 +121,43 @@ impl FileJukeBox {
         Ok(())
     }
 
-    pub fn rhai_set_status_updated(&mut self, list: Dynamic) -> RhaiRes<FileJukeBox> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the rhai argument cannot be converted or the underlying
+    /// operation fails.
+    pub fn rhai_set_status_updated(&mut self, list: Dynamic) -> RhaiRes<Self> {
         let v = serde_json::to_string(&list).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         let packages: Vec<VynilPackage> =
             serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         self.write_to_cache(&packages, None).map_err(rhai_err)?;
+        drop(list);
         Ok(self.clone())
     }
 
-    pub fn rhai_set_status_packages_merge(&mut self, filter: String, list: Dynamic) -> RhaiRes<FileJukeBox> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the rhai argument cannot be converted or the underlying
+    /// operation fails.
+    pub fn rhai_set_status_packages_merge(&mut self, filter: String, list: Dynamic) -> RhaiRes<Self> {
         let v = serde_json::to_string(&list).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         let packages: Vec<VynilPackage> =
             serde_json::from_str(&v).map_err(|e| rhai_err(Error::SerializationError(e)))?;
         self.write_to_cache(&packages, Some(&filter)).map_err(rhai_err)?;
+        drop(list);
+        drop(filter);
         Ok(self.clone())
     }
 
-    pub fn rhai_set_status_failed(&mut self, reason: String) -> RhaiRes<FileJukeBox> {
-        Err(rhai_err(Error::Other(format!(
-            "SCAN-FILE-001: Scan failed: {}",
-            reason
-        ))))
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the underlying operation fails.
+    pub fn rhai_set_status_failed(&mut self, reason: String) -> RhaiRes<Self> {
+        let msg = format!("SCAN-FILE-001: Scan failed: {reason}");
+        drop(reason);
+        Err(rhai_err(Error::Other(msg)))
     }
 }
 
@@ -158,7 +183,7 @@ mod tests {
     fn make_pkg(category: &str, name: &str) -> VynilPackage {
         VynilPackage {
             registry: "docker.io".to_string(),
-            image: format!("{}/{}", category, name),
+            image: format!("{category}/{name}"),
             tag: "1.0.0".to_string(),
             metadata: VynilPackageMeta {
                 name: name.to_string(),

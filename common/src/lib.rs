@@ -28,7 +28,7 @@ pub enum Error {
     #[error("Finalizer error: {0}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)
     // so boxing this error to break cycles
-    FinalizerError(#[from] Box<kube::runtime::finalizer::Error<Error>>),
+    FinalizerError(#[from] Box<kube::runtime::finalizer::Error<Self>>),
 
     #[error("Registering template failed with error: {0}")]
     HbsTemplateError(#[from] handlebars::TemplateError),
@@ -118,8 +118,11 @@ impl Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub type RhaiRes<T> = std::result::Result<T, Box<rhai::EvalAltResult>>;
 pub fn rhai_err(e: Error) -> Box<rhai::EvalAltResult> {
-    e.to_string().into()
+    let msg = e.to_string();
+    drop(e);
+    msg.into()
 }
+#[must_use]
 pub fn rhai_err_str(e: String) -> Box<rhai::EvalAltResult> {
     e.into()
 }
@@ -163,7 +166,7 @@ pub struct Children {
     pub namespace: Option<String>,
 }
 
-/// GlobalPublished describe a published service open to use
+/// `GlobalPublished` describe a published service open to use
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalPublished {

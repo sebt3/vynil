@@ -1,7 +1,8 @@
 /// Generates the common `ApplicationCondition` constructors shared by all three instance types.
+///
 /// Call this at module scope (not inside an `impl` block) in any instance module.
 /// Requires: local `ApplicationCondition`, `ConditionsStatus`, `ConditionsType` in scope,
-/// with at least: Ready, Installed, AgentStarted, TofuInstalled, RhaiApplied variants.
+/// with at least: Ready, Installed, `AgentStarted`, `TofuInstalled`, `RhaiApplied` variants.
 #[macro_export]
 macro_rules! impl_condition_common {
     () => {
@@ -133,9 +134,10 @@ macro_rules! impl_condition_common {
     };
 }
 
-/// Generates `ApplicationCondition` constructors for the "children" condition types:
-/// BeforeApplied, VitalApplied, ScalableApplied, OtherApplied, InitFrom, ScheduleBackup.
-/// Used by ServiceInstance and TenantInstance (not SystemInstance).
+/// Generates `ApplicationCondition` constructors for the "children" condition types.
+///
+/// Covers `BeforeApplied`, `VitalApplied`, `ScalableApplied`, `OtherApplied`, `InitFrom`,
+/// `ScheduleBackup`. Used by `ServiceInstance` and `TenantInstance` (not `SystemInstance`).
 #[macro_export]
 macro_rules! impl_condition_children {
     () => {
@@ -261,7 +263,7 @@ macro_rules! impl_condition_children {
 }
 
 /// Generates `ApplicationCondition` constructors for CRD conditions.
-/// Used by ServiceInstance and SystemInstance (not TenantInstance).
+/// Used by `ServiceInstance` and `SystemInstance` (not `TenantInstance`).
 #[macro_export]
 macro_rules! impl_condition_crds {
     () => {
@@ -298,6 +300,9 @@ macro_rules! impl_condition_crds {
 macro_rules! impl_instance_common {
     ($type:ty, $kind_str:literal) => {
         impl $type {
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn get(namespace: String, name: String) -> $crate::Result<Self> {
                 let api = ::kube::api::Api::<Self>::namespaced(
                     $crate::context::get_client_async().await,
@@ -306,6 +311,9 @@ macro_rules! impl_instance_common {
                 api.get(&name).await.map_err($crate::Error::KubeError)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn list(namespace: String) -> $crate::Result<::kube::api::ObjectList<Self>> {
                 let api = ::kube::api::Api::<Self>::namespaced(
                     $crate::context::get_client_async().await,
@@ -323,6 +331,9 @@ macro_rules! impl_instance_common {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns an error when the stored state cannot be decoded from base64+gzip.
             pub fn get_tfstate(&self) -> $crate::Result<Option<String>> {
                 if let Some(status) = self.status.clone() {
                     if let Some(tf) = status.tfstate {
@@ -336,6 +347,9 @@ macro_rules! impl_instance_common {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns an error when the stored state cannot be decoded from base64+gzip.
             pub fn get_rhaistate(&self) -> $crate::Result<Option<String>> {
                 if let Some(status) = self.status.clone() {
                     if let Some(tf) = status.rhaistate {
@@ -430,6 +444,9 @@ macro_rules! impl_instance_common {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns an error when the state cannot be encoded, or `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_tfstate(&mut self, tfstate: String) -> $crate::Result<Self> {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
@@ -457,6 +474,9 @@ macro_rules! impl_instance_common {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns an error when the state cannot be encoded, or `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_tofu_failed(
                 &mut self,
                 tfstate: String,
@@ -501,6 +521,9 @@ macro_rules! impl_instance_common {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns an error when the state cannot be encoded, or `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_rhaistate(&mut self, rhaistate: String) -> $crate::Result<Self> {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
@@ -528,6 +551,9 @@ macro_rules! impl_instance_common {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns an error when the state cannot be encoded, or `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_rhai_failed(
                 &mut self,
                 rhaistate: String,
@@ -572,6 +598,9 @@ macro_rules! impl_instance_common {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_agent_started(&mut self) -> $crate::Result<Self> {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
@@ -600,6 +629,9 @@ macro_rules! impl_instance_common {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_missing_box(&mut self, jukebox: String) -> $crate::Result<Self> {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
@@ -628,6 +660,9 @@ macro_rules! impl_instance_common {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_missing_package(
                 &mut self,
                 category: String,
@@ -660,6 +695,9 @@ macro_rules! impl_instance_common {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_missing_requirement(
                 &mut self,
                 reason: String,
@@ -695,6 +733,9 @@ macro_rules! impl_instance_common {
 
             // ── Rhai wrappers ─────────────────────────────────────────────────────────
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_get(namespace: String, name: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -703,6 +744,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_list(namespace: String) -> $crate::RhaiRes<Vec<Self>> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -712,6 +756,9 @@ macro_rules! impl_instance_common {
                 .map(|lst| lst.into_iter().collect())
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub fn get_metadata(&mut self) -> $crate::RhaiRes<::rhai::Dynamic> {
                 let v = serde_json::to_string(&self.metadata)
                     .map_err(|e| $crate::rhai_err($crate::Error::SerializationError(e)))?;
@@ -719,6 +766,9 @@ macro_rules! impl_instance_common {
                     .map_err(|e| $crate::rhai_err($crate::Error::SerializationError(e)))
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub fn get_spec(&mut self) -> $crate::RhaiRes<::rhai::Dynamic> {
                 let v = serde_json::to_string(&self.spec)
                     .map_err(|e| $crate::rhai_err($crate::Error::SerializationError(e)))?;
@@ -726,6 +776,9 @@ macro_rules! impl_instance_common {
                     .map_err(|e| $crate::rhai_err($crate::Error::SerializationError(e)))
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub fn get_status(&mut self) -> $crate::RhaiRes<::rhai::Dynamic> {
                 let v = serde_json::to_string(&self.status)
                     .map_err(|e| $crate::rhai_err($crate::Error::SerializationError(e)))?;
@@ -733,18 +786,27 @@ macro_rules! impl_instance_common {
                     .map_err(|e| $crate::rhai_err($crate::Error::SerializationError(e)))
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_get_tfstate(&mut self) -> $crate::RhaiRes<String> {
                 self.get_tfstate()
                     .map_err($crate::rhai_err)
                     .map(|r| r.unwrap_or_default())
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_get_rhaistate(&mut self) -> $crate::RhaiRes<String> {
                 self.get_rhaistate()
                     .map_err($crate::rhai_err)
                     .map(|r| r.unwrap_or_default())
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_ready(&mut self, tag: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -753,6 +815,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_tfstate(&mut self, tfstate: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -761,6 +826,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_tofu_failed(
                 &mut self,
                 tfstate: String,
@@ -774,6 +842,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_rhaistate(&mut self, rhaistate: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -782,6 +853,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_rhai_failed(
                 &mut self,
                 rhaistate: String,
@@ -795,6 +869,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_agent_started(&mut self) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -803,6 +880,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_missing_box(&mut self, jukebox: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -811,6 +891,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_missing_package(
                 &mut self,
                 category: String,
@@ -824,6 +907,9 @@ macro_rules! impl_instance_common {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_missing_requirement(
                 &mut self,
                 reason: String,
@@ -839,14 +925,18 @@ macro_rules! impl_instance_common {
     };
 }
 
-/// Generates the `impl $type` block for "full application" instance types that manage
-/// children resources: befores, vitals, scalables, others, services, init, schedule.
-/// Used by ServiceInstance and TenantInstance (not SystemInstance).
+/// Generates the `impl $type` block for "full application" instance types.
+///
+/// Those types manage children resources: befores, vitals, scalables, others, services, init,
+/// schedule. Used by `ServiceInstance` and `TenantInstance` (not `SystemInstance`).
 /// Also generates `set_status_ready` which excludes BeforeApplied/InitFrom/ScheduleBackup.
 #[macro_export]
 macro_rules! impl_instance_befores {
     ($type:ty) => {
         impl $type {
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_ready(&mut self, tag: String) -> $crate::Result<Self> {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
@@ -903,6 +993,9 @@ macro_rules! impl_instance_befores {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_services(
                 &mut self,
                 services: Vec<$crate::Published>,
@@ -914,6 +1007,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_befores(
                 &mut self,
                 befores: Vec<$crate::Children>,
@@ -941,6 +1037,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_before_failed(
                 &mut self,
                 reason: String,
@@ -980,6 +1079,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_vitals(
                 &mut self,
                 vitals: Vec<$crate::Children>,
@@ -1007,6 +1109,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_vital_failed(
                 &mut self,
                 reason: String,
@@ -1046,6 +1151,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_scalables(
                 &mut self,
                 scalables: Vec<$crate::Children>,
@@ -1073,6 +1181,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_scalable_failed(
                 &mut self,
                 reason: String,
@@ -1112,6 +1223,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_others(
                 &mut self,
                 others: Vec<$crate::Children>,
@@ -1139,6 +1253,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_other_failed(
                 &mut self,
                 reason: String,
@@ -1178,6 +1295,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_posts(
                 &mut self,
                 posts: Vec<$crate::Children>,
@@ -1205,6 +1325,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_post_failed(
                 &mut self,
                 reason: String,
@@ -1244,6 +1367,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_init_failed(&mut self, reason: String) -> $crate::Result<Self> {
                 let client = $crate::context::get_client_async().await;
                 let generation = self.metadata.generation.unwrap_or(1);
@@ -1280,6 +1406,9 @@ macro_rules! impl_instance_befores {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_schedule_backup_failed(
                 &mut self,
                 reason: String,
@@ -1321,6 +1450,9 @@ macro_rules! impl_instance_befores {
 
             // ── Rhai wrappers ─────────────────────────────────────────────────────────
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the `Dynamic` argument cannot be converted to JSON or the underlying Kubernetes operation fails.
             pub fn rhai_set_services(&mut self, services: ::rhai::Dynamic) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current().block_on(async move {
@@ -1341,6 +1473,9 @@ macro_rules! impl_instance_befores {
                 })
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the `Dynamic` argument cannot be converted to JSON or the underlying Kubernetes operation fails.
             pub fn rhai_set_status_befores(&mut self, list: ::rhai::Dynamic) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current().block_on(async move {
@@ -1354,6 +1489,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_before_failed(&mut self, reason: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -1362,6 +1500,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the `Dynamic` argument cannot be converted to JSON or the underlying Kubernetes operation fails.
             pub fn rhai_set_status_vitals(&mut self, list: ::rhai::Dynamic) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current().block_on(async move {
@@ -1375,6 +1516,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_vital_failed(&mut self, reason: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -1383,6 +1527,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the `Dynamic` argument cannot be converted to JSON or the underlying Kubernetes operation fails.
             pub fn rhai_set_status_scalables(
                 &mut self,
                 list: ::rhai::Dynamic,
@@ -1399,6 +1546,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_scalable_failed(
                 &mut self,
                 reason: String,
@@ -1410,6 +1560,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the `Dynamic` argument cannot be converted to JSON or the underlying Kubernetes operation fails.
             pub fn rhai_set_status_others(&mut self, list: ::rhai::Dynamic) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current().block_on(async move {
@@ -1423,6 +1576,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_other_failed(&mut self, reason: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -1431,6 +1587,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the `Dynamic` argument cannot be converted to JSON or the underlying Kubernetes operation fails.
             pub fn rhai_set_status_posts(&mut self, list: ::rhai::Dynamic) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current().block_on(async move {
@@ -1444,6 +1603,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_post_failed(&mut self, reason: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -1452,6 +1614,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_init_failed(&mut self, reason: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()
@@ -1460,6 +1625,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_schedule_backup_failed(
                 &mut self,
                 reason: String,
@@ -1472,6 +1640,9 @@ macro_rules! impl_instance_befores {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_missing_init_version(
                 &mut self,
                 version: String,
@@ -1505,6 +1676,9 @@ macro_rules! impl_instance_befores {
                 }
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_missing_init_version(
                 &mut self,
                 version: String,
@@ -1520,11 +1694,14 @@ macro_rules! impl_instance_befores {
 }
 
 /// Generates the `impl $type` block for CRD management.
-/// Used by ServiceInstance and SystemInstance (not TenantInstance).
+/// Used by `ServiceInstance` and `SystemInstance` (not `TenantInstance`).
 #[macro_export]
 macro_rules! impl_instance_crds {
     ($type:ty) => {
         impl $type {
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_crds(&mut self, crds: Vec<String>) -> $crate::Result<Self> {
                 let count = crds.len();
                 let client = $crate::context::get_client_async().await;
@@ -1549,6 +1726,9 @@ macro_rules! impl_instance_crds {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns `Error::KubeError` when the Kubernetes API call fails.
             pub async fn set_status_crd_failed(
                 &mut self,
                 reason: String,
@@ -1588,6 +1768,9 @@ macro_rules! impl_instance_crds {
                 Ok(result)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the `Dynamic` argument cannot be converted to JSON or the underlying Kubernetes operation fails.
             pub fn rhai_set_status_crds(&mut self, list: ::rhai::Dynamic) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current().block_on(async move {
@@ -1601,6 +1784,9 @@ macro_rules! impl_instance_crds {
                 .map_err($crate::rhai_err)
             }
 
+            /// # Errors
+            ///
+            /// Returns a Rhai error when the underlying Kubernetes operation fails.
             pub fn rhai_set_status_crd_failed(&mut self, reason: String) -> $crate::RhaiRes<Self> {
                 ::tokio::task::block_in_place(|| {
                     ::tokio::runtime::Handle::current()

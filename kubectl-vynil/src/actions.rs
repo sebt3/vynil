@@ -7,6 +7,7 @@
 
 use std::{
     collections::HashMap,
+    io::Write,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -53,7 +54,7 @@ async fn set_annotation(api: &Api<DynamicObject>, name: &str, key: &str, value: 
     let patch = serde_json::json!({ "metadata": { "annotations": { key: value } } });
     api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
         .await
-        .with_context(|| format!("failed to annotate {} with {}={}", name, key, value))?;
+        .with_context(|| format!("failed to annotate {name} with {key}={value}"))?;
     Ok(())
 }
 
@@ -86,7 +87,7 @@ async fn wait_job_recreated(
             }
         }
         if Instant::now() >= deadline {
-            bail!("{}: timed out waiting for job {} to be (re)created", err_id, name);
+            bail!("{err_id}: timed out waiting for job {name} to be (re)created");
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -118,7 +119,7 @@ async fn wait_job_terminal(
             }
         }
         if Instant::now() >= deadline {
-            bail!("{}: timed out waiting for job {} to finish", err_id, name);
+            bail!("{err_id}: timed out waiting for job {name} to finish");
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -135,7 +136,7 @@ fn job_tag(job: &Job) -> Option<String> {
         .and_then(|e| e.value.clone())
 }
 
-/// Annotates a (cluster-scoped) JukeBox and waits for its scan job to complete.
+/// Annotates a (cluster-scoped) `JukeBox` and waits for its scan job to complete.
 /// `filter` is `None` for a full scan, or `Some("<cat>[/<pkg>]")` for a partial one.
 async fn scan_jukebox_and_wait(
     client: &Client,
@@ -144,7 +145,7 @@ async fn scan_jukebox_and_wait(
     vynil_namespace: &str,
     timeout: u64,
 ) -> Result<()> {
-    let job_name = format!("scan-{}", jukebox);
+    let job_name = format!("scan-{jukebox}");
     let ar = vynil_api_resource("JukeBox", "jukeboxes");
     // JukeBox is cluster-scoped.
     let box_api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
@@ -155,24 +156,31 @@ async fn scan_jukebox_and_wait(
         .context("SCAN-ERR-02: failed to read current scan job")?;
 
     let value = filter.unwrap_or("true");
-    eprintln!("annotating jukebox {} with force-scan={}", jukebox, value);
+    eprintln!("annotating jukebox {jukebox} with force-scan={value}");
     set_annotation(&box_api, jukebox, "vynil.solidite.fr/force-scan", value)
         .await
         .context("SCAN-ERR-03: failed to trigger scan")?;
 
-    let deadline = Instant::now() + Duration::from_secs(timeout);
-    eprintln!("waiting for scan job {}/{} ...", vynil_namespace, job_name);
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(timeout))
+        .context("SCAN-ERR-09: timeout overflow")?;
+    eprintln!("waiting for scan job {vynil_namespace}/{job_name} ...");
     wait_job_recreated(&job_api, &job_name, old_uid.as_deref(), deadline, "SCAN-ERR-04").await?;
     match wait_job_terminal(&job_api, &job_name, deadline, "SCAN-ERR-05").await? {
         JobOutcome::Complete => {
-            println!("scan complete: job {}/{} succeeded", vynil_namespace, job_name);
+            println!("scan complete: job {vynil_namespace}/{job_name} succeeded");
             Ok(())
         }
-        JobOutcome::Failed(msg) => bail!("SCAN-ERR-06: scan job {} failed: {}", job_name, msg),
+        JobOutcome::Failed(msg) => bail!("SCAN-ERR-06: scan job {job_name} failed: {msg}"),
     }
 }
 
 /// `kubectl-vynil <box> scan [<cat>[/<pkg>]]`.
+///
+/// # Errors
+///
+/// Returns an error when the Kubernetes client cannot be created, the annotation cannot
+/// be set, or the job/pod wait fails.
 pub async fn run_jukebox_scan(name: &str, args: JukeboxScanArgsRef<'_>, context: Option<&str>) -> Result<()> {
     let client = make_client(context)
         .await
@@ -181,7 +189,12 @@ pub async fn run_jukebox_scan(name: &str, args: JukeboxScanArgsRef<'_>, context:
 }
 
 /// `kubectl-vynil <kind> -n <ns> <inst> scan`: resolve the referenced package and
-/// trigger a partial scan on its JukeBox.
+/// trigger a partial scan on its `JukeBox`.
+///
+/// # Errors
+///
+/// Returns an error when the Kubernetes client cannot be created, the annotation cannot
+/// be set, or the job/pod wait fails.
 pub async fn run_instance_scan(
     info: &InstanceKindInfo,
     namespace: &str,
@@ -213,7 +226,7 @@ pub async fn run_instance_scan(
         .and_then(|v| v.as_str())
         .context("SCAN-ERR-10: instance spec has no .spec.package")?;
 
-    let filter = format!("{}/{}", category, package);
+    let filter = format!("{category}/{package}");
     scan_jukebox_and_wait(
         &client,
         jukebox,
@@ -225,6 +238,11 @@ pub async fn run_instance_scan(
 }
 
 /// `kubectl-vynil <kind> -n <ns> <inst> upgrade`.
+///
+/// # Errors
+///
+/// Returns an error when the Kubernetes client cannot be created, the annotation cannot
+/// be set, or the job/pod wait fails.
 pub async fn run_upgrade(
     info: &InstanceKindInfo,
     namespace: &str,
@@ -253,7 +271,9 @@ pub async fn run_upgrade(
         .await
         .context("UPG-ERR-04: failed to trigger reinstall")?;
 
-    let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(args.timeout))
+        .context("UPG-ERR-09: timeout overflow")?;
     eprintln!(
         "waiting for install job {}/{} ...",
         args.vynil_namespace, job_name
@@ -277,10 +297,10 @@ pub async fn run_upgrade(
     } else {
         match wait_job_terminal(&job_api, &job_name, deadline, "UPG-ERR-06").await? {
             JobOutcome::Complete => {
-                println!("upgrade complete: job {} succeeded", job_name);
+                println!("upgrade complete: job {job_name} succeeded");
                 Ok(())
             }
-            JobOutcome::Failed(msg) => bail!("UPG-ERR-07: install job {} failed: {}", job_name, msg),
+            JobOutcome::Failed(msg) => bail!("UPG-ERR-07: install job {job_name} failed: {msg}"),
         }
     }
 }
@@ -296,14 +316,14 @@ async fn watch_pods(
     deadline: Instant,
 ) -> Result<()> {
     let pods: Api<Pod> = Api::namespaced(client.clone(), vynil_namespace);
-    let selector = format!("type={},namespace={},instance={}", type_label, namespace, name);
+    let selector = format!("type={type_label},namespace={namespace},instance={name}");
     let lp = ListParams::default().labels(&selector);
     let mut last: HashMap<String, String> = HashMap::new();
 
     loop {
-        let list = pods.list(&lp).await.context("UPG-ERR-08: failed to list pods")?;
+        let pod_list = pods.list(&lp).await.context("UPG-ERR-08: failed to list pods")?;
         let mut pending = false;
-        for pod in &list.items {
+        for pod in &pod_list.items {
             let name = pod.metadata.name.clone().unwrap_or_default();
             let phase = pod
                 .status
@@ -311,7 +331,7 @@ async fn watch_pods(
                 .and_then(|s| s.phase.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
             if last.get(&name) != Some(&phase) {
-                println!("{}\t{}", name, phase);
+                println!("{name}\t{phase}");
                 last.insert(name.clone(), phase.clone());
             }
             if !matches!(phase.as_str(), "Succeeded" | "Failed") {
@@ -361,6 +381,11 @@ fn transport_mode(t: &TransportArgs, context: Option<&str>) -> Result<(Transport
 }
 
 /// `kubectl-vynil <kind> -n <ns> <inst> diagnostic`: bundle every item into a tar.gz.
+///
+/// # Errors
+///
+/// Returns an error when the diagnostic items cannot be fetched or the bundle cannot be
+/// written.
 pub async fn run_diagnostic(
     info: &InstanceKindInfo,
     namespace: &str,
@@ -374,7 +399,7 @@ pub async fn run_diagnostic(
 
     let mut collected = Vec::new();
     for item in &items {
-        eprintln!("collecting: {}", item);
+        eprintln!("collecting: {item}");
         collected.push((*item, get_item(&mode, &target, item).await));
     }
 
@@ -400,6 +425,11 @@ pub async fn run_diagnostic(
 }
 
 /// `kubectl-vynil <kind> -n <ns> <inst> <item>`: print a single diagnostic item to stdout.
+///
+/// # Errors
+///
+/// Returns an error when the item cannot be fetched, written to stdout, or returned a
+/// failure status.
 pub async fn run_item(
     info: &InstanceKindInfo,
     namespace: &str,
@@ -413,12 +443,8 @@ pub async fn run_item(
     let result = get_item(&mode, &target, item).await;
 
     if let Some((distinct, occurrences)) = result.redactions {
-        eprintln!(
-            "redactions: {} distinct values, {} occurrences",
-            distinct, occurrences
-        );
+        eprintln!("redactions: {distinct} distinct values, {occurrences} occurrences");
     }
-    use std::io::Write;
     std::io::stdout()
         .write_all(&result.body)
         .context("DIAG-ERR-02: failed to write item to stdout")?;
@@ -429,7 +455,8 @@ pub async fn run_item(
     Ok(())
 }
 
-/// Reference bundle for the JukeBox scan args (avoids cloning the parsed struct).
+/// Reference bundle for the `JukeBox` scan args (avoids cloning the parsed struct).
+#[derive(Debug)]
 pub struct JukeboxScanArgsRef<'a> {
     pub package: Option<&'a str>,
     pub vynil_namespace: &'a str,
@@ -437,6 +464,11 @@ pub struct JukeboxScanArgsRef<'a> {
 }
 
 /// Top-level dispatch for `kubectl-vynil jukebox …`.
+///
+/// # Errors
+///
+/// Returns an error when the Kubernetes client cannot be created, the annotation cannot
+/// be set, or the job/pod wait fails.
 pub async fn run_jukebox(args: &JukeboxArgs, context: Option<&str>) -> Result<()> {
     match &args.verb {
         JukeboxVerb::Scan(s) => {
@@ -456,13 +488,18 @@ pub async fn run_jukebox(args: &JukeboxArgs, context: Option<&str>) -> Result<()
 
 /// Top-level dispatch for the instance kinds. Resolves the namespace, defaulting
 /// to the selected kubectl context namespace when `-n` is omitted.
+///
+/// # Errors
+///
+/// Returns an error when the Kubernetes client cannot be created, the annotation cannot
+/// be set, or the job/pod wait fails.
 pub async fn run_instance(
     info: &InstanceKindInfo,
     args: &InstanceArgs,
     context: Option<&str>,
     namespace: Option<&str>,
 ) -> Result<()> {
-    use crate::cli::InstanceVerb::*;
+    use crate::cli::InstanceVerb::{Diagnostic, Scan, Upgrade};
     let namespace = match namespace {
         Some(ns) => ns.to_string(),
         None => make_client(context)

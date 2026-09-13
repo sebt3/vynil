@@ -17,7 +17,7 @@ pub enum OutputFormat {
     Json,
 }
 
-#[derive(clap::ValueEnum, Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(clap::ValueEnum, Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageType {
     /// Tenant package type
@@ -106,7 +106,7 @@ fn format_results(results: &client::testing::TestResultCollector, format: &Outpu
     }
 }
 
-pub async fn run(args: &Parameters) -> Result<()> {
+pub fn run(args: &Parameters) -> Result<()> {
     if !args.package_dir.join("tests").is_dir() {
         return Err(Error::MissingTestDirectory(args.package_dir.clone()));
     }
@@ -127,14 +127,17 @@ pub async fn run(args: &Parameters) -> Result<()> {
             fs::write(output, handler.results.to_junit()).map_err(Error::Stdio)?;
         }
     } else if let Some(test_name) = args.test_name.clone() {
-        let created_objects: Arc<Mutex<Vec<Dynamic>>> = Default::default();
-        handler.run_test(&test_name, created_objects.clone());
+        let created_objects: Arc<Mutex<Vec<Dynamic>>> = Arc::default();
+        handler.run_test(&test_name, &created_objects);
         println!("{}", format_results(&handler.results, &args.format));
         if let Some(output) = args.junit_output_filename.clone() {
             fs::write(output, handler.results.to_junit()).map_err(Error::Stdio)?;
         }
         if let Some(output) = args.template_output_filename.clone() {
-            let objets = created_objects.lock().unwrap().clone();
+            let objets = created_objects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             let content = yaml_all_serialize_to_string(&objets)?;
             fs::write(output, content).map_err(Error::Stdio)?;
         }

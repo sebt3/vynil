@@ -31,6 +31,7 @@ use tracing::{Span, field};
 // ── Recommendation context ────────────────────────────────────────────────────
 
 /// Holds the three recommendation lists computed during reconciliation
+#[derive(Debug)]
 pub struct RecoContext {
     pub crds: Vec<String>,
     pub system_services: Vec<String>,
@@ -40,7 +41,7 @@ pub struct RecoContext {
 // ── InstanceKind trait ────────────────────────────────────────────────────────
 
 /// Captures all behaviors that differ between the three instance kinds
-/// (ServiceInstance, SystemInstance, TenantInstance).
+/// (`ServiceInstance`, `SystemInstance`, `TenantInstance`).
 ///
 /// The generic reconcile/cleanup logic lives in [`do_reconcile`] and [`do_cleanup`];
 /// those functions call the methods below for every type-specific decision.
@@ -73,7 +74,7 @@ pub trait InstanceKind:
     /// Returns the currently installed tag from the status, or an empty string.
     fn current_tag(&self) -> String;
     /// Returns the version requested for initial restore, or None if absent.
-    /// Default implementation returns None (SystemInstance, or no initFrom.version).
+    /// Default implementation returns None (`SystemInstance`, or no initFrom.version).
     fn init_from_version(&self) -> Option<&str> {
         None
     }
@@ -85,7 +86,7 @@ pub trait InstanceKind:
     async fn set_missing_package(self, category: String, package: String) -> Result<Self>;
     async fn set_missing_requirement(self, reason: String) -> Result<Self>;
     /// Records that the requested init version was not found.
-    /// Default no-op for instance types that don't support initFrom (e.g. SystemInstance).
+    /// Default no-op for instance types that don't support initFrom (e.g. `SystemInstance`).
     async fn set_missing_init_version(self, _version: String) -> Result<Self>
     where
         Self: Sized,
@@ -105,7 +106,7 @@ pub trait InstanceKind:
     ) -> Result<Option<Action>>;
 
     /// Builds the three recommendation lists (CRDs, system services, tenant services).
-    /// TenantInstance overrides this to also fill `tenant_services`.
+    /// `TenantInstance` overrides this to also fill `tenant_services`.
     async fn build_recommendations(
         &self,
         recos: Option<Vec<VynilPackageRecommandation>>,
@@ -138,6 +139,11 @@ fn ns<T: kube::ResourceExt>(inst: &T) -> String {
 
 /// Builds the CRD and system-service recommendation lists that are common
 /// to all three instance types.
+///
+/// # Errors
+///
+/// Propagates the [`common::instanceservice`] lookup error and any [`Error::KubeError`]
+/// raised while checking recommendation metadata existence.
 pub async fn build_base_recommendations(
     recos: Option<Vec<VynilPackageRecommandation>>,
     client: Client,
@@ -179,6 +185,11 @@ pub async fn build_base_recommendations(
 /// Returns `Ok(Some(version))` if a valid `initFrom.version` is found,
 /// `Ok(None)` if no version was requested or the instance is already installed,
 /// or `Err(Error::MissingInitVersion)` if the requested version doesn't exist.
+///
+/// # Errors
+///
+/// Returns [`Error::MissingInitVersion`] when the requested version cannot be resolved, or
+/// the underlying [`Error::KubeError`] raised while querying the registry.
 pub async fn resolve_init_version<T: InstanceKind>(
     inst: &T,
     pck: &VynilPackage,
@@ -187,9 +198,8 @@ pub async fn resolve_init_version<T: InstanceKind>(
     client: Client,
     vynil_ns: &str,
 ) -> Result<Option<String>> {
-    let requested = match inst.init_from_version() {
-        Some(v) => v,
-        None => return Ok(None),
+    let Some(requested) = inst.init_from_version() else {
+        return Ok(None);
     };
     // Already installed: ignore the init version override
     if !inst.current_tag().is_empty() {
@@ -229,6 +239,7 @@ pub async fn resolve_init_version<T: InstanceKind>(
 // ── Job helpers ───────────────────────────────────────────────────────────────
 
 /// True if the Job has a `Complete` or `Failed` condition set to "True".
+#[must_use]
 pub fn is_job_terminal(job: &Job) -> bool {
     let Some(status) = &job.status else { return false };
     let Some(conditions) = &status.conditions else {
@@ -240,20 +251,26 @@ pub fn is_job_terminal(job: &Job) -> bool {
 }
 
 /// True if the Job has a `Failed` condition set to "True".
+#[must_use]
 pub fn is_job_failed(job: &Job) -> bool {
     job.status
         .as_ref()
         .and_then(|s| s.conditions.as_ref())
-        .map(|cs| cs.iter().any(|c| c.status == "True" && c.type_ == "Failed"))
-        .unwrap_or(false)
+        .is_some_and(|cs| cs.iter().any(|c| c.status == "True" && c.type_ == "Failed"))
 }
 
 /// A [`Condition`] that matches once the Job is terminal (Complete or Failed).
+#[must_use]
 pub fn is_job_terminal_cond() -> impl Condition<Job> {
-    |obj: Option<&Job>| obj.map(is_job_terminal).unwrap_or(false)
+    |obj: Option<&Job>| obj.is_some_and(is_job_terminal)
 }
 
 /// Deletes a Job using foreground deletion and waits until it disappears.
+///
+/// # Errors
+///
+/// Returns [`Error::Elapsed`] when the deletion was not observed within the deadline, or
+/// [`Error::KubeWaitError`] when the underlying watch failed.
 pub async fn delete_job_and_wait(job_api: &Api<Job>, job_name: &str) -> Result<()> {
     match job_api.delete(job_name, &DeleteParams::foreground()).await {
         Ok(eith) => {
@@ -273,6 +290,11 @@ pub async fn delete_job_and_wait(job_api: &Api<Job>, job_name: &str) -> Result<(
 
 /// Applies (SSA patch) a Job definition, falling back to delete-then-create
 /// if the server-side apply is rejected.
+///
+/// # Errors
+///
+/// Returns [`Error::KubeError`] when the delete-then-create fallback fails, or
+/// [`Error::Elapsed`] / [`Error::KubeWaitError`] when waiting for the old Job to disappear.
 pub async fn upsert_job(job_api: &Api<Job>, job_name: &str, job_def: Value) -> Result<()> {
     let patch_result = job_api
         .patch(
@@ -281,37 +303,128 @@ pub async fn upsert_job(job_api: &Api<Job>, job_name: &str, job_def: Value) -> R
             &Patch::Apply(job_def.clone()),
         )
         .await;
-    match patch_result {
-        Ok(_) => Ok(()),
-        Err(_) => {
-            if let either::Left(j) = job_api
-                .delete(job_name, &DeleteParams::foreground())
+    if patch_result.is_ok() {
+        return Ok(());
+    }
+    {
+        if let either::Left(j) = job_api
+            .delete(job_name, &DeleteParams::foreground())
+            .await
+            .map_err(Error::KubeError)?
+        {
+            let uid = j.metadata.uid.unwrap_or_default();
+            let cond = await_condition(job_api.clone(), job_name, conditions::is_deleted(&uid));
+            tokio::time::timeout(std::time::Duration::from_secs(20), cond)
                 .await
-                .map_err(Error::KubeError)?
-            {
-                let uid = j.metadata.uid.unwrap_or_default();
-                let cond = await_condition(job_api.clone(), job_name, conditions::is_deleted(&uid));
-                tokio::time::timeout(std::time::Duration::from_secs(20), cond)
-                    .await
-                    .map_err(Error::Elapsed)?
-                    .map_err(Error::KubeWaitError)?;
-            }
-            job_api
-                .create(
-                    &PostParams::default(),
-                    &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
-                )
-                .await
-                .map_err(Error::KubeError)?;
-            Ok(())
+                .map_err(Error::Elapsed)?
+                .map_err(Error::KubeWaitError)?;
+        }
+        job_api
+            .create(
+                &PostParams::default(),
+                &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
+            )
+            .await
+            .map_err(Error::KubeError)?;
+    }
+    Ok(())
+}
+
+// ── Shared reconcile/cleanup building blocks ─────────────────────────────────
+
+/// Injects the fields every package job template relies on before rendering,
+/// common to install and delete flows.
+fn insert_base_context<T: InstanceKind>(context: &mut Value, inst: &T, package_action: &str, job_name: &str) {
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("name".to_string(), inst.name_any().into());
+        obj.insert("namespace".to_string(), ns(inst).into());
+        obj.insert("package_type".to_string(), T::type_name().into());
+        obj.insert("package_action".to_string(), package_action.into());
+        obj.insert("job_name".to_string(), job_name.to_string().into());
+        obj.insert("digest".to_string(), inst.clone().get_options_digest().into());
+        obj.insert("oci_mount".to_string(), false.into());
+    }
+}
+
+/// Finds the package targeted by the instance inside its cached jukebox content.
+///
+/// Returns `None` when the jukebox itself is absent from the cache. The third tuple
+/// field only holds the cached package list when `with_package_list` is set; otherwise
+/// it is empty (the delete flow does not need it and avoids cloning it).
+async fn lookup_cached_package<T: InstanceKind>(
+    inst: &T,
+    ctx: &Context,
+    current_version: &str,
+    with_package_list: bool,
+) -> Option<(Option<VynilPackage>, Option<String>, Vec<VynilPackage>)> {
+    let packages = ctx.packages.read().await;
+    let cached_box = packages.get(inst.spec_jukebox())?;
+    let pck = cached_box
+        .packages
+        .iter()
+        .find(|p| {
+            p.metadata.name == inst.spec_package()
+                && p.metadata.category == inst.spec_category()
+                && p.metadata.usage == T::package_type()
+                && p.is_min_version_ok(current_version)
+                && p.is_vynil_version_ok()
+        })
+        .cloned();
+    let pull_secret = cached_box.pull_secret.clone();
+    let cached_packages = if with_package_list {
+        cached_box.packages.clone()
+    } else {
+        Vec::new()
+    };
+    drop(packages);
+    Some((pck, pull_secret, cached_packages))
+}
+
+/// Injects the registry-secret fields into the templating context.
+fn apply_pull_secret(context: &mut Value, pull_secret: Option<&String>) {
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("use_secret".to_string(), pull_secret.is_some().into());
+        if let Some(ps) = pull_secret {
+            obj.insert("pull_secret".to_string(), ps.clone().into());
         }
     }
+}
+
+/// Runs the package value script (when set) and stores its rendered map in the context.
+///
+/// # Errors
+///
+/// Returns [`Error::JsonError`] when the stored script cannot be decoded as a string, or
+/// the script-evaluation error raised by the Rhai engine.
+fn apply_value_script<T: InstanceKind>(
+    inst: &T,
+    value_script: Option<String>,
+    context: &mut Value,
+) -> Result<()> {
+    let val = match value_script {
+        Some(script) => {
+            let mut rhai = Script::new(vec![]);
+            inst.set_rhai_instance(&mut rhai);
+            let script = serde_json::from_str::<String>(&script).map_err(Error::JsonError)?;
+            format!("{:?}", rhai.eval_map_string(&script)?)
+        }
+        None => "\"{}\"".to_string(),
+    };
+    if let Some(obj) = context.as_object_mut() {
+        obj.insert("ctrl_values".to_string(), val.into());
+    }
+    Ok(())
 }
 
 // ── Generic entry point (finalizer wrapper) ───────────────────────────────────
 
 /// Entry point called by the kube controller. Wires tracing, metrics, and the
 /// finalizer, then delegates to the `Reconciler` impl on `T`.
+///
+/// # Errors
+///
+/// Propagates the finalizer transaction error and any [`Error`] raised by the underlying
+/// reconcile or cleanup phase.
 pub async fn run_with_finalizer<T>(inst: Arc<T>, ctx: Arc<Context>) -> Result<Action>
 where
     T: InstanceKind + Reconciler,
@@ -338,6 +451,12 @@ where
 
 // ── Generic reconcile (Apply) ─────────────────────────────────────────────────
 
+/// Shared reconcile body for the three instance kinds.
+///
+/// # Errors
+///
+/// Propagates rendering, serialization, script-evaluation and [`Error::KubeError`] errors
+/// raised while preparing and applying the install job.
 pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<Action> {
     tracing::debug!(
         "Reconcilling {}Instance {}/{}",
@@ -351,8 +470,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     if inst
         .annotations()
         .get("vynil.solidite.fr/suspend")
-        .map(|v| v == "true")
-        .unwrap_or(false)
+        .is_some_and(|v| v == "true")
     {
         tracing::info!(
             "{}Instance {}/{} is suspended, skipping reconciliation",
@@ -360,7 +478,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
             ns(inst),
             inst.name_any()
         );
-        return Ok(Action::requeue(Duration::from_secs(15 * 60)));
+        return Ok(Action::requeue(Duration::from_mins(15)));
     }
 
     let mut hbs = ctx.renderer.clone();
@@ -371,66 +489,27 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     let current_version = inst.current_tag();
 
     let mut context = ctx.base_context.clone();
-    {
-        let obj = context.as_object_mut().unwrap();
-        obj.insert("name".to_string(), inst.name_any().into());
-        obj.insert("namespace".to_string(), ns.clone().into());
-        obj.insert("package_type".to_string(), T::type_name().into());
-        obj.insert("package_action".to_string(), "install".into());
-        obj.insert("job_name".to_string(), job_name.clone().into());
-        obj.insert("digest".to_string(), inst.clone().get_options_digest().into());
-        obj.insert("oci_mount".to_string(), false.into());
-    }
+    insert_base_context(&mut context, inst, "install", &job_name);
 
     // ── Package lookup ────────────────────────────────────────────────────
-    let (pck, pull_secret, cached_packages) = {
-        let packages = ctx.packages.read().await;
-        let jukebox = inst.spec_jukebox();
-        if !packages.keys().any(|x| x == jukebox) {
-            drop(packages);
-            inst.clone()
-                .set_missing_box(inst.spec_jukebox().to_string())
-                .await?;
-            return Ok(Action::requeue(Duration::from_secs(15 * 60)));
-        }
-        let pck = packages[jukebox]
-            .packages
-            .iter()
-            .find(|p| {
-                p.metadata.name == inst.spec_package()
-                    && p.metadata.category == inst.spec_category()
-                    && p.metadata.usage == T::package_type()
-                    && p.is_min_version_ok(current_version.clone())
-                    && p.is_vynil_version_ok()
-            })
-            .cloned();
-        let pull_secret = packages[jukebox].pull_secret.clone();
-        let cached_packages = packages[jukebox].packages.clone();
-        (pck, pull_secret, cached_packages)
-        // packages lock released here
+    let Some((pck_opt, pull_secret, cached_packages)) =
+        lookup_cached_package(inst, &ctx, &current_version, true).await
+    else {
+        inst.clone()
+            .set_missing_box(inst.spec_jukebox().to_string())
+            .await?;
+        return Ok(Action::requeue(Duration::from_mins(15)));
     };
 
-    let pck = match pck {
-        Some(p) => p,
-        None => {
-            inst.clone()
-                .set_missing_package(inst.spec_category().to_string(), inst.spec_package().to_string())
-                .await?;
-            return Ok(Action::requeue(Duration::from_secs(15 * 60)));
-        }
+    let Some(pck) = pck_opt else {
+        inst.clone()
+            .set_missing_package(inst.spec_category().to_string(), inst.spec_package().to_string())
+            .await?;
+        return Ok(Action::requeue(Duration::from_mins(15)));
     };
 
     // ── Pull secret ───────────────────────────────────────────────────────
-    if let Some(ref ps) = pull_secret {
-        let obj = context.as_object_mut().unwrap();
-        obj.insert("use_secret".to_string(), true.into());
-        obj.insert("pull_secret".to_string(), ps.clone().into());
-    } else {
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("use_secret".to_string(), false.into());
-    }
+    apply_pull_secret(&mut context, pull_secret.as_ref());
 
     // ── initFrom version resolution ───────────────────────────────────────
     let effective_tag =
@@ -439,8 +518,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
             Ok(None) => pck.tag.clone(),
             Err(e) => return Err(e),
         };
-    {
-        let obj = context.as_object_mut().unwrap();
+    if let Some(obj) = context.as_object_mut() {
         obj.insert("tag".to_string(), effective_tag.into());
         obj.insert("image".to_string(), pck.image.clone().into());
         obj.insert("registry".to_string(), pck.registry.clone().into());
@@ -455,8 +533,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     let recos = inst
         .build_recommendations(pck.recommandations, client.clone())
         .await?;
-    {
-        let obj = context.as_object_mut().unwrap();
+    if let Some(obj) = context.as_object_mut() {
         obj.insert("rec_crds".to_string(), recos.crds.join(",").into());
         obj.insert(
             "rec_system_services".to_string(),
@@ -469,21 +546,7 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
     }
 
     // ── Value script ──────────────────────────────────────────────────────
-    if let Some(value_script) = pck.value_script {
-        let mut rhai = Script::new(vec![]);
-        inst.set_rhai_instance(&mut rhai);
-        let script = serde_json::from_str::<String>(&value_script).map_err(Error::JsonError)?;
-        let val = rhai.eval_map_string(&script)?;
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("ctrl_values".to_string(), format!("{:?}", val).into());
-    } else {
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("ctrl_values".to_string(), "\"{}\"".into());
-    }
+    apply_value_script(inst, pck.value_script, &mut context)?;
 
     // ── Force-reinstall annotation ────────────────────────────────────────
     let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
@@ -496,27 +559,33 @@ pub async fn do_reconcile<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Resul
             serde_json::from_value(serde_json::json!([
                 {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-reinstall"}
             ]))
-            .unwrap(),
+            .map_err(Error::SerializationError)?,
         );
         api.patch(&inst.name_any(), &PatchParams::default(), &patch)
             .await
             .map_err(Error::KubeError)?;
         let job = job_api.get_metadata_opt(&job_name).await;
         if matches!(job, Ok(Some(_))) {
-            delete_job_and_wait(&job_api, &job_name).await?;
+            Box::pin(delete_job_and_wait(&job_api, &job_name)).await?;
         }
     }
 
     // ── Create/update the install job ─────────────────────────────────────
     let job_def_str = hbs.render("{{> package.yaml }}", &context)?;
     let job_def: Value = common::yamlhandler::yaml_str_to_json(&job_def_str)?;
-    upsert_job(&job_api, &job_name, job_def).await?;
+    Box::pin(upsert_job(&job_api, &job_name, job_def)).await?;
 
-    Ok(Action::requeue(Duration::from_secs(15 * 60)))
+    Ok(Action::requeue(Duration::from_mins(15)))
 }
 
 // ── Generic cleanup (Cleanup / finalizer deletion) ────────────────────────────
 
+/// Shared cleanup body for the three instance kinds.
+///
+/// # Errors
+///
+/// Propagates [`Error::Other`] when children still exist, the rendering and serialization
+/// errors of the cleanup job, and any [`Error::KubeError`] waiting for its terminal state.
 pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<Action> {
     ctx.diagnostics.write().await.last_event = Utc::now();
     let mut hbs = ctx.renderer.clone();
@@ -527,66 +596,28 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
     let current_version = inst.current_tag();
 
     let mut context = ctx.base_context.clone();
-    {
-        let obj = context.as_object_mut().unwrap();
-        obj.insert("name".to_string(), inst.name_any().into());
-        obj.insert("namespace".to_string(), ns.clone().into());
-        obj.insert("package_type".to_string(), T::type_name().into());
-        obj.insert("package_action".to_string(), "delete".into());
-        obj.insert("job_name".to_string(), job_name.clone().into());
-        obj.insert("digest".to_string(), inst.clone().get_options_digest().into());
-        obj.insert("oci_mount".to_string(), false.into());
-    }
+    insert_base_context(&mut context, inst, "delete", &job_name);
 
     // ── Package lookup ────────────────────────────────────────────────────
-    let (pck, pull_secret) = {
-        let packages = ctx.packages.read().await;
-        let jukebox = inst.spec_jukebox();
-        if !packages.keys().any(|x| x == jukebox) {
-            return Ok(Action::await_change());
-        }
-        let pck = packages[jukebox]
-            .packages
-            .iter()
-            .find(|p| {
-                p.metadata.name == inst.spec_package()
-                    && p.metadata.category == inst.spec_category()
-                    && p.metadata.usage == T::package_type()
-                    && p.is_min_version_ok(current_version.clone())
-                    && p.is_vynil_version_ok()
-            })
-            .cloned();
-        let pull_secret = packages[jukebox].pull_secret.clone();
-        (pck, pull_secret)
-        // packages lock released here
+    let Some((pck_opt, pull_secret, _unused)) =
+        lookup_cached_package(inst, &ctx, &current_version, false).await
+    else {
+        return Ok(Action::await_change());
     };
 
-    let pck = match pck {
-        Some(p) => p,
-        None => {
-            if inst.have_child() {
-                return Err(Error::Other(String::from(
-                    "This install have child but the package cannot be found",
-                )));
-            }
-            return Ok(Action::await_change());
+    let Some(pck) = pck_opt else {
+        if inst.have_child() {
+            return Err(Error::Other(String::from(
+                "This install have child but the package cannot be found",
+            )));
         }
+        return Ok(Action::await_change());
     };
 
     // ── Pull secret ───────────────────────────────────────────────────────
-    if let Some(ps) = pull_secret {
-        let obj = context.as_object_mut().unwrap();
-        obj.insert("use_secret".to_string(), true.into());
-        obj.insert("pull_secret".to_string(), ps.into());
-    } else {
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("use_secret".to_string(), false.into());
-    }
+    apply_pull_secret(&mut context, pull_secret.as_ref());
 
-    {
-        let obj = context.as_object_mut().unwrap();
+    if let Some(obj) = context.as_object_mut() {
         obj.insert("tag".to_string(), pck.tag.clone().into());
         obj.insert("image".to_string(), pck.image.clone().into());
         obj.insert("registry".to_string(), pck.registry.clone().into());
@@ -597,27 +628,13 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
     }
 
     // ── Value script ──────────────────────────────────────────────────────
-    if let Some(value_script) = pck.value_script {
-        let mut rhai = Script::new(vec![]);
-        inst.set_rhai_instance(&mut rhai);
-        let script = serde_json::from_str::<String>(&value_script).map_err(Error::JsonError)?;
-        let val = rhai.eval_map_string(&script)?;
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("ctrl_values".to_string(), format!("{:?}", val).into());
-    } else {
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("ctrl_values".to_string(), "\"{}\"".into());
-    }
+    apply_value_script(inst, pck.value_script, &mut context)?;
 
     // ── Delete the install job ────────────────────────────────────────────
     let job_api: Api<Job> = Api::namespaced(client.clone(), my_ns);
     let job = job_api.get_metadata_opt(&job_name).await;
     if matches!(job, Ok(Some(_))) {
-        delete_job_and_wait(&job_api, &job_name).await?;
+        Box::pin(delete_job_and_wait(&job_api, &job_name)).await?;
     }
 
     // ── Create and run the delete job ─────────────────────────────────────
@@ -634,7 +651,7 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
 
     // Wait for the delete job to reach a terminal state (Complete or Failed).
     let cond = await_condition(job_api.clone(), &job_name, is_job_terminal_cond());
-    match tokio::time::timeout(std::time::Duration::from_secs(3 * 60), cond).await {
+    match tokio::time::timeout(std::time::Duration::from_mins(3), cond).await {
         Ok(res) => {
             res.map_err(Error::KubeWaitError)?;
             let failed = job_api
@@ -642,8 +659,7 @@ pub async fn do_cleanup<T: InstanceKind>(inst: &T, ctx: Arc<Context>) -> Result<
                 .await
                 .map_err(Error::KubeError)?
                 .as_ref()
-                .map(is_job_failed)
-                .unwrap_or(false);
+                .is_some_and(is_job_failed);
             // Purge the delete job in every terminal case (success or failure).
             if let Err(e) = job_api.delete(&job_name, &DeleteParams::foreground()).await {
                 tracing::warn!("Deleting Job {} failed with: {e}", &job_name);
@@ -725,7 +741,7 @@ mod tests {
             metadata: VynilPackageMeta {
                 name: name.to_string(),
                 category: category.to_string(),
-                description: "".to_string(),
+                description: String::new(),
                 app_version: None,
                 usage,
                 features: vec![],
@@ -893,7 +909,7 @@ mod tests {
     // These tests document the integration behavior: resolve_init_version()
     // return value determines the tag inserted into the Handlebars context.
 
-    /// do_reconcile scenario 1: no initFrom → resolve returns None → use pck.tag
+    /// `do_reconcile` scenario 1: no initFrom → resolve returns None → use pck.tag
     #[tokio::test]
     async fn test_do_reconcile_tag_no_init_from() {
         let inst = make_tenant(None, None);
@@ -903,7 +919,7 @@ mod tests {
         // Ok(None) → do_reconcile uses pck.tag ("2.0.0")
     }
 
-    /// do_reconcile scenario 2: first install with valid version in cache → tag overridden
+    /// `do_reconcile` scenario 2: first install with valid version in cache → tag overridden
     #[tokio::test]
     async fn test_do_reconcile_tag_init_from_version_in_cache() {
         let inst = make_tenant(Some("1.5.0"), None);
@@ -914,7 +930,7 @@ mod tests {
         assert!(matches!(result, Ok(Some(ref v)) if v == "1.5.0"));
     }
 
-    /// do_reconcile scenario 3: version not in cache → OCI check required (ignored, needs registry)
+    /// `do_reconcile` scenario 3: version not in cache → OCI check required (ignored, needs registry)
     #[tokio::test]
     #[ignore = "requires a real OCI registry"]
     async fn test_do_reconcile_tag_init_from_version_missing() {
@@ -922,7 +938,7 @@ mod tests {
         // Expected: Err(MissingInitVersion), no job created.
     }
 
-    /// do_reconcile scenario 4: already installed (status.tag non-empty) → resolve returns None → upgrade path
+    /// `do_reconcile` scenario 4: already installed (status.tag non-empty) → resolve returns None → upgrade path
     #[tokio::test]
     async fn test_do_reconcile_tag_already_installed_ignores_init_from() {
         let inst = make_tenant(Some("1.5.0"), Some("1.5.0"));

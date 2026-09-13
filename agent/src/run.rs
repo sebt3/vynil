@@ -18,18 +18,22 @@ pub struct Parameters {
     script_dir: PathBuf,
 }
 
-pub async fn run(args: &Parameters) -> Result<()> {
+pub fn run(args: &Parameters) -> Result<()> {
     // Validate that the script parameter is a file
-    if !Path::new(&args.script).is_file() {
-        tracing::error!("{:?} is not a file", &args.script);
-        Err(Error::MissingScript(args.script.clone()))
-    } else {
-        let p = args.script.as_path().parent().unwrap();
+    if Path::new(&args.script).is_file() {
+        let p = args
+            .script
+            .as_path()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""));
         let mut rhai = Script::new(vec![
             p.to_string_lossy().to_string(),
             format!("{}/lib", args.script_dir.display()),
         ]);
         let _ = rhai.run_file(&args.script)?;
         Ok(())
+    } else {
+        tracing::error!("{:?} is not a file", &args.script);
+        Err(Error::MissingScript(args.script.clone()))
     }
 }

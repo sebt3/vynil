@@ -5,9 +5,9 @@ pub use handlebars::{
     template::{Parameter, Template, TemplateElement},
 };
 pub use serde_json::Value;
-use tracing::*;
+use tracing::warn;
 
-/// Helpers Handlebars spécifiques à vynil (en plus de vynil_core::hbs::CORE_HBS_HELPERS).
+/// Helpers Handlebars spécifiques à vynil (en plus de `vynil_core::hbs::CORE_HBS_HELPERS`).
 pub const VYNIL_HBS_HELPERS: &[&str] = &[
     "selector_from_ctx",
     "labels_from_ctx",
@@ -21,6 +21,7 @@ pub const VYNIL_HBS_HELPERS: &[&str] = &[
 ];
 
 /// Vrai si `name` est un helper natif (core générique OU contextuel vynil).
+#[must_use]
 pub fn is_native_hbs_helper(name: &str) -> bool {
     vynil_core::hbs::CORE_HBS_HELPERS.contains(&name) || VYNIL_HBS_HELPERS.contains(&name)
 }
@@ -28,33 +29,54 @@ pub fn is_native_hbs_helper(name: &str) -> bool {
 // ── Contextual helpers (vynil-specific, stay in common) ────────────────────────
 
 handlebars_helper!(selector: |ctx: Value, {comp:str=""}| {
-    let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["selector"].as_object().unwrap().clone();
+    let mut sel = ctx
+        .get("instance")
+        .and_then(|v| v.get("selector"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     if !comp.is_empty() {
         sel.insert("app.kubernetes.io/component".into(), Value::from(comp));
     }
     sel
 });
 handlebars_helper!(labels: |ctx: Value, {comp:str=""}| {
-    let mut sel = ctx.as_object().unwrap()["instance"].as_object().unwrap()["labels"].as_object().unwrap().clone();
+    let mut sel = ctx
+        .get("instance")
+        .and_then(|v| v.get("labels"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     if !comp.is_empty() {
         sel.insert("app.kubernetes.io/component".into(), Value::from(comp));
     }
     sel
 });
 handlebars_helper!(have_crd: |ctx: Value, name: String| {
-    ctx.as_object().unwrap()["cluster"].as_object().unwrap()["crds"].as_array().unwrap().iter().any(|crd| *crd==name)
+    ctx.get("cluster")
+        .and_then(|v| v.get("crds"))
+        .and_then(Value::as_array)
+        .is_some_and(|crds| crds.iter().any(|crd| *crd == name))
 });
 handlebars_helper!(have_system_service: |ctx: Value, name: String| {
-    if ctx.as_object().unwrap()["cluster"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].is_array() {
-        let v: Vec<&Value> = ctx.as_object().unwrap()["cluster"].as_object().unwrap()["services"].as_array().unwrap().iter().filter(|s| s.as_object().unwrap().get("key").unwrap_or_default()==&name).collect();
-        !v.is_empty()
-    } else {false}
+    ctx.get("cluster")
+        .and_then(|v| v.get("services"))
+        .and_then(Value::as_array)
+        .is_some_and(|services| {
+            services
+                .iter()
+                .any(|s| s.get("key") == Some(&Value::String(name.clone())))
+        })
 });
 handlebars_helper!(have_tenant_service: |ctx: Value, name: String| {
-    if ctx.as_object().unwrap().contains_key("tenant") && ctx.as_object().unwrap()["tenant"].is_object() && ctx.as_object().unwrap()["tenant"].as_object().unwrap().contains_key("services") && ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].is_array() {
-        let v: Vec<&Value> = ctx.as_object().unwrap()["tenant"].as_object().unwrap()["services"].as_array().unwrap().iter().filter(|s| s.as_object().unwrap().get("key").unwrap_or_default()==&name).collect();
-        !v.is_empty()
-    } else {false}
+    ctx.get("tenant")
+        .and_then(|v| v.get("services"))
+        .and_then(Value::as_array)
+        .is_some_and(|services| {
+            services
+                .iter()
+                .any(|s| s.get("key") == Some(&Value::String(name.clone())))
+        })
 });
 
 handlebars_helper!(render_template: |template: String, data: Value| {
@@ -93,7 +115,7 @@ impl<'a> std::ops::Deref for HandleBars<'a> {
         &self.0
     }
 }
-impl<'a> std::ops::DerefMut for HandleBars<'a> {
+impl std::ops::DerefMut for HandleBars<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }

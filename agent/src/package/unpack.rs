@@ -70,11 +70,8 @@ pub struct Parameters {
     pull_path: String,
 }
 
-pub async fn run(args: &Parameters) -> Result<()> {
-    if !Path::new(&args.destination).is_dir() {
-        tracing::error!("{:?} is not a directory", &args.destination);
-        Err(Error::MissingDestination(args.destination.clone()))
-    } else {
+pub fn run(args: &Parameters) -> Result<()> {
+    if Path::new(&args.destination).is_dir() {
         let mut cli = if args.pull_path.is_empty() {
             Registry::new(
                 args.registry.clone(),
@@ -86,12 +83,23 @@ pub async fn run(args: &Parameters) -> Result<()> {
                 .map_err(Error::Stdio)?;
             let pull_secret: serde_json::Value =
                 serde_json::from_str(&pull_secret_string).map_err(Error::SerializationError)?;
-            let hash = pull_secret["auths"][args.registry.clone()]["auth"].clone();
-            let user_pass = base64_decode(hash.as_str().unwrap().to_string())?;
-            let auth = user_pass.split(":").collect::<Vec<&str>>();
-            Registry::new(args.registry.clone(), auth[0].to_string(), auth[1].to_string())
+            let hash = pull_secret
+                .get("auths")
+                .and_then(|a| a.get(args.registry.as_str()))
+                .and_then(|r| r.get("auth"))
+                .cloned()
+                .unwrap_or_default();
+            let hash_str = hash.as_str().unwrap_or_default();
+            let user_pass = base64_decode(hash_str.to_string())?;
+            let auth: Vec<&str> = user_pass.split(':').collect();
+            let user = auth.first().copied().unwrap_or_default().to_string();
+            let pass = auth.get(1).copied().unwrap_or_default().to_string();
+            Registry::new(args.registry.clone(), user, pass)
         };
         cli.pull_image(&args.destination, args.image.clone(), args.tag.clone())?;
         Ok(())
+    } else {
+        tracing::error!("{:?} is not a directory", &args.destination);
+        Err(Error::MissingDestination(args.destination.clone()))
     }
 }

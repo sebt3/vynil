@@ -12,10 +12,10 @@ use kubectl_vynil::{
 async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider().install_default().ok();
 
-    let mut argv = std::env::args();
-    let _bin = argv.next();
-    if argv.next().as_deref() == Some("__complete") {
-        let words: Vec<String> = argv.collect();
+    let mut raw_args = std::env::args();
+    let _bin = raw_args.next();
+    if raw_args.next().as_deref() == Some("__complete") {
+        let words: Vec<String> = raw_args.collect();
         kubectl_vynil::completion::run(words).await;
         return Ok(());
     }

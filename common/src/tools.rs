@@ -33,7 +33,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_empty_string() {
-        let encoded = encode_base64_gz("".to_string()).unwrap();
+        let encoded = encode_base64_gz(String::new()).unwrap();
         let decoded = base64_gz_decode(encoded).unwrap();
         assert_eq!(decoded, "");
     }

@@ -1,8 +1,8 @@
 use base64::Engine as _;
 use k8s_openapi::api::core::v1::Secret;
-use kube::{Api, Client};
+use kube::{Api, Client, api::ListParams};
 use regex::Regex;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::LazyLock};
 
 use crate::dto::ScrubStats;
 
@@ -74,9 +74,14 @@ fn is_scrubbable(value: &str) -> bool {
     value.len() >= MIN_SECRET_LEN && !COMMON_DENYLIST.contains(&value.to_ascii_lowercase().as_str())
 }
 
+/// List all Secrets of a namespace.
+///
+/// # Errors
+///
+/// Returns the underlying Kubernetes API error when the list call fails.
 async fn list_secrets(client: &Client, namespace: &str) -> Result<Vec<Secret>, kube::Error> {
     let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
-    Ok(api.list(&Default::default()).await?.items)
+    Ok(api.list(&ListParams::default()).await?.items)
 }
 
 /// Extract decoded values from a Secret's `data` and `stringData`.
@@ -113,8 +118,8 @@ fn extract_secret_values(secret: &Secret, values: &mut HashSet<String>) {
 /// Single-pass `str::replace` (no re-scan of the replacement → no infinite loop).
 fn scrub_secrets(text: &str, secrets: &[String]) -> (String, ScrubStats) {
     let mut result = text.to_string();
-    let mut distinct = 0;
-    let mut occurrences = 0;
+    let mut distinct = 0_usize;
+    let mut occurrences = 0_usize;
 
     for secret in secrets {
         if secret.is_empty() {
@@ -123,8 +128,8 @@ fn scrub_secrets(text: &str, secrets: &[String]) -> (String, ScrubStats) {
         let count = result.matches(secret.as_str()).count();
         if count > 0 {
             result = result.replace(secret.as_str(), ANONYMIZED_TEXT);
-            distinct += 1;
-            occurrences += count;
+            distinct = distinct.saturating_add(1);
+            occurrences = occurrences.saturating_add(count);
         }
     }
 
@@ -134,20 +139,34 @@ fn scrub_secrets(text: &str, secrets: &[String]) -> (String, ScrubStats) {
     })
 }
 
+fn compile_static(pattern: &str) -> Regex {
+    match Regex::new(pattern) {
+        Ok(re) => re,
+        Err(e) => panic!("invalid static scrubbing pattern {pattern}: {e}"),
+    }
+}
+
+static JWT_RE: LazyLock<Regex> =
+    LazyLock::new(|| compile_static(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"));
+static BEARER_RE: LazyLock<Regex> = LazyLock::new(|| compile_static(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]+"));
+static PEM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    compile_static(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----")
+});
+
 /// Targeted pattern redaction for well-known secret shapes.
 fn apply_patterns(text: &str) -> String {
-    let jwt = Regex::new(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+").unwrap();
-    let bearer = Regex::new(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]+").unwrap();
-    let pem =
-        Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----").unwrap();
-
-    let mut result = jwt.replace_all(text, ANONYMIZED_TEXT).to_string();
-    result = bearer.replace_all(&result, ANONYMIZED_TEXT).to_string();
-    result = pem.replace_all(&result, ANONYMIZED_TEXT).to_string();
+    let mut result = JWT_RE.replace_all(text, ANONYMIZED_TEXT).to_string();
+    result = BEARER_RE.replace_all(&result, ANONYMIZED_TEXT).to_string();
+    result = PEM_RE.replace_all(&result, ANONYMIZED_TEXT).to_string();
     result
 }
 
 /// Scrub a `serde_json::Value` via its string form.
+///
+/// # Errors
+///
+/// Returns a `serde_json::Error` when the value cannot be serialized or when the
+/// scrubbed text is no longer valid JSON.
 pub async fn scrub_json(
     value: serde_json::Value,
     client: &Client,

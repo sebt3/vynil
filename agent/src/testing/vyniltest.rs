@@ -5,6 +5,7 @@ use common::rhaihandler::Dynamic;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[must_use]
 pub fn appslug(pkg: &str, inst: &str) -> String {
     if pkg == inst {
         inst.to_string()
@@ -28,7 +29,7 @@ pub struct VynilTest {
     pub metadata: VynilTestMeta,
     /// Target instance to test against
     pub instance: VynilTestInstance,
-    /// TestSet references with variable overrides
+    /// `TestSet` references with variable overrides
     pub testSets: Option<Vec<VynilTestSetRef>>,
     /// Additional mocks at test level
     pub mocks: Option<VynilTestSetMocks>,
@@ -84,10 +85,10 @@ fn json_subset_diff(expected: &serde_json::Value, actual: &serde_json::Value, pa
                 } else {
                     format!("{path}.{k}")
                 };
-                match act.get(k) {
-                    None => vec![format!("{child}: expected {v}, got <missing>")],
-                    Some(av) => json_subset_diff(v, av, &child),
-                }
+                act.get(k).map_or_else(
+                    || vec![format!("{child}: expected {v}, got <missing>")],
+                    |av| json_subset_diff(v, av, &child),
+                )
             })
             .collect(),
         (serde_json::Value::Array(exp), serde_json::Value::Array(act)) => exp
@@ -97,19 +98,18 @@ fn json_subset_diff(expected: &serde_json::Value, actual: &serde_json::Value, pa
             .map(|(i, e)| format!("{path}[{i}]: no match found for {e}"))
             .collect(),
         _ => {
-            if expected != actual {
-                vec![format!("{path}: expected {expected}, got {actual}")]
-            } else {
+            if expected == actual {
                 vec![]
+            } else {
+                vec![format!("{path}: expected {expected}, got {actual}")]
             }
         }
     }
 }
 
 fn object_label(d: &Dynamic) -> String {
-    let map = match d.as_map_ref() {
-        Ok(m) => m,
-        Err(_) => return "<unknown>".into(),
+    let Ok(map) = d.as_map_ref() else {
+        return "<unknown>".into();
     };
     let kind = map
         .get("kind")
@@ -139,10 +139,7 @@ fn object_label(d: &Dynamic) -> String {
 
 /// Returns true if a generated Dynamic object matches the selector criteria.
 fn matches_selector(d: &Dynamic, selector: &VynilAssertSelector) -> bool {
-    let map = match d.as_map_ref() {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
+    let Ok(map) = d.as_map_ref() else { return false };
     if let Some(kind) = &selector.kind {
         let actual = map.get("kind").and_then(|v| v.clone().into_string().ok());
         if actual.as_deref() != Some(kind) {
@@ -152,13 +149,11 @@ fn matches_selector(d: &Dynamic, selector: &VynilAssertSelector) -> bool {
     if selector.name.is_none() && selector.namespace.is_none() {
         return true;
     }
-    let meta_dyn = match map.get("metadata") {
-        Some(m) => m,
-        None => return false,
+    let Some(meta_dyn) = map.get("metadata") else {
+        return false;
     };
-    let meta = match meta_dyn.as_map_ref() {
-        Ok(m) => m,
-        Err(_) => return false,
+    let Ok(meta) = meta_dyn.as_map_ref() else {
+        return false;
     };
     if let Some(name) = &selector.name {
         let actual = meta.get("name").and_then(|v| v.clone().into_string().ok());
@@ -175,12 +170,201 @@ fn matches_selector(d: &Dynamic, selector: &VynilAssertSelector) -> bool {
     true
 }
 
+/// Builds the "did you mean" hint when a selector matched nothing but similar objects exist.
+fn no_match_hint(generated: &[Dynamic], selector: &VynilAssertSelector) -> String {
+    let hints: Vec<String> = generated
+        .iter()
+        .filter(|d| {
+            let Ok(map) = d.as_map_ref() else { return false };
+            let kind_match = selector.kind.as_ref().is_some_and(|k| {
+                map.get("kind")
+                    .and_then(|v| v.clone().into_string().ok())
+                    .as_deref()
+                    .is_some_and(|ak| ak.eq_ignore_ascii_case(k))
+            });
+            let name_match = selector.name.as_ref().is_some_and(|n| {
+                map.get("metadata")
+                    .and_then(|m| m.as_map_ref().ok())
+                    .and_then(|meta| meta.get("name").and_then(|v| v.clone().into_string().ok()))
+                    .as_deref()
+                    .is_some_and(|an| an.eq_ignore_ascii_case(n))
+            });
+            kind_match || name_match
+        })
+        .map(object_label)
+        .collect();
+    if hints.is_empty() {
+        "no objects matched selector".into()
+    } else {
+        format!("no objects matched selector (did you mean: {})", hints.join(", "))
+    }
+}
+
+/// Renders detail lines for the given object indices: per-object JSON diffs when
+/// `show_diff` is true, plain "(matched)" labels otherwise.
+fn detail_lines(
+    indices: &[usize],
+    objects: &[&Dynamic],
+    jsons: &[serde_json::Value],
+    expected: &serde_json::Value,
+    show_diff: bool,
+) -> String {
+    if indices.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = indices
+        .iter()
+        .map(|&i| {
+            let label = objects
+                .get(i)
+                .map_or_else(|| "<unknown>".into(), |d| object_label(d));
+            if !show_diff {
+                return format!("  {label} (matched)");
+            }
+            let diffs = jsons
+                .get(i)
+                .map_or_else(Vec::new, |json| json_subset_diff(expected, json, ""));
+            if diffs.is_empty() {
+                format!("  {label}")
+            } else {
+                format!("  {label}: {}", diffs.join(", "))
+            }
+        })
+        .collect();
+    format!("\n{}", lines.join("\n"))
+}
+
+/// Evaluates a value-carrying matcher against the number of matching selected objects.
+fn value_verdict(
+    matcher: &VynilAssertMatch,
+    matching: usize,
+    total: usize,
+    non_match_detail: &dyn Fn() -> String,
+    match_detail: &dyn Fn() -> String,
+) -> (bool, String) {
+    match matcher {
+        VynilAssertMatch::All => {
+            if matching == total {
+                (true, format!("{matching}/{total} match"))
+            } else {
+                (
+                    false,
+                    format!("{matching}/{total} match, expected all{}", non_match_detail()),
+                )
+            }
+        }
+        VynilAssertMatch::Any => {
+            if matching > 0 {
+                (true, format!("{matching}/{total} match"))
+            } else {
+                (
+                    false,
+                    format!("0/{total} match, expected at least one{}", non_match_detail()),
+                )
+            }
+        }
+        VynilAssertMatch::Exact(n) => {
+            let n = usize::try_from(*n).unwrap_or(usize::MAX);
+            if matching == n && total == n {
+                (true, format!("{matching}/{total} match"))
+            } else {
+                (
+                    false,
+                    format!(
+                        "{matching}/{total} match, expected exactly {n}{}",
+                        non_match_detail()
+                    ),
+                )
+            }
+        }
+        VynilAssertMatch::AtLeast(n) => {
+            let n = usize::try_from(*n).unwrap_or(usize::MAX);
+            if matching >= n {
+                (true, format!("{matching}/{total} match"))
+            } else {
+                (
+                    false,
+                    format!(
+                        "{matching}/{total} match, expected at least {n}{}",
+                        non_match_detail()
+                    ),
+                )
+            }
+        }
+        VynilAssertMatch::AtMost(n) => {
+            let n = usize::try_from(*n).unwrap_or(usize::MAX);
+            if matching <= n {
+                (true, format!("{matching}/{total} match"))
+            } else {
+                (
+                    false,
+                    format!("{matching}/{total} match, expected at most {n}{}", match_detail()),
+                )
+            }
+        }
+        VynilAssertMatch::None => {
+            if matching == 0 {
+                (true, format!("0/{total} match as expected"))
+            } else {
+                (
+                    false,
+                    format!("{matching}/{total} match, expected none{}", match_detail()),
+                )
+            }
+        }
+    }
+}
+
+/// Evaluates a bare matcher (no expected value) against the number of selected objects.
+fn count_verdict(matcher: &VynilAssertMatch, total: usize) -> (bool, String) {
+    match matcher {
+        VynilAssertMatch::All | VynilAssertMatch::Any => {
+            if total > 0 {
+                (true, format!("{total} match"))
+            } else {
+                (false, format!("{total} match, expected at least one"))
+            }
+        }
+        VynilAssertMatch::Exact(n) => {
+            let n = usize::try_from(*n).unwrap_or(usize::MAX);
+            if total == n {
+                (true, format!("{total} match"))
+            } else {
+                (false, format!("{total} match, expected exactly {n}"))
+            }
+        }
+        VynilAssertMatch::AtLeast(n) => {
+            let n = usize::try_from(*n).unwrap_or(usize::MAX);
+            if total >= n {
+                (true, format!("{total} match"))
+            } else {
+                (false, format!("{total} match, expected at least {n}"))
+            }
+        }
+        VynilAssertMatch::AtMost(n) => {
+            let n = usize::try_from(*n).unwrap_or(usize::MAX);
+            if total <= n {
+                (true, format!("{total} match"))
+            } else {
+                (false, format!("{total} match, expected at most {n}"))
+            }
+        }
+        VynilAssertMatch::None => {
+            if total == 0 {
+                (true, format!("{total} match as expected"))
+            } else {
+                (false, format!("{total} match, expected none"))
+            }
+        }
+    }
+}
+
 impl VynilTest {
     /// Runs all asserts against the generated objects and returns results.
+    #[must_use]
     pub fn run_asserts(&self, generated: &[Dynamic]) -> Vec<VynilAssertResult> {
-        let asserts = match &self.asserts {
-            Some(a) => a,
-            None => return vec![],
+        let Some(asserts) = &self.asserts else {
+            return vec![];
         };
         asserts
             .iter()
@@ -191,210 +375,39 @@ impl VynilTest {
                     .collect();
                 let total = selected.len();
                 if total == 0 && !matches!(a.matcher, VynilAssertMatch::None | VynilAssertMatch::AtMost(_)) {
-                    let hints: Vec<String> = generated
-                        .iter()
-                        .filter(|d| {
-                            let map = match d.as_map_ref() {
-                                Ok(m) => m,
-                                Err(_) => return false,
-                            };
-                            let kind_match = a.selector.kind.as_ref().is_some_and(|k| {
-                                map.get("kind")
-                                    .and_then(|v| v.clone().into_string().ok())
-                                    .as_deref()
-                                    .is_some_and(|ak| ak.eq_ignore_ascii_case(k))
-                            });
-                            let name_match = a.selector.name.as_ref().is_some_and(|n| {
-                                map.get("metadata")
-                                    .and_then(|m| m.as_map_ref().ok())
-                                    .and_then(|meta| {
-                                        meta.get("name").and_then(|v| v.clone().into_string().ok())
-                                    })
-                                    .as_deref()
-                                    .is_some_and(|an| an.eq_ignore_ascii_case(n))
-                            });
-                            kind_match || name_match
-                        })
-                        .map(object_label)
-                        .collect();
-                    let message = if hints.is_empty() {
-                        "no objects matched selector".into()
-                    } else {
-                        format!("no objects matched selector (did you mean: {})", hints.join(", "))
-                    };
                     return VynilAssertResult {
                         name: a.name.clone(),
                         description: a.description.clone(),
                         passed: false,
-                        message,
+                        message: no_match_hint(generated, &a.selector),
                     };
                 }
-                let (passed, message) = if let Some(value) = a.value.clone() {
-                    // Compute JSON once per object and partition matched/non-matched
-                    let selected_jsons: Vec<serde_json::Value> = selected
-                        .iter()
-                        .map(|d| {
-                            serde_json::from_str(&serde_json::to_string(*d).unwrap_or_default())
-                                .unwrap_or_default()
-                        })
-                        .collect();
-                    let (matched_idx, non_matched_idx): (Vec<usize>, Vec<usize>) =
-                        (0..total).partition(|&i| json_subset_match(&value, &selected_jsons[i]));
-                    let matching = matched_idx.len();
-
-                    // Detail lines for objects that did NOT match the value
-                    let non_match_detail = || -> String {
-                        if non_matched_idx.is_empty() {
-                            return String::new();
-                        }
-                        let lines: Vec<String> = non_matched_idx
+                let (passed, message) = a.value.clone().map_or_else(
+                    || count_verdict(&a.matcher, total),
+                    |value| {
+                        let selected_jsons: Vec<serde_json::Value> = selected
                             .iter()
-                            .map(|&i| {
-                                let diffs = json_subset_diff(&value, &selected_jsons[i], "");
-                                if diffs.is_empty() {
-                                    format!("  {}", object_label(selected[i]))
-                                } else {
-                                    format!("  {}: {}", object_label(selected[i]), diffs.join(", "))
-                                }
+                            .map(|d| {
+                                serde_json::from_str(&serde_json::to_string(*d).unwrap_or_default())
+                                    .unwrap_or_default()
                             })
                             .collect();
-                        format!("\n{}", lines.join("\n"))
-                    };
-                    // Detail lines for objects that DID match (used when too many matched)
-                    let match_detail = || -> String {
-                        if matched_idx.is_empty() {
-                            return String::new();
-                        }
-                        let lines: Vec<String> = matched_idx
-                            .iter()
-                            .map(|&i| format!("  {} (matched)", object_label(selected[i])))
-                            .collect();
-                        format!("\n{}", lines.join("\n"))
-                    };
-
-                    match &a.matcher {
-                        VynilAssertMatch::All => {
-                            if matching == total {
-                                (true, format!("{matching}/{total} match"))
-                            } else {
-                                (
-                                    false,
-                                    format!("{matching}/{total} match, expected all{}", non_match_detail()),
-                                )
-                            }
-                        }
-                        VynilAssertMatch::Any => {
-                            if matching > 0 {
-                                (true, format!("{matching}/{total} match"))
-                            } else {
-                                (
-                                    false,
-                                    format!("0/{total} match, expected at least one{}", non_match_detail()),
-                                )
-                            }
-                        }
-                        VynilAssertMatch::Exact(n) => {
-                            let n = *n as usize;
-                            if matching == n && total == n {
-                                (true, format!("{matching}/{total} match"))
-                            } else {
-                                (
-                                    false,
-                                    format!(
-                                        "{matching}/{total} match, expected exactly {n}{}",
-                                        non_match_detail()
-                                    ),
-                                )
-                            }
-                        }
-                        VynilAssertMatch::AtLeast(n) => {
-                            let n = *n as usize;
-                            if matching >= n {
-                                (true, format!("{matching}/{total} match"))
-                            } else {
-                                (
-                                    false,
-                                    format!(
-                                        "{matching}/{total} match, expected at least {n}{}",
-                                        non_match_detail()
-                                    ),
-                                )
-                            }
-                        }
-                        VynilAssertMatch::AtMost(n) => {
-                            let n = *n as usize;
-                            if matching <= n {
-                                (true, format!("{matching}/{total} match"))
-                            } else {
-                                (
-                                    false,
-                                    format!(
-                                        "{matching}/{total} match, expected at most {n}{}",
-                                        match_detail()
-                                    ),
-                                )
-                            }
-                        }
-                        VynilAssertMatch::None => {
-                            if matching == 0 {
-                                (true, format!("0/{total} match as expected"))
-                            } else {
-                                (
-                                    false,
-                                    format!("{matching}/{total} match, expected none{}", match_detail()),
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    match &a.matcher {
-                        VynilAssertMatch::All => {
-                            if total > 0 {
-                                (true, format!("{total} match"))
-                            } else {
-                                (false, format!("{total} match, expected at least one"))
-                            }
-                        }
-                        VynilAssertMatch::Any => {
-                            if total > 0 {
-                                (true, format!("{total} match"))
-                            } else {
-                                (false, format!("{total} match, expected at least one"))
-                            }
-                        }
-                        VynilAssertMatch::Exact(n) => {
-                            let n = *n as usize;
-                            if total == n {
-                                (true, format!("{total} match"))
-                            } else {
-                                (false, format!("{total} match, expected exactly {n}"))
-                            }
-                        }
-                        VynilAssertMatch::AtLeast(n) => {
-                            let n = *n as usize;
-                            if total >= n {
-                                (true, format!("{total} match"))
-                            } else {
-                                (false, format!("{total} match, expected at least {n}"))
-                            }
-                        }
-                        VynilAssertMatch::AtMost(n) => {
-                            let n = *n as usize;
-                            if total <= n {
-                                (true, format!("{total} match"))
-                            } else {
-                                (false, format!("{total} match, expected at most {n}"))
-                            }
-                        }
-                        VynilAssertMatch::None => {
-                            if total == 0 {
-                                (true, format!("{total} match as expected"))
-                            } else {
-                                (false, format!("{total} match, expected none"))
-                            }
-                        }
-                    }
-                };
+                        let (matched_idx, non_matched_idx): (Vec<usize>, Vec<usize>) =
+                            (0..total).partition(|&i| {
+                                selected_jsons
+                                    .get(i)
+                                    .is_some_and(|json| json_subset_match(&value, json))
+                            });
+                        let matching = matched_idx.len();
+                        value_verdict(
+                            &a.matcher,
+                            matching,
+                            total,
+                            &|| detail_lines(&non_matched_idx, &selected, &selected_jsons, &value, true),
+                            &|| detail_lines(&matched_idx, &selected, &selected_jsons, &value, false),
+                        )
+                    },
+                );
                 VynilAssertResult {
                     name: a.name.clone(),
                     description: a.description.clone(),

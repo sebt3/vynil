@@ -6,6 +6,15 @@ pub struct TtlCache<T: Clone + Send + Sync + 'static> {
     ttl: Duration,
 }
 
+impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for TtlCache<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TtlCache")
+            .field("inner", &"tokio::sync::RwLock<Option<(Instant, T)>>")
+            .field("ttl", &self.ttl)
+            .finish()
+    }
+}
+
 impl<T: Clone + Send + Sync + 'static> TtlCache<T> {
     pub fn new(ttl: Duration) -> Self {
         Self {
@@ -14,18 +23,25 @@ impl<T: Clone + Send + Sync + 'static> TtlCache<T> {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns the error produced by `refresh` when the cached value is stale and the
+    /// refresh fails.
     pub async fn get_or_refresh<F, Fut>(&self, refresh: F) -> crate::Result<T>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = crate::Result<T>>,
     {
-        {
+        let cached = {
             let guard = self.inner.read().await;
-            if let Some((ts, val)) = guard.as_ref()
-                && ts.elapsed() < self.ttl
-            {
-                return Ok(val.clone());
-            }
+            guard
+                .as_ref()
+                .filter(|(ts, _)| ts.elapsed() < self.ttl)
+                .map(|(_, val)| val.clone())
+        };
+        if let Some(val) = cached {
+            return Ok(val);
         }
         let mut guard = self.inner.write().await;
         if let Some((ts, val)) = guard.as_ref()
@@ -35,6 +51,7 @@ impl<T: Clone + Send + Sync + 'static> TtlCache<T> {
         }
         let val = refresh().await?;
         *guard = Some((Instant::now(), val.clone()));
+        drop(guard);
         Ok(val)
     }
 }
@@ -49,7 +66,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_value_on_first_call() {
-        let cache: TtlCache<i32> = TtlCache::new(Duration::from_secs(60));
+        let cache: TtlCache<i32> = TtlCache::new(Duration::from_mins(1));
         let call_count = Arc::new(AtomicUsize::new(0));
         let cc = call_count.clone();
         let val = cache
@@ -65,7 +82,7 @@ mod tests {
 
     #[tokio::test]
     async fn returns_cached_value_within_ttl() {
-        let cache: TtlCache<i32> = TtlCache::new(Duration::from_secs(60));
+        let cache: TtlCache<i32> = TtlCache::new(Duration::from_mins(1));
         let call_count = Arc::new(AtomicUsize::new(0));
         for _ in 0..3 {
             let cc = call_count.clone();
@@ -111,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn propagates_refresh_error() {
-        let cache: TtlCache<i32> = TtlCache::new(Duration::from_secs(60));
+        let cache: TtlCache<i32> = TtlCache::new(Duration::from_mins(1));
         let result = cache
             .get_or_refresh(|| async { Err(crate::Error::Other("E_TEST".into())) })
             .await;
@@ -120,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_stays_empty_after_error() {
-        let cache: TtlCache<i32> = TtlCache::new(Duration::from_secs(60));
+        let cache: TtlCache<i32> = TtlCache::new(Duration::from_mins(1));
         let _ = cache
             .get_or_refresh(|| async { Err::<i32, _>(crate::Error::Other("fail".into())) })
             .await;

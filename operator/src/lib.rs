@@ -34,6 +34,7 @@ pub mod telemetry;
 /// Metrics
 mod metrics;
 pub use metrics::Metrics;
+#[must_use]
 pub fn get_client_name() -> String {
     "controller.vynil.solidite.fr".to_string()
 }

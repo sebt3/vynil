@@ -2,8 +2,11 @@ use crate::{anonymize::scrub_yaml, dto::ScrubStats, error::DiagError};
 use k8s_openapi::api::core::v1::ConfigMap;
 use kube::{Api, Client};
 
-/// Get the vynil configuration from the `vynil` ConfigMap. Redaction stats are returned to the
+/// Get the vynil configuration from the `vynil` `ConfigMap`. Redaction stats are returned to the
 /// caller (the handler emits them as the `X-Diag-Redactions` header, like every other endpoint).
+/// # Errors
+///
+/// Propagates the [`DiagError`] raised by the `ConfigMap` read or YAML serialization.
 pub async fn get_vynil_config(
     client: &Client,
     vynil_namespace: &str,

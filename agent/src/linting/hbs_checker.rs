@@ -24,9 +24,12 @@ const KNOWN_HBS_ROOTS: &[&str] = &[
     "namespace",
 ];
 
+/// Shared empty rule set for lookups on line 0.
+static NO_INLINE_DISABLES: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
+
 pub struct HbsChecker<'a> {
-    _package_dir: &'a Path,
-    _pkg: &'a VynilPackageSource,
+    package_dir: &'a Path,
+    pkg: &'a VynilPackageSource,
     config: &'a LintConfig,
     defined_helpers: HashSet<String>,
     used_helpers: HashSet<String>,
@@ -41,8 +44,8 @@ pub struct HbsChecker<'a> {
 impl<'a> HbsChecker<'a> {
     pub fn new(package_dir: &'a Path, pkg: &'a VynilPackageSource, config: &'a LintConfig) -> Self {
         let mut checker = HbsChecker {
-            _package_dir: package_dir,
-            _pkg: pkg,
+            package_dir,
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -107,7 +110,7 @@ impl<'a> HbsChecker<'a> {
                         file,
                         self.config.clone(),
                         inline_disables,
-                        self._pkg,
+                        self.pkg,
                         self.defined_helpers.clone(),
                         self.defined_partials.clone(),
                     );
@@ -141,7 +144,7 @@ impl<'a> HbsChecker<'a> {
                         level,
                         file: file.to_path_buf(),
                         line: None,
-                        message: format!("Syntax error: {}", e),
+                        message: format!("Syntax error: {e}"),
                     });
                 }
             }
@@ -158,7 +161,7 @@ impl<'a> HbsChecker<'a> {
             if !self.used_helpers.contains(helper)
                 && let Some(level) = self.config.resolve_level(
                     "hbs/unused-helper",
-                    &PathBuf::from(&format!("handlebars/helpers/{}.rhai", helper)),
+                    &PathBuf::from(&format!("handlebars/helpers/{helper}.rhai")),
                     LintLevel::Warn,
                     &HashSet::new(),
                 )
@@ -166,9 +169,9 @@ impl<'a> HbsChecker<'a> {
                 findings.push(LintFinding {
                     rule: "hbs/unused-helper".to_string(),
                     level,
-                    file: PathBuf::from(&format!("handlebars/helpers/{}.rhai", helper)),
+                    file: PathBuf::from(&format!("handlebars/helpers/{helper}.rhai")),
                     line: None,
-                    message: format!("Helper `{}` defined but never used", helper),
+                    message: format!("Helper `{helper}` defined but never used"),
                 });
             }
         }
@@ -178,7 +181,7 @@ impl<'a> HbsChecker<'a> {
             if !self.used_partials.contains(partial)
                 && let Some(level) = self.config.resolve_level(
                     "hbs/unused-partial",
-                    &PathBuf::from(&format!("handlebars/partials/{}.hbs", partial)),
+                    &PathBuf::from(&format!("handlebars/partials/{partial}.hbs")),
                     LintLevel::Warn,
                     &HashSet::new(),
                 )
@@ -186,16 +189,24 @@ impl<'a> HbsChecker<'a> {
                 findings.push(LintFinding {
                     rule: "hbs/unused-partial".to_string(),
                     level,
-                    file: PathBuf::from(&format!("handlebars/partials/{}.hbs", partial)),
+                    file: PathBuf::from(&format!("handlebars/partials/{partial}.hbs")),
                     line: None,
-                    message: format!("Partial `{}` defined but never used", partial),
+                    message: format!("Partial `{partial}` defined but never used"),
                 });
             }
         }
 
+        self.check_unused_options(&mut findings);
+        self.check_unused_images(&mut findings);
+        self.check_unused_resources(&mut findings);
+
+        findings
+    }
+
+    fn check_unused_options(&self, findings: &mut Vec<LintFinding>) {
         // Check unused options
-        if let Some(options) = &self._pkg.options {
-            let yaml_path = self._package_dir.join("package.yaml");
+        if let Some(options) = &self.pkg.options {
+            let yaml_path = self.package_dir.join("package.yaml");
             let line_numbers = super::find_option_line_numbers(&yaml_path);
             let yaml_inline_disables = std::fs::read_to_string(&yaml_path)
                 .map(|src| parse_inline_disables(&src))
@@ -219,7 +230,7 @@ impl<'a> HbsChecker<'a> {
                         level,
                         file: PathBuf::from("package.yaml"),
                         line,
-                        message: format!("Option `{}` defined but never used", key),
+                        message: format!("Option `{key}` defined but never used"),
                     });
                 }
 
@@ -240,16 +251,18 @@ impl<'a> HbsChecker<'a> {
                             level,
                             file: PathBuf::from("package.yaml"),
                             line,
-                            message: format!("Option `{}` defined but never used", leaf_path),
+                            message: format!("Option `{leaf_path}` defined but never used"),
                         });
                     }
                 }
             }
         }
+    }
 
+    fn check_unused_images(&self, findings: &mut Vec<LintFinding>) {
         // Check unused images
-        if let Some(images) = &self._pkg.images {
-            let yaml_path = self._package_dir.join("package.yaml");
+        if let Some(images) = &self.pkg.images {
+            let yaml_path = self.package_dir.join("package.yaml");
             let line_numbers = super::find_section_key_line_numbers(&yaml_path, "images");
             let yaml_inline_disables = std::fs::read_to_string(&yaml_path)
                 .map(|src| parse_inline_disables(&src))
@@ -273,15 +286,17 @@ impl<'a> HbsChecker<'a> {
                         level,
                         file: PathBuf::from("package.yaml"),
                         line,
-                        message: format!("Image `{}` defined but never used", key),
+                        message: format!("Image `{key}` defined but never used"),
                     });
                 }
             }
         }
+    }
 
+    fn check_unused_resources(&self, findings: &mut Vec<LintFinding>) {
         // Check unused resources
-        if let Some(resources) = &self._pkg.resources {
-            let yaml_path = self._package_dir.join("package.yaml");
+        if let Some(resources) = &self.pkg.resources {
+            let yaml_path = self.package_dir.join("package.yaml");
             let line_numbers = super::find_section_key_line_numbers(&yaml_path, "resources");
             let yaml_inline_disables = std::fs::read_to_string(&yaml_path)
                 .map(|src| parse_inline_disables(&src))
@@ -305,13 +320,11 @@ impl<'a> HbsChecker<'a> {
                         level,
                         file: PathBuf::from("package.yaml"),
                         line,
-                        message: format!("Resource `{}` defined but never used", key),
+                        message: format!("Resource `{key}` defined but never used"),
                     });
                 }
             }
         }
-
-        findings
     }
 
     pub fn scan_rhai_for_values(&mut self, source: &str) {
@@ -373,7 +386,7 @@ impl<'a> HbsChecker<'a> {
 fn collect_option_leaf_paths(prefix: &str, schema: &serde_json::Value, paths: &mut Vec<String>) {
     if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
         for (key, sub_schema) in props {
-            let child_path = format!("{}.{}", prefix, key);
+            let child_path = format!("{prefix}.{key}");
             if sub_schema.get("properties").is_some() {
                 collect_option_leaf_paths(&child_path, sub_schema, paths);
             } else {
@@ -482,18 +495,7 @@ impl<'a> HelperWalker<'a> {
                     self.check_root_var(param, line);
                 }
             }
-            TemplateElement::Expression(e) => {
-                self.check_helper(&e.name, &e.params, line);
-                self.check_values_path(&e.name, line);
-                for param in &e.params {
-                    self.check_values_path(param, line);
-                    self.check_root_var(param, line);
-                }
-                self.check_image_resource_helper(&e.name, &e.params, line);
-                self.check_path(&e.name, line);
-                self.check_root_var(&e.name, line);
-            }
-            TemplateElement::HtmlExpression(e) => {
+            TemplateElement::Expression(e) | TemplateElement::HtmlExpression(e) => {
                 self.check_helper(&e.name, &e.params, line);
                 self.check_values_path(&e.name, line);
                 for param in &e.params {
@@ -507,10 +509,7 @@ impl<'a> HelperWalker<'a> {
             TemplateElement::DecoratorBlock(d) => {
                 self.check_helper(&d.name, &d.params, line);
             }
-            TemplateElement::PartialExpression(d) => {
-                self.check_partial(&d.name, line);
-            }
-            TemplateElement::PartialBlock(d) => {
+            TemplateElement::PartialExpression(d) | TemplateElement::PartialBlock(d) => {
                 self.check_partial(&d.name, line);
             }
             _ => {}
@@ -528,7 +527,7 @@ impl<'a> HelperWalker<'a> {
                     "hbs/unknown-helper",
                     &self.file,
                     LintLevel::Error,
-                    self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                    self.inline_disables.get(&0).unwrap_or(&NO_INLINE_DISABLES),
                 )
             {
                 self.findings.push(LintFinding {
@@ -536,7 +535,7 @@ impl<'a> HelperWalker<'a> {
                     level,
                     file: self.file.clone(),
                     line,
-                    message: format!("Helper `{}` not found", helper_name),
+                    message: format!("Helper `{helper_name}` not found"),
                 });
             }
         }
@@ -553,16 +552,17 @@ impl<'a> HelperWalker<'a> {
         if let Parameter::Path(path) = param
             && let HbsPath::Relative((segs, _)) = path
             && !segs.is_empty()
-            && let PathSeg::Named(first) = &segs[0]
+            && let Some(PathSeg::Named(first)) = segs.first()
             && first == "values"
             && segs.len() >= 2
-            && let PathSeg::Named(key) = &segs[1]
+            && let Some(PathSeg::Named(key)) = segs.get(1)
         {
             self.used_values.insert(key.clone());
 
             // Track the full dot-separated path for leaf detection
-            let path_parts: Vec<&str> = segs[1..]
+            let path_parts: Vec<&str> = segs
                 .iter()
+                .skip(1)
                 .filter_map(|s| {
                     if let PathSeg::Named(n) = s {
                         Some(n.as_str())
@@ -581,7 +581,7 @@ impl<'a> HelperWalker<'a> {
                     "hbs/unknown-value",
                     &self.file,
                     LintLevel::Error,
-                    self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                    self.inline_disables.get(&0).unwrap_or(&NO_INLINE_DISABLES),
                 )
             {
                 self.findings.push(LintFinding {
@@ -589,7 +589,7 @@ impl<'a> HelperWalker<'a> {
                     level,
                     file: self.file.clone(),
                     line,
-                    message: format!("Unknown value key `{}`", key),
+                    message: format!("Unknown value key `{key}`"),
                 });
             }
         }
@@ -607,7 +607,7 @@ impl<'a> HelperWalker<'a> {
 
             if let Some((rule_name, field_name)) = rule
                 && params.len() > 1
-                && let Parameter::Literal(json_val) = &params[1]
+                && let Some(Parameter::Literal(json_val)) = params.get(1)
                 && let Some(key) = json_val.as_str()
             {
                 let has_key = if field_name == "images" {
@@ -636,7 +636,7 @@ impl<'a> HelperWalker<'a> {
                         rule_name,
                         &self.file,
                         LintLevel::Error,
-                        self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                        self.inline_disables.get(&0).unwrap_or(&NO_INLINE_DISABLES),
                     )
                 {
                     self.findings.push(LintFinding {
@@ -655,14 +655,14 @@ impl<'a> HelperWalker<'a> {
         if let Parameter::Path(path) = param
             && let HbsPath::Relative((segs, _)) = path
             && !segs.is_empty()
-            && let PathSeg::Named(first) = &segs[0]
+            && let Some(PathSeg::Named(first)) = segs.first()
             && first == "tenant"
             && self.pkg.metadata.usage == common::vynilpackage::VynilPackageType::System
             && let Some(level) = self.config.resolve_level(
                 "hbs/wrong-package-type",
                 &self.file,
                 LintLevel::Warn,
-                self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                self.inline_disables.get(&0).unwrap_or(&NO_INLINE_DISABLES),
             )
         {
             self.findings.push(LintFinding {
@@ -679,20 +679,20 @@ impl<'a> HelperWalker<'a> {
         if let Parameter::Path(path) = param
             && let HbsPath::Relative((segs, _)) = path
             && segs.len() >= 2
-            && let PathSeg::Named(first) = &segs[0]
+            && let Some(PathSeg::Named(first)) = segs.first()
             && !first.starts_with('@')
             && !KNOWN_HBS_ROOTS.contains(&first.as_str())
         {
             // Specific check: `context.<known_root>` is a common mistake — the `context.` prefix
             // used in Rhai scripts is not available in HBS templates.
             if first == "context"
-                && let PathSeg::Named(second) = &segs[1]
+                && let Some(PathSeg::Named(second)) = segs.get(1)
                 && KNOWN_HBS_ROOTS.contains(&second.as_str())
                 && let Some(level) = self.config.resolve_level(
                     "hbs/context-prefix",
                     &self.file,
                     LintLevel::Error,
-                    self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                    self.inline_disables.get(&0).unwrap_or(&NO_INLINE_DISABLES),
                 )
             {
                 self.findings.push(LintFinding {
@@ -711,7 +711,7 @@ impl<'a> HelperWalker<'a> {
                 "hbs/unknown-root-variable",
                 &self.file,
                 LintLevel::Warn,
-                self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                self.inline_disables.get(&0).unwrap_or(&NO_INLINE_DISABLES),
             ) {
                 self.findings.push(LintFinding {
                     rule: "hbs/unknown-root-variable".to_string(),
@@ -742,7 +742,7 @@ impl<'a> HelperWalker<'a> {
                 "hbs/unknown-partial",
                 &self.file,
                 LintLevel::Error,
-                self.inline_disables.get(&0).unwrap_or(&HashSet::new()),
+                self.inline_disables.get(&0).unwrap_or(&NO_INLINE_DISABLES),
             )
         {
             self.findings.push(LintFinding {
@@ -750,7 +750,7 @@ impl<'a> HelperWalker<'a> {
                 level,
                 file: self.file.clone(),
                 line,
-                message: format!("Partial `{}` not found", partial_name),
+                message: format!("Partial `{partial_name}` not found"),
             });
         }
     }
@@ -770,19 +770,27 @@ mod tests {
             let pkg = Box::leak(Box::new(create_dummy_pkg()));
             let config = Box::leak(Box::new(LintConfig::default()));
             let checker = HbsChecker {
-                _package_dir: Path::new("."),
-                _pkg: pkg,
+                package_dir: Path::new("."),
+                pkg,
                 config,
-                defined_helpers: defined_helpers.iter().map(|s| s.to_string()).collect(),
+                defined_helpers: defined_helpers
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
                 used_helpers: HashSet::new(),
-                defined_partials: defined_partials.iter().map(|s| s.to_string()).collect(),
+                defined_partials: defined_partials
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
                 used_partials: HashSet::new(),
                 used_values: HashSet::new(),
                 used_value_paths: HashSet::new(),
                 used_images: HashSet::new(),
                 used_resources: HashSet::new(),
             };
-            TestChecker { checker }
+            drop(defined_helpers);
+            drop(defined_partials);
+            Self { checker }
         }
     }
 
@@ -903,8 +911,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_pkg_with_options()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -927,8 +935,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_pkg_with_options()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -951,8 +959,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_dummy_pkg()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -975,8 +983,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_pkg_with_images()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -999,8 +1007,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_pkg_with_resources()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -1125,8 +1133,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_system_pkg()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -1150,8 +1158,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_pkg_with_options()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -1180,8 +1188,8 @@ mod tests {
         let pkg = Box::leak(Box::new(create_pkg_with_options()));
         let config = Box::leak(Box::new(LintConfig::default()));
         let mut checker = HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),
@@ -1361,8 +1369,8 @@ mod tests {
     fn make_checker(pkg: &'static VynilPackageSource) -> HbsChecker<'static> {
         let config = Box::leak(Box::new(LintConfig::default()));
         HbsChecker {
-            _package_dir: Path::new("."),
-            _pkg: pkg,
+            package_dir: Path::new("."),
+            pkg,
             config,
             defined_helpers: HashSet::new(),
             used_helpers: HashSet::new(),

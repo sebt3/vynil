@@ -1,7 +1,7 @@
 use crate::RhaiRes;
 use rhai::{Dynamic, Engine, Map, serde::to_dynamic};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 // Re-export for backward compatibility (agent tests import from common::k8smock)
 pub use vynil_core::oci_mock::oci_mock_rhai_register;
@@ -21,25 +21,23 @@ pub struct K8sInstanceMock {
 
 impl K8sInstanceMock {
     fn get_sub(&self, key: &str) -> RhaiRes<Dynamic> {
-        if self.obj.is_map() {
-            let map = self.obj.as_map_ref().unwrap();
-            if map.contains_key(key) {
-                return Ok(map[key].clone());
-            }
-        }
-        Ok(Dynamic::UNIT)
+        let map = self
+            .obj
+            .as_map_ref()
+            .map_err(|e| -> Box<rhai::EvalAltResult> { format!("mock object is not a map: {e}").into() })?;
+        Ok(map.get(key).cloned().unwrap_or(Dynamic::UNIT))
     }
 
     fn set_status_field(&mut self, key: &str, val: Dynamic) {
-        if !self.obj.is_map() {
-            return;
-        }
-        let mut top: Map = self.obj.as_map_ref().unwrap().clone();
+        let mut top: Map = match self.obj.as_map_ref() {
+            Ok(map) => map.clone(),
+            Err(_) => return,
+        };
         let status = top
             .entry("status".into())
             .or_insert_with(|| Dynamic::from_map(Map::new()));
-        if status.is_map() {
-            let mut status_map: Map = status.as_map_ref().unwrap().clone();
+        let status_map: Option<Map> = status.as_map_ref().ok().map(|m| m.clone());
+        if let Some(mut status_map) = status_map {
             status_map.insert(key.into(), val);
             *status = Dynamic::from_map(status_map);
         }
@@ -48,37 +46,34 @@ impl K8sInstanceMock {
     }
 
     fn persist(&self) {
-        if !self.obj.is_map() {
+        let Ok(map) = self.obj.as_map_ref() else {
             return;
-        }
-        let map = self.obj.as_map_ref().unwrap();
-        let kind = match map.get("kind").and_then(|k| k.clone().into_string().ok()) {
-            Some(k) => k,
-            None => return,
         };
-        let meta: Map = match map.get("metadata") {
-            Some(m) if m.is_map() => m.as_map_ref().unwrap().clone(),
-            _ => return,
+        let Some(kind) = map.get("kind").and_then(|k| k.clone().into_string().ok()) else {
+            return;
         };
-        let name = match meta.get("name").and_then(|n| n.clone().into_string().ok()) {
-            Some(n) => n,
-            None => return,
+        let meta: Option<Map> = map
+            .get("metadata")
+            .and_then(|m| m.as_map_ref().ok().map(|g| g.clone()));
+        let Some(meta) = meta else {
+            return;
         };
-        let ns = match meta.get("namespace").and_then(|n| n.clone().into_string().ok()) {
-            Some(n) => n,
-            None => return,
+        let Some(name) = meta.get("name").and_then(|n| n.clone().into_string().ok()) else {
+            return;
         };
-        let mut mocks = self.mocks.lock().unwrap();
+        let Some(ns) = meta.get("namespace").and_then(|n| n.clone().into_string().ok()) else {
+            return;
+        };
+        let mut mocks = self.mocks.lock().unwrap_or_else(PoisonError::into_inner);
         for entry in mocks.iter_mut() {
-            if !entry.is_map() {
+            let entry_map: Option<Map> = entry.as_map_ref().ok().map(|g| g.clone());
+            let Some(entry_map) = entry_map else {
                 continue;
-            }
-            let entry_map: Map = entry.as_map_ref().unwrap().clone();
-            let entry_kind = entry_map.get("kind").and_then(|k| k.clone().into_string().ok());
-            let entry_meta: Option<Map> = match entry_map.get("metadata") {
-                Some(m) if m.is_map() => Some(m.as_map_ref().unwrap().clone()),
-                _ => None,
             };
+            let entry_kind = entry_map.get("kind").and_then(|k| k.clone().into_string().ok());
+            let entry_meta: Option<Map> = entry_map
+                .get("metadata")
+                .and_then(|m| m.as_map_ref().ok().map(|g| g.clone()));
             let entry_name = entry_meta
                 .as_ref()
                 .and_then(|m| m.get("name"))
@@ -99,22 +94,42 @@ impl K8sInstanceMock {
 
     // ── Getters ─────────────────────────────────────────────────────────
 
+    /// Returns the `metadata` section of the mocked instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
         self.get_sub("metadata")
     }
 
+    /// Returns the `spec` section of the mocked instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_spec(&mut self) -> RhaiRes<Dynamic> {
         self.get_sub("spec")
     }
 
+    /// Returns the `status` section of the mocked instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_status(&mut self) -> RhaiRes<Dynamic> {
         self.get_sub("status")
     }
 
-    pub fn get_options_digest(&mut self) -> String {
+    pub const fn get_options_digest(&mut self) -> String {
         String::new()
     }
 
+    /// Returns the mocked tfstate stored in `status.tfstate`, or an empty string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_tfstate(&mut self) -> RhaiRes<String> {
         let status = self.get_sub("status")?;
         if let Ok(m) = status.as_map_ref()
@@ -126,6 +141,11 @@ impl K8sInstanceMock {
         Ok(String::new())
     }
 
+    /// Returns the mocked rhaistate stored in `status.rhaistate`, or an empty string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_rhaistate(&mut self) -> RhaiRes<String> {
         let status = self.get_sub("status")?;
         if let Ok(m) = status.as_map_ref()
@@ -139,124 +159,259 @@ impl K8sInstanceMock {
 
     // ── Common status setters ───────────────────────────────────────────
 
+    /// Stores `tag` in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_ready(&mut self, tag: String) -> RhaiRes<Self> {
         self.set_status_field("tag", Dynamic::from(tag));
         Ok(self.clone())
     }
 
+    /// Records the agent start in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_agent_started(&mut self) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Records a missing `JukeBox` in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_missing_box(&mut self, _jukebox: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Records a missing package in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_missing_package(&mut self, _cat: String, _pkg: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Records a missing requirement in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_missing_requirement(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Records a missing init version in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_missing_init_version(&mut self, _version: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores `tfstate` in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_tfstate(&mut self, tfstate: String) -> RhaiRes<Self> {
         self.set_status_field("tfstate", Dynamic::from(tfstate));
         Ok(self.clone())
     }
 
+    /// Records a tofu failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_tofu_failed(&mut self, _tfstate: String, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores `rhaistate` in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_rhaistate(&mut self, rhaistate: String) -> RhaiRes<Self> {
         self.set_status_field("rhaistate", Dynamic::from(rhaistate));
         Ok(self.clone())
     }
 
+    /// Records a rhai failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_rhai_failed(&mut self, _rhaistate: String, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
     // ── Children status setters ─────────────────────────────────────────
 
+    /// Stores the applied CRDs in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_crds(&mut self, list: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("crds", list);
         Ok(self.clone())
     }
 
+    /// Records a CRD failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_crd_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores the applied befores in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_befores(&mut self, list: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("befores", list);
         Ok(self.clone())
     }
 
+    /// Records a before failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_before_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores the applied vitals in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_vitals(&mut self, list: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("vitals", list);
         Ok(self.clone())
     }
 
+    /// Records a vital failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_vital_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores the applied scalables in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_scalables(&mut self, list: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("scalables", list);
         Ok(self.clone())
     }
 
+    /// Records a scalable failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_scalable_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores the applied others in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_others(&mut self, list: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("others", list);
         Ok(self.clone())
     }
 
+    /// Records an other failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_other_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores the applied posts in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_posts(&mut self, list: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("posts", list);
         Ok(self.clone())
     }
 
+    /// Records a post failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_post_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Stores the applied systems in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_systems(&mut self, list: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("systems", list);
         Ok(self.clone())
     }
 
+    /// Records a system failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_system_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Records an init failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_init_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
+    /// Records a schedule backup failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_schedule_backup_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 
     // ── Services ────────────────────────────────────────────────────────
 
+    /// Stores the published services in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_services(&mut self, services: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("services", services);
         Ok(self.clone())
@@ -284,36 +439,54 @@ impl K8sInstanceMock {
 
     // ── Tenant-specific ─────────────────────────────────────────────────
 
+    /// Returns the tenant label of the mocked namespace, falling back to the
+    /// instance namespace when no label is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_tenant_name(&mut self) -> RhaiRes<String> {
         if let Ok(meta) = self.get_sub("metadata")
             && let Ok(m) = meta.as_map_ref()
             && let Some(ns) = m.get("namespace")
             && let Ok(s) = ns.clone().into_string()
         {
-            for m in self.mocks.lock().unwrap().clone() {
-                if !m.is_map() {
+            let mocks: Vec<Dynamic> = {
+                let guard = self.mocks.lock().unwrap_or_else(PoisonError::into_inner);
+                guard.clone()
+            };
+            for m in mocks {
+                let map: Option<Map> = m.as_map_ref().ok().map(|g| g.clone());
+                let Some(map) = map else {
+                    continue;
+                };
+                let kind_is_namespace = map
+                    .get("kind")
+                    .and_then(|k| k.clone().into_string().ok())
+                    .is_some_and(|k| k == "Namespace");
+                if !kind_is_namespace {
                     continue;
                 }
-                let map = m.as_map_ref().unwrap();
-                if !map.contains_key("kind") || !map["kind"].is_string() {
+                let meta: Option<Map> = map
+                    .get("metadata")
+                    .and_then(|v| v.as_map_ref().ok().map(|g| g.clone()));
+                let Some(meta) = meta else {
+                    continue;
+                };
+                let name_match = meta
+                    .get("name")
+                    .and_then(|n| n.clone().into_string().ok())
+                    .is_some_and(|n| n == s);
+                if !name_match {
                     continue;
                 }
-                if map["kind"].clone().into_string().unwrap() != "Namespace" {
-                    continue;
-                }
-                if !map.contains_key("metadata") || !map["metadata"].is_map() {
-                    continue;
-                }
-                let meta = map["metadata"].as_map_ref().unwrap();
-                let name_match = meta.contains_key("name")
-                    && meta["name"].is_string()
-                    && meta["name"].clone().into_string().unwrap() == s;
-                if name_match && meta.contains_key("labels") && meta["labels"].is_map() {
-                    let labels = meta["labels"].as_map_ref().unwrap();
+                let labels: Option<Map> = meta
+                    .get("labels")
+                    .and_then(|l| l.as_map_ref().ok().map(|g| g.clone()));
+                if let Some(labels) = labels {
                     let label_key = std::env::var("TENANT_LABEL")
                         .unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
-                    if labels.clone().keys().any(|k| k == &label_key) {
-                        let tenant = labels[label_key.as_str()].clone();
+                    if let Some(tenant) = labels.get(label_key.as_str()) {
                         return Ok(tenant.to_string());
                     }
                 }
@@ -323,78 +496,87 @@ impl K8sInstanceMock {
         Ok(String::new())
     }
 
+    /// Returns the namespaces of the mocked tenant.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_tenant_namespaces(&mut self) -> RhaiRes<Dynamic> {
         let ns = self.get_tenant_name()?;
         Ok(Dynamic::from_array(vec![Dynamic::from(ns)]))
     }
 
+    /// Returns the service names of the mocked tenant (always empty in the mock).
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn get_tenant_services_names(&mut self) -> RhaiRes<Dynamic> {
         Ok(Dynamic::from_array(vec![]))
     }
 }
 
+fn lock_clone(mocks: &Arc<Mutex<Vec<Dynamic>>>) -> Vec<Dynamic> {
+    let guard = mocks.lock().unwrap_or_else(PoisonError::into_inner);
+    guard.clone()
+}
+
+fn matches_kind_and_namespace(item: &Dynamic, kind: &str, namespace: &str) -> bool {
+    let map: Option<Map> = item.as_map_ref().ok().map(|g| g.clone());
+    let Some(map) = map else {
+        return false;
+    };
+    let kind_match = map
+        .get("kind")
+        .and_then(|k| k.clone().into_string().ok())
+        .is_some_and(|k| k == kind);
+    if !kind_match {
+        return false;
+    }
+    let meta: Option<Map> = map
+        .get("metadata")
+        .and_then(|v| v.as_map_ref().ok().map(|g| g.clone()));
+    let Some(meta) = meta else {
+        return false;
+    };
+    meta.get("namespace")
+        .and_then(|n| n.clone().into_string().ok())
+        .is_some_and(|n| n == namespace)
+}
+
 fn find_instance_mock(
-    mocks: Arc<Mutex<Vec<Dynamic>>>,
+    mocks: &Arc<Mutex<Vec<Dynamic>>>,
     kind: &str,
     namespace: &str,
     name: &str,
 ) -> RhaiRes<K8sInstanceMock> {
-    for m in mocks.lock().unwrap().clone() {
-        if !m.is_map() {
+    for m in lock_clone(mocks) {
+        if !matches_kind_and_namespace(&m, kind, namespace) {
             continue;
         }
-        let map = m.as_map_ref().unwrap();
-        if !map.contains_key("kind") || !map["kind"].is_string() {
+        let map: Option<Map> = m.as_map_ref().ok().map(|g| g.clone());
+        let Some(map) = map else {
             continue;
-        }
-        if map["kind"].clone().into_string().unwrap() != kind {
-            continue;
-        }
-        if !map.contains_key("metadata") || !map["metadata"].is_map() {
-            continue;
-        }
-        let meta = map["metadata"].as_map_ref().unwrap();
-        let name_match = meta.contains_key("name")
-            && meta["name"].is_string()
-            && meta["name"].clone().into_string().unwrap() == name;
-        let ns_match = meta.contains_key("namespace")
-            && meta["namespace"].is_string()
-            && meta["namespace"].clone().into_string().unwrap() == namespace;
-        if name_match && ns_match {
+        };
+        let name_match = map
+            .get("metadata")
+            .and_then(|v| v.as_map_ref().ok().map(|g| g.clone()))
+            .and_then(|meta| meta.get("name").and_then(|n| n.clone().into_string().ok()))
+            .is_some_and(|n| n == name);
+        if name_match {
             return Ok(K8sInstanceMock {
-                obj: m.clone(),
-                mocks: mocks.clone(),
+                obj: m,
+                mocks: Arc::clone(mocks),
             });
         }
     }
     Err(format!("Failed to find {kind} {name} in namespace {namespace} in the Mock database").into())
 }
 
-fn list_instance_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>, kind: &str, namespace: &str) -> RhaiRes<Dynamic> {
-    let items: Vec<K8sInstanceMockObj> = mocks
-        .lock()
-        .unwrap()
-        .clone()
+fn list_instance_mocks(mocks: &Arc<Mutex<Vec<Dynamic>>>, kind: &str, namespace: &str) -> RhaiRes<Dynamic> {
+    let items: Vec<K8sInstanceMockObj> = lock_clone(mocks)
         .iter()
-        .filter(|m| {
-            if !m.is_map() {
-                return false;
-            }
-            let map = m.as_map_ref().unwrap();
-            if !map.contains_key("kind") || !map["kind"].is_string() {
-                return false;
-            }
-            if map["kind"].clone().into_string().unwrap() != kind {
-                return false;
-            }
-            if !map.contains_key("metadata") || !map["metadata"].is_map() {
-                return false;
-            }
-            let meta = map["metadata"].as_map_ref().unwrap();
-            meta.contains_key("namespace")
-                && meta["namespace"].is_string()
-                && meta["namespace"].clone().into_string().unwrap() == namespace
-        })
+        .filter(|m| matches_kind_and_namespace(m, kind, namespace))
         .map(|m| K8sInstanceMockObj { obj: m.clone() })
         .collect();
     to_dynamic(serde_json::json!({"items": items}))
@@ -409,99 +591,120 @@ pub struct K8sJukeBoxMock {
 
 impl K8sJukeBoxMock {
     fn get_sub(&self, key: &str) -> RhaiRes<Dynamic> {
-        if self.obj.is_map() {
-            let map = self.obj.as_map_ref().unwrap();
-            if map.contains_key(key) {
-                return Ok(map[key].clone());
-            }
-        }
-        Ok(Dynamic::UNIT)
+        let map = self
+            .obj
+            .as_map_ref()
+            .map_err(|e| -> Box<rhai::EvalAltResult> { format!("mock object is not a map: {e}").into() })?;
+        Ok(map.get(key).cloned().unwrap_or(Dynamic::UNIT))
     }
 
     fn set_status_field(&mut self, key: &str, val: Dynamic) {
-        if !self.obj.is_map() {
-            return;
-        }
-        let mut top: Map = self.obj.as_map_ref().unwrap().clone();
+        let mut top: Map = match self.obj.as_map_ref() {
+            Ok(map) => map.clone(),
+            Err(_) => return,
+        };
         let status = top
             .entry("status".into())
             .or_insert_with(|| Dynamic::from_map(Map::new()));
-        if status.is_map() {
-            let mut status_map: Map = status.as_map_ref().unwrap().clone();
+        let status_map: Option<Map> = status.as_map_ref().ok().map(|m| m.clone());
+        if let Some(mut status_map) = status_map {
             status_map.insert(key.into(), val);
             *status = Dynamic::from_map(status_map);
         }
         self.obj = Dynamic::from_map(top);
     }
 
+    /// Returns the `metadata` section of the mocked `JukeBox`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_metadata(&mut self) -> RhaiRes<Dynamic> {
         self.get_sub("metadata")
     }
 
+    /// Returns the `spec` section of the mocked `JukeBox`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_spec(&mut self) -> RhaiRes<Dynamic> {
         self.get_sub("spec")
     }
 
+    /// Returns the `status` section of the mocked `JukeBox`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the mocked object is not a map.
     pub fn get_status(&mut self) -> RhaiRes<Dynamic> {
         self.get_sub("status")
     }
 
+    /// Stores the scanned packages in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_updated(&mut self, packages: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("packages", packages);
         Ok(self.clone())
     }
 
+    /// Stores the merged packages in the mocked `status`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_packages_merge(&mut self, _filter: String, packages: Dynamic) -> RhaiRes<Self> {
         self.set_status_field("packages", packages);
         Ok(self.clone())
     }
 
+    /// Records a scan failure in the mock.
+    ///
+    /// # Errors
+    ///
+    /// Never fails; the mock always succeeds.
     pub fn set_status_failed(&mut self, _reason: String) -> RhaiRes<Self> {
         Ok(self.clone())
     }
 }
 
-fn find_jukebox_mock(mocks: Arc<Mutex<Vec<Dynamic>>>, name: &str) -> RhaiRes<K8sJukeBoxMock> {
-    for m in mocks.lock().unwrap().clone() {
-        if !m.is_map() {
+fn find_jukebox_mock(mocks: &Arc<Mutex<Vec<Dynamic>>>, name: &str) -> RhaiRes<K8sJukeBoxMock> {
+    for m in lock_clone(mocks) {
+        let map: Option<Map> = m.as_map_ref().ok().map(|g| g.clone());
+        let Some(map) = map else {
+            continue;
+        };
+        let kind_is_jukebox = map
+            .get("kind")
+            .and_then(|k| k.clone().into_string().ok())
+            .is_some_and(|k| k == "JukeBox");
+        if !kind_is_jukebox {
             continue;
         }
-        let map = m.as_map_ref().unwrap();
-        if !map.contains_key("kind") || !map["kind"].is_string() {
-            continue;
-        }
-        if map["kind"].clone().into_string().unwrap() != "JukeBox" {
-            continue;
-        }
-        if !map.contains_key("metadata") || !map["metadata"].is_map() {
-            continue;
-        }
-        let meta = map["metadata"].as_map_ref().unwrap();
-        if meta.contains_key("name")
-            && meta["name"].is_string()
-            && meta["name"].clone().into_string().unwrap() == name
-        {
-            return Ok(K8sJukeBoxMock { obj: m.clone() });
+        let name_match = map
+            .get("metadata")
+            .and_then(|v| v.as_map_ref().ok().map(|g| g.clone()))
+            .and_then(|meta| meta.get("name").and_then(|n| n.clone().into_string().ok()))
+            .is_some_and(|n| n == name);
+        if name_match {
+            return Ok(K8sJukeBoxMock { obj: m });
         }
     }
     Err(format!("Failed to find JukeBox {name} in the Mock database").into())
 }
 
-fn list_jukebox_mocks(mocks: Arc<Mutex<Vec<Dynamic>>>) -> RhaiRes<Dynamic> {
-    let items: Vec<K8sJukeBoxMock> = mocks
-        .lock()
-        .unwrap()
-        .clone()
+fn list_jukebox_mocks(mocks: &Arc<Mutex<Vec<Dynamic>>>) -> RhaiRes<Dynamic> {
+    let items: Vec<K8sJukeBoxMock> = lock_clone(mocks)
         .iter()
         .filter(|m| {
-            if !m.is_map() {
-                return false;
-            }
-            let map = m.as_map_ref().unwrap();
-            if !map.contains_key("kind") || !map["kind"].is_string() {
-                return false;
-            }
-            map["kind"].clone().into_string().unwrap() == "JukeBox"
+            m.as_map_ref().ok().is_some_and(|map| {
+                map.get("kind")
+                    .and_then(|k| k.clone().into_string().ok())
+                    .is_some_and(|k| k == "JukeBox")
+            })
         })
         .map(|m| K8sJukeBoxMock { obj: m.clone() })
         .collect();
@@ -571,21 +774,18 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
     let arced_mocks = Arc::new(Mutex::new(mocks));
 
     // Register generic K8s mocks from core
-    vynil_core::k8s_mock::k8s_mock_rhai_register(engine, arced_mocks.clone(), created.clone());
+    vynil_core::k8s_mock::k8s_mock_rhai_register(engine, arced_mocks.clone(), created);
 
     // ── Instance mocks ──────────────────────────────────────────────────
 
     // ServiceInstance
     let inst_mocks = arced_mocks.clone();
     let get_svc = move |ns: String, name: String| -> RhaiRes<K8sInstanceMock> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
-        find_instance_mock(mock, "ServiceInstance", &ns, &name)
+        find_instance_mock(&inst_mocks, "ServiceInstance", &ns, &name)
     };
     let inst_mocks = arced_mocks.clone();
-    let list_svc = move |ns: String| -> RhaiRes<Dynamic> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
-        list_instance_mocks(mock, "ServiceInstance", &ns)
-    };
+    let list_svc =
+        move |ns: String| -> RhaiRes<Dynamic> { list_instance_mocks(&inst_mocks, "ServiceInstance", &ns) };
     engine
         .register_type_with_name::<K8sInstanceMock>("ServiceInstance")
         .register_fn("get_service_instance", get_svc)
@@ -599,14 +799,11 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
     // SystemInstance
     let inst_mocks = arced_mocks.clone();
     let get_sys = move |ns: String, name: String| -> RhaiRes<K8sInstanceMock> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
-        find_instance_mock(mock, "SystemInstance", &ns, &name)
+        find_instance_mock(&inst_mocks, "SystemInstance", &ns, &name)
     };
     let inst_mocks = arced_mocks.clone();
-    let list_sys = move |ns: String| -> RhaiRes<Dynamic> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
-        list_instance_mocks(mock, "SystemInstance", &ns)
-    };
+    let list_sys =
+        move |ns: String| -> RhaiRes<Dynamic> { list_instance_mocks(&inst_mocks, "SystemInstance", &ns) };
     engine
         .register_type_with_name::<K8sInstanceMock>("SystemInstance")
         .register_fn("get_system_instance", get_sys)
@@ -623,14 +820,11 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
     // TenantInstance
     let inst_mocks = arced_mocks.clone();
     let get_tnt = move |ns: String, name: String| -> RhaiRes<K8sInstanceMock> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
-        find_instance_mock(mock, "TenantInstance", &ns, &name)
+        find_instance_mock(&inst_mocks, "TenantInstance", &ns, &name)
     };
     let inst_mocks = arced_mocks.clone();
-    let list_tnt = move |ns: String| -> RhaiRes<Dynamic> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = inst_mocks.clone();
-        list_instance_mocks(mock, "TenantInstance", &ns)
-    };
+    let list_tnt =
+        move |ns: String| -> RhaiRes<Dynamic> { list_instance_mocks(&inst_mocks, "TenantInstance", &ns) };
     engine
         .register_type_with_name::<K8sInstanceMock>("TenantInstance")
         .register_fn("get_tenant_instance", get_tnt)
@@ -646,15 +840,9 @@ pub fn k8smock_rhai_register(engine: &mut Engine, mocks: Vec<Dynamic>, created: 
 
     // JukeBox (cluster-scoped)
     let jb_mocks = arced_mocks.clone();
-    let get_jb = move |name: String| -> RhaiRes<K8sJukeBoxMock> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = jb_mocks.clone();
-        find_jukebox_mock(mock, &name)
-    };
+    let get_jb = move |name: String| -> RhaiRes<K8sJukeBoxMock> { find_jukebox_mock(&jb_mocks, &name) };
     let jb_mocks = arced_mocks;
-    let list_jb = move || -> RhaiRes<Dynamic> {
-        let mock: Arc<Mutex<Vec<Dynamic>>> = jb_mocks.clone();
-        list_jukebox_mocks(mock)
-    };
+    let list_jb = move || -> RhaiRes<Dynamic> { list_jukebox_mocks(&jb_mocks) };
     engine
         .register_type_with_name::<K8sJukeBoxMock>("JukeBox")
         .register_fn("get_jukebox", get_jb)

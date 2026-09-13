@@ -9,11 +9,11 @@ use rhai::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// InitFrom contains the informations for the backup to use to initialize the installation
+/// `InitFrom` contains the informations for the backup to use to initialize the installation
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InitFrom {
-    /// Name of the secret containing: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BASE_REPO_URL and RESTIC_PASSWORD. Default to "backup-settings"
+    /// Name of the secret containing: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BASE_REPO_URL` and `RESTIC_PASSWORD`. Default to "backup-settings"
     pub secret_name: Option<String>,
     /// Path within the bucket containing the backup to use for recovery. Default to "<namespace-name>/<app-slug>"
     pub sub_path: Option<String>,
@@ -83,11 +83,11 @@ pub enum ConditionsStatus {
     False,
 }
 
-/// ApplicationCondition contains details about an application condition, which is usually an error or warning
+/// `ApplicationCondition` contains details about an application condition, which is usually an error or warning
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplicationCondition {
-    /// LastTransitionTime is the time the condition was last observed
+    /// `LastTransitionTime` is the time the condition was last observed
     pub last_transition_time: Option<DateTime<Utc>>,
     /// Message contains human-readable message indicating details about condition
     pub message: String,
@@ -106,7 +106,7 @@ impl_condition_children!();
 /// The status object of `TenantInstance`
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct TenantInstanceStatus {
-    /// TenantInstance Conditions
+    /// `TenantInstance` Conditions
     pub conditions: Vec<ApplicationCondition>,
     /// Current tag
     pub tag: Option<String>,
@@ -131,6 +131,7 @@ pub struct TenantInstanceStatus {
 }
 
 impl TenantInstance {
+    #[must_use]
     pub fn have_child(&self) -> bool {
         if let Some(status) = self.status.clone() {
             if status.rhaistate.is_some() {
@@ -159,7 +160,7 @@ impl TenantInstance {
             {
                 return true;
             }
-            if let Some(child) = status.posts.clone()
+            if let Some(child) = status.posts
                 && !child.is_empty()
             {
                 return true;
@@ -168,46 +169,68 @@ impl TenantInstance {
         false
     }
 
+    /// Returns the tenant name, read from the namespace tenant label when present,
+    /// or from the instance namespace otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Other` when the instance has no namespace, and `Error::KubeError`
+    /// when the namespace metadata cannot be read.
     pub async fn get_tenant_name(&self) -> Result<String> {
-        let my_ns = self.metadata.namespace.clone().unwrap();
+        let my_ns = self
+            .metadata
+            .namespace
+            .clone()
+            .ok_or_else(|| Error::Other("TenantInstance has no namespace".to_string()))?;
         let ns_api: Api<Namespace> = Api::all(get_client_async().await);
         let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
         let label_key =
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
-        if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().any(|k| k == &label_key) {
-                Ok(labels[&label_key].clone())
-            } else {
-                Ok(my_ns)
-            }
-        } else {
-            Ok(my_ns)
+        if let Some(labels) = my_ns_meta.metadata.labels
+            && let Some(tenant) = labels.get(&label_key)
+        {
+            return Ok(tenant.clone());
         }
+        Ok(my_ns)
     }
 
+    /// Returns every namespace owned by the instance tenant, or only the instance
+    /// namespace when no tenant label is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Other` when the instance has no namespace, and `Error::KubeError`
+    /// when the namespaces cannot be listed.
     pub async fn get_tenant_namespaces(&self) -> Result<Vec<String>> {
-        let my_ns = self.metadata.namespace.clone().unwrap();
+        let my_ns = self
+            .metadata
+            .namespace
+            .clone()
+            .ok_or_else(|| Error::Other("TenantInstance has no namespace".to_string()))?;
         let ns_api: Api<Namespace> = Api::all(get_client_async().await);
         let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
         let label_key =
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "vynil.solidite.fr/tenant".to_string());
         let res = vec![my_ns];
-        if let Some(labels) = my_ns_meta.metadata.labels.clone()
-            && labels.clone().keys().any(|k| k == &label_key)
-        {
-            let tenant_name = &labels[&label_key];
+        let tenant_name = my_ns_meta
+            .metadata
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.get(&label_key));
+        if let Some(tenant_name) = tenant_name {
             let mut lp = ListParams::default();
-            lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
+            lp = lp.labels(format!("{label_key}=={tenant_name}").as_str());
             let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
-            return Ok(my_nss
-                .items
-                .into_iter()
-                .map(|n| n.metadata.name.unwrap())
-                .collect());
+            return Ok(my_nss.items.into_iter().filter_map(|n| n.metadata.name).collect());
         }
         Ok(res)
     }
 
+    /// Returns the sorted published service names of every tenant namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::KubeError` when the tenant instances cannot be listed.
     pub async fn get_tenant_services_names(&self) -> Result<Vec<String>> {
         let mut res: Vec<String> = Vec::new();
         let cli = get_client_async().await;
@@ -223,6 +246,11 @@ impl TenantInstance {
         Ok(res)
     }
 
+    /// Rhai wrapper over `get_tenant_name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when `get_tenant_name` fails.
     pub fn rhai_get_tenant_name(&mut self) -> RhaiRes<String> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move { self.get_tenant_name().await })
@@ -230,6 +258,11 @@ impl TenantInstance {
         .map_err(rhai_err)
     }
 
+    /// Rhai wrapper over `get_tenant_namespaces`, returning a rhai array.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the namespaces cannot be serialized.
     pub fn rhai_get_tenant_namespaces(&mut self) -> RhaiRes<rhai::Dynamic> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
@@ -245,6 +278,11 @@ impl TenantInstance {
         .map_err(rhai_err)
     }
 
+    /// Rhai wrapper over `get_tenant_services_names`, returning a rhai array.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Rhai error when the service names cannot be serialized.
     pub fn rhai_get_tenant_services_names(&mut self) -> RhaiRes<rhai::Dynamic> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
@@ -263,6 +301,87 @@ impl TenantInstance {
 
 impl_instance_common!(TenantInstance, "TenantInstance");
 impl_instance_befores!(TenantInstance);
+
+/// Registers `TenantInstance` accessors on a rhai engine.
+pub fn tenant_rhai_register(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<TenantInstance>("TenantInstance")
+        .register_fn("get_tenant_instance", TenantInstance::rhai_get)
+        .register_fn("get_tenant_name", TenantInstance::rhai_get_tenant_name)
+        .register_fn(
+            "get_tenant_namespaces",
+            TenantInstance::rhai_get_tenant_namespaces,
+        )
+        .register_fn(
+            "get_tenant_services_names",
+            TenantInstance::rhai_get_tenant_services_names,
+        )
+        .register_fn("list_tenant_instance", TenantInstance::rhai_list)
+        .register_fn("options_digest", TenantInstance::get_options_digest)
+        .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)
+        .register_fn("get_rhaistate", TenantInstance::rhai_get_rhaistate)
+        .register_fn("set_agent_started", TenantInstance::rhai_set_agent_started)
+        .register_fn("set_missing_box", TenantInstance::rhai_set_missing_box)
+        .register_fn("set_missing_package", TenantInstance::rhai_set_missing_package)
+        .register_fn(
+            "set_missing_requirement",
+            TenantInstance::rhai_set_missing_requirement,
+        )
+        .register_fn(
+            "set_missing_init_version",
+            TenantInstance::rhai_set_missing_init_version,
+        )
+        .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
+        .register_fn("set_status_befores", TenantInstance::rhai_set_status_befores)
+        .register_fn(
+            "set_status_before_failed",
+            TenantInstance::rhai_set_status_before_failed,
+        )
+        .register_fn("set_status_vitals", TenantInstance::rhai_set_status_vitals)
+        .register_fn(
+            "set_status_vital_failed",
+            TenantInstance::rhai_set_status_vital_failed,
+        )
+        .register_fn("set_status_scalables", TenantInstance::rhai_set_status_scalables)
+        .register_fn(
+            "set_status_scalable_failed",
+            TenantInstance::rhai_set_status_scalable_failed,
+        )
+        .register_fn("set_status_others", TenantInstance::rhai_set_status_others)
+        .register_fn(
+            "set_status_other_failed",
+            TenantInstance::rhai_set_status_other_failed,
+        )
+        .register_fn("set_status_posts", TenantInstance::rhai_set_status_posts)
+        .register_fn(
+            "set_status_post_failed",
+            TenantInstance::rhai_set_status_post_failed,
+        )
+        .register_fn("set_tfstate", TenantInstance::rhai_set_tfstate)
+        .register_fn(
+            "set_status_tofu_failed",
+            TenantInstance::rhai_set_status_tofu_failed,
+        )
+        .register_fn("set_rhaistate", TenantInstance::rhai_set_rhaistate)
+        .register_fn("set_services", TenantInstance::rhai_set_services)
+        .register_fn("get_services", TenantInstance::rhai_get_services)
+        .register_fn(
+            "set_status_rhai_failed",
+            TenantInstance::rhai_set_status_rhai_failed,
+        )
+        .register_fn(
+            "set_status_schedule_backup_failed",
+            TenantInstance::rhai_set_status_schedule_backup_failed,
+        )
+        .register_fn(
+            "set_status_init_failed",
+            TenantInstance::rhai_set_status_init_failed,
+        )
+        .register_get("metadata", TenantInstance::get_metadata)
+        .register_get("spec", TenantInstance::get_spec)
+        .register_get("status", TenantInstance::get_status);
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -354,83 +473,4 @@ version: "1.0.0"
             "should detect init_version_ko condition already present"
         );
     }
-}
-
-pub fn tenant_rhai_register(engine: &mut Engine) {
-    engine
-        .register_type_with_name::<TenantInstance>("TenantInstance")
-        .register_fn("get_tenant_instance", TenantInstance::rhai_get)
-        .register_fn("get_tenant_name", TenantInstance::rhai_get_tenant_name)
-        .register_fn(
-            "get_tenant_namespaces",
-            TenantInstance::rhai_get_tenant_namespaces,
-        )
-        .register_fn(
-            "get_tenant_services_names",
-            TenantInstance::rhai_get_tenant_services_names,
-        )
-        .register_fn("list_tenant_instance", TenantInstance::rhai_list)
-        .register_fn("options_digest", TenantInstance::get_options_digest)
-        .register_fn("get_tfstate", TenantInstance::rhai_get_tfstate)
-        .register_fn("get_rhaistate", TenantInstance::rhai_get_rhaistate)
-        .register_fn("set_agent_started", TenantInstance::rhai_set_agent_started)
-        .register_fn("set_missing_box", TenantInstance::rhai_set_missing_box)
-        .register_fn("set_missing_package", TenantInstance::rhai_set_missing_package)
-        .register_fn(
-            "set_missing_requirement",
-            TenantInstance::rhai_set_missing_requirement,
-        )
-        .register_fn(
-            "set_missing_init_version",
-            TenantInstance::rhai_set_missing_init_version,
-        )
-        .register_fn("set_status_ready", TenantInstance::rhai_set_status_ready)
-        .register_fn("set_status_befores", TenantInstance::rhai_set_status_befores)
-        .register_fn(
-            "set_status_before_failed",
-            TenantInstance::rhai_set_status_before_failed,
-        )
-        .register_fn("set_status_vitals", TenantInstance::rhai_set_status_vitals)
-        .register_fn(
-            "set_status_vital_failed",
-            TenantInstance::rhai_set_status_vital_failed,
-        )
-        .register_fn("set_status_scalables", TenantInstance::rhai_set_status_scalables)
-        .register_fn(
-            "set_status_scalable_failed",
-            TenantInstance::rhai_set_status_scalable_failed,
-        )
-        .register_fn("set_status_others", TenantInstance::rhai_set_status_others)
-        .register_fn(
-            "set_status_other_failed",
-            TenantInstance::rhai_set_status_other_failed,
-        )
-        .register_fn("set_status_posts", TenantInstance::rhai_set_status_posts)
-        .register_fn(
-            "set_status_post_failed",
-            TenantInstance::rhai_set_status_post_failed,
-        )
-        .register_fn("set_tfstate", TenantInstance::rhai_set_tfstate)
-        .register_fn(
-            "set_status_tofu_failed",
-            TenantInstance::rhai_set_status_tofu_failed,
-        )
-        .register_fn("set_rhaistate", TenantInstance::rhai_set_rhaistate)
-        .register_fn("set_services", TenantInstance::rhai_set_services)
-        .register_fn("get_services", TenantInstance::rhai_get_services)
-        .register_fn(
-            "set_status_rhai_failed",
-            TenantInstance::rhai_set_status_rhai_failed,
-        )
-        .register_fn(
-            "set_status_schedule_backup_failed",
-            TenantInstance::rhai_set_status_schedule_backup_failed,
-        )
-        .register_fn(
-            "set_status_init_failed",
-            TenantInstance::rhai_set_status_init_failed,
-        )
-        .register_get("metadata", TenantInstance::get_metadata)
-        .register_get("spec", TenantInstance::get_spec)
-        .register_get("status", TenantInstance::get_status);
 }

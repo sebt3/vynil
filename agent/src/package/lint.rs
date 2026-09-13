@@ -56,12 +56,12 @@ pub struct Parameters {
     #[arg(long = "level", default_value = "all")]
     pub level: LevelFilter,
 
-    /// JUnit output file
+    /// `JUnit` output file
     #[arg(long = "junit-output-filename", env = "JUNIT_OUTPUT_FILENAME")]
     pub junit_output_filename: Option<PathBuf>,
 }
 
-fn expected_dirs(pkg_type: &VynilPackageType) -> &[&str] {
+const fn expected_dirs(pkg_type: &VynilPackageType) -> &[&str] {
     match pkg_type {
         VynilPackageType::System => &["systems", "crds", "scripts", "handlebars"],
         VynilPackageType::Service => &[
@@ -86,51 +86,14 @@ fn expected_dirs(pkg_type: &VynilPackageType) -> &[&str] {
     }
 }
 
-pub async fn run(args: &Parameters) -> Result<()> {
-    let mut collector = crate::linting::LintResultCollector::new();
-    let _config = crate::linting::LintConfig::load(&args.package_dir)?;
-
-    // Check 1: Missing manifest
-    let manifest_path = args.package_dir.join("package.yaml");
-    if !manifest_path.exists() {
-        collector.add(crate::linting::LintFinding {
-            rule: "package/missing-manifest".to_string(),
-            level: crate::linting::LintLevel::Error,
-            file: PathBuf::from("package.yaml"),
-            line: None,
-            message: "package.yaml is missing".to_string(),
-        });
-        collector.prefix_files(&args.package_dir);
-        let level_filter = level_filter_to_lint_level(&args.level);
-        println!("{}", format_output(&collector, &args.format, level_filter));
-        return Err(common::Error::YamlError("Missing package manifest".to_string()));
-    }
-
-    let package = match read_package_yaml(&manifest_path) {
-        Ok(pkg) => pkg,
-        Err(e) => {
-            collector.add(crate::linting::LintFinding {
-                rule: "package/invalid-manifest".to_string(),
-                level: crate::linting::LintLevel::Error,
-                file: PathBuf::from("package.yaml"),
-                line: None,
-                message: format!("Failed to parse package.yaml: {}", e),
-            });
-            collector.prefix_files(&args.package_dir);
-            let level_filter = level_filter_to_lint_level(&args.level);
-            println!("{}", format_output(&collector, &args.format, level_filter));
-            return Err(common::Error::YamlError("Invalid package manifest".to_string()));
-        }
-    };
-
-    // Check 2: Invalid manifest (missing required fields + option schemas)
-    check_manifest_fields(&package, &manifest_path, &mut collector);
-
-    let expected = expected_dirs(&package.metadata.usage);
-    let expected_set: HashSet<&str> = expected.iter().copied().collect();
-
-    // Check 3: Unexpected directories
-    if let Ok(entries) = std::fs::read_dir(&args.package_dir) {
+/// Flag directories that are valid for other package usages but not this one.
+fn check_unexpected_dirs(
+    package_dir: &std::path::Path,
+    package: &VynilPackageSource,
+    expected_set: &HashSet<&str>,
+    collector: &mut crate::linting::LintResultCollector,
+) {
+    if let Ok(entries) = std::fs::read_dir(package_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir()
@@ -166,30 +129,31 @@ pub async fn run(args: &Parameters) -> Result<()> {
             }
         }
     }
+}
 
-    // Check HBS files
-    let config = crate::linting::LintConfig::load(&args.package_dir)?;
-    let mut hbs_checker = crate::linting::hbs_checker::HbsChecker::new(&args.package_dir, &package, &config);
+/// Run every HBS-related check over the package directories.
+///
+/// # Errors
+///
+/// Returns a [`common::Error`] when directory walks or template checks fail at OS level.
+fn run_hbs_checks(
+    package_dir: &std::path::Path,
+    package: &VynilPackageSource,
+    config: &crate::linting::LintConfig,
+    collector: &mut crate::linting::LintResultCollector,
+) -> Result<()> {
+    let mut hbs_checker = crate::linting::hbs_checker::HbsChecker::new(package_dir, package, config);
 
-    // Scan for .hbs files
-    if let Ok(entries) = std::fs::read_dir(&args.package_dir) {
+    if let Ok(entries) = std::fs::read_dir(package_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan_hbs_files(
-                    &path,
-                    &args.package_dir,
-                    &mut hbs_checker,
-                    &mut collector,
-                    &config,
-                    &package,
-                )?;
+                scan_hbs_files(&path, package_dir, &mut hbs_checker, collector)?;
             }
         }
     }
 
-    // Scan rhai files for context.values.X usages before finalizing hbs checker
-    if let Ok(entries) = std::fs::read_dir(&args.package_dir) {
+    if let Ok(entries) = std::fs::read_dir(package_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -199,21 +163,25 @@ pub async fn run(args: &Parameters) -> Result<()> {
     }
 
     collector.extend(hbs_checker.finalize());
+    Ok(())
+}
 
-    // Check Rhai files
-    let mut rhai_checker = crate::linting::rhai_checker::RhaiChecker::new(
-        &args.package_dir,
-        &args.config_dir,
-        args.script_dir.as_deref(),
-        &package,
-        &config,
-    );
-
-    if let Ok(entries) = std::fs::read_dir(&args.package_dir) {
+/// Run Rhai checks over package directories and inline scripts, then finalize.
+///
+/// # Errors
+///
+/// Returns a [`common::Error`] when directory walks fail at OS level.
+fn run_rhai_checks(
+    rhai_checker: &mut crate::linting::rhai_checker::RhaiChecker,
+    package_dir: &std::path::Path,
+    package: &VynilPackageSource,
+    collector: &mut crate::linting::LintResultCollector,
+) -> Result<()> {
+    if let Ok(entries) = std::fs::read_dir(package_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan_rhai_files(&path, &args.package_dir, &mut rhai_checker, &mut collector)?;
+                scan_rhai_files(&path, package_dir, rhai_checker, collector)?;
             }
         }
     }
@@ -229,7 +197,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
     }
     for req in &package.requirements.clone() {
         if let VynilPackageRequirement::Prefly { script, name } = req {
-            let virtual_path = PathBuf::from(format!("package.yaml#prefly({})", name));
+            let virtual_path = PathBuf::from(format!("package.yaml#prefly({name})"));
             let findings = rhai_checker.check_file(&virtual_path, script);
             for finding in findings {
                 collector.add(finding);
@@ -238,6 +206,68 @@ pub async fn run(args: &Parameters) -> Result<()> {
     }
 
     collector.extend(rhai_checker.finalize());
+    Ok(())
+}
+
+pub fn run(args: &Parameters) -> Result<()> {
+    let mut collector = crate::linting::LintResultCollector::new();
+    let _config = crate::linting::LintConfig::load(&args.package_dir);
+
+    // Check 1: Missing manifest
+    let manifest_path = args.package_dir.join("package.yaml");
+    if !manifest_path.exists() {
+        collector.add(crate::linting::LintFinding {
+            rule: "package/missing-manifest".to_string(),
+            level: crate::linting::LintLevel::Error,
+            file: PathBuf::from("package.yaml"),
+            line: None,
+            message: "package.yaml is missing".to_string(),
+        });
+        collector.prefix_files(&args.package_dir);
+        let level_filter = level_filter_to_lint_level(&args.level);
+        println!("{}", format_output(&collector, &args.format, level_filter));
+        return Err(common::Error::YamlError("Missing package manifest".to_string()));
+    }
+
+    let package = match read_package_yaml(&manifest_path) {
+        Ok(pkg) => pkg,
+        Err(e) => {
+            collector.add(crate::linting::LintFinding {
+                rule: "package/invalid-manifest".to_string(),
+                level: crate::linting::LintLevel::Error,
+                file: PathBuf::from("package.yaml"),
+                line: None,
+                message: format!("Failed to parse package.yaml: {e}"),
+            });
+            collector.prefix_files(&args.package_dir);
+            let level_filter = level_filter_to_lint_level(&args.level);
+            println!("{}", format_output(&collector, &args.format, level_filter));
+            return Err(common::Error::YamlError("Invalid package manifest".to_string()));
+        }
+    };
+
+    // Check 2: Invalid manifest (missing required fields + option schemas)
+    check_manifest_fields(&package, &manifest_path, &mut collector);
+
+    let expected = expected_dirs(&package.metadata.usage);
+    let expected_set: HashSet<&str> = expected.iter().copied().collect();
+
+    check_unexpected_dirs(&args.package_dir, &package, &expected_set, &mut collector);
+
+    // Check HBS files
+    let config = crate::linting::LintConfig::load(&args.package_dir);
+    run_hbs_checks(&args.package_dir, &package, &config, &mut collector)?;
+
+    // Check Rhai files
+    let mut rhai_checker = crate::linting::rhai_checker::RhaiChecker::new(
+        &args.package_dir,
+        &args.config_dir,
+        args.script_dir.as_deref(),
+        &package,
+        &config,
+    );
+
+    run_rhai_checks(&mut rhai_checker, &args.package_dir, &package, &mut collector)?;
 
     collector.prefix_files(&args.package_dir);
 
@@ -247,7 +277,7 @@ pub async fn run(args: &Parameters) -> Result<()> {
     if let Some(junit_path) = &args.junit_output_filename {
         let junit_xml = collector.to_junit();
         std::fs::write(junit_path, junit_xml)
-            .map_err(|e| common::Error::YamlError(format!("Failed to write JUnit output: {}", e)))?;
+            .map_err(|e| common::Error::YamlError(format!("Failed to write JUnit output: {e}")))?;
     }
 
     if collector.has_errors() {
@@ -280,7 +310,7 @@ fn check_manifest_fields(
             level: crate::linting::LintLevel::Error,
             file: manifest.clone(),
             line: None,
-            message: format!("Missing required field: {}", field),
+            message: format!("Missing required field: {field}"),
         });
     }
     check_options(package, manifest_path, collector);
@@ -294,10 +324,10 @@ fn is_prerelease(version: &str) -> bool {
 
 fn find_line_with_key(manifest_path: &std::path::Path, key: &str) -> Option<usize> {
     let content = std::fs::read_to_string(manifest_path).ok()?;
-    let search = format!("{}:", key);
+    let search = format!("{key}:");
     content.lines().enumerate().find_map(|(i, line)| {
         if line.trim_start().starts_with(&search) {
-            Some(i + 1)
+            Some(i.saturating_add(1))
         } else {
             None
         }
@@ -309,15 +339,15 @@ fn find_image_tag_line(manifest_path: &std::path::Path, image_name: &str) -> Opt
     let mut in_images = false;
     let mut images_indent = 0usize;
     let mut in_image = false;
-    let mut image_indent = 0usize;
-    let image_key = format!("{}:", image_name);
+    let mut entry_indent = 0usize;
+    let image_key = format!("{image_name}:");
 
     for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        let indent = line.len() - trimmed.len();
+        let indent = line.len().saturating_sub(trimmed.len());
 
         if !in_images {
             if trimmed == "images:" {
@@ -330,14 +360,14 @@ fn find_image_tag_line(manifest_path: &std::path::Path, image_name: &str) -> Opt
             }
             if trimmed.starts_with(&image_key) {
                 in_image = true;
-                image_indent = indent;
+                entry_indent = indent;
             }
         } else {
-            if indent <= image_indent {
+            if indent <= entry_indent {
                 break;
             }
             if trimmed.starts_with("tag:") {
-                return Some(i + 1);
+                return Some(i.saturating_add(1));
             }
         }
     }
@@ -358,10 +388,7 @@ fn check_prerelease_versions(
             level: crate::linting::LintLevel::Warn,
             file: manifest.clone(),
             line: find_line_with_key(manifest_path, "app_version"),
-            message: format!(
-                "app_version '{}' contains a pre-release marker (alpha/beta/rc)",
-                app_version
-            ),
+            message: format!("app_version '{app_version}' contains a pre-release marker (alpha/beta/rc)"),
         });
     }
     if let Some(images) = &package.images {
@@ -375,8 +402,7 @@ fn check_prerelease_versions(
                     file: manifest.clone(),
                     line: find_image_tag_line(manifest_path, name),
                     message: format!(
-                        "Image '{}' tag '{}' contains a pre-release marker (alpha/beta/rc)",
-                        name, tag
+                        "Image '{name}' tag '{tag}' contains a pre-release marker (alpha/beta/rc)"
                     ),
                 });
             }
@@ -400,10 +426,7 @@ fn check_options(
                 level: crate::linting::LintLevel::Error,
                 file: manifest.clone(),
                 line,
-                message: format!(
-                    "Option '{}': must be an OpenAPI schema object, got scalar value",
-                    key
-                ),
+                message: format!("Option '{key}': must be an OpenAPI schema object, got scalar value"),
             });
             continue;
         }
@@ -414,11 +437,13 @@ fn check_options(
                 level: crate::linting::LintLevel::Error,
                 file: manifest.clone(),
                 line,
-                message: format!("Option '{}': invalid OpenAPI schema: {}", key, e),
+                message: format!("Option '{key}': invalid OpenAPI schema: {e}"),
             });
             continue;
         }
-        let obj = val.as_object().unwrap();
+        let Some(obj) = val.as_object() else {
+            continue;
+        };
         let has_type_indicator = obj.contains_key("type")
             || obj.contains_key("$ref")
             || obj.contains_key("oneOf")
@@ -430,7 +455,7 @@ fn check_options(
                 level: crate::linting::LintLevel::Error,
                 file: manifest.clone(),
                 line,
-                message: format!("Option '{}': missing 'type' field in OpenAPI schema", key),
+                message: format!("Option '{key}': missing 'type' field in OpenAPI schema"),
             });
         }
         if !obj.contains_key("description") {
@@ -439,7 +464,7 @@ fn check_options(
                 level: crate::linting::LintLevel::Info,
                 file: manifest.clone(),
                 line,
-                message: format!("Option '{}': no description provided", key),
+                message: format!("Option '{key}': no description provided"),
             });
         }
         if obj.get("type").and_then(|t| t.as_str()) == Some("object") && obj.contains_key("properties") {
@@ -449,8 +474,7 @@ fn check_options(
                 file: manifest.clone(),
                 line,
                 message: format!(
-                    "Option '{}': nested 'properties' sub-schema is not supported for type:object; use a flat 'default:' map at the option root instead",
-                    key
+                    "Option '{key}': nested 'properties' sub-schema is not supported for type:object; use a flat 'default:' map at the option root instead"
                 ),
             });
         }
@@ -468,7 +492,7 @@ fn format_output(
     }
 }
 
-fn level_filter_to_lint_level(filter: &LevelFilter) -> crate::linting::LintLevel {
+const fn level_filter_to_lint_level(filter: &LevelFilter) -> crate::linting::LintLevel {
     match filter {
         LevelFilter::All => crate::linting::LintLevel::Info,
         LevelFilter::Warn => crate::linting::LintLevel::Warn,
@@ -528,14 +552,12 @@ fn scan_hbs_files(
     package_dir: &std::path::Path,
     hbs_checker: &mut crate::linting::hbs_checker::HbsChecker,
     collector: &mut crate::linting::LintResultCollector,
-    _config: &crate::linting::LintConfig,
-    _package: &common::vynilpackage::VynilPackageSource,
 ) -> Result<()> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan_hbs_files(&path, package_dir, hbs_checker, collector, _config, _package)?;
+                scan_hbs_files(&path, package_dir, hbs_checker, collector)?;
             } else if path.extension().and_then(|e| e.to_str()) == Some("hbs")
                 && let Ok(source) = std::fs::read_to_string(&path)
                 && let Ok(rel_path) = path.strip_prefix(package_dir)

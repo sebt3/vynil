@@ -65,19 +65,19 @@ impl InstanceKind for ServiceInstance {
     }
 
     async fn set_missing_box(mut self, jukebox: String) -> Result<Self> {
-        ServiceInstance::set_missing_box(&mut self, jukebox).await
+        Self::set_missing_box(&mut self, jukebox).await
     }
 
     async fn set_missing_package(mut self, category: String, package: String) -> Result<Self> {
-        ServiceInstance::set_missing_package(&mut self, category, package).await
+        Self::set_missing_package(&mut self, category, package).await
     }
 
     async fn set_missing_requirement(mut self, reason: String) -> Result<Self> {
-        ServiceInstance::set_missing_requirement(&mut self, reason).await
+        Self::set_missing_requirement(&mut self, reason).await
     }
 
     async fn set_missing_init_version(mut self, version: String) -> Result<Self> {
-        ServiceInstance::set_missing_init_version(&mut self, version).await
+        Self::set_missing_init_version(&mut self, version).await
     }
 
     async fn check_requirements(
@@ -86,9 +86,9 @@ impl InstanceKind for ServiceInstance {
         client: Client,
     ) -> Result<Option<Action>> {
         for req in reqs {
-            let (res, mes, requeue) = req.check_service(self, client.clone()).await?;
-            if !res {
-                self.clone().set_missing_requirement(mes).await?;
+            let (outcome, message, requeue) = req.check_service(self, client.clone()).await?;
+            if !outcome {
+                self.clone().set_missing_requirement(message).await?;
                 return Ok(Some(Action::requeue(Duration::from_secs(requeue))));
             }
         }
@@ -125,20 +125,35 @@ impl InstanceKind for ServiceInstance {
 
 #[async_trait]
 impl Reconciler for ServiceInstance {
+    /// Runs the shared reconcile pipeline for this instance kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`common::Error`] raised by the shared reconcile pipeline.
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
-        do_reconcile(self, ctx).await
+        Box::pin(do_reconcile(self, ctx)).await
     }
 
+    /// Runs the shared cleanup/finalizer pipeline for this instance kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`common::Error`] raised by the shared cleanup pipeline.
     async fn cleanup(&self, ctx: Arc<Context>) -> Result<Action> {
-        do_cleanup(self, ctx).await
+        Box::pin(do_cleanup(self, ctx)).await
     }
 }
 
 // ── Controller entry points ───────────────────────────────────────────────────
 
 #[instrument(skip(ctx, inst), fields(trace_id))]
+/// Reconcile entry point used by the controller runtime.
+///
+/// # Errors
+///
+/// Returns the [`common::Error`] raised by the reconcile/cleanup pipeline.
 pub async fn reconcile(inst: Arc<ServiceInstance>, ctx: Arc<Context>) -> Result<Action> {
-    run_with_finalizer(inst, ctx).await
+    Box::pin(run_with_finalizer(inst, ctx)).await
 }
 
 #[must_use]
@@ -156,5 +171,7 @@ pub fn error_policy(inst: Arc<ServiceInstance>, error: &Error, ctx: Arc<Context>
         error
     );
     inst.record_reconcile_failure(&ctx, error);
-    Action::requeue(Duration::from_secs(5 * 60))
+    drop(inst);
+    drop(ctx);
+    Action::requeue(Duration::from_mins(5))
 }

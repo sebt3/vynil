@@ -4,6 +4,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
+use common::handlebarshandler::HandleBars;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use kube::{
     api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},
@@ -22,6 +23,12 @@ use tracing::{Span, field, instrument};
 static JUKEBOX_FINALIZER: &str = "jukeboxes.vynil.solidite.fr";
 
 #[instrument(skip(ctx, dist), fields(trace_id))]
+/// Reconcile entry point used by the controller runtime.
+///
+/// # Errors
+///
+/// Returns [`Error::FinalizerError`] when the finalizer transaction itself fails, or the
+/// underlying [`Error`] raised while applying or cleaning the [`JukeBox`].
 pub async fn reconcile(dist: Arc<JukeBox>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
     Span::current().record("trace_id", field::display(&trace_id));
@@ -66,14 +73,14 @@ impl Reconciler for JukeBox {
         // Track whether a terminal job exists so we can skip re-creating it later.
         let job_is_terminal = if let Ok(Some(job)) = job_api.get_opt(&job_name).await {
             if job.metadata.deletion_timestamp.is_some() {
-                return Ok(Action::requeue(Duration::from_secs(60)));
+                return Ok(Action::requeue(Duration::from_mins(1)));
             }
             if !is_job_terminal(&job) {
                 tracing::info!(
                     "JukeBox {} scan job is still running, requeuing in 1 minute",
                     self.name_any()
                 );
-                return Ok(Action::requeue(Duration::from_secs(60)));
+                return Ok(Action::requeue(Duration::from_mins(1)));
             }
             true
         } else {
@@ -81,18 +88,11 @@ impl Reconciler for JukeBox {
         };
 
         let mut context = ctx.base_context.clone();
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("name".to_string(), self.name_any().into());
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("job_name".to_string(), job_name.clone().into());
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("schedule".to_string(), self.spec.schedule.clone().into());
+        if let Some(obj) = context.as_object_mut() {
+            obj.insert("name".to_string(), self.name_any().into());
+            obj.insert("job_name".to_string(), job_name.clone().into());
+            obj.insert("schedule".to_string(), self.spec.schedule.clone().into());
+        }
 
         // CronJob is always maintained.
         let cj_def_str = hbs.render("{{> cronscan.yaml }}", &context)?;
@@ -112,82 +112,30 @@ impl Reconciler for JukeBox {
         //  - force-scan annotation is present (explicit user request).
         // A terminal job without force-scan is left untouched; periodic rescans are
         // the CronJob's responsibility.
-        if should_create_scan_job(job_is_terminal, &force_scan) {
+        if should_create_scan_job(job_is_terminal, force_scan.as_ref()) {
             // force-scan: delete the known terminal job and inject the package filter.
             // Annotation is removed ONLY after successful job creation so that a creation
             // failure retries on the next reconcile.
             if let Some(ref filter_value) = force_scan {
-                if job_is_terminal {
-                    match job_api.delete(&job_name, &DeleteParams::foreground()).await {
-                        Ok(eith) => {
-                            if let either::Left(j) = eith {
-                                let uid = j.metadata.uid.unwrap_or_default();
-                                let cond =
-                                    await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
-                                tokio::time::timeout(std::time::Duration::from_secs(20), cond)
-                                    .await
-                                    .map_err(Error::Elapsed)?
-                                    .map_err(Error::KubeWaitError)?;
-                            }
-                        }
-                        Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
-                    }
+                if job_is_terminal
+                    && let Ok(either::Left(j)) = job_api.delete(&job_name, &DeleteParams::foreground()).await
+                {
+                    wait_job_deleted(&job_api, &job_name, j).await?;
                 }
                 inject_package_filter(&mut context, filter_value);
             }
 
             // Create the Job (server-side apply; fallback to delete+create on spec conflict).
-            let job_def_str = hbs.render("{{> scan.yaml }}", &context)?;
-            let job_def: Value = common::yamlhandler::yaml_str_to_json(&job_def_str)?;
-            let _job = match job_api
-                .patch(
-                    &job_name,
-                    &PatchParams::apply(&get_client_name()).force(),
-                    &Patch::Apply(job_def.clone()),
-                )
-                .await
-            {
-                Ok(j) => j,
-                Err(_) => {
-                    if let either::Left(j) = job_api
-                        .delete(&job_name, &DeleteParams::foreground())
-                        .await
-                        .map_err(Error::KubeError)?
-                    {
-                        let uid = j.metadata.uid.unwrap_or_default();
-                        let cond = await_condition(job_api.clone(), &job_name, conditions::is_deleted(&uid));
-                        tokio::time::timeout(std::time::Duration::from_secs(20), cond)
-                            .await
-                            .map_err(Error::Elapsed)?
-                            .map_err(Error::KubeWaitError)?;
-                    }
-                    job_api
-                        .create(
-                            &PostParams::default(),
-                            &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
-                        )
-                        .await
-                        .map_err(Error::KubeError)?
-                }
-            };
+            Box::pin(upsert_scan_job(&mut hbs, &context, &job_api, &job_name)).await?;
 
             // Remove force-scan annotation only after successful job creation.
             if force_scan.is_some() {
-                let stms = Api::<JukeBox>::all(client.clone());
-                let patch = Patch::Json::<()>(
-                    serde_json::from_value(serde_json::json!([
-                        {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
-                    ]))
-                    .unwrap(),
-                );
-                stms.patch(&self.name_any(), &PatchParams::default(), &patch)
-                    .await
-                    .map_err(Error::KubeError)?;
+                remove_force_scan_annotation(&client, &self.name_any()).await?;
             }
         }
 
         tracing::debug!("Reconcilling JukeBox {} Done", self.name_any());
-        Ok(Action::requeue(Duration::from_secs(15 * 60)))
+        Ok(Action::requeue(Duration::from_mins(15)))
     }
 
     // Reconcile with finalize cleanup (the object was deleted)
@@ -203,7 +151,7 @@ impl Reconciler for JukeBox {
             match cron_api.delete(&job_name, &DeleteParams::foreground()).await {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Deleting CronJob {} failed with: {e}", &job_name),
-            };
+            }
         }
         let job_api: Api<Job> = Api::namespaced(client.clone(), ns);
         let job = job_api.get_metadata_opt(&job_name).await;
@@ -211,23 +159,93 @@ impl Reconciler for JukeBox {
             match job_api.delete(&job_name, &DeleteParams::foreground()).await {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Deleting Job {} failed with: {e}", &job_name),
-            };
+            }
         }
         Ok(Action::await_change())
     }
 }
 
-fn should_create_scan_job(job_is_terminal: bool, force_scan: &Option<String>) -> bool {
+const fn should_create_scan_job(job_is_terminal: bool, force_scan: Option<&String>) -> bool {
     !job_is_terminal || force_scan.is_some()
 }
 
 fn inject_package_filter(context: &mut Value, filter_value: &str) {
-    if filter_value != "true" && !filter_value.is_empty() {
-        context
-            .as_object_mut()
-            .unwrap()
-            .insert("package_filter".to_string(), filter_value.to_string().into());
+    if filter_value != "true"
+        && !filter_value.is_empty()
+        && let Some(obj) = context.as_object_mut()
+    {
+        obj.insert("package_filter".to_string(), filter_value.to_string().into());
     }
+}
+
+/// Wait until the given deleted Job object is actually gone from the API (bounded by 20s).
+///
+/// # Errors
+///
+/// Returns [`Error::Elapsed`] when the deletion was not observed within the deadline, or
+/// [`Error::KubeWaitError`] when the watch failed.
+async fn wait_job_deleted(job_api: &Api<Job>, job_name: &str, job: Job) -> Result<()> {
+    let uid = job.metadata.uid.unwrap_or_default();
+    let cond = await_condition(job_api.clone(), job_name, conditions::is_deleted(&uid));
+    tokio::time::timeout(std::time::Duration::from_secs(20), cond)
+        .await
+        .map_err(Error::Elapsed)?
+        .map_err(Error::KubeWaitError)
+        .map(|_| ())
+}
+
+/// Render the scan job and apply it; on server-side-apply conflict, delete-then-create.
+///
+/// # Errors
+///
+/// Returns the rendering, serialization or Kubernetes error raised while upserting the Job.
+async fn upsert_scan_job(
+    hbs: &mut HandleBars<'_>,
+    context: &Value,
+    job_api: &Api<Job>,
+    job_name: &str,
+) -> Result<()> {
+    let job_def_str = hbs.render("{{> scan.yaml }}", context)?;
+    let job_def: Value = common::yamlhandler::yaml_str_to_json(&job_def_str)?;
+    let patch_res = job_api
+        .patch(
+            job_name,
+            &PatchParams::apply(&get_client_name()).force(),
+            &Patch::Apply(job_def.clone()),
+        )
+        .await;
+    if patch_res.is_err()
+        && let Ok(either::Left(j)) = job_api.delete(job_name, &DeleteParams::foreground()).await
+    {
+        wait_job_deleted(job_api, job_name, j).await?;
+        job_api
+            .create(
+                &PostParams::default(),
+                &serde_json::from_value(job_def).map_err(Error::SerializationError)?,
+            )
+            .await
+            .map_err(Error::KubeError)?;
+    }
+    Ok(())
+}
+
+/// Remove the force-scan annotation from the [`JukeBox`] after a successful rescan kickoff.
+///
+/// # Errors
+///
+/// Returns the Kubernetes error raised by the JSON-patch call.
+async fn remove_force_scan_annotation(client: &kube::Client, name: &str) -> Result<()> {
+    let stms = Api::<JukeBox>::all(client.clone());
+    let patch = Patch::Json::<()>(
+        serde_json::from_value(serde_json::json!([
+            {"op": "remove", "path": "/metadata/annotations/vynil.solidite.fr~1force-scan"}
+        ]))
+        .map_err(Error::SerializationError)?,
+    );
+    stms.patch(name, &PatchParams::default(), &patch)
+        .await
+        .map_err(Error::KubeError)?;
+    Ok(())
 }
 
 #[must_use]
@@ -238,7 +256,9 @@ pub fn error_policy(dist: Arc<JukeBox>, error: &Error, ctx: Arc<Context>) -> Act
         error
     );
     ctx.metrics.jukebox.reconcile_failure(&dist, error);
-    Action::requeue(Duration::from_secs(5 * 60))
+    drop(dist);
+    drop(ctx);
+    Action::requeue(Duration::from_mins(5))
 }
 
 #[cfg(test)]
@@ -348,7 +368,7 @@ mod tests {
         let client = kube::Client::new(mock_svc, "default");
         let ctx = make_test_ctx(client, BTreeMap::new());
         let action = jb.reconcile(ctx.clone()).await.unwrap();
-        assert_eq!(action, Action::requeue(Duration::from_secs(60)));
+        assert_eq!(action, Action::requeue(Duration::from_mins(1)));
         let cache = ctx.packages.read().await;
         assert!(
             cache.contains_key("box-a"),
@@ -406,19 +426,19 @@ mod tests {
 
     #[test]
     fn no_job_always_creates_scan_job() {
-        assert!(should_create_scan_job(false, &None));
-        assert!(should_create_scan_job(false, &Some("apps/pkg".to_string())));
+        assert!(should_create_scan_job(false, None));
+        assert!(should_create_scan_job(false, Some(&"apps/pkg".to_string())));
     }
 
     #[test]
     fn terminal_job_without_force_scan_skips_job_creation() {
-        assert!(!should_create_scan_job(true, &None));
+        assert!(!should_create_scan_job(true, None));
     }
 
     #[test]
     fn terminal_job_with_force_scan_recreates_job() {
-        assert!(should_create_scan_job(true, &Some("apps/monappli".to_string())));
-        assert!(should_create_scan_job(true, &Some("true".to_string())));
+        assert!(should_create_scan_job(true, Some(&"apps/monappli".to_string())));
+        assert!(should_create_scan_job(true, Some(&"true".to_string())));
     }
 
     #[test]

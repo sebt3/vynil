@@ -74,7 +74,7 @@ pub struct AnonymizedResponse<T> {
 /// Popularity contest: aggregated package counts per jukebox -> category -> package
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PopularityContest {
-    /// JuKebox name -> category counts
+    /// `JuKebox` name -> category counts
     pub jukeboxes: BTreeMap<String, JukeboxCategory>,
 }
 

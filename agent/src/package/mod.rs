@@ -29,29 +29,29 @@ pub enum Commands {
     Unpack(unpack::Parameters),
 }
 
-pub async fn run(cmd: &Parameters) {
+pub fn run(cmd: &Parameters) {
     match &cmd.command {
-        Commands::Build(args) => build::run(args).await.unwrap_or_else(|e| {
+        Commands::Build(args) => build::run(args).unwrap_or_else(|e| {
             tracing::error!("Packing directory failed with: {e:}");
             process::exit(1)
         }),
-        Commands::Lint(args) => lint::run(args).await.unwrap_or_else(|e| {
+        Commands::Lint(args) => lint::run(args).unwrap_or_else(|e| {
             tracing::error!("Linting the package failed with: {e:}");
             process::exit(1)
         }),
-        Commands::Update(args) => update::run(args).await.unwrap_or_else(|e| {
+        Commands::Update(args) => update::run(args).unwrap_or_else(|e| {
             tracing::error!("Updating the package failed with: {e:}");
             process::exit(2)
         }),
-        Commands::Test(args) => test::run(args).await.unwrap_or_else(|e| {
+        Commands::Test(args) => test::run(args).unwrap_or_else(|e| {
             tracing::error!("Testing the package failed with: {e:}");
             process::exit(3)
         }),
-        Commands::Unpack(args) => unpack::run(args).await.unwrap_or_else(|e| {
+        Commands::Unpack(args) => unpack::run(args).unwrap_or_else(|e| {
             tracing::error!("Unpacking OCI image to directory failed with: {e:}");
             process::exit(4)
         }),
-        Commands::Validate(args) => validate::run(args).await.unwrap_or_else(|e| {
+        Commands::Validate(args) => validate::run(args).unwrap_or_else(|e| {
             tracing::error!("The package failed to validate: {e:}");
             process::exit(4)
         }),
