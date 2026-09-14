@@ -1,0 +1,236 @@
+Spec: Tools
+
+Purpose:
+  Provide the one lossless compressed-text codec the crate shares: @encode_base64_gz gzips
+    @String text and frames it as padded standard base64, and @base64_gz_decode reverses that
+    frame back to text, so in-crate callers can carry textual payloads in string fields at
+    reduced size through a byte-safe alphabet.
+
+Owns:
+  ./tools.rs
+
+References:
+  ./ttl_cache.sdd, ./instancesystem.sdd — approved calibration references.
+
+Must:
+  @encode_base64_gz runs the @String::into_bytes of its input through @flate2::write::GzEncoder
+    over an empty @Vec at @flate2::Compression::default() — explicit level `6` — then finishes
+    the stream and base64-encodes the result with @base64::engine::general_purpose::STANDARD;
+    both @std::io::Write legs map their @std::io::Error to @crate::Error::Stdio.
+  The produced frame is a single-member gzip stream: magic `1f 8b`, method `08`, flags `00`, an
+    all-zero `mtime` field, `xfl` `00`, os `ff`, then the deflate data and the CRC32 plus
+    little-endian ISIZE trailer, base64-rendered with the padded `A-Z a-z 0-9 + /` alphabet and
+    no line breaks (observed on the locked rust_backend/miniz_oxide build).
+  Identical @String inputs produce byte-identical frames on that build — the header carries no
+    timestamp or nonce — so @encode_base64_gz output is stable across runs.
+  @base64_gz_decode is strictly base64-first: @base64::engine::general_purpose::STANDARD must
+    decode the whole frame before any gzip byte is inspected, so malformed base64 always fails
+    as @crate::Error::Base64DecodeError and only structurally valid base64 can fail as
+    @crate::Error::Stdio.
+  Decompression extracts text exclusively through @std::io::Read::read_to_string, which
+    validates UTF-8 over the whole decompressed payload before @Ok; a non-UTF-8 payload fails
+    and a partial or lossy string is never returned.
+  @base64_gz_decode accepts any gzip stream @flate2::read::GzDecoder reads, not only
+    @encode_base64_gz output, and is level-agnostic (frames compressed at level `9` decode);
+    its default @flate2::read::GzDecoder::new construction stops at the first member of a
+    concatenated stream and discards the remainder of the frame while still returning @Ok.
+  Both directions buffer fully in memory — encode compresses the entire input before returning,
+    decode base64-decodes the whole frame up front — with no explicit size limit and no
+    streaming handle.
+  For every @String the roundtrip through @encode_base64_gz and @base64_gz_decode returns that
+    same text unchanged, including `""` — empty text roundtrips through a valid empty-member
+    gzip frame, and the roundtrip alone proves nothing about decode tolerance of foreign
+    frames.
+
+Depends on:
+  @base64::engine::general_purpose::STANDARD through @base64::Engine — padded standard-alphabet
+    engine, workspace `0.22.1` in `/Cargo.toml`, used in both directions.
+  @flate2::write::GzEncoder, @flate2::read::GzDecoder and @flate2::Compression — `1.1.4`
+    requested in `/common/Cargo.toml`, `1.1.9` locked in `/Cargo.lock`, default `rust_backend`
+    features compiling the miniz_oxide backend; every observed byte here comes from that build.
+  @crate::Error — variants @crate::Error::Stdio and @crate::Error::Base64DecodeError wrapping
+    @std::io::Error and @base64::DecodeError — and @crate::Result in ./lib.rs: the mapped error
+    contract both functions return.
+  @std::io::Write and @std::io::Read — the stream APIs @encode_base64_gz and
+    @base64_gz_decode drive.
+
+Exposes:
+  @encode_base64_gz — @pub fn taking @data: @String by value and returning
+    @crate::Result<@String>: the gzip+base64 frame of the input; no @String input is known to
+    return @Err on the locked build (see Tasks).
+  @base64_gz_decode — @pub fn taking @data: @String by value and returning @crate::Result<@String>:
+    the validated-UTF-8 text of the first gzip member carried in the frame, or a typed failure
+    for any malformed frame.
+  Both @pub markers are crate-internal: ./lib.rs declares the module `mod tools;` with no @pub
+    and no re-export, so @crate::tools is the only reach and the codec is not part of the
+    published API of the crate.
+
+Accepts:
+  @encode_base64_gz accepts any @String — the compressed bytes are its UTF-8 encoding, and the
+    empty string is accepted.
+  @base64_gz_decode accepts any @String, but @Ok requires a complete frame: canonical `=`-padded
+    standard base64 whose bytes open as a valid single-member gzip stream ending in a correct
+    trailer; whitespace anywhere, URL-safe `-`/`_` bytes, missing or non-canonical padding,
+    non-canonical final symbols and non-UTF-8 payloads are all rejected (see Raises).
+  Neither function imposes a length, size or rate limit on its input.
+
+Returns:
+  @encode_base64_gz returns @crate::Result<@String> whose @Ok is padded standard base64, no line
+    breaks; the frame of `""` is a fixed 20-byte empty-member stream (see Example); compressibility
+    is content-dependent — the encoder always emits the full deflate + base64 overhead even when
+    it never shrinks.
+  @base64_gz_decode returns @crate::Result<@String> whose @Ok is the text of the first gzip
+    member only, validated UTF-8.
+
+Raises:
+  @encode_base64_gz maps @std::io::Error from @flate2::write::GzEncoder::write_all or
+    @flate2::write::GzEncoder::finish into @crate::Error::Stdio; no @String input is known to
+    trigger either leg on the in-memory @Vec sink (see Tasks).
+  @base64_gz_decode maps @base64::DecodeError into @crate::Error::Base64DecodeError:
+    @base64::DecodeError::InvalidByte for bytes outside the standard alphabet — in
+    @test_decode_invalid_base64 the `-` at index `3` — @base64::DecodeError::InvalidPadding for
+    missing, truncated or non-canonical padding, @base64::DecodeError::InvalidLastSymbol for a
+    non-canonical final symbol.
+  @base64_gz_decode maps decompression and extraction @std::io::Error into @crate::Error::Stdio:
+    kind @std::io::ErrorKind::InvalidInput with message `invalid gzip header` when the frame
+    bytes are not a gzip header; kind @std::io::ErrorKind::UnexpectedEof on the miniz_oxide
+    backend for an empty frame or a truncated or corrupt deflate body; kind
+    @std::io::ErrorKind::InvalidData with message `stream did not contain valid UTF-8` when the
+    decompressed payload is not UTF-8.
+
+Handles:
+  Encoding empty text — produces a valid empty-member frame that decodes back to `""`.
+  Decoding an empty @String frame — fails with kind @std::io::ErrorKind::UnexpectedEof instead
+    of returning empty text.
+  Decoding a frame holding concatenated gzip members — returns the first member's text and
+    silently discards the rest (see Tasks).
+  Decoding a frame compressed at another level — succeeds; only the encoder fixates the level.
+
+Tasks:
+  [ ] Cover the strictness of @base64_gz_decode on non-canonical frames: unpadded `YQ`,
+      truncated `YQ=`, URL-safe `-`, an embedded newline, and non-canonical `YR==` each reject
+      with the distinct @base64::DecodeError variant named in Raises.
+  [ ] Cover @base64_gz_decode of the empty frame `""` failing as @crate::Error::Stdio with kind
+      @std::io::ErrorKind::UnexpectedEof.
+  [ ] Cover @base64_gz_decode frames that are valid base64 but not a decodable gzip stream:
+      non-gzip bytes (`invalid gzip header`) and truncated or corrupt deflate bodies
+      (@std::io::ErrorKind::UnexpectedEof).
+  [ ] Cover @base64_gz_decode rejecting a gzip payload whose decompressed bytes are not UTF-8,
+      and the fact that no partial text escapes the failure.
+  [ ] Cover @base64_gz_decode returning only the first member of a concatenated two-member frame.
+  [ ] Cover @encode_base64_gz determinism: repeated calls return a byte-identical frame, and
+      `""` encodes to the fixed constant in the Example block.
+  [ ] Cover @base64_gz_decode accepting a frame produced at level `9`, foreign to the encoder's
+      fixed level `6`.
+  [ ] Pin @crate::Error variants in failure tests: @test_decode_invalid_base64 currently asserts
+      only @Result::is_err, so the variant identity is untested today.
+  [?] Both functions carry a @pub marker while ./lib.rs declares the module `mod tools;`
+      privately with no re-export: @crate::tools callers are the only reach and the marker grants
+      nothing. Decide later whether the codec becomes crate-public API or the marker is demoted;
+      in-reach callers rely on the current path either way.
+  [?] @base64_gz_decode silently truncates a concatenated multi-member frame to its first
+      member because @flate2::read::GzDecoder::new defaults to single-member mode, discarding
+      the rest while returning @Ok. Decide later whether multi-member frames must be rejected or
+      fully decoded.
+  [?] @encode_base64_gz declares a fallible @crate::Result whose @crate::Error::Stdio legs were
+      not reachable for any input on the in-memory @Vec sink. Decide later whether the fallible
+      signature stays.
+  [?] The frame's byte stability — zeroed `mtime`, `xfl` `00`, os `ff`, deterministic deflate —
+      is an artifact of the locked rust_backend/miniz_oxide flate2 build; alternative selectable
+      backends could emit different header and deflate bytes for the same text. Decide later
+      whether the durable guarantee is cross-tool decode compatibility only or this exact byte
+      shape.
+  [?] @base64_gz_decode is text-only: it decompresses through @std::io::Read::read_to_string, so
+      a binary payload can never survive the roundtrip. Confirm the codec never needs to carry
+      bytes, or decide on a byte-oriented variant.
+
+Done when:
+  Every Scenario above has a passing mapped in-file test, the Tasks coverage gaps are closed, and
+    `cargo test -p common` is green.
+
+Scenario: Text roundtrips through the codec
+  Given the @String `"hello world\nsome yaml:\n  key: value\n"` — the in-file test literal with
+    its newline and indentation
+  When the @encode_base64_gz output is passed to @base64_gz_decode
+  Then the decoded text equals the original
+  Maps to test @test_encode_decode_roundtrip
+
+Scenario: Empty text roundtrips to a short constant frame
+  Given the empty string `""`
+  When @encode_base64_gz encodes it and @base64_gz_decode reads the frame back
+  Then encoding yields the 28-character padded base64 of a 20-byte empty-member gzip stream
+  And decoding returns `""`
+  Maps to test @test_encode_decode_empty_string
+
+Scenario: Highly repetitive payload shrinks and roundtrips
+  Given `x` repeated `10_000` times
+  When @encode_base64_gz encodes the text
+  Then the frame is shorter than the original text
+  And decoding the frame returns the identical @String
+  Maps to test @test_encode_decode_large_content
+
+Scenario: Malformed base64 symbols are rejected before gzip
+  Given the frame `not-valid-base64!!!`
+  When @base64_gz_decode runs
+  Then the call returns @Err of @crate::Error::Base64DecodeError wrapping
+    @base64::DecodeError::InvalidByte
+  Maps to test @test_decode_invalid_base64
+  The test asserts only @Result::is_err; pinning the variant is an open task.
+
+Scenario: Non-canonical base64 framing is rejected
+  Given frames `YQ` and `YQ=` (padding absent or truncated), `YQ==\n` (trailing whitespace),
+    `-_8=` (URL-safe bytes) and `YR==` (non-canonical final symbol)
+  When @base64_gz_decode runs on each
+  Then `YQ` and `YQ=` fail as @base64::DecodeError::InvalidPadding, the whitespace and URL-safe
+    frames as @base64::DecodeError::InvalidByte, and `YR==` as @base64::DecodeError::InvalidLastSymbol
+  And every failure arrives wrapped as @crate::Error::Base64DecodeError before gzip is read
+  No mapped test exists.
+
+Scenario: Empty frame fails instead of decoding to empty text
+  Given the empty @String as a frame
+  When @base64_gz_decode runs
+  Then the call returns @Err of @crate::Error::Stdio with kind @std::io::ErrorKind::UnexpectedEof —
+    @base64::engine::general_purpose::STANDARD accepts `""`, it is opening the empty stream as
+    gzip that fails — and an empty frame never yields `""`
+  No mapped test exists.
+
+Scenario: Frame is rejected when it is not a decodable gzip stream
+  Given valid standard base64 of bytes that are not a gzip stream
+  When @base64_gz_decode runs
+  Then the call returns @Err of @crate::Error::Stdio with kind @std::io::ErrorKind::InvalidInput
+    and message `invalid gzip header`
+  But when the header is valid and the deflate body is truncated or corrupted, the failure kind
+    is @std::io::ErrorKind::UnexpectedEof on the miniz_oxide backend
+  And text decompressed before the failure is discarded, never returned
+  No mapped test exists.
+
+Scenario: Non-UTF-8 payload cannot be decoded to text
+  Given a frame whose gzip payload decompresses to bytes that are not valid UTF-8 (probe bytes
+    `ff fe 00 c3`)
+  When @base64_gz_decode runs
+  Then the call returns @Err of @crate::Error::Stdio with kind @std::io::ErrorKind::InvalidData
+    and message `stream did not contain valid UTF-8`
+  And no lossy conversion of the payload is observable through the return type
+  No mapped test exists.
+
+Scenario: Concatenated gzip members truncate to the first
+  Given a frame holding two gzip members carrying `part1` and `part2`, concatenated as raw bytes
+    before base64
+  When @base64_gz_decode runs
+  Then the call returns @Ok with `part1` only and the remaining bytes of the frame are silently
+    discarded
+  No mapped test exists; see the open decision task.
+
+Scenario: Encoding is byte-stable for a given input
+  Given two @encode_base64_gz calls with the same @String
+  When their frames are compared
+  Then they are byte-identical and the frame carries no per-call timestamp or nonce
+  No mapped test exists.
+
+Example:
+  wire for `""`: `H4sIAAAAAAAA/wMAAAAAAAAAAAA=` — 28 base64 chars over the 20-byte
+    empty-member stream `1f 8b 08 00 00 00 00 00 00 ff 03 00 00 00 00 00 00 00 00 00`
+  wire head for `hello world`: `H4sIAAAAAAAA/8tIzcnJVyjPL8pJAQCFEUoNCwAAAA==`, opening with
+    header `1f 8b 08 00 00 00 00 00 00 ff`
+  alphabet probe: raw bytes `ff ff ff` encode to `////` — the URL-safe `-`/`_` variant is a
+    @base64::engine::general_purpose::STANDARD alternative that decoding here refuses

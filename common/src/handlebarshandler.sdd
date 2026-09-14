@@ -1,0 +1,500 @@
+Spec: HandlebarsHandler
+
+Purpose:
+  Own the Vynil-layer Handlebars engine: the @HandleBars newtype over
+    @vynil_core::hbs::HandleBars that registers the nine Vynil contextual helpers
+    (context selectors/labels, CRD and published-service probes, script-built image
+    references and k8s resources maps, and the nested `render_template` /
+    `render_file` recursion helpers) on top of the generic core surface, hands the
+    engine to package scripts through @handlebars_rhai_register (`new_hbs` and its
+    methods), freezes the native-helper name list via @VYNIL_HBS_HELPERS and
+    @is_native_hbs_helper, and re-exports @Value plus the Handlebars template AST
+    types for external template inspection.
+
+Owns:
+  ./handlebarshandler.rs
+
+References:
+  ./rhaihandler.rs — sole in-crate caller of @handlebars_rhai_register
+    (@crate::rhaihandler::Script::new_core adds it; the @tests module here drives
+    @crate::rhaihandler::Script::new under @cfg(test), product code depends on
+    nothing in that module).
+  ./tools.sdd, ./yamlhandler.sdd, ./instance_macros.sdd — approved calibration references.
+
+Must:
+  @HandleBars::new builds the complete engine as @vynil_core::hbs::HandleBars::new()
+    (which is `handlebars_misc_helpers::new_hbs` plus the core vendored JSON helpers)
+    then registers on @vynil_core::hbs::HandleBars::engine_mut exactly seven macro
+    helpers under registered names `selector_from_ctx`→@selector,
+    `labels_from_ctx`→@labels, `ctx_have_crd`→@have_crd,
+    `have_system_service`→@have_system_service, `have_tenant_service`→@have_tenant_service,
+    `render_template`→@render_template, `render_file`→@render_file, plus two Rhai
+    script helpers `image_from_ctx` and `resources_from_ctx`; nothing else is added.
+  The two @vynil_core::hbs::HandleBars::engine_mut script registrations go through
+    @handlebars::Handlebars::register_script_helper, which compiles the Rhai source
+    eagerly, and their @Result::Ok(()) is discarded with `let _` — a compile failure
+    would silently leave the helper absent. In the locked build both scripts compile
+    and behave as specified below (verified against a pinned 6.4.2/0.7.7/1.25.1 probe).
+  Error texts of helper argument failures name the macro struct, not the registered
+    name: `@selector`, `@labels` and `@have_crd` appear in messages while templates
+    call them `selector_from_ctx`, `labels_from_ctx`, `ctx_have_crd`; `@have_system_service`,
+    `@have_tenant_service`, `@render_template`, `@render_file` match their registered names.
+  The engine inherits two engine-wide settings installed by the locked
+    `handlebars_misc_helpers` `0.17.0` `setup_handlebars` inside the core constructor,
+    attributed to that build: @handlebars::Handlebars::set_strict_mode(`true`) — an
+    undefined variable reaching a strictly-typed helper parameter is a render error,
+    not an empty value — and @handlebars::Handlebars::register_escape_fn with
+    @handlebars::no_escape, replacing the `&"<>` @handlebars::html_escape default, so
+    no `{{ }}` output is HTML-escaped anywhere (probed: `&`/`%26` from `url_encode`
+    and `=` from base64 survive; json helper output carries raw quotes).
+  Objects returned by helpers render through the locked handlebars @JsonRender::render
+    placeholder — `{{selector_from_ctx this}}` prints the literal `[object]`, a null
+    value prints the empty string — so @selector, @labels and `resources_from_ctx`
+    results are only consumable via @JsonRender-free paths: subexpressions such as
+    `json_to_str (resources_from_ctx this "app")`, block helpers such as
+    `{{#each (selector_from_ctx this)}}`, or Rhai scripts reading the parameters.
+  @selector (`selector_from_ctx`) takes @ctx: @Value (any JSON — object, string,
+    null all accepted) plus optional hash `comp`: @str default `""`; returns the
+    cloned object found at `ctx.instance.selector` when that is an object, else the
+    empty object; a non-empty `comp` maps-inserts the key `app.kubernetes.io/component`
+    after the copied entries — an equal existing key keeps its position and takes the
+    `comp` value — while an empty `comp` (explicit or default) inserts nothing.
+    `ctx` being absent (or an undefined variable under strict mode) fails rendering
+    with `Helper/Decorator selector param with name ctx required but not found`.
+  @labels (`labels_from_ctx`) is identical over `ctx.instance.labels`.
+  @have_crd (`ctx_have_crd`) takes @ctx: @Value and a required `name`: @String — JSON
+    numbers, bools and objects never satisfy the @String coercion and fail with
+    `type mismatch for String` — and answers whether `ctx.cluster.crds` is an array
+    containing a JSON string exactly equal to `name`; a missing or non-array `crds`
+    is `false`, and non-string entries simply never match.
+  @have_system_service and @have_tenant_service share the shape (required @ctx +
+    @String `name`, @bool answer) over `ctx.cluster.services` and `ctx.tenant.services`
+    respectively: true if some array element is an object whose `key` field equals
+    `name` as a JSON string; non-object elements are inert, missing or non-array
+    context answers `false`.
+  `image_from_ctx` is an unguarded Rhai script on `params`: `params[0]` and
+    `params[1]` are indexed raw — with fewer than two parameters the render fails with
+    the handlebars-prefixed Rhai text `Cannot convert data to Rhai dynamic:` carrying an
+    `Array index <n> out of bounds` — and it indexes
+    `root["instance"]["images"][name]` with no type or presence guard, so a
+    non-object `root` or an unknown `name` aborts mid-script (unknown name surfaces
+    later as `Function not found: contains` against the unit image entry, at script
+    line 3 position 21). The tag is `im["tag"]` only when the key exists and its
+    value is not the unit `()` — a present `tag: null` therefore falls back — and the
+    fallback `root["instance"]["package"]["app_version"]` is itself unguarded, so a
+    missing package fails with `Indexer unavailable: () [string] (line 3, position 92)`.
+    Success renders the Rhai template string `<registry>/<repository>:<tag>`.
+  `resources_from_ctx` is the null-safe twin: every access chains with the Rhai
+    optional-index `?` (`params[0]?["instance"]?["resources"]`, `root?[name]?...`) so
+    any missing level yields the unit `()` and the helper returns an empty `#{}` map,
+    not an error; `#{}` is the Rhai empty-map literal inside the plain Rust string
+    (no Rust interpolation happens). It copies only the four leaf values
+    `requests.cpu`, `requests.memory`, `limits.cpu`, `limits.memory` with their JSON
+    types intact, adds the `requests` / `limits` parent keys only when at least one
+    leaf was found (`requests` ordered before `limits`), and never copies `scaler`
+    or any other peer key of the named resource block.
+  @render_template (@render_template struct under the registered name
+    `render_template`) takes `template`: @String and @data: @Value, constructs a
+    brand-new @HandleBars::new() per call — the nested engine therefore sees all nine
+    contextual helpers — and on any inner @vynil_core::Error logs @tracing::warn!
+    and outputs the empty string; because the nested engine starts from a core-only
+    base plus contextual helpers, any `{{> partial}}` or registered-template reference
+    inside the nested text is unresolvable and always collapses to the empty string.
+  @render_file takes `file`: @String and @data: @Value, reads the path through
+    @std::fs::read_to_string resolved against the process working directory, renders
+    it via @vynil_core::hbs::HandleBars::render_named — which registers the template
+    under the file-path name inside that fresh engine only — and likewise maps read,
+    parse, and render failures to @tracing::warn! plus empty-string output; file text
+    with no `{{ }}` tokens passes through byte-for-byte including its trailing newline,
+    and nothing caps a template that calls `render_file` on itself.
+  The Rhai `render_named` bridge (the last method of @handlebars_rhai_register) is
+    the core @vynil_core::hbs::HandleBars::rhai_render_named: it registers the template
+    in the
+    live engine instead of a throwaway one, so the name persists for the rest of that
+    engine — a later `{{> name}}` partial reference in the same engine renders the
+    leaked template, and a repeated call with the same name silently overwrites it.
+  @handlebars_rhai_register adds to the passed @rhai::Engine exactly
+    @rhai::Engine::register_type_with_name under the script type name `"HandleBars"`
+    and five global functions — `new_hbs` (@HandleBars::new, per call), and the
+    methods `register_template`
+    (@name @String, @template @String → @crate::RhaiRes<@rhai::Dynamic> unit),
+    `register_partial_dir` (@directory @String), `register_helper_dir`
+    (@directory @String), `render_from` (@template @String, @data @rhai::Map →
+    @crate::RhaiRes<@String>) and `render_named` (@name @String, @template @String,
+    @data @rhai::Map → @crate::RhaiRes<@String>) dispatched to
+    @vynil_core::hbs::HandleBars::rhai_register_template,
+    @vynil_core::hbs::HandleBars::rhai_register_partial_dir,
+    @vynil_core::hbs::HandleBars::rhai_register_helper_dir,
+    @vynil_core::hbs::HandleBars::rhai_render and
+    @vynil_core::hbs::HandleBars::rhai_render_named through @std::ops::DerefMut;
+    directory arguments naming a missing or non-directory path are accepted with no
+    effect, and both dir methods load only their suffix — `*.rhai` files as script
+    helpers named after the basename, `*.hbs` files as templates — core-side behavior.
+  @is_native_hbs_helper answers pure literal membership of @name: it is `true` exactly
+    when @name is in @vynil_core::hbs::CORE_HBS_HELPERS or in @VYNIL_HBS_HELPERS,
+    consulting no engine — `inline` is answered native although that name is
+    registered as a decorator and a helper lookup fails, and names gated out of the
+    build by Cargo features would still answer native.
+  The nine registered names are disjoint from the handlebars `6.4.2` built-in helper
+    set (`if`, `unless`, `each`, `with`, `lookup`, `raw`, `log`, `eq`, `ne`, `gt`,
+    `gte`, `lt`, `lte`, `and`, `or`, `not`, `len`, the case helpers) and from the
+    misc/core helper surface, so @HandleBars::new registers nothing over anything a
+    probe of the built engine can reach; conversely `helperMissing`,
+    `blockHelperMissing` and `else` are `false` in @is_native_hbs_helper.
+  Object key order follows the locked @serde_json `1.0.150` with `preserve_order`
+    unified by the handlebars dependency: selector/labels output keeps the context
+    order with the `comp` key last, and `resources_from_ctx` emits `requests` before
+    `limits`.
+  @HandleBars exposes its core: the tuple field is `pub` and @std::ops::Deref /
+    @std::ops::DerefMut target @vynil_core::hbs::HandleBars, so Rust callers hold the
+    whole core surface (@vynil_core::hbs::HandleBars::engine_mut,
+    @vynil_core::hbs::HandleBars::render, @vynil_core::hbs::HandleBars::render_named,
+    @vynil_core::hbs::HandleBars::register_template, the two dir registrars and the
+    @crate::RhaiRes methods) beyond what this file itself defines; @Clone and @Debug
+    derive over the inner engine; @HandleBars::new returns the @HandleBars<'static>
+    instantiation regardless of any borrow scope.
+  The in-file @tests pin the post-core-extraction lockstep contract in both
+    directions: core generic helpers (@gen_password, @gen_private_key, base64,
+    @url_encode, @to_decimal, @concat, @header_basic) must still render through
+    @HandleBars::new(), and `new_hbs` on a registered engine must produce the common
+    contextual surface — the regression test re-renders a package-style context to keep
+    install/crds/backup script paths from silently losing the contextual helpers.
+
+Depends on:
+  `handlebars` `6.2.0` requested in `/common/Cargo.toml`, `6.4.2` locked in
+    `/Cargo.lock`, features `script_helper` and `string_helpers` —
+    @handlebars::handlebars_helper typed-parameter conversion (a @Value param accepts
+    any JSON, a @String param accepts only JSON strings via @serde_json::from_value,
+    a `str` hash only JSON strings, hash defaults applying only to absent keys),
+    @handlebars::RenderErrorReason argument texts, @JsonRender::render placeholders,
+    @handlebars::Handlebars engine semantics (registration overwrite, registered
+    templates usable as partials), @handlebars::no_escape, and the re-export sources
+    @handlebars::Path and @handlebars::PathSeg and @handlebars::template::{@Parameter,
+    @Template, @TemplateElement}.
+  `vynil-core` `0.7.7` from crates.io (`/common/Cargo.toml`, requested features
+    `k8s,oci,s3,fs,shell,password` on default `http,crypto,rhai,hbs,hbs-scripting`) —
+    @vynil_core::hbs::HandleBars supplies the base engine,
+    @vynil_core::hbs::CORE_HBS_HELPERS supplies the core half of @is_native_hbs_helper,
+    and the `rhai_*` wrappers plus @handlebars_misc_helpers `0.17.0` setup supply the
+    strict-mode / no-escape / error-text behavior frozen above;
+    @vynil_core::Error::HbsRenderError `Renderer error: ` and
+    @vynil_core::Error::HbsTemplateError `Registering template failed with error: `
+    are the prefixes scripts and Rust callers see.
+  `handlebars_misc_helpers` `0.17.0` locked (`/common/Cargo.toml` features
+    `string,json,jsonnet,regex,uuid` unified over core's request) —
+    `new_hbs`/`setup_handlebars` installs strict mode and @handlebars::no_escape and
+    the first-level helper set the engine carries.
+  `rhai` `1.20.0` requested, `1.25.1` locked (`/common/Cargo.toml`, features
+    `sync`, `serde`, `internals`) — @rhai::Engine registration, @rhai::Map, @rhai::Dynamic,
+    `params` array semantics for script helpers, and the @serde_json round-trip of a
+    @rhai::Map performed by the core `rhai_render` / `rhai_render_named` boundary.
+  @serde_json `1.0.150` — @Value as the helper data currency and re-export target,
+    `preserve_order` key stability unified via handlebars.
+  @tracing::warn — the only signal for @render_template / @render_file failures.
+  @crate::RhaiRes in ./lib.rs — the @rhai::EvalAltResult result alias used by every
+    @handlebars_rhai_register bridge closure.
+  @std::fs::read_to_string — @render_file template reads.
+
+Exposes:
+  @VYNIL_HBS_HELPERS — `pub const VYNIL_HBS_HELPERS: &[&str]` holding exactly the
+    nine registered names in order: `selector_from_ctx`, `labels_from_ctx`,
+    `ctx_have_crd`, `have_system_service`, `have_tenant_service`, `image_from_ctx`,
+    `resources_from_ctx`, `render_template`, `render_file`; documentation positions it
+    as the addition over @vynil_core::hbs::CORE_HBS_HELPERS.
+  @is_native_hbs_helper — `#[must_use] pub fn is_native_hbs_helper(name: &str) -> bool`;
+    `true` for any name in @vynil_core::hbs::CORE_HBS_HELPERS or @VYNIL_HBS_HELPERS
+    (const membership, engine not consulted).
+  @HandleBars — `pub struct HandleBars<'a>(pub @vynil_core::hbs::HandleBars<'a>)` with
+    `#[derive(Clone, Debug)]` over the inner engine; @std::ops::Deref and
+    @std::ops::DerefMut to @vynil_core::hbs::HandleBars grant the full core surface;
+    the `pub` field allows bypassing every layer.
+  @HandleBars::new — `#[must_use] pub fn new() -> @HandleBars<'static>`; the exact
+    helper surface is the `Must` registration entry (seven @handlebars_helper helpers
+    plus `image_from_ctx` and `resources_from_ctx` script helpers).
+  @handlebars_rhai_register — `pub fn handlebars_rhai_register(engine: &mut @rhai::Engine)`;
+    script-visible surface exactly as the `Must` bridge entry: custom type
+    `"HandleBars"`, constructor `new_hbs`, methods `register_template`,
+    `register_partial_dir`, `register_helper_dir`, `render_from`, `render_named`.
+  Re-exports — `pub use` of @handlebars::Path as @HbsPath, @handlebars::PathSeg,
+    @handlebars::template::@Parameter, @handlebars::template::@Template,
+    @handlebars::template::@TemplateElement, and @serde_json::@Value; template-AST
+    inspection and JSON data flow through these instead of the upstream paths.
+
+Accepts:
+  @HandleBars::new accepts nothing; @is_native_hbs_helper accepts any `&str` and never
+    fails; @handlebars_rhai_register accepts any mutable @rhai::Engine and re-applies
+    its six registrations idempotently, overwriting same-name entries.
+  Template data is any @Value context; the contextual helpers freeze this data
+    contract on top of it: `instance.selector` / `instance.labels` objects of string
+    labels, `instance.images.<name>` objects with `registry` and `repository` plus an
+    optional non-`null` `tag`, `instance.package.app_version` as the image tag
+    fallback, `instance.resources.<name>.requests|limits.{cpu,memory}` leaf values of
+    any JSON type, `cluster.crds` an array of strings, `cluster.services[]` and
+    `tenant.services[]` objects carrying a string `key`; every other shape degrades
+    to empty/false/absent rather than rejecting.
+  `render_template` accepts any template text (@String param — non-string first
+    parameter is a type-mismatch error) and any @Value data; `render_file` accepts any
+    path text, read at call time against the process working directory.
+  The Rhai bridge `render_from` / `render_named` accept any @rhai::Map — the core
+    boundary JSON-serializes it (integers, floats, bools, strings, arrays, nested maps;
+    the unit `()` becomes JSON `null`) before the engine sees it, and a @rhai::Dynamic
+    that @serde_json cannot serialize fails the call before rendering.
+  Script helpers receive every provided parameter positionally in `params` without
+    type checking; a path resolving to undefined arrives as the absent-value path the
+    script must itself guard.
+
+Returns:
+  @HandleBars::new returns the fully registered @HandleBars<'static> engine;
+    @is_native_hbs_helper returns @bool.
+  @selector / @labels return a JSON object (possibly `{}`); @have_crd,
+    @have_system_service, @have_tenant_service return booleans rendered `true` /
+    `false`; `image_from_ctx` returns the `registry/repository:tag` string;
+    `resources_from_ctx` returns a possibly-empty map; booleans and numbers returned
+    or looked up by helpers render plainly, objects render `[object]` in expression
+    position.
+  Both nested-rendering helpers return @String — the rendered text or `""`.
+  @handlebars_rhai_register returns nothing; the script methods return
+    @crate::RhaiRes payloads: unit, unit, unit, rendered @String, rendered @String.
+
+Raises:
+  Through the Deref'd @vynil_core::hbs::HandleBars::render surface, helper argument
+    failures arrive as @vynil_core::Error::HbsRenderError whose display wraps the
+    position clause `Error rendering "<name or Unnamed template>" line <l>, col <c>:`
+    around the handlebars reasons `Helper/Decorator <struct> param with name <p> required but not found`
+    (absent parameter or strict-mode undefined variable),
+    `... param with name name type mismatch for String` (@have_crd, the two service
+    probes given non-string names; same class for @render_template / @render_file
+    non-string first parameters), and `Helper/Decorator selector hash with name comp type mismatch for str`
+    for a non-string or `null` explicit `comp` (hash defaults apply only to absent
+    keys); unknown helper names raise `Helper not found <name>`.
+  Script-helper runtime failures arrive prefixed for the dynamic boundary:
+    `Cannot convert data to Rhai dynamic: <rhai message> (line <l>, position <p>)` —
+    out-of-bounds `params`, `Function not found: contains ((), ...)` for unknown image
+    names, `Indexer unavailable: () [string]` for missing image fallback paths.
+  @render_template and @render_file raise nothing outward — every inner failure
+    (missing file, unparseable text, failed render) is @tracing::warn!-logged and
+    returned as the empty string.
+  The Rhai-registered methods raise @rhai::EvalAltResult errors on the script side:
+    template-registration failures carry the @vynil_core::Error display prefix
+    `Registering template failed with error: `, `render_from` / `render_named` render
+    failures carry the bare handlebars text (`Error rendering ... Partial not found <p>`
+    etc. plus the Rhai `Runtime error: ... (line <l>, position <p>)` wrap), and a
+    non-serializable @rhai::Map fails with the @serde_json message — the
+    registration-vs-render text asymmetry is the core wrappers'.
+  No path in this file panics on reachable input: @Option::unwrap_or_default,
+    @Option::is_some_and and @str::is_empty guard every fallible step, and the file
+    contains no `unwrap()` / `expect()` calls; strict-mode and script failures are values.
+
+Handles:
+  Missing `comp` hash, empty `comp` string, absent or non-object `ctx`/`instance` —
+    selector/labels answer `{}`, with `comp` inserted only when non-empty and
+    component-key override keeping the original position.
+  `tag` absent or explicit `null` in an image entry — the tag falls back to
+    `instance.package.app_version`; unknown image name or missing `package` — hard
+    render error (see Raises).
+  Non-array `cluster.crds` / non-object service entries / non-string crds items —
+    probes answer `false` instead of erroring.
+  Undefined context paths reaching script helpers — `resources_from_ctx` null-chains
+    to `{}`; `image_from_ctx` has no chain and errors.
+  `render_file` on a missing, unparseable, or partial-referencing file, and
+    `render_template` on a missing-partial template — @tracing::warn! then `""`.
+  `register_partial_dir` / `register_helper_dir` naming a missing or non-directory
+    path — accepted unchanged as a no-op (core `is_dir` gate).
+  Registered-name reuse — @handlebars::Handlebars::register_helper overwrites any
+    previous same-name helper of whichever layer it shadows, silently.
+
+Tasks:
+  [ ] Cover the contextual helper argument surface with in-file tests: selector/labels
+      `comp` insert/override/no-op/non-object, `ctx_have_crd` string-equality plus the
+      number-vs-string rejection, and the two service probes over mixed object/scalar
+      arrays — none of the five has any mapped test today.
+  [ ] Cover `image_from_ctx`: tag present, absent and `null` fallback to
+      `package.app_version`, the `registry/repository:tag` shape, and the error texts
+      for unknown name, missing `package`, and missing parameters. No mapped test exists.
+  [ ] Cover `render_template` nested rendering: simple template with data,
+      contextual helpers available in the nested engine, and missing-partial collapse
+      to `""` with the warn swallowed. No mapped test exists.
+  [ ] Cover `render_file`: existing template with trailing newline pass-through,
+      read-error / unparseable-template / unresolvable-partial all landing at `""`.
+      No mapped test exists.
+  [ ] Cover strict-mode argument failures verbatim: absent ctx, undefined variable as
+      the @Value/@String parameter, numeric `name`, and `comp=5`, asserting the exact
+      `Helper/Decorator ...` texts including the macro-struct-name drift. No mapped
+      test exists.
+  [ ] Cover the no-HTML-escaping property and the `[object]` placeholder directly —
+      @test_helper_url_encode currently accepts either `%26` or `&amp;`, so the engine
+      escape contract could invert unnoticed.
+  [ ] Cover the shared-engine leak of the Rhai `render_named` method: register under a
+      name once, later render `{{> name}}` in the same engine, and repeat-name
+      overwrite. No mapped test exists.
+  [ ] Assert @VYNIL_HBS_HELPERS against the runtime engine and cover @is_native_hbs_helper
+      `true`/`false` edges (`inline` as decorator, `helperMissing`, core names), so the
+      const cannot drift from the registered surface silently.
+  [?] `let _` discards the compile errors of @handlebars::Handlebars::register_script_helper
+      — a future edit breaking either script leaves `image_from_ctx` /
+      `resources_from_ctx` silently
+      unregistered until something renders them. Decide later whether registration
+      failures must fail engine construction.
+  [?] @is_native_hbs_helper is const-membership, not engine truth: it answers native
+      for `inline` (decorator only — a helper lookup fails) and would answer native
+      for feature-gated core names in a leaner build. Decide later whether the gate
+      becomes engine-driven or the list is corrected and feature-pinned.
+  [?] Argument-error texts name the macro structs (`selector`, `labels`, `have_crd`)
+      while templates call the registered aliases (`selector_from_ctx`,
+      `labels_from_ctx`, `ctx_have_crd`) — one failure is hard to grep from the other.
+      Decide later whether the struct names realign.
+  [?] Helper objects print the literal `[object]` in expression position, so
+      `{{selector_from_ctx this}}` silently produces junk text instead of JSON; only
+      subexpression/block use works. Decide later whether the helpers should return
+      rendered-JSON strings or the Value behavior stays documented.
+  [?] @render_template / @render_file map every nested failure to the empty string plus
+      @tracing::warn!: package scripts cannot distinguish empty output from broken
+      templates, and the fresh nested engine can never see partials or templates
+      registered by the outer render, so `{{> }}` inside these calls always collapses.
+      Decide later whether errors must surface or partials be inherited.
+  [?] `render_file` reads its path against the process working directory (no template
+      base dir) and nothing guards a template file calling `render_file` on itself —
+      only `{{> }}` self-include is refused upstream, helper recursion is live
+      recursion. Decide later whether path resolution and recursion depth need rules.
+  [?] `image_from_ctx` is unguarded where `resources_from_ctx` null-chains: its
+      failures surface as cryptic Rhai texts (`Function not found: contains ((), ...)`,
+      `Indexer unavailable: ()`). Decide later whether it becomes a typed Rust helper
+      or gains `?` guards.
+  [?] Strict mode, the no-escape renderer, and the `[object]` behavior all belong to
+      `handlebars_misc_helpers` `0.17.0` + `handlebars` `6.4.2` internals, not to this
+      file, yet every claim here leans on them; a dependency bump could re-enable
+      HTML escaping or soften strictness with no change in this file. Decide later
+      whether @HandleBars::new re-asserts both settings itself.
+  [?] The Rhai `render_named` bridge registers into the live shared engine (persistent
+      partials, silent same-name overwrite, cross-render state) while `render_from`
+      is clean — two persistence classes under one object. Decide later whether
+      `render_named` should render without registering, as core's plain method could.
+  [?] @Clone on @HandleBars clones the whole registered engine including script ASTs
+      and leaked templates; no in-file rule says whether clones are meant to be cheap
+      per-render or long-lived shared renderers. Confirm the intended ownership before
+      consumers are reviewed.
+
+Done when:
+  Every Scenario above has a passing in-file test (or the gap is explicitly carried),
+    the Tasks coverage checks are closed, and `cargo test -p common` with
+    `cargo clippy --all-targets -- -D warnings` are green.
+
+Example:
+  selector wire probe: `{{json_to_str (selector_from_ctx this comp="c1")}}` over
+    `{"instance":{"selector":{"app":"z","tier":"w"}}}` yields
+    `{"app":"z","tier":"w","app.kubernetes.io/component":"c1"}` — comp appended last
+  direct-object wire: `{{selector_from_ctx this}}` yields the placeholder `[object]`
+  argument error wire: `{{selector_from_ctx}}` yields `Renderer error: Error rendering "Unnamed template" line 1, col 1: Helper/Decorator selector param with name ctx required but not found`
+  script-error wire: `{{image_from_ctx this "nope"}}` yields `Renderer error: Error rendering "Unnamed template" line 1, col 1: Cannot convert data to Rhai dynamic: Function not found: contains ((), &str | ImmutableString | String) (line 3, position 21)`
+  image wires: with tag → `reg/repo/web:1.2`, tag absent or `null` →
+    `reg/repo/web:9.9` from `package.app_version`
+
+Scenario: Script map data reaches helpers as JSON
+  Given a @rhai::Engine built by @handlebars_rhai_register and a script-built
+    `#{}` map holding an @i64, a string, and a boolean
+  When the script calls `new_hbs().render_from(...)` with it
+  Then each value renders in its JSON form (`42`, `hello`, `true`) through the
+    contextual engine
+  Maps to test @test_rhai_render_scalar_values
+
+Scenario: Nested script maps keep their shape
+  Given a @rhai::Map with an inner map (`host`, `port`)
+  When `render_from` renders a `{{svc.host}}:{{svc.port}}`-style path access
+  Then nested path resolution succeeds against the JSON-converted map
+  Maps to test @test_rhai_render_nested_map
+
+Scenario: Script render_named renders with its data and registers its name
+  Given a script calling `render_named("t", "result: {{v}}", #{v: "ok"})`
+  Then the call returns `result: ok`
+  And the same engine later renders `{{> t}}` with the leaked template instead of
+    failing with a missing partial
+  Maps to test @test_rhai_render_named_basic for the render leg; the persistence leg
+    has no mapped test.
+
+Scenario: Context selects and labels carry the component tag
+  Given a context with `instance.selector` and `instance.labels` objects
+  When `{{#each (selector_from_ctx this)}}` renders with and without `comp="c1"`, and
+    `comp` is also given as an empty string or over an absent `instance`
+  Then entries render in context order, `app.kubernetes.io/component` appears only
+    for a non-empty `comp`, an existing component key is overwritten in place, and a
+    context without the branch yields nothing to iterate
+  No mapped test exists.
+
+Scenario: CRD and service probes answer from the cluster context
+  Given contexts mixing a matching `crds` string, a number crds entry, object service
+    entries with `key`, a bare string service entry, and a tenant-side twin
+  When @ctx_have_crd, @have_system_service and @have_tenant_service render
+  Then string matches answer `true`, type-mismatched entries never match, scalar
+    service elements are skipped, and absent branches answer `false`
+  No mapped test exists.
+
+Scenario: Image reference falls back to the package app version
+  Given `instance.images.web` with `registry` and `repository`, with `tag` present,
+    absent, and `null`, plus `instance.package.app_version` as the fallback
+  When `{{image_from_ctx this "web"}}` renders each context
+  Then the presence of a non-`()` tag wins and both fallback shapes render
+    `<registry>/<repository>:9.9`
+  But an unknown image name or missing `package` aborts the render with the script
+    error texts from Raises
+  No mapped test exists.
+
+Scenario: Resources extraction keeps only the k8s leaf keys
+  Given `instance.resources.app` variants — full, requests-only, requests plus
+    `scaler`, and an empty `instance`
+  When `{{json_to_str (resources_from_ctx this "app")}}` renders each
+  Then the four k8s leaf keys pass through with types, a parent key appears only with
+    a leaf, `scaler` is never copied, and an empty context yields `{}`
+  Maps to tests @test_resources_from_ctx_full_config,
+    @test_resources_from_ctx_requests_only_no_limits_key,
+    @test_resources_from_ctx_scaler_does_not_leak and
+    @test_resources_from_ctx_empty_context_returns_empty_object
+
+Scenario: Script-visible engine is the contextual engine
+  Given a registered script building `#{ instance: #{ selector: ... } }` and calling
+    `new_hbs()`
+  When it renders `{{#each (selector_from_ctx this)}}{{@key}}={{this}}{{/each}}`
+  Then the new engine exposes the contextual helpers — `app=demo` renders, proving
+    `new_hbs` returns this file's engine and not the core-only one
+  Maps to test @test_new_hbs_rhai_exposes_contextual_helpers
+
+Scenario: Core generic surface survives into this engine
+  Given template expressions for `gen_password` (length and `symbols=0`),
+    `gen_private_key`
+    (`ed25519`, `rsa bits=2048` PEM-parsed), `base64_encode` / `base64_decode`
+    round-trip, `url_encode`, `to_decimal` (octal `755` and `0`), `concat`, and
+    `header_basic`
+  When each renders through @HandleBars::new()
+  Then the core helper results are unchanged by this layer
+  Maps to tests @test_helper_gen_password_length_and_classes,
+    @test_helper_gen_password_symbols_disabled, @test_helper_gen_private_key_ed25519,
+    @test_helper_gen_private_key_rsa_with_bits, @test_helper_base64_encode,
+    @test_helper_base64_decode, @test_helper_base64_roundtrip,
+    @test_helper_url_encode, @test_helper_to_decimal_octal,
+    @test_helper_to_decimal_zero, @test_helper_concat and @test_helper_header_basic
+
+Scenario: Nested render_template renders inline and collapses failures
+  Given a template calling `{{render_template "Hi {{name}}" this}}` and another
+    calling it with `{{> nope}}` inside
+  When both render
+  Then the inline template renders with the passed data while the inner missing
+    partial — every partial reference does, in fact — yields the empty string plus a
+    warning, never an outer error
+  No mapped test exists.
+
+Scenario: Files render through render_file and fail silently
+  Given `render_file` calls naming a readable template file, a missing path, and an
+    unparseable file
+  When all three render
+  Then the readable file renders with its trailing newline intact while the other two
+    return the empty string after warnings
+  No mapped test exists.
+
+Scenario: Strict mode turns missing args into render errors
+  Given calls missing the `ctx` parameter, passing an undefined variable as @ctx or
+    as `name`, passing a number as `name`, and passing `comp=5`
+  When any renders through the Deref'd core render surface
+  Then each fails with the exact `Helper/Decorator <struct> param with name <p> required but not found`
+    / `type mismatch` family named in Raises — errors name
+    the macro structs, and the script helpers with no missing-`comp`-style
+    requirement keep answering
+  No mapped test exists.

@@ -1,0 +1,421 @@
+Spec: VynilPackage
+
+Purpose:
+  Carry the package model of the whole product in one file: the source-package YAML document
+    @VynilPackageSource as authors write it, the JukeBox-status package entry @VynilPackage as the
+    cluster stores it, the requirement vocabulary @VynilPackageRequirement with its evaluation
+    against a @SystemInstance, @TenantInstance or @ServiceInstance, the selection predicates that
+    let a consumer pick a migration waypoint version, and the Rhai bridge @package_rhai_register
+    that exposes the source document to package scripts. A reader must be able to regenerate the
+    exact JSON/YAML wire shapes and the exact serde accept/reject boundaries from this spec.
+
+Owns:
+  ./vynilpackage.rs
+
+References:
+  ./tools.sdd — approved calibration reference for style and detail.
+
+Must:
+  Wire enums freeze exact strings. @VynilPackageType serializes as `tenant` (default variant
+    @VynilPackageType::Tenant), `system`, `service`; @VynilPackageFeature as `upgrade` (default),
+    `backup`, `monitoring`, `high_availability`, `auto_config`, `auto_scaling`, `deprecated` —
+    both via `#[serde(rename_all = "snake_case")]`. @StorageCapability carries no serde rename and
+    serializes as exactly `RWX` (default) or `ROX`; deserialization is case-sensitive and `rwx` is
+    rejected as `unknown variant`.
+  @VynilPackageMeta freezes wire keys `name`, `category`, `description`, `app_version`, `type`,
+    `features`, `backup_affinity`; the Rust field @VynilPackageMeta.usage is renamed via
+    `#[serde(rename = "type")]`. @name, @category, @description, @usage and @features are required
+    by serde (the @Vec has no serde default); @app_version and @backup_affinity default to @None.
+    No container sets `deny_unknown_fields`, so unknown keys are silently ignored everywhere here.
+  @VynilPackageRequirement is externally tagged with snake_case tags. JSON shape per variant:
+    `{"custom_resource_definition":"<crd-name>"}`, `{"system_service":"<name>"}`,
+    `{"tenant_service":"<name>"}`, `{"system_package":{"category":"…","name":"…"}}`,
+    `{"tenant_package":{"category":"…","name":"…"}}`, `{"prefly":{"script":"…","name":"…"}}`,
+    `{"cluster_version":{"major":N,"minor":N}}`, `{"storage_capability":"RWX"|"ROX"}`,
+    `{"minimum_previous_version":"<semver-string>"}`, `{"vynil_version":"<semver-string>"}`,
+    `{"cpu":<f64>}`, `{"memory":<u64>}`, `{"disk":<u64>}`. In @VynilPackageSource YAML the
+    `#[serde(with = "@serde_yaml::with::singleton_map_recursive")]` on @requirements renders each
+    sequence item as that single-key mapping inline, e.g. `- custom_resource_definition: some.crd.io`
+    or `- cluster_version:` with `major: 1` / `minor: 25` children — the forms the in-file tests use.
+  Numeric requirement payloads type-check at deserialize time on the locked @serde_json: @cpu is
+    @f64 and accepts JSON integers widened (`2` → `2.0`); @memory and @disk are @u64 and reject
+    floats (`512.5` → `invalid type: floating point`) and numeric strings (`"512"` → `invalid type:
+    string`); @minimum_previous_version / @vynil_version are @String and reject an unquoted YAML
+    scalar such as `0.4` (`invalid type: floating point …, expected a string`). The embedded version
+    text itself is never parsed at deserialize time — any @String is accepted onto the wire.
+  @read_package_yaml opens the path, wraps the reader in @serde_yaml::Deserializer::from_reader and
+    deserializes exactly one @VynilPackageSource through @serde_yaml::with::singleton_map_recursive
+    — a multi-document stream consumes only the first document.
+  @VynilPackageSource freezes wire keys `apiVersion`, `kind`, `metadata`, `requirements`,
+    `recommandations`, `options`, `images`, `resources`, `value_script`; @api_version and @kind are
+    required plain @String whose values are not validated here (content such as
+    `vynil.solidite.fr/v1` / `Package` comes only from convention), and all sections except @metadata
+    and @requirements default to @None / empty on deserialize.
+  The three check methods @VynilPackageRequirement::check_system, @VynilPackageRequirement::check_tenant
+    and @VynilPackageRequirement::check_service evaluate one requirement on a cloned instance
+    (bound in the @rhai context as `instance`) and return the tuple
+    (@bool satisfied, @String failure-message, @u64 ttl-seconds). The message string is formatted and
+    returned whatever the verdict; the ttl is exactly `900` seconds (`15 * 60`) for every variant
+    except @VynilPackageRequirement::CustomResourceDefinition and @VynilPackageRequirement::Prefly,
+    which use `300` (`5 * 60`). A requirement that fails evaluates as (@false, message, ttl); only an
+    infrastructure, semver-parse or script failure surfaces @Err.
+  Variant evaluation shared by all three flavors: @VynilVersion compares @Semver::parse(VERSION) >=
+    @Semver::parse(v), message text `Requested vynil version {v} is over current version {VERSION}. Please upgrade vynil first`;
+    @ClusterVersion fetches @crate::k8sraw::K8sRaw::get_api_version, extracts (major, minor) via the
+    private @parse_cluster_api_version, and passes when `maj > major || (maj == major && min >= minor)`
+    — minor-only comparison, no patch exists on the wire; @CustomResourceDefinition calls
+    @kube::Api::get_metadata_opt on the CRD name and passes iff present; @Prefly runs the script
+    through @crate::rhaihandler::Script::eval_truth on a fresh @crate::rhaihandler::Script::new with an
+    empty resolver-path vector — a non-boolean result is an @Err, not a failed requirement;
+    @SystemPackage lists all @SystemInstance cluster-wide and matches `spec.category == category &&
+    spec.package == name`; @SystemService consults @ServiceInstance::get_all_services_names (TTL-cached).
+  Flavor differences: @check_tenant additionally evaluates @VynilPackageRequirement::TenantPackage —
+    pass iff a listed @TenantInstance matches category+package and its @metadata.namespace is in
+    @TenantInstance::get_tenant_namespaces — and @VynilPackageRequirement::TenantService via
+    @TenantInstance::get_tenant_services_names. @check_service has neither branch. @check_system has an
+    explicit @VynilPackageRequirement::TenantPackage branch that logs a warning
+    (`TenantPackage Requirement for a system package is invalid, skipping`) and returns @true.
+    @VynilPackageRequirement::StorageCapability is a TODO stub in every flavor: warn
+    (`StorageCapability Requirement is a TODO`), return @true. @VynilPackageRequirement::MinimumPreviousVersion
+    always returns (@true, `""`, `900`) at check time — it is enforced at selection time by
+    @VynilPackage::is_min_version_ok. Every otherwise-unmatched variant (@Cpu, @Memory, @Disk in all
+    flavors, @TenantService in @check_system, @TenantService and @TenantPackage in @check_service) falls
+    into a `_` catch-all returning (@true, `""`, `900`).
+  @VynilPackage::is_min_version_ok and @VynilPackage::is_vynil_version_ok are three-fold lenient: an
+    unparseable @current string, a missing corresponding requirement, and an unparseable target string
+    each return @true; only two successfully parsed values can return @false via @cur >= @target. This
+    is the predicate a migration chain selects with: `packages.iter().find(|p| p.is_min_version_ok(current)).map(|p| p.tag)`
+    against a newest-first list — an empty or unparseable @current qualifies every package so the first
+    (latest) entry is chosen, and a first entry whose minimum excludes @current falls through to the
+    next (waypoint) entry.
+  @Semver (re-export @vynil_core::Semver, locked `0.7.7`) @parse strips exactly one leading ASCII `v`
+    then delegates to @semver::Version::parse (locked `1.0.28`, probe-verified): `1.2.3` accepted;
+    `v1.2.3` rejected by the inner parser (only the wrapper strips it, lowercase `v` only); `1.2`,
+    `1.02.3` (leading zero), `""`, `·1.2.3` (leading space) rejected; `1.2.3-pre` and `1.2.3+build`
+    accepted. Ordering: prerelease ranks below its release, and the locked build's @Ord/@Eq include
+    build metadata (`1.0.0+a` < `1.0.0+b`, not @Eq — unlike the semver.org precedence rule). The wrapper
+    derives @Ord over (@version, @use_v), so equal versions with the `v` prefix rank strictly higher:
+    `>=` can be @false for semantically equal versions when @current carries no `v` and the target does.
+  @VynilPackage::is_cluster_version_ok is synchronous over async: it calls @tokio::task::block_in_place
+    around @tokio::runtime::Handle::block_on, fetches and parses the api-server version before consulting
+    @VynilPackage::get_cluster_version — a package without a @ClusterVersion requirement can still return
+    @Err from that fetch; with a requirement it returns @Ok(maj > major || (maj == major && min >= minor)).
+    @parse_cluster_api_version (private) accepts only a JSON object with @major and @minor fields whose
+    values re-serialize (via @serde_json::to_string) to bare u64 text: JSON numbers `1` pass, JSON
+    strings re-serialize with quotes and fail as @crate::Error::ParseInt (probe-verified `\"1\"` →
+    `invalid digit found in string`), floats fail likewise; a non-object value fails as
+    @crate::Error::Other("api-server version response is not a JSON object") and a missing field as
+    @crate::Error::Other whose text is `api-server version response has no` — the missing field name
+    followed by literal backtick characters followed by `field`.
+  First-match getters freeze duplicate handling: @VynilPackage::get_min_version,
+    @VynilPackage::get_vynil_version and @VynilPackage::get_cluster_version scan @requirements in
+    order and return the first matching variant's payload, @None otherwise; later duplicates are ignored.
+  @VynilPackageSource getters (@VynilPackageSource::get_metadata, ::get_requirements,
+    ::get_recommandations, ::get_options, ::get_images, ::get_resources) hand sections to Rhai through a
+    @serde_json string roundtrip into @rhai::Dynamic, so the meta map arrives with the renamed `type`
+    key and @None fields as `null`; @None sections return @rhai::Dynamic::from(()) — the Rhai unit
+    value, not an empty map or array. @VynilPackageSource::get_value_script maps @None to `""` and is
+    infallible. The methods take @mut @self without mutating, matching the @rhai::Engine::register_get
+    signature.
+  @VynilPackageSource::validate_options deserializes each @options value (round-tripped through a
+    JSON string) as the re-exported @Schema (@openapiv3::Schema, locked `2.2.0`) and discards the
+    result — a type-shape-only gate. Accept boundary: the value must be a JSON object whose recognized
+    OpenAPI keywords match openapiv3's permissive keyword types (unknown keys tolerated, `type` an
+    unchecked @String, unknown keyword combinations landing in the catch-all @Any arm); scalars, arrays
+    and @null are rejected. No JSON-Schema meta-validation runs.
+  @package_rhai_register freezes the script-visible surface: global fn `vynil_version` →
+    @get_vynil_version (the compiled @VERSION, not any package requirement); the Rust type
+    @VynilPackageSource registered under the Rhai type name `VynilPackage` (distinct from the Rust
+    @VynilPackage); global fn `read_package_yaml` → @rhai_read_package_yaml(@String); member fn
+    `validate_options`; property getters `metadata`, `requirements`, `recommandations`, `options`,
+    `value_script`, `images`, `resources`. @apiVersion and @kind are not exposed to Rhai.
+
+Depends on:
+  @crate::Error, @crate::Result, @crate::RhaiRes, @crate::rhai_err in /common/src/lib.rs — the error
+    contract; @crate::Error::Core wraps @vynil_core::Failures such as its @Semver and Rhai errors.
+  @crate::Semver and @crate::k8sraw::K8sRaw — both re-exports of locked `vynil-core` `0.7.7`
+    (`/common/Cargo.toml`), the semver wrapper and the raw `/version` api-server fetch.
+  @crate::SystemInstance, @crate::TenantInstance, @crate::ServiceInstance — instance models read as
+    @kube::Api resources and via their @get_all_services_names, @get_tenant_namespaces and
+    @get_tenant_services_names helpers.
+  @crate::rhaihandler::Script — the fully registered Vynil Rhai engine running @Prefly scripts.
+  @kube::Api, @kube::Client, @kube::api::ListParams and @k8s_openapi CRD type — cluster reads.
+  @serde, @serde_json `1.0.150`, @serde_yaml `0.9.34` with @singleton_map_recursive, @schemars::JsonSchema,
+    @rhai `1.20`, @openapiv3 `2.2.0`, @tokio, @tracing — versions locked in `/Cargo.lock`.
+
+Exposes:
+  @VERSION — @pub @const @&@str from `env!("CARGO_PKG_VERSION")`; the compiled-in running version,
+    `0.7.10` in this build (`/Cargo.toml` `workspace.package.version`, `version.workspace = true`).
+  @get_vynil_version — `#[must_use]` @pub fn() -> @String, a copy of @VERSION.
+  @VynilPackageType — enum, derives @Serialize/@Deserialize/@Eq/@PartialEq/@Clone/@Debug/@JsonSchema/@Default;
+    variants @VynilPackageType::Tenant (`tenant`, `#[default]`), ::System (`system`), ::Service (`service`).
+  @VynilPackageFeature — same derives; variants @VynilPackageFeature::Upgrade (`upgrade`, default),
+    ::Backup (`backup`), ::Monitoring (`monitoring`), ::HighAvailability (`high_availability`),
+    ::AutoConfig (`auto_config`), ::AutoScaling (`auto_scaling`), ::Deprecated (`deprecated`).
+  @StorageCapability — same derives; variants @StorageCapability::RWX (`RWX`, default), ::ROX (`ROX`);
+    no serde rename (see Must).
+  @VynilPackageMeta — struct, derives @Deserialize/@Serialize/@Clone/@PartialEq/@Eq/@Debug/@JsonSchema;
+    fields (wire key → type): `name` → @String, `category` → @String, `description` → @String,
+    `app_version` → @Option<@String>, `type` → @VynilPackageType (Rust field @VynilPackageMeta.usage),
+    `features` → @Vec<@VynilPackageFeature> (required), `backup_affinity` → @Option<@String>.
+  @VynilPackageRequirement — externally tagged snake_case enum, derives @Serialize/@Deserialize/@PartialEq/@Clone/@Debug/@JsonSchema
+    (@PartialEq only — @VynilPackageRequirement::Cpu carries @f64); variants and payloads:
+    @VynilPackageRequirement::CustomResourceDefinition(@String), ::SystemService(@String),
+    ::TenantService(@String), ::SystemPackage { @category: @String, @name: @String },
+    ::TenantPackage { @category, @name }, ::Prefly { @script: @String, @name: @String },
+    ::ClusterVersion { @major: @u64, @minor: @u64 }, ::StorageCapability(@StorageCapability),
+    ::MinimumPreviousVersion(@String), ::VynilVersion(@String), ::Cpu(@f64), ::Memory(@u64), ::Disk(@u64).
+  @VynilPackageRequirement::check_system, ::check_tenant, ::check_service — @async @pub
+    fn(&self, @inst typed per flavor, @client: @kube::Client) -> @crate::Result<(@bool, @String, @u64)>;
+    evaluation matrix in Must.
+  @VynilPackageRecommandation — snake_case enum with @Serialize/@Deserialize/@PartialEq/@Eq/@Clone/@Debug/@JsonSchema;
+    newtype variants ::CustomResourceDefinition(@String) → `custom_resource_definition`,
+    ::SystemService(@String) → `system_service`, ::TenantService(@String) → `tenant_service`; carried
+    on the wire but never evaluated in this file.
+  @VynilPackage — JukeBox-status entry (embedded in @JukeBox status `packages` by /common/src/jukebox.rs,
+    so its serde+schemars shape is CRD wire), derives @Deserialize/@Serialize/@PartialEq/@Clone/@Debug/@JsonSchema
+    (no @Eq — @f64 in requirements); fields: `registry` → @String, `image` → @String, `tag` → @String,
+    `metadata` → @VynilPackageMeta, `requirements` → @Vec<@VynilPackageRequirement> (required),
+    `recommandations` → @Option<@Vec<@VynilPackageRecommandation>>, `options` →
+    @Option<@std::collections::BTreeMap<@String, @serde_json::Value>>, `value_script` → @Option<@String>.
+    Option fields carry no `skip_serializing_if`, so serialization emits them as explicit `null` keys.
+  @VynilPackage::get_min_version, ::get_vynil_version, ::get_cluster_version — `#[must_use]`
+    first-match getters returning @Option<@String>, @Option<@String>, @Option<(@u64, @u64)> respectively;
+    note @VynilPackage::get_vynil_version returns the package's requested vynil version target, while
+    the module fn @get_vynil_version returns the compiled running version.
+  @VynilPackage::is_min_version_ok — `#[must_use]` fn(&self, @current: &@str) -> @bool, lenient triple-guard.
+  @VynilPackage::is_vynil_version_ok — `#[must_use]` fn(&self) -> @bool comparing @VERSION against the
+    @VynilVersion target with the same leniency.
+  @VynilPackage::is_cluster_version_ok — fn(&self) -> @crate::Result<@bool>, blocking mechanism in Must.
+  @Image — struct `tag` → @Option<@String>, `registry` → @String, `repository` → @String (no rename,
+    required where not Option), derives @Deserialize/@Serialize/@PartialEq/@Eq/@Clone/@Debug.
+  @ResourceItem — struct `cpu`/`memory`/`storage` → @Option<@String> (unit text, not parsed here).
+  @ResourceScaler — snake_case struct with required `max_replicas` → @u64, `average_utilization` → @u64.
+  @Resource — struct `requests`/`limits` → @Option<@ResourceItem>, `scaler` → @Option<@ResourceScaler>.
+  @VynilPackageSource — source YAML document, derives @Deserialize/@Serialize/@Clone/@Debug only (no
+    @PartialEq, no @JsonSchema), `#[allow(non_snake_case)]`; fields `apiVersion` → @String (required),
+    `kind` → @String (required), `metadata` → @VynilPackageMeta, `requirements` → required
+    @Vec<@VynilPackageRequirement> with @serde_yaml::with::singleton_map_recursive, `recommandations`,
+    `options`, `images` → @Option<@std::collections::BTreeMap<@String, @Image>>, `resources` →
+    @Option<@std::collections::BTreeMap<@String, @Resource>>, `value_script` — all @Option.
+  @VynilPackageSource::get_metadata, ::get_requirements, ::get_recommandations, ::get_options,
+    ::get_images, ::get_resources — @pub fn(&mut self) -> @crate::RhaiRes<@rhai::Dynamic>;
+    @VynilPackageSource::get_value_script — @pub fn(&mut self) -> @crate::RhaiRes<@String>;
+    @VynilPackageSource::validate_options — @pub fn(&mut self) -> @crate::RhaiRes<()> (semantics in Must).
+  @read_package_yaml — @pub fn(@file: &@std::path::PathBuf) -> @crate::Result<@VynilPackageSource>.
+  @rhai_read_package_yaml — @pub fn(@file: @String) -> @crate::RhaiRes<@VynilPackageSource>, wrapping
+    @read_package_yaml and mapping through @crate::rhai_err (message is the @crate::Error display text).
+  @package_rhai_register — @pub fn(@engine: &mut @rhai::Engine); frozen script surface in Must.
+  @Schema — module-level `pub use @openapiv3::Schema;` re-export, the type @validate_options targets.
+  All of the above is crate-public reach: /common/src/lib.rs declares `pub mod vynilpackage;`, so
+    every @pub item above is an external API surface of the `common` crate (unlike crate-private ./tools.rs).
+
+Accepts:
+  @read_package_yaml accepts any readable path holding a YAML document shaped as @VynilPackageSource —
+    required top-level `apiVersion`, `kind`, `metadata` (with required `name`, `category`,
+    `description`, `type`, `features`) and `requirements` (may be `[]`); optional `recommandations`,
+    `options`, `images`, `resources`, `value_script`; unknown keys at any level are ignored.
+  Requirement list items accept exactly the thirteen snake_case tags with the payload types of Must;
+    an untagged or unknown tag (e.g. `cpu: two`) is a serde error surfaced as @crate::Error::YamlError.
+  The check methods accept any live @kube::Client and instance reference; they perform all cluster I/O
+    at call time with @ListParams::default() and no caching (unlike the cached
+    @ServiceInstance::get_all_services_names leg).
+  The Rhai getters accept whatever the source document holds; they impose no content constraints beyond
+    serde round-trippability.
+
+Returns:
+  @read_package_yaml / @rhai_read_package_yaml — a populated @VynilPackageSource with @serde defaults
+    applied (@None for missing options, empty @Vec from `[]`).
+  check_system / check_tenant / check_service — @Ok((satisfied, message, ttl)) with the message
+    describing the failure state whether or not satisfied, and ttl `900` / `300` as in Must.
+  @VynilPackage::is_min_version_ok / ::is_vynil_version_ok — @bool, @true on every lenient path.
+  @VynilPackage::is_cluster_version_ok — @Ok(false) only when a fetched version is below the
+    requirement; @Ok(true) when the requirement is absent or met.
+  The @VynilPackageSource getters — @rhai::Dynamic maps/arrays built from serde-JSON, Rhai unit `()` for
+    @None sections, `""` for @None @value_script; @Ok(()) from @validate_options.
+
+Raises:
+  @read_package_yaml maps unreadable-path @std::io::Error into @crate::Error::Stdio and every
+    deserialization failure (missing required key, wrong payload type, unknown requirement tag) into
+    @crate::Error::YamlError carrying the @serde_yaml error's @to_string.
+  check_system / check_tenant / check_service return @Err from: failed @kube::Api calls mapped as
+    @crate::Error::KubeError; unparseable @VynilVersion target or @VERSION via @Semver::parse (propagated
+    as @crate::Error::Core wrapping the core @Semver error — a malformed requirement errors instead of
+    reporting an unsatisfied requirement); a @Prefly script that fails to parse, run, or returns
+    non-boolean; @parse_cluster_api_version's @crate::Error::Other / @crate::Error::SerializationError /
+    @crate::Error::ParseInt outcomes; instance-helper failures from the tenant/service-name legs.
+  @VynilPackage::is_cluster_version_ok raises the same fetch/parse errors as its check-method sibling.
+  The @VynilPackageSource getters and @validate_options map @serde_json failures through
+    @crate::Error::JsonError into @crate::rhai_err — a boxed @rhai::EvalAltResult holding
+    `Json decoding error: …` text; no other raise path exists.
+
+Handles:
+  @check_system evaluating a @TenantPackage requirement — warns, skips, returns satisfied, with the
+    still-formatted `Tenant package {category}/{name} is not installed` message (see Tasks).
+  @VynilPackageRequirement::StorageCapability — warn and satisfied in all three flavors (TODO stub).
+  @VynilPackageRequirement::MinimumPreviousVersion at check time — satisfied with empty message; the
+    real gate is @VynilPackage::is_min_version_ok at selection time.
+  Catch-all `_` arms — @Cpu/@Memory/@Disk in all flavors, @TenantService in @check_system, and
+    @TenantService plus @TenantPackage in @check_service return satisfied with empty message.
+  @None @recommandations / @options / @images / @resources getter calls — Rhai unit value; @None
+    @value_script — empty string.
+  Missing source file — @crate::Error::Stdio, tested by @test_read_package_yaml_missing_file.
+  @crate::Error mapping inside @rhai_read_package_yaml — the whole @crate::Error becomes a Rhai error
+    string, losing its variant identity on the script side.
+
+Tasks:
+  [ ] Cover check_system/check_tenant/check_service per variant against the ./k8smock.rs cluster mock:
+      satisfied and unsatisfied verdicts, the exact message strings, and the `900` vs `300` ttl split.
+  [ ] Cover @parse_cluster_api_version boundaries: non-object response, missing `major`/`minor`, JSON
+      number fields (@Ok), JSON string and float fields (@crate::Error::ParseInt).
+  [ ] Cover @VynilPackage::is_vynil_version_ok (pass, fail, and both lenient @true paths) and
+      @VynilPackage::is_cluster_version_ok (requirement absent → @Ok(true) subject to fetch success).
+  [ ] Cover @VynilPackage::get_cluster_version absent branch (only the present branch is tested today).
+  [ ] Cover the @JukeBox-side JSON shape of @VynilPackage serialization: `type` key, `storage_capability`
+      with `RWX`, explicit `null` keys for @None options, and the externally tagged requirement objects.
+  [ ] Cover serde rejections: missing mandatory `features` or `type` in metadata, lowercase
+      `storage_capability: rwx`, `memory: 512.5`, `memory: "512"`, `minimum_previous_version: 0.4`.
+  [ ] Cover the lenient @true paths of @VynilPackage::is_min_version_ok with a malformed target string,
+      and the `v`/no-`v` equal-version ordering edge via a real requirement pair.
+  [ ] Cover the Rhai surface from @package_rhai_register through @crate::rhaihandler::Script:
+      `vynil_version`, `read_package_yaml`, all seven property getters (including @None → unit), and
+      @validate_options over a valid and an invalid options document.
+  [ ] Cover @read_package_yaml on a multi-document YAML stream, pinning that only the first document loads.
+  [ ] Cover the @Prefly leg end to end: boolean true/false results and a non-boolean script erroring.
+  [?] @parse_cluster_api_version re-serializes the field value before the u64 parse, so JSON string
+      values arrive quoted as `"\"1\""` and fail as @Error::ParseInt (probe-verified); the real-cluster
+      api-server `/version` reports `major`/`minor` as JSON strings, which would make every @ClusterVersion
+      check and @is_cluster_version_ok error on a live cluster. Decide later, against a live probe, whether
+      the parser must accept quoted values.
+  [?] @VynilPackage::is_min_version_ok / ::is_vynil_version_ok return @true on any parse failure, so a typo
+      like minimum_previous_version: `1.2` silently disables the migration guard instead of failing safe.
+      Decide later whether malformed guards should fail closed.
+  [?] The @vynil_core::Semver wrapper derives @Ord over (version, use_v), so at equal semver a `v`-prefixed
+      target ranks above an unprefixed current and `>=` fails. Decide later whether @use_v belongs in ordering.
+  [?] Locked @semver `1.0.28` orderings include build metadata and rank prereleases below releases, so
+      guard strings like `0.7.10+build` or prerelease @VERSION values shift @>= outcomes against the
+      semver.org precedence rule. Decide later which precedence the version guards must follow.
+  [?] @VynilPackage::is_cluster_version_ok combines @tokio::task::block_in_place with
+      @tokio::runtime::Handle::block_on, which panics on a `current_thread` runtime or outside any runtime
+      per the tokio contract, and fetches /version even for packages with no @ClusterVersion requirement,
+      letting unrelated fetch errors surface. Decide later whether the sync bridge and the fetch-before-branch stay.
+  [?] @check_system's @TenantPackage stub and the `_` catch-arms silently satisfy unenforceable or
+    forgotten variants (`TenantService`/`TenantPackage` misses, @Cpu/@Memory/@Disk) with @true — a new
+      requirement variant added to the enum is accepted invisibly until arms are extended. Decide later
+      whether unmatched variants should fail or error by default.
+  [?] @VynilPackageRequirement::StorageCapability satisfies unconditionally behind a TODO warning; the
+      requirement is carried, displayed and scheduled but never enforced. Decide if/when to implement.
+  [?] In the check methods an unparseable @VynilVersion string aborts as @Err (via `?`) while the sibling
+      guard methods treat it as @true — two opposite responses to the same bad authoring. Decide one policy.
+  [?] The module fn @get_vynil_version (running compiled version) and the method
+      @VynilPackage::get_vynil_version (requirement target) share a name and differ in meaning; the Rhai
+      `vynil_version` maps to the first. Decide later whether one is renamed.
+  [?] @StorageCapability serializes `RWX`/`ROX`, inconsistent with the snake_case wire of its sibling
+      enums and case-sensitive to authors. Decide later whether to rename for consistency (wire-breaking).
+  [?] @VynilPackageSource.apiVersion and .kind are stored but never validated against
+      `vynil.solidite.fr/v1` / `Package` anywhere in this file. Decide later whether the model should gate them.
+  [?] Every @Option field serializes as an explicit `null` (no `skip_serializing_if`), and @features is
+      mandatory (no serde default) while sibling fields are optional — an asymmetric authoring surface
+      frozen onto the CRD wire. Decide later whether to add defaults/skip attributes.
+  [?] @Prefly scripts run on the fully registered @crate::rhaihandler::Script::new engine (k8s, http, s3,
+      …) with the instance bound, so an unvetted package script gets cluster-capable APIs. Decide the
+      trust boundary deliberately.
+
+Done when:
+  Every Scenario above has a passing mapped in-file test, the Tasks coverage gaps are closed, the `[?]`
+    decisions are recorded, and `cargo test -p common` is green.
+
+Scenario: Minimal package parses and each type tag maps to its variant
+  Given the MINIMAL_YAML source with `type: tenant`, `category: apps` and `features: [upgrade]`
+  When @read_package_yaml reads the temp file
+  Then @VynilPackageMeta.name is `test-pkg`, @usage is @VynilPackageType::Tenant and @requirements is empty
+  And retagged copies yield @VynilPackageType::System / @VynilPackageType::Service
+  Maps to tests @test_read_package_yaml_minimal_fields, @test_read_package_yaml_system_type, @test_read_package_yaml_service_type
+
+Scenario: Every requirement wire form deserializes
+  Given REQUIREMENTS_YAML listing `custom_resource_definition`, `system_service`, `tenant_service`,
+    `system_package`, `tenant_package`, `vynil_version`, `minimum_previous_version`, `cluster_version`,
+    `cpu`, `memory`, `disk` in sequence
+  When @read_package_yaml reads it
+  Then each position matches the variant and payload asserted in the tests (`some.crd.io`, `monitoring`,
+    `auth`, storage/longhorn, infra/postgres, `0.5.0`, `0.4.0`, (1, 25), 2.0, 512, 1024)
+  Maps to tests @test_requirement_custom_resource_definition, @test_requirement_system_service,
+    @test_requirement_tenant_service, @test_requirement_system_package, @test_requirement_tenant_package,
+    @test_requirement_vynil_version, @test_requirement_minimum_previous_version,
+    @test_requirement_cluster_version, @test_requirement_cpu, @test_requirement_memory_and_disk
+
+Scenario: Images and resources maps parse with optional members
+  Given a source with `images.main` (registry+repository+tag `1.25`) and `images.sidecar` (tag omitted),
+    and `resources.app.requests` cpu `100m` memory `128Mi`
+  When @read_package_yaml reads it
+  Then the `main` @Image carries @Some tag and the `sidecar` @Image carries @None tag, and the
+    @ResourceItem strings arrive verbatim without unit parsing
+  Maps to tests @test_read_package_yaml_with_images, @test_read_package_yaml_with_resources
+
+Scenario: Migration guard compares semvers inclusively
+  Given minimum_previous_version `1.0.0`
+  When @VynilPackage::is_min_version_ok runs on `1.0.1`, `2.0.0`, `1.0.0`, `0.9.9`
+  Then the first three are @true and `0.9.9` is @false; with no such requirement any `current` is @true
+  Maps to tests @test_is_min_version_ok_above_minimum, @test_is_min_version_ok_at_minimum,
+    @test_is_min_version_ok_below_minimum, @test_is_min_version_ok_no_requirement
+
+Scenario: First-match requirement getters
+  Given a package carrying both a @VynilVersion and a @MinimumPreviousVersion requirement, or a
+    @ClusterVersion (1, 28), or none
+  When the three getters run
+  Then each returns the first matching payload @Some(…) or @None; the cluster-absent case is untested
+  Maps to tests @test_get_min_version_present, @test_get_min_version_absent,
+    @test_get_vynil_version_present, @test_get_vynil_version_absent, @test_get_cluster_version_present
+
+Scenario: Waypoint selection walks a chain step by step
+  Given a newest-first chain like v3(min v2) → v2(no min) → optionally v4(min v3) → v3(min v2)
+  When a consumer finds the first @VynilPackage the guard admits for @current
+  Then from `1.0.0` the waypoint `2.0.0` is picked, from `2.0.0`/`2.5.0` the final `3.0.0`, and a fresh
+    install with @current `""` (parse fails → guard @true) picks the first entry `3.0.0`
+  Maps to tests @test_migration_chain_selects_waypoint_when_below_minimum,
+    @test_migration_chain_selects_final_once_waypoint_installed,
+    @test_migration_chain_fresh_install_picks_latest, @test_migration_chain_three_hops_step_by_step,
+    @test_migration_chain_already_above_minimum_picks_latest
+
+Scenario: Unreadable source file fails as Stdio
+  Given the path `/nonexistent/path/pkg.yaml`
+  When @read_package_yaml runs
+  Then the result is @Err (variant pinnedness untested — the test asserts @is_err only)
+  Maps to test @test_read_package_yaml_missing_file
+
+Scenario: Requirement checks evaluate per flavor with fixed ttl and message
+  Given each requirement variant against a mock cluster with and without the needed state
+  When @check_system, @check_tenant or @check_service runs
+  Then the verdict follows the Must matrix with ttl `300` for @CustomResourceDefinition/@Prefly and
+    `900` elsewhere, and unenforceable variants (system-side @TenantPackage, @StorageCapability stub,
+    catch-arms, @MinimumPreviousVersion) return satisfied with their documented messages
+  No mapped test exists.
+
+Scenario: Api-server version response shapes decide fetch success
+  Given `/version` mock responses: object with numeric `major`/`minor`; object with string values as
+    the real cluster sends; float values; non-object; missing field
+  When @VynilPackage::is_cluster_version_ok or a @ClusterVersion check parses them
+  Then only the numeric form yields a verdict, string/float forms @Err as @crate::Error::ParseInt,
+    non-object and missing field @Err as @crate::Error::Other, and no requirement can be met through an
+    unparsable response
+  No mapped test exists; see the live-cluster `[?]`.
+
+Scenario: Running-version guard leniency and semver edges
+  Given various @VynilVersion targets (`0.5.0`, `v0.5.0`, malformed, `+build`/prerelease-tagged)
+  When @VynilPackage::is_vynil_version_ok and the check-method leg run
+  Then @Ok/@true/@false follow the Must semver paragraph, including `>=` @false for equal versions where
+    only the target carries the `v`, and the check leg @Errs where the guard method returns @true
+  No mapped test exists.
+
+Example:
+  JukeBox-status requirement JSON: `{"vynil_version":"0.5.0"}`,
+    `{"cluster_version":{"major":1,"minor":25}}`, `{"storage_capability":"RWX"}`,
+    `{"system_package":{"category":"storage","name":"longhorn"}}`
+  source-YAML equivalent lines: `- vynil_version: "0.5.0"`, `- cluster_version:` + `major: 1` +
+    `minor: 25`, `- storage_capability: RWX`
+  check messages (formatted whether or not satisfied): `CRD {crd} is not installed`,
+    `Requirement {name} failed`, `System package {category}/{name} is not installed`,
+    `Tenant package {category}/{name} is not installed`, `Tenant service {svc} is not installed`,
+    `System Service {svc} is not available`, `Storage capability {capa:?} isn't available`
+    (Debug-rendered `RWX`/`ROX`), and the two `…is over current version… Please upgrade…` version texts
+  ttl tuple third members: `900` default, `300` for CRD and Prefly checks

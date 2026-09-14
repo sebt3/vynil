@@ -1,0 +1,380 @@
+Spec: Context
+
+Purpose:
+  Be the process-wide reconcile context of the crate: remember which one of the four package
+    payloads — @JukeBox, @ServiceInstance, @TenantInstance, @SystemInstance, or the initial
+    @VynilContext::None — the current work unit acts as, and turn that slot into the material
+    applied objects need through @get_owner_ns, @get_owner and @get_labels; carry the cluster
+    write identity (@get_client_name, @get_short_name, @get_reporter) and the @kube::Client
+    suppliers @get_client and @get_client_async; @wire_core_k8s injects the accessors into
+    `vynil-core` so generic apply paths label and own objects through the same context.
+
+Owns:
+  ./context.rs
+
+References:
+  ./tools.sdd, ./instancesystem.sdd — approved calibration references.
+
+Must:
+  The whole module shares one private @CONTEXT: a @std::sync::LazyLock over a
+    @tokio::sync::RwLock<@VynilContext> initialized to @VynilContext::None; it is not `pub`,
+    so @set_tenant, @set_service, @set_system, @set_box, @get_owner_ns, @get_owner and
+    @get_labels are its only reaches and the stored value is global to the process for its
+    lifetime with no reset or full-read surface.
+  @VynilContext is a @pub enum deriving only @Debug and carrying exactly
+    @VynilContext::JukeBox,
+    @VynilContext::ServiceInstance, @VynilContext::TenantInstance,
+    @VynilContext::SystemInstance and the unit variant @VynilContext::None.
+  Every sync entry crosses the async state with @tokio::task::block_in_place wrapping
+    @tokio::runtime::Handle::current().block_on, so the whole module's usability contract is
+    "called on a live tokio multi-thread runtime"; the panic cases are frozen in Raises.
+  @set_tenant, @set_service, @set_system and @set_box take the write lock and store their
+    variant as the entire context: the previous value is dropped outright, from any variant
+    and of any kind, so a later set always replaces an earlier one with no merge, version
+    check or kind-transition guard.
+  @get_owner_ns maps the stored variant one-to-one: the three instance variants return
+    @Some of `metadata.namespace` cloned through @unwrap_or_default — an instance without a
+    namespace yields @Some of an empty string, not @None — while @VynilContext::JukeBox and
+    @VynilContext::None return @None.
+  @get_owner returns @None only for @VynilContext::None; payload variants return a JSON
+    object with exactly the keys `apiVersion` (literal `vynil.solidite.fr/v1`), `kind` (the
+    payload kind string `TenantInstance`, `ServiceInstance`, `SystemInstance` or `JukeBox`),
+    `name` and `uid` from `metadata` with an absent field serialized as `""`, and hard-coded
+    `blockOwnerDeletion: true` plus `controller: true` — a JukeBox context therefore yields a
+    JukeBox owner reference even though @get_owner_ns refuses one.
+  @get_labels returns @None only for @VynilContext::None; every payload variant yields a
+    label object carrying `app.kubernetes.io/managed-by` (literal `vynil`) and
+    `app.kubernetes.io/instance` (from `metadata.name`, `""` when absent); the three instance
+    variants add `app.kubernetes.io/name` from `spec.package`,
+    `vynil.solidite.fr/owner-namespace` from `metadata.namespace` and
+    `vynil.solidite.fr/owner-category` from `spec.category` (absent metadata fields become
+    `""`); `vynil.solidite.fr/owner-type` distinguishes the variants as `tenant`, `system`,
+    `service` or `jukebox`; the @VynilContext::JukeBox object carries only the three keys
+    `app.kubernetes.io/managed-by`, `app.kubernetes.io/instance` and
+    `vynil.solidite.fr/owner-type`.
+  The @VynilContext::TenantInstance branch of @get_labels performs in-cluster I/O while
+    holding the @CONTEXT read guard: it clones the @TenantInstance and calls
+    @rhai_get_tenant_name, whose wrapper does a nested @tokio::task::block_in_place plus
+    block_on over @TenantInstance::get_tenant_name — that path builds a fresh client via
+    @get_client_async and reads the instance namespace metadata; the
+    `vynil.solidite.fr/tenant` label value is the namespace value of the label key named by
+    the `TENANT_LABEL` environment variable (default `vynil.solidite.fr/tenant`) or the
+    instance namespace when the label is absent, and any failure — instance without a
+    namespace, API unreachable — is swallowed to `""` with no propagation or log.
+  Name identity derives from the executable: @get_prog_name (private) extracts
+    @std::env::current_exe's file name through @to_str and yields @None on any failure;
+    @get_client_name maps `agent` to `agent.vynil.solidite.fr`, `operator` to
+    `controller.vynil.solidite.fr`, and every other file name or failure to
+    `vynil.solidite.fr`.
+  @get_short_name splits @get_client_name on `.` and returns `{second}-{first}` only when the
+    split has more than three parts, `vynil` otherwise; the reachable results on this code
+    are `vynil-agent` for the agent binary, `vynil-controller` for the operator binary and
+    `vynil` for every other executable or failure, and a three-part client name can never
+    shorten.
+  @init_k8s is an empty `pub const fn` — calling it changes no state and only keeps its call
+    sites compiling.
+  @get_client and @get_client_async build a fresh @kube::Client::try_default on every call
+    with no caching of any kind in this file; all discovery is delegated to
+    @kube::Config::infer on the locked kube-client `3.1.0` build, which loads the kubeconfig
+    from the `KUBECONFIG` environment variable or `~/.kube/config` first and falls back to
+    the in-cluster configuration (the `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`
+    environment variables plus the service-account token files) only when that kubeconfig
+    load fails; the file itself contains no kubeconfig parsing, no in-cluster override and no
+    in-cluster test fake.
+  On client-build failure both suppliers @panic! with the message
+    `cannot create the Kubernetes client: {e}` interpolating the @kube::Error Display, which
+    for an unresolvable configuration carries the combined kubeconfig and in-cluster
+    inference errors.
+  @get_reporter stamps a @kube::runtime::events::Reporter with `controller` set to
+    @get_short_name() and `instance` set to the `POD_NAME` environment variable re-read per
+    call, literal `unknown` when unset.
+  @wire_core_k8s registers exactly five hooks — @vynil_core::k8s::set_get_client(@get_client),
+    @vynil_core::set_client_name(@get_client_name),
+    @vynil_core::k8s::set_get_labels(@get_labels), @vynil_core::k8s::set_get_owner(@get_owner)
+    and @vynil_core::k8s::set_get_owner_ns(@get_owner_ns) — each stored on the core side in a
+    @std::sync::OnceLock through @set().ok(), so the first registration per hook sticks and
+    any re-registration is silently ignored; @vynil_core::k8s::context_is_wired reports true
+    only once all five are present, and the core lazy client reads the client hook with an
+    @expect on first use, so wiring must precede the first core k8s call of the process.
+
+Depends on:
+  @crate::@JukeBox, @crate::@ServiceInstance, @crate::@SystemInstance, @crate::@TenantInstance
+    — ./jukebox.rs, ./instanceservice.rs, ./instancesystem.rs, ./instancetenant.rs: payload
+    `metadata` and `spec` fields and, on the tenant label path,
+    @crate::TenantInstance::rhai_get_tenant_name → @crate::TenantInstance::get_tenant_name,
+    which re-enters this module through @get_client_async — a real in-crate cycle between the
+    context and the instance models.
+  @kube::client::Client and @kube::runtime::events::Reporter — kube `3.1.0` locked in
+    `/Cargo.lock` on workspace features `runtime`, `client`, `derive` from `/Cargo.toml`;
+    @Client::try_default plus @kube::Config::infer perform every step of client construction
+    and kubeconfig/in-cluster discovery.
+  @tokio::sync::RwLock, @tokio::task::block_in_place, @tokio::runtime::Handle — tokio
+    `1.48.0` requested in `/Cargo.toml`, `1.52.3` locked in `/Cargo.lock`; the panic texts in
+    Raises are owned by that build, whose @block_in_place passes a plain thread through and
+    refuses non-multi-thread scheduler contexts.
+  `vynil-core` `0.7.7` locked in `/Cargo.lock` with feature `k8s` — the five @std::sync::OnceLock
+    injection hooks @wire_core_k8s registers into.
+  @serde_json — the @serde_json::Value carrier of the owner and label objects.
+  @std::env — @std::env::current_exe for the binary identity and @std::env::var for
+    `POD_NAME`.
+
+Exposes:
+  @VynilContext — @pub enum, @Debug the only derive, with variants @VynilContext::JukeBox(@JukeBox),
+    @VynilContext::ServiceInstance(@ServiceInstance),
+    @VynilContext::TenantInstance(@TenantInstance), @VynilContext::SystemInstance(@SystemInstance)
+    and @VynilContext::None.
+  @set_tenant — @pub fn @set_tenant(@i: @TenantInstance): installs the tenant variant.
+  @set_service — @pub fn @set_service(@i: @ServiceInstance): installs the service variant.
+  @set_system — @pub fn @set_system(@i: @SystemInstance): installs the system variant.
+  @set_box — @pub fn @set_box(@jb: @JukeBox): installs the JukeBox variant.
+  @get_owner_ns — @must_use @pub fn @get_owner_ns() -> @Option<@String>: owner namespace of
+    an instance variant, empty string when the field is absent, @None for JukeBox and @None.
+  @get_owner — @must_use @pub fn @get_owner() -> @Option<@serde_json::Value>: owner
+    reference object for any payload variant, @None for @VynilContext::None.
+  @get_labels — @must_use @pub fn @get_labels() -> @Option<@serde_json::Value>: label object
+    for any payload variant, @None for @VynilContext::None; the tenant branch additionally
+    performs a cluster namespace read with failures flattened to `""` (see Must).
+  @get_client_name — @must_use @pub fn @get_client_name() -> @String, re-exported at the
+    crate root by `./lib.rs`.
+  @get_short_name — @must_use @pub fn @get_short_name() -> @String: `vynil-agent`,
+    `vynil-controller` or `vynil`.
+  @init_k8s — @pub const fn @init_k8s(): observable no-op.
+  @get_client — @must_use @pub fn @get_client() -> @kube::Client: blocking client supplier
+    requiring a multi-thread runtime, panics per Raises.
+  @get_client_async — @pub async fn @get_client_async() -> @kube::Client: async twin of
+    @get_client with the same per-call construction and panic contract, and no
+    @must_use marker.
+  @get_reporter — @must_use @pub fn @get_reporter() -> @kube::runtime::events::Reporter.
+  @wire_core_k8s — @pub fn @wire_core_k8s(): first-wins registration of the five
+    `vynil-core` hooks; idempotent by OnceLock design.
+
+Accepts:
+  The four setters each accept one owned payload by value — @JukeBox, @ServiceInstance,
+    @TenantInstance or @SystemInstance — with no validation, deduplication or rejection of any
+    kind: any instance value replaces the stored context unconditionally.
+  @get_owner_ns, @get_owner, @get_labels, @get_client_name, @get_short_name, @get_reporter,
+    @get_client, @init_k8s and @wire_core_k8s take no arguments; the sync ones among them
+    carry as implicit precondition a live tokio multi-thread runtime (see Raises), and
+    @get_labels on the tenant variant requires a reachable API server for a non-empty tenant
+    label.
+  @get_client and @get_client_async accept no configuration argument of any kind — endpoint,
+    context and credentials all arrive from the process environment through
+    @kube::Config::infer.
+
+Returns:
+  @set_tenant, @set_service, @set_system, @set_box, @init_k8s and @wire_core_k8s return `()`;
+    state change is the only observable output.
+  @get_owner_ns returns @Some(@String) for the three instance variants — the raw namespace or
+    the empty string — and @None for JukeBox and @None contexts.
+  @get_owner and @get_labels return the owner/label @serde_json::Value objects shaped in
+    Must, or @None for @VynilContext::None.
+  @get_client_name returns one of `agent.vynil.solidite.fr`, `controller.vynil.solidite.fr`
+    or `vynil.solidite.fr`; @get_short_name returns one of `vynil-agent`, `vynil-controller`
+    or `vynil`.
+  @get_client and @get_client_async return a freshly constructed @kube::Client — a usable
+    client is returned without probing the API server — or never return at all (panic).
+  @get_reporter returns a @kube::runtime::events::Reporter with `controller` and `instance`
+    populated as described in Must.
+
+Raises:
+  Every synchronous entry point that touches @CONTEXT and @get_client panics outside any
+    tokio runtime before reading or writing state: @tokio::task::block_in_place passes a plain
+    thread through and @tokio::runtime::Handle::current then panics for the absent runtime.
+  Every such synchronous entry point panics when called in the async execution context of a
+    current-thread runtime (or a LocalSet), on the locked tokio `1.52.3` build with the
+    text `can call blocking only when running on the multi-threaded runtime`; nested
+    @block_in_place within an outer blocking context — as on the tenant label path — succeeds
+    on a multi-thread runtime.
+  @get_client and @get_client_async panic with
+    `cannot create the Kubernetes client: {e}` whenever @kube::Client::try_default fails —
+    no kubeconfig resolvable and no in-cluster environment being the concrete production
+    trigger.
+  No function in this module has a typed error channel: the tenant-branch cluster read of
+    @get_labels never surfaces its failure (flattened to `""`), and @wire_core_k8s,
+    @init_k8s, @get_client_name, @get_short_name and @get_reporter never panic.
+
+Handles:
+  @VynilContext::None as both the initial state and after-context state — @get_owner_ns,
+    @get_owner and @get_labels all return @None.
+  Re-entrant setting — every @set_* replaces whatever variant was stored, so mixed-kind
+    sequences simply end at the last write.
+  Absent `metadata` name, namespace or uid fields — rendered as `""` in owner and label
+    values, and @Some(`""`) from @get_owner_ns.
+  @VynilContext::JukeBox — owner reference and jukebox-type labels are produced but
+    @get_owner_ns stays @None.
+  Missing, absent-label or failed tenant resolution on @VynilContext::TenantInstance — falls
+    back respectively to the namespace value, published as the empty string.
+  Unrecognized executable file names and @std::env::current_exe failure — generic
+    `vynil.solidite.fr` client name and `vynil` short name.
+  Unset `POD_NAME` — reporter instance `unknown`.
+  Repeat or partial pre-registration of `vynil-core` hooks — silently ignored per hook by the
+    core-side @OnceLock.
+
+Tasks:
+  [ ] Cover the three getters on the untouched @VynilContext::None default returning @None.
+  [ ] Cover @set_* replacement semantics: second call overwrites the first, mixed-kind
+      sequences end at the last write, no error on overwrite.
+  [ ] Pin @get_owner key sets, kind strings, fixed `apiVersion`, `blockOwnerDeletion` and
+      `controller` values for all four payload variants, including `""` for absent `name`/`uid`.
+  [ ] Pin @get_labels key sets per variant: instance labels with `spec.package`/`spec.category`,
+      the tenant-only `vynil.solidite.fr/tenant` key, and JukeBox with its three keys only.
+  [ ] Cover the tenant label resolution: namespace label value, fallback to the namespace name
+      when unlabeled, `""` on no-namespace or unreachable cluster, and the `TENANT_LABEL`
+      key override.
+  [ ] Cover @get_short_name for two-, three- and four-part client names (`vynil` vs the
+      `{second}-{first}` form) and the @get_client_name `agent`/`operator`/other name mapping —
+      testability bounded by the @std::env::current_exe dependency (see the `[?]` below).
+  [ ] Cover @get_reporter with `POD_NAME` set and unset.
+  [ ] Cover the panic surfaces: a sync accessor or setter called outside any runtime, one
+      called under a current-thread runtime (e.g. `#[tokio::test(flavor = "current_thread")]`),
+      and the @get_client/@get_client_async panic message with no resolvable configuration.
+  [ ] Cover the wiring beyond @wire_core_k8s_populates_all_onelocks: assert a pre-registered
+      or second @wire_core_k8s call keeps the first hook (first-wins), which today's single
+      post-wire assertion does not pin.
+  [ ] Cover @init_k8s inertness: observable context state identical across the call.
+  [?] @CONTEXT is process-wide mutable global state with no reset or inspection surface: one
+      test binary shares it across all tests and every module thread sees one slot. Decide
+      later whether the global stays or a passed context object replaces it.
+  [?] The sync-over-async wrappers (@block_in_place plus @Handle::block_on) make every sync
+      entry panic outside a runtime or under a current-thread runtime, with the panic text
+      coming from tokio and nothing documenting the precondition at the callsites. Decide
+      later whether async-native accessors or an explicit precondition comment replaces this.
+  [?] @get_client and @get_client_async panic instead of returning @crate::Result, and the
+      message `cannot create the Kubernetes client: {e}` carries no stable unique error
+      identifier as the project error rule asks. Decide later whether the suppliers become
+      fallible and identified.
+  [?] Both suppliers' doc comments call the result the "shared" client, yet each call rebuilds
+      a full @kube::Client and re-reads kubeconfig or token files; only `vynil-core`'s lazy
+      static reuses one injected instance. Decide later whether this module caches a client.
+  [?] @init_k8s is an empty `const fn` dead stub that several call sites still invoke for no
+      observable effect. Decide later whether it is removed or gains real initialization.
+  [?] @get_owner_ns returns @Some(`""`) rather than @None for an instance with no namespace,
+      so callers cannot distinguish "empty namespace" from "unknown". Decide later which
+      polarity is intended.
+  [?] The tenant branch of @get_labels flattens any resolution failure — no namespace, API
+      down — into a published `vynil.solidite.fr/tenant: ""` label without a log, and holds
+      the @CONTEXT read guard across that blocking cluster read, stalling concurrent setters.
+      Decide later whether failures propagate or the read happens outside the lock.
+  [?] @get_short_name shortens only names with more than three dot-parts, so the generic
+      `vynil.solidite.fr` name never derives anything but `vynil`; whether the `> 3` guard is
+      deliberate or off-by-one against three-part names is undetermined. Decide later.
+  [?] Binary identity rides on @std::env::current_exe's file name: `operator` maps to the
+      differently spelled `controller.vynil.solidite.fr` while every other shipped binary
+      (diagnostic server, kubectl plugin) silently gets the generic `vynil.solidite.fr`
+      field-manager and `User-Agent`. Decide later whether identity should come from build
+      metadata or explicit configuration instead.
+  [?] @get_client carries @must_use while its async twin @get_client_async does not. Decide
+      later whether the asymmetry stays.
+  [?] Because each core hook is OnceLock first-wins, a host that pre-registers any stub — a
+      test harness, say — permanently shadows this module's closure for that hook while the
+      remaining four still register, so a partially stubbed wiring is possible and silent.
+      Decide later whether re-wiring must replace or refuse.
+
+Done when:
+  Every Scenario above has a passing mapped test, the coverage Tasks are closed or decided,
+    and `cargo test -p common` is green.
+
+Scenario: Fresh process starts with no context
+  Given no @set_* has run
+  When @get_owner_ns, @get_owner and @get_labels execute
+  Then all three return @None
+  No mapped test exists.
+
+Scenario: Setters install and later setters replace the context
+  Given a @TenantInstance installed through @set_tenant
+  When @set_service runs afterwards with a @ServiceInstance
+  Then all getters reflect the service instance only and the tenant value is gone
+  And a second @set_tenant likewise replaces whatever was stored without error
+  No mapped test exists.
+
+Scenario: Owner reference shape per kind
+  Given a @TenantInstance named `frontend` with `uid` `u-1`
+  When @get_owner runs
+  Then the object carries `apiVersion` `vynil.solidite.fr/v1`, `kind` `TenantInstance`,
+    `name` `frontend`, `uid` `u-1`, `blockOwnerDeletion` `true` and `controller` `true`
+  But a @VynilContext::JukeBox context yields the same keys with `kind` `JukeBox`
+  No mapped test exists.
+
+Scenario: Absent optional metadata yields empty strings
+  Given an instance variant whose `metadata` lacks `name`, `namespace` and `uid`
+  When @get_owner_ns, @get_owner and @get_labels run
+  Then @get_owner_ns returns @Some of `""`
+  And the owner `name`/`uid` values and label namespace field are all `""`
+  No mapped test exists.
+
+Scenario: JukeBox context has an owner but no owner namespace
+  Given a @VynilContext::JukeBox installed via @set_box
+  When the three getters run
+  Then @get_owner_ns returns @None
+  But @get_owner returns the JukeBox-kind owner object and @get_labels the three-key jukebox
+    label object
+  No mapped test exists.
+
+Scenario: Tenant label follows the namespace label
+  Given a @TenantInstance in namespace `shops` labeled `vynil.solidite.fr/tenant: acme`
+  When @get_labels runs
+  Then `vynil.solidite.fr/tenant` is `acme`
+  But when the namespace carries no tenant label the value falls back to `shops`
+  And when the namespace has no namespace label source at all — the instance itself has no
+    namespace — the value is `""` even though the rest of the labels are published
+  No mapped test exists.
+
+Scenario: Client names follow the running binary
+  Given `agent` as the executable file name — then `operator` — then any other name — then an
+    unresolvable path
+  When @get_client_name and @get_short_name run
+  Then the pairs are `agent.vynil.solidite.fr` with `vynil-agent`,
+    `controller.vynil.solidite.fr` with `vynil-controller`, and `vynil.solidite.fr` with
+    `vynil` for the last two cases
+  No mapped test exists.
+
+Scenario: Reporter carries the pod identity when present
+  Given `POD_NAME` set to `vynil-agent-7f9b`
+  When @get_reporter runs
+  Then the reporter `instance` is `vynil-agent-7f9b` and `controller` is @get_short_name()
+  But with `POD_NAME` unset the `instance` is `unknown`
+  No mapped test exists.
+
+Scenario: Unreachable cluster configuration panics out of both client suppliers
+  Given no readable kubeconfig and no in-cluster environment
+  When @get_client or @get_client_async runs
+  Then the call panics with a message beginning `cannot create the Kubernetes client:`
+    carrying the combined kubeconfig and in-cluster inference failure
+  No mapped test exists.
+
+Scenario: Sync context access require a multi-thread runtime
+  Given @set_box or a getter invoked on a plain thread with no runtime
+  When it runs
+  Then it panics from @tokio::runtime::Handle::current before @CONTEXT is read or written
+  But given the same call from inside a tokio multi-thread runtime task, it completes
+  And given it from the async context of a current-thread runtime, @block_in_place panics
+    with `can call blocking only when running on the multi-threaded runtime`
+  No mapped test exists.
+
+Scenario: Wiring registers the five injection hooks once
+  Given a fresh process
+  When @wire_core_k8s runs
+  Then @vynil_core::k8s::context_is_wired reports true because all five @OnceLock hooks hold
+    a closure
+  Maps to test @wire_core_k8s_populates_all_onelocks
+  The first-wins behaviour of a repeated or partially pre-registered call has no mapped test.
+
+Scenario: init_k8s is inert
+  Given any stored @VynilContext state
+  When @init_k8s is called any number of times
+  Then no observable state changes
+  No mapped test exists.
+
+Example:
+  owner object for a tenant instance `frontend` with `uid` `u-1`: keys and values
+    `apiVersion: "vynil.solidite.fr/v1"`, `kind: "TenantInstance"`, `name: "frontend"`,
+    `uid: "u-1"`, `blockOwnerDeletion: true`, `controller: true`
+  label object for that instance with `spec.package` `frontend`, `spec.category` `apps`,
+    namespace `shops` labeled tenant `acme`: `app.kubernetes.io/managed-by: "vynil"`,
+    `app.kubernetes.io/name: "frontend"`, `app.kubernetes.io/instance: "frontend"`,
+    `vynil.solidite.fr/owner-namespace: "shops"`,
+    `vynil.solidite.fr/owner-category: "apps"`,
+    `vynil.solidite.fr/owner-type: "tenant"`,
+    `vynil.solidite.fr/tenant: "acme"`
+  reachable client names: `agent.vynil.solidite.fr`, `controller.vynil.solidite.fr`,
+    `vynil.solidite.fr`; derived short names `vynil-agent`, `vynil-controller`, `vynil`

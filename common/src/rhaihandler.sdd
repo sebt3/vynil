@@ -1,0 +1,325 @@
+Spec: RhaiHandler
+
+Purpose:
+  Assemble the Vynil Rhai scripting surface: the @Script newtype over
+    @vynil_core::engine::Script preserves the historical `common::Script` API while four
+    constructors — @Script::new_core, @Script::new_file_scan, @Script::new and
+    @Script::new_mock — layer Vynil registrations in a fixed order onto the generic core
+    engine, including the real-cluster versus mock substitution; the file itself defines the
+    single script-visible global `vynil_owner`, provides the error-converting execution entry
+    points (@Script::run_file, @Script::eval, @Script::eval_truth,
+    @Script::eval_map_string), and re-exports the rhai vocabulary so consumers import engine
+    types through this module instead of @vynil_core directly.
+
+Owns:
+  ./rhaihandler.rs
+
+References:
+  ./yamlhandler.sdd — @yaml_ordered_rhai_register is installed by @Script::new_core, and the
+    only mapped regression test of that surface, @test_yaml_decode_modify_single_key_preserves_order,
+    is this file's only @tests entry.
+  ./handlebarshandler.sdd — @handlebars_rhai_register closes the @Script::new_core assembly.
+  ./k8smock.sdd — @k8smock_rhai_register is @Script::new_mock's cluster stand-in and owns the
+    mock/real name-partition and the forwarded core k8s-mock behavior.
+  ./context.sdd — @crate::context::get_owner is the entire data source of the @vynil_owner
+    closure, including its tokio runtime precondition.
+  ./tools.sdd — approved calibration reference.
+
+Must:
+  @Script::new_core is the shared base of all four constructors: it calls
+    @vynil_core::engine::Script::new_bare(@resolver_path), which for the `/common/Cargo.toml`
+    feature set `k8s,oci,s3,fs,shell,password` plus core defaults `http,crypto,rhai,hbs,hbs-scripting`
+    builds the generic engine attributed to that crates.io `vynil-core` `0.7.7` — one
+    @vynil_core::engine::FileModuleResolver per `resolver_path` entry in given order, expression
+    depths `256`/`128`, call levels `512`, and the generic helper set that gives every
+    constructor its host-level script powers (`get_env`, filesystem read/write/copy/list,
+    `shell_run`/`shell_output`, password and crypto helpers, real OCI registry client) — this
+    file removes none of that and gates none of it on the chosen constructor.
+  On top of the base, @Script::new_core adds exactly four registrations, in exactly this order:
+    the private @vynil_owner_register (the `vynil_owner` global), then @yaml_ordered_rhai_register,
+    then @package_rhai_register, then @handlebars_rhai_register.
+  @Script::new_file_scan is @Script::new_core then @http_rhai_register, @s3_rhai_register and
+    @file_jukebox_rhai_register, in that order; it installs none of the instance, JukeBox or k8s
+    registrars @Script::new adds, so those script names are simply absent for scripts run on it
+    (see Handles).
+  @Script::new is @Script::new_core then @http_rhai_register, @s3_rhai_register,
+    @service_rhai_register, @system_rhai_register, @tenant_rhai_register, @jukebox_rhai_register,
+    @k8sgeneric_rhai_register, @k8sraw_rhai_register and @k8sworkload_rhai_register, in that
+    order; it has no file JukeBox variant and adds nothing to the base's real OCI bindings — the
+    OCI names visible to scripts on @Script::new are entirely the core build's real ones.
+  @Script::new_mock is @Script::new_core then @vynil_core::oci_mock::oci_mock_rhai_register,
+    then @httpmock_rhai_register(@http_mocks), then @k8smock_rhai_register(@k8s_mocks,
+    @created_objects), in that order. The registrations @Script::new would add that @Script::new_mock
+    does not are exactly @http_rhai_register, @s3_rhai_register, the three instance registrars,
+    @jukebox_rhai_register and the three core k8s registrars; with them absent, the s3 script
+    surface (`s3_get_yaml`, `s3_list_keys`) is missing from mock engines entirely — stubbed
+    nowhere, unlike http and the cluster surface, which are replaced name-for-name by mocks
+    (./k8smock.sdd).
+  The @oci_mock_rhai_register step layers stubs onto an engine the base already gave the real
+    `new_registry`/`push_image`/`sign_image`/`list_tags`/`get_manifest` bindings and the `"Registry"`
+    type: the stub adds the same five function names plus `"OciRegistryMock"`, and its
+    `new_registry` (three @String args, the same signature as the real @vynil_core::oci::Registry::new)
+    replaces that binding under the locked @rhai registry's name-plus-signature lookup, leaving
+    scripts no construction path to a live @Registry — while `get_auth_from_file` is not among the
+    mocked names and stays the real docker-config reader on mock engines.
+  `vynil_owner` is the only script-visible name this file itself defines: a zero-argument global
+    @rhai function returning @rhai::Dynamic that calls @crate::context::get_owner at every call
+    (a context set after engine construction is visible to an already-built engine), converts the
+    owner-reference @serde_json::Value via @to_dynamic, and answers an empty @rhai map whenever
+    the context is unset or the conversion @Result::Err — the two failures are indistinguishable
+    to scripts.
+  The four execution wrappers are pure error conversion: each calls the same-named core method on
+    the wrapped engine and @Into::into the failure, so @vynil_core::Error arrives as the transparent
+    @crate::Error::Core with core's display text intact — `Rhai script error: <rhai text>`,
+    `Missing script <path>`, `SerializationError: ...` — no rewriting, tagging or logging happens
+    at this layer.
+  Because the wrappers are inherent methods they shadow the identically named @std::ops::Deref
+    targets: calls through @Script take the @crate::Result channel, while the same names through
+    the public `.0` field keep returning @vynil_core::Result, and every core surface the wrapper
+    did not re-expose stays reachable Deref'd with its native contract —
+    @vynil_core::engine::Script::eval_map_json (unconverted error type),
+    @vynil_core::engine::Script::set_dynamic (two @unwrap calls), and
+    @vynil_core::engine::Script::add_code / @vynil_core::engine::Script::add_common.
+  Script data and context arrive through the shared persistent @rhai::Scope reachable via Deref:
+    @rhai::Scope::set_or_push directly (as @crate::rhaihandler::tests injects `input_yaml`) or the
+    unconverted core `set_dynamic` writes variables that every later @Script::run_file /
+    @Script::eval on the same @Script sees, and values written by one evaluation persist to the
+    next — one @Script is one mutable namespace.
+  @Script::new_core, @Script::new_file_scan and @Script::new are @must_use; @Script::new_mock is
+    not. The mock inputs are moved out untouched: @http_mocks to the http-mock registrar,
+    @k8s_mocks and the caller-shared @std::sync::Arc<@std::sync::Mutex<@Vec<@rhai::Dynamic>>>
+    recorder through @k8smock_rhai_register to the core k8s mock (./k8smock.sdd), never inspected
+    or retained by this file.
+  The re-export block freezes the engine vocabulary consumers import via @crate::rhaihandler:
+    exactly @AST, @ASTNode, @Array, @Dynamic, @Engine, @Expr, @FileModuleResolver,
+    @ImmutableString, @Map, @Module, @ModuleResolversCollection, @ParseError, @Scope, @Stmt,
+    @base64_decode and @to_dynamic — the rhai set core re-exports plus the core helper
+    @vynil_core::engine::base64_decode; core's sibling `url_encode` is not re-exported here, so
+    consumers following these paths reach base64 but not the url helper.
+  Of the ten registrar entry points this file calls, six arrive under the ./lib.rs alias modules
+    `crate::httphandler`, `crate::httpmock`, `crate::k8sgeneric`, `crate::k8sraw`,
+    `crate::k8sworkload` and `crate::s3handler` that are @pub use re-exports of @vynil_core
+    modules — those registrations are core code from crates.io, not Vynil-crate code;
+    @vynil_core::oci_mock is likewise imported directly rather than through the @crate::k8smock
+    re-export its spec documents. Vynil-crate registration code reaches the assembly only via
+    ./yamlhandler.rs, ./vynilpackage.rs, ./handlebarshandler.rs, ./context.rs, the instance and
+    JukeBox files and ./k8smock.rs.
+
+Depends on:
+  `vynil-core` `0.7.7` from crates.io (`/common/Cargo.toml`) — @vynil_core::engine::Script is the
+    wrapped type and supplies @vynil_core::engine::Script::new_bare plus every execution body;
+    @vynil_core::Error converts through @Into::into; @vynil_core::oci_mock and the
+    @vynil_core::engine re-exports of @Dynamic, @Map, @to_dynamic and the base64 helper are
+    consumed directly. Engine contents and error texts are attributed to that build and its
+    feature set.
+  @rhai `1.20.0` requested / `1.25.1` locked (workspace features `sync`, `serde`, `internals`) —
+    later-registration-wins function replacement, the @rhai::Scope model, and @rhai::Map's
+    @std::collections::BTreeMap backing (JSON key ordering, attributed) behind what scripts see.
+  ./yamlhandler.sdd — @yaml_ordered_rhai_register; ./handlebarshandler.sdd — @handlebars_rhai_register;
+    ./vynilpackage.sdd — @package_rhai_register; ./context.sdd — @crate::context::get_owner.
+  @crate::instanceservice::service_rhai_register (./instanceservice.rs),
+    @crate::instancesystem::system_rhai_register (./instancesystem.rs),
+    @crate::instancetenant::tenant_rhai_register (./instancetenant.rs),
+    @crate::jukebox::jukebox_rhai_register (./jukebox.rs),
+    @crate::jukebox_file::file_jukebox_rhai_register (./jukebox_file.rs),
+    @crate::k8smock::k8smock_rhai_register (./k8smock.sdd) — the crate-code registrars this
+    assembly calls.
+  @crate::Error::Core and @crate::Result (./lib.rs) — the transparent conversion target and return
+    alias of every wrapper; @HttpMockItem arrives via the `crate::httpmock` alias.
+  @std::sync::Arc and @std::sync::Mutex — the `created_objects` recorder type threaded to the
+    mock layer.
+
+Exposes:
+  @Script — `#[derive(@std::fmt::Debug)] pub struct @Script(pub @vynil_core::engine::Script)`:
+    @Debug only, no @Clone; @std::ops::Deref / @std::ops::DerefMut to @vynil_core::engine::Script;
+    the public tuple field lets callers wrap any core engine — including a bare
+    @vynil_core::engine::Script::new_bare with zero Vynil registrations — bypassing every
+    constructor and its ordering.
+  @Script::new_core — `#[must_use] pub fn @Script::new_core(@resolver_path: @Vec<@String>) -> @Self`:
+    base + owner + ordered yaml + package model + Handlebars bridge, exactly as itemised in `Must`.
+  @Script::new_file_scan — `#[must_use] pub fn @Script::new_file_scan(@resolver_path: @Vec<@String>) -> @Self`:
+    core set + real http + real s3 + the file-scan JukeBox surface (./jukebox_file.rs).
+  @Script::new — `#[must_use] pub fn @Script::new(@resolver_path: @Vec<@String>) -> @Self`: the
+    full live-cluster surface — http, s3, the three instance kinds, real JukeBox, and the generic,
+    raw and workload k8s registrars.
+  @Script::new_mock — @pub fn @Script::new_mock taking @resolver_path: @Vec<@String>,
+    @http_mocks: @Vec<@HttpMockItem>, @k8s_mocks: @Vec<@rhai::Dynamic> and @created_objects:
+    @std::sync::Arc<@std::sync::Mutex<@Vec<@rhai::Dynamic>>> returning @Self; no @must_use; the
+    cluster-test engine (OCI/http/k8s stands-ins); drives `agent package test`.
+  @Script::run_file — `pub fn @Script::run_file(&mut self, @file: &@std::path::PathBuf) -> @crate::Result<@rhai::Dynamic>`:
+    runs the Rhai file at `file`; doc comment says `Runs the rhai script stored in file`.
+  @Script::eval — `pub fn @Script::eval(&mut self, @script: &str) -> @crate::Result<@rhai::Dynamic>`.
+  @Script::eval_truth — `pub fn @Script::eval_truth(&mut self, @script: &str) -> @crate::Result<@bool>`.
+  @Script::eval_map_string — `pub fn @Script::eval_map_string(&mut self, @script: &str) -> @crate::Result<@String>`;
+    its doc comment says a script "returning a string" is required, which the core body it
+    forwards to contradicts (see Tasks).
+  `vynil_owner()` — the script-visible zero-arg global returning an owner-reference map or `#{}`,
+    installed into every engine by the private @vynil_owner_register; no Rust-side surface.
+  Re-exports — @pub use of @AST, @ASTNode, @Array, @Dynamic, @Engine, @Expr, @FileModuleResolver,
+    @ImmutableString, @Map, @Module, @ModuleResolversCollection, @ParseError, @Scope, @Stmt,
+    @base64_decode, @to_dynamic from @vynil_core::engine, keeping consumer import paths stable.
+
+Accepts:
+  @resolver_path: @Vec<@String> by all four constructors — each entry kept as an
+    @vynil_core::engine::FileModuleResolver search directory in given order with no existence
+    check (`import` misses for an absent dir are runtime events, not construction errors), and the
+    empty vec accepted.
+  @Script::new_mock additionally accepts any @Vec<@HttpMockItem> fixture list and any @Vec<@rhai::Dynamic>
+    documents — entries are not shape-validated here (./k8smock.sdd defines the expected document
+    shape) — plus one shared `created` recorder @std::sync::Arc.
+  @Script::run_file accepts a borrowed @std::path::PathBuf checked at call time: any non-file path
+    (missing or a directory, tested by @std::path::Path::is_file) takes the @Err branch, and the
+    core method the wrapper calls performs @unwrap on @OsStr::to_str for such paths.
+  @Script::eval / @Script::eval_truth / @Script::eval_map_string accept any `&str` snippet; the
+    only size rules are the engine's fixed `256`/`128` expression-depth and `512` call-level caps —
+    there is no timeout, memory cap or instruction limit at any layer here.
+  Scope injection accepts any variable name and value via @rhai::Scope::set_or_push or the Deref'd
+    @set_dynamic (which requires JSON-serializable input); no reserved names, later bindings simply
+    replace earlier ones.
+
+Returns:
+  Every constructor returns @Script — construction never fails, never logs a user-visible error
+    and never contacts a cluster, registry or network; contact happens only when a script later
+    calls a real registration.
+  @Script::run_file returns the file's last-expression value; @Script::eval returns the snippet's
+    last-expression value (@rhai::Dynamic), including @rhai::Dynamic::UNIT for valueless results.
+  @Script::eval_truth returns the final value coerced @bool.
+  @Script::eval_map_string returns the @serde_json::to_string of the resulting @rhai::Map — a
+    compact JSON object text whose keys are in alphabetical order, because the locked @rhai @rhai::Map
+    is @std::collections::BTreeMap-backed, not script insertion order.
+
+Raises:
+  @Script::eval, @Script::eval_truth and @Script::eval_map_string surface every parse error, script
+    throw and last-value type failure as @crate::Error::Core wrapping @vynil_core::Error::RhaiError,
+    display `Rhai script error: <rhai text>`; @Script::eval_truth with a non-bool final value fails
+    that way rather than answering `false`, and @Script::eval_map_string on a script returning a
+    bare string — the shape its own doc advertises — fails the @rhai::Map coercion as this same
+    error, never returning the string.
+  @Script::eval_map_string additionally maps a @serde_json failure — any map entry whose @rhai::Dynamic
+    carries a custom registered value (e.g. @YamlDoc, @HandleBars), which @rhai serde cannot
+    encode — to @crate::Error::Core wrapping @vynil_core::Error::SerializationError.
+  @Script::run_file yields @crate::Error::Core(@vynil_core::Error::MissingScript), display
+    `Missing script <path>`, for any non-file path, and the `Rhai script error:` text for
+    parse/run failures; a path with a non-UTF-8 OS string panics inside the core @unwrap before
+    either leg returns (see Tasks).
+  A script's `vynil_owner()` call raises no @rhai::EvalAltResult ever — when the evaluation thread is
+    outside a tokio multi-thread runtime the @crate::context::get_owner call panics with tokio's
+    runtime text (./context.sdd), and a Rust panic in a registered function is not a catchable
+    script error.
+  No constructor raises: same-name registrations from a later registrar silently replace earlier
+    bindings per the locked @rhai registry, unlogged and undetectable through this API.
+
+Handles:
+  Context unset (or conversion failure) at a `vynil_owner()` call — the empty map; a context installed
+    after construction — visible to the existing engine on its next call.
+  Scripts written against one constructor's surface run on another (cluster names under
+    @Script::new_file_scan, s3/http names under @Script::new_mock): the assembly grants no guidance and the
+    call fails at run time with rhai's function-not-found error.
+  Empty @resolver_path — an empty resolver collection, so every `import` misses; the core
+    `import_run` / `import_template` shims turn module-not-found into a debug-log skip returning
+    unit (core build).
+  @Script::new_mock with both mock vectors empty — registrars install the full mock surface over an empty
+    database; lookup misses are the mock layer's error texts (./k8smock.sdd), not
+    function-absence.
+
+Tasks:
+  [ ] Cover constructor surface divergence by probing script name presence per engine: @Script::new answers
+      http/s3/instance/JukeBox/k8s names; @Script::new_file_scan answers http, s3 and the file JukeBox
+      but fails cluster names as function-not-found; @Script::new_mock answers the mock lookups and the
+      OCI stub while `s3_get_yaml`/`s3_list_keys` fail as function-not-found.
+  [ ] Cover both `vynil_owner` legs on a runtime-satisfying harness: `#{}` before any `set_*` and
+      the owner-map key set pinned by ./context.sdd after @crate::context::set_service.
+  [ ] Cover the execution contracts: @Script::run_file on a missing path @Err displaying
+      `Missing script <path>`; @Script::eval_truth on a non-bool value @Err not `false`;
+      @Script::eval_map_string returning alphabetically-ordered JSON for a map and @Err for a
+      returned bare string; @rhai::Dynamic::UNIT round-tripping for valueless scripts.
+  [ ] Pin the two-channel error split: @Script::eval @Err is @crate::Error::Core while the same
+      snippet through `script.0.eval` yields @vynil_core::Error — today's single test pins neither leg.
+  [ ] Cover @resolver_path: an `import` of a module file inside a resolver dir resolves, and the
+      same import on an engine built with an empty vec skips via the shim.
+  [ ] Cover the new_mock OCI shadowing: `new_registry("a","b","c")` on a mock engine yields the stub
+      (later `list_tags` returns the stub answer) and `get_auth_from_file` still reads docker config.
+  [?] @Script::eval_map_string's doc comment ("a rhai script returning a string") contradicts the
+      core method it wraps, which requires an @rhai::Map and returns its JSON text; a returned
+      string is an @Err. Decide later whether the doc is fixed or the method renamed — tests should
+      pin current behaviour either way.
+  [?] @Script::run_file can panic on a non-UTF-8 path inside the core @unwrap reached via this
+      wrapper, and none of this file's error texts (all core-carried) carry a stable unique
+      identifier as the project error rule asks. Decide later whether the wrapper should pre-check
+      the path and tag the errors.
+  [?] @Script::new_mock lacks @must_use while all three other constructors carry it. Decide later
+      whether the marker is aligned.
+  [?] The mock engine is not hermetic: the base leaves real filesystem, `shell_run`/`shell_output`,
+      `get_env` and password helpers live under @Script::new_mock, OCI is only partially stubbed (`get_auth_from_file`
+      stays real), and s3 is absent rather than stubbed — a mock-run package script can read host
+      files and execute commands. Decide later whether the mock path should shed or stub host powers.
+  [?] The `vynil_owner` panic surface is neither documented at the closure nor exercised by a test;
+      the runtime precondition rides silently on ./context.sdd. Decide later whether the closure
+      should degrade to `#{}` instead of panicking.
+  [?] @vynil_owner collapses conversion failure into the same `#{}` as unset context, so scripts
+      cannot distinguish a wrong owner-reference shape from no reconciliation context. Decide later
+      whether the two legs need distinct observable answers.
+  [?] @Script::new_file_scan installs real http and s3 but no instance/k8s/JukeBox names at all, so script
+      mistakes in file-scan flows surface only as run-time function-not-found. Confirm the reduced
+      surface is the intended shape of the file-scan flow.
+
+Done when:
+  Every Scenario above has a passing mapped test or an explicit carried Task, the Tasks coverage
+    gaps are closed, and `cargo test -p common` with `cargo clippy --all-targets -- -D warnings`
+    are green.
+
+Scenario: Assembled real engine round-trips order-preserving YAML through injected scope
+  Given @Script::new(@Vec::new()) and the literal `z: first\na: second\nm: third\n` pushed as
+    @rhai::Dynamic under `input_yaml` through the Deref'd @rhai::Scope::set_or_push
+  When @Script::eval runs `yaml_decode_ordered` on `input_yaml`, then `doc["a"] = "MODIFIED"`,
+    then `yaml_encode_ordered` on `doc`
+  Then the @Ok @rhai::Dynamic's @rhai::Dynamic::to_string has exactly the same non-empty line count as the
+    input, exactly one differing line, and that line contains `MODIFIED`
+  And the injected scope variable was visible to the script across the wrapper boundary
+  Maps to test @test_yaml_decode_modify_single_key_preserves_order
+  The cycle semantics are ./yamlhandler.sdd's contract; this scenario pins only the assembly —
+    @Script::new core set installs the ordered registrar, Deref'd scope injection feeds @Script::eval,
+    and the wrapper returns @crate::Result<@rhai::Dynamic>.
+
+Scenario: Owner map reaches scripts only after a context exists
+  Given an engine on a multi-thread tokio runtime before any `set_*` ran
+  When a script calls `vynil_owner()`
+  Then the value is the empty map `#{}`
+  But after @crate::context::set_service the same call returns the owner-reference map with the keys
+    pinned by ./context.sdd
+  No mapped test exists.
+
+Scenario: Mock engine answers mock names and lacks the never-installed ones
+  Given @Script::new_mock with empty @http_mocks and @k8s_mocks
+  When a script calls `get_service_instance("ns","missing")`, `new_registry("a","b","c")` and
+    `s3_get_yaml(...)`
+  Then the lookup fails with ./k8smock.sdd's miss text — the name exists — while
+    `new_registry` answers the OCI stub
+  But `s3_get_yaml` fails as function-not-found, the name was never installed
+  No mapped test exists.
+
+Scenario: Missing script is an @Err, never a panic — non-UTF-8 paths are the exception
+  Given any constructed @Script
+  When @Script::run_file targets a nonexistent path or a directory
+  Then the @Err displays `Missing script <path>`
+  But a path whose OS string is not valid UTF-8 panics inside the core @unwrap before any result
+  No mapped test exists.
+
+Scenario: Wrapper and Deref twin raise different error types for one snippet
+  Given an engine asked to parse the invalid snippet `let = ;`
+  When @Script::eval runs it
+  Then the failure is @crate::Error::Core wrapping @vynil_core::Error::RhaiError with the prefix
+    `Rhai script error: `
+  And the same snippet through `script.0.eval` returns @vynil_core::Error directly
+  No mapped test exists.
+
+Example:
+  constructor surface: new_core = base + owner + yaml-ordered + package + handlebars;
+    new_file_scan = new_core + http + s3 + file-JukeBox; new = new_core + http + s3 + service +
+    system + tenant + jukebox + k8sgeneric + k8sraw + k8sworkload; new_mock = new_core + oci-mock +
+    http-mocks + k8s-mock
+  `vynil_owner()` with unset context → `#{}`; after @crate::context::set_service of instance `web`
+    with uid `u-1` → map with `apiVersion` `vynil.solidite.fr/v1`, `kind` `ServiceInstance`,
+    `name` `web`, `uid` `u-1` (shape owned by ./context.sdd)
+  @Script::eval_map_string over a script returning `#{b: 1, a: 2}` → `{"a":1,"b":2}` — alphabetical,
+    not insertion, order

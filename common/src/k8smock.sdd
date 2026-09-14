@@ -1,0 +1,403 @@
+Spec: K8sMock
+
+Purpose:
+  Stand in for the live-cluster Rhai surface so Vynil package scripts can run without a
+    cluster: @K8sInstanceMock answers the `ServiceInstance`, `SystemInstance` and
+    `TenantInstance` script types against an in-memory mock database, @K8sJukeBoxMock
+    answers `JukeBox`, @k8smock_rhai_register installs these name-for-name on an
+    @rhai::Engine next to the forwarded core generic-K8s mocks, and @oci_mock_rhai_register
+    is re-exported so mock engines reach an OCI stub through this module. The module is
+    not `#[cfg(test)]`- or feature-gated: ./lib.rs declares `pub mod k8smock;`
+    unconditionally, so it is public API in every build, and
+    @crate::rhaihandler::Script::new_mock (likewise ungated) wires it into the shipped
+    `agent package test` execution path.
+
+Owns:
+  ./k8smock.rs
+
+References:
+  ./rhaihandler.rs — @crate::rhaihandler::Script::new_mock is the only in-crate caller of
+    @k8smock_rhai_register.
+  ./instanceservice.rs, ./instancesystem.rs, ./instancetenant.rs, ./jukebox.rs — the real
+    registries @service_rhai_register, @system_rhai_register, @tenant_rhai_register and
+    @jukebox_rhai_register whose script-visible names this file replaces for mock
+    engines.
+  ./tools.sdd, ./yamlhandler.sdd, ./handlebarshandler.sdd — approved calibration references.
+
+Must:
+  One Rust type answers all three instance kinds: @K8sInstanceMock is registered three
+    times through @rhai::Engine::register_type_with_name under the script type names
+    `"ServiceInstance"`, `"SystemInstance"` and `"TenantInstance"`, and because
+    @rhai::Engine::register_fn binds by Rust type rather than by alias, every @K8sInstanceMock
+    method installed by any block is callable on a value of any of the three names — the
+    per-kind registration blocks are grouping, not enforcement.
+  The global lookups match the real registries by name: `get_service_instance`,
+    `list_service_instance`, `list_services_names`, `get_system_instance`,
+    `list_system_instance`, `get_tenant_instance`, `list_tenant_instance`, `get_jukebox`
+    and `list_jukebox`; per-kind member surfaces equal the real per-kind name sets as a
+    union, with `set_missing_init_version` additionally registered inside the System block
+    (already callable anyway through the shared type).
+  `get_services` and `set_services` are registered for the instance type, `metadata`,
+    `spec` and `status` are @rhai::Engine::register_get member properties, and the JukeBox
+    mock exposes the eight real JukeBox member/property names including
+    `set_status_updated`, `set_status_packages_merge` and `set_status_failed`.
+  Field-store setters write the value to `status.<key>` on the handle and republish it:
+    @K8sInstanceMock::set_status_ready stores its tag under `tag`; @set_tfstate, @set_rhaistate,
+    @set_services, @set_status_crds, @set_status_befores, @set_status_vitals,
+    @set_status_scalables, @set_status_others, @set_status_posts and @set_status_systems
+    store under the eponymous key (`tfstate`, `rhaistate`, `services`, `crds`, `befores`,
+    `vitals`, `scalables`, `others`, `posts`, `systems`); @K8sJukeBoxMock::set_status_updated
+    and @K8sJukeBoxMock::set_status_packages_merge both store their `packages` argument
+    under `packages`, ignoring any filter.
+  Every field write tolerates malformed objects and still returns @Ok of a handle clone:
+    through the private @set_status_field a non-map handle `obj` drops the write entirely,
+    a missing `status` is created as an empty map before insert, and a `status` that exists
+    as a non-map discards the value while the handle `obj` is still rebuilt.
+  Instance field writes flow back to the shared database through @persist: the database
+    entry whose `kind`, `metadata.name` and `metadata.namespace` exactly equal the handle's
+    is replaced with the handle's whole document, so a later `get_*_instance` on the same
+    engine sees the new `status`; a missing key triple, no matching entry, or a non-map
+    entry is a silent no-op, matching never inserts, and only the first matching entry is
+    updated.
+  @K8sJukeBoxMock never persists: its @set_status_field mutates only the handle, so a
+    later `get_jukebox` on the same engine returns the stored document unchanged.
+  Handles snapshot the entry at lookup time and @persist replaces the entry wholesale, so
+    a stale handle's next persisted field write clobbers intervening writes to the same
+    entry (last-persisted-document wins).
+  The sixteen recorder stubs — @K8sInstanceMock::set_agent_started, @set_missing_box,
+    @set_missing_package, @set_missing_requirement, @set_missing_init_version,
+    @set_status_tofu_failed, @set_status_rhai_failed, @set_status_crd_failed,
+    @set_status_before_failed, @set_status_vital_failed, @set_status_scalable_failed,
+    @set_status_other_failed, @set_status_post_failed, @set_status_system_failed,
+    @set_status_init_failed and @set_status_schedule_backup_failed — plus
+    @K8sJukeBoxMock::set_status_failed ignore every argument, touch no state and return
+    @Ok of an unchanged handle clone.
+  Constant and pass-through stubs: @K8sInstanceMock::get_options_digest (a `const fn`)
+    always returns `""`; the global `list_services_names` and
+    @K8sInstanceMock::get_tenant_services_names always answer an empty collection;
+    @K8sInstanceMock::get_tfstate and @K8sInstanceMock::get_rhaistate return the raw string
+    held at `status.tfstate` / `status.rhaistate` with no base64+gzip decode and `""` when
+    the key is absent or not a string.
+  @K8sInstanceMock::get_services_string (registered as `get_services`) maps
+    `status.services`-array entries' `key` strings lexicographically sorted and joined
+    with `,`; entries that are not maps, lack `key`, or hold a non-string `key` are
+    skipped, and every other shape answers `""`.
+  @K8sInstanceMock::get_tenant_name resolves in order: read own `metadata.namespace`
+    (else return `""`); scan the database for the first `kind` `"Namespace"` entry whose
+    `metadata.name` equals it and whose `metadata.labels` contains the key of environment
+    variable `TENANT_LABEL` (read per call, default `vynil.solidite.fr/tenant`), returning
+    that label value's @rhai::Dynamic display text; otherwise fall back to the namespace
+    string itself. @K8sInstanceMock::get_tenant_namespaces wraps that result in a
+    single-element array — even the fallback, including the empty-string case.
+  List results are plain JSON, not mock-capable objects: @list_instance_mocks and
+    @list_jukebox_mocks return @rhai::serde::to_dynamic of `{"items": [...]}` where each
+    item is the @K8sInstanceMockObj / @K8sJukeBoxMock serde encoding — the raw document
+    wrapped under one `obj` key — and the filter is kind plus namespace (instance) or kind
+    only (JukeBox), regardless of name.
+  The mock database is internal to each @k8smock_rhai_register call: the @Vec<@rhai::Dynamic>
+    is moved into a private @std::sync::Arc<@std::sync::Mutex<@Vec>> that is never handed
+    back, so instance writes are observable from Rust only by re-running scripts; the
+    `created` recorder vector is forwarded untouched to the core registration and never
+    read or written by this file.
+  Every lock acquisition recovers from poisoning through @std::sync::PoisonError::into_inner;
+    no mock path panics.
+
+Depends on:
+  @rhai `1.25.1` — @rhai::Engine, @rhai::Dynamic, @rhai::Map, @rhai::EvalAltResult,
+    @rhai::serde::to_dynamic; all state is @Dynamic maps, matched through @as_map_ref /
+    @into_string / @into_array value tests.
+  @vynil_core::k8s_mock::k8s_mock_rhai_register `0.7.7` (crates.io, `/common/Cargo.toml`)
+    — called first inside @k8smock_rhai_register with the same mocks Arc and `created`;
+    it installs the generic/raw/workload mock names, the `DynamicObject` type and the
+    no-op override of `update_k8s_crd_cache`.
+  @vynil_core::oci_mock::oci_mock_rhai_register — re-exported unchanged; registers the OCI
+    stub (`new_registry` discarding its arguments, empty `list_tags`, annotations-only
+    `get_manifest`, fixed-digest `push_image`, no-op `sign_image`); @k8smock_rhai_register
+    itself does not call it.
+  @crate::RhaiRes in ./lib.rs — the `@std::result::Result`<_, `Box<@rhai::EvalAltResult>`>
+    alias every fallible mock entry point returns.
+  @serde / @serde_json derives on the mock structs and @serde_json::json! for the list
+    wire; @std::sync::{Arc, Mutex, PoisonError}; @std::env::var for `TENANT_LABEL`.
+
+Exposes:
+  @k8smock_rhai_register — @pub fn taking an engine, the owned `@Vec<@rhai::Dynamic>`
+    mock database, and the `created` recorder
+    `@std::sync::Arc<@std::sync::Mutex<@Vec<@rhai::Dynamic>>>`:
+    the module's registration entry point; installs the type aliases, globals, member
+    functions and `metadata`/`spec`/`status` getter properties itemised in the `Must`
+    entries, with shared blocks re-registered (common members three times, children
+    members twice) — identical bindings re-registered under the same names.
+  @K8sInstanceMock — @pub struct with @Clone, @Debug, @serde::Serialize and
+    @serde::Deserialize derives, fields `pub obj: @rhai::Dynamic` and
+    `pub mocks: @std::sync::Arc<@std::sync::Mutex<@Vec<@rhai::Dynamic>>>`;
+    both fields are public, so Rust callers construct handles with any document and any
+    shared database, bypassing every lookup below; the serde derive covers the
+    `mocks` field too.
+  @K8sInstanceMock::get_metadata / @K8sInstanceMock::get_spec / @K8sInstanceMock::get_status —
+    `pub fn(&mut self) -> @crate::RhaiRes<@rhai::Dynamic>`; cloned section of the handle
+    document or @rhai::Dynamic::UNIT when the key is absent; clones so mutating a returned
+    section never writes back.
+  @K8sInstanceMock::get_options_digest — `pub const fn(&mut self) -> @std::string::String`,
+    always `""`.
+  @K8sInstanceMock::get_tfstate / @K8sInstanceMock::get_rhaistate —
+    `pub fn(&mut self) -> @crate::RhaiRes<@std::string::String>`, raw stored string or `""`.
+  @K8sInstanceMock::get_services_string — `pub fn(&mut self) -> @std::string::String`,
+    registered as `get_services`; never fails.
+  @K8sInstanceMock::get_tenant_name — `pub fn(&mut self) -> @crate::RhaiRes<@std::string::String>`
+    of the resolved tenant name.
+  @K8sInstanceMock::get_tenant_namespaces — `pub fn(&mut self) -> @crate::RhaiRes<@rhai::Dynamic>`
+    wrapping that result in a single-element array.
+  @K8sInstanceMock::get_tenant_services_names — `pub fn(&mut self) -> @crate::RhaiRes<@rhai::Dynamic>`,
+    always `[]`.
+  @K8sInstanceMock::set_status_ready(@std::string::String) / @set_tfstate(@std::string::String) /
+    @set_rhaistate(@std::string::String) / @set_services(@rhai::Dynamic) / @set_status_crds /
+    @set_status_befores / @set_status_vitals / @set_status_scalables / @set_status_others /
+    @set_status_posts / @set_status_systems (all `@rhai::Dynamic`) —
+    `pub fn(&mut self, ...) -> @crate::RhaiRes<Self>`: store per the `Must` key map,
+    persist, return the updated handle clone.
+  @K8sInstanceMock::set_agent_started / @set_missing_box / @set_missing_package /
+    @set_missing_requirement / @set_missing_init_version / @set_status_tofu_failed /
+    @set_status_rhai_failed / @set_status_crd_failed / @set_status_before_failed /
+    @set_status_vital_failed / @set_status_scalable_failed / @set_status_other_failed /
+    @set_status_post_failed / @set_status_system_failed / @set_status_init_failed /
+    @set_status_schedule_backup_failed — `pub fn(&mut self, ...) -> @crate::RhaiRes<Self>`:
+    the argument-ignoring recorder stubs of the `Must` entry.
+  @K8sJukeBoxMock — @pub struct with @Clone, @Debug, @serde::Serialize and
+    @serde::Deserialize derives, field `pub obj: @rhai::Dynamic`; public field,
+    constructed directly by Rust callers to inject a document into a script scope.
+  @K8sJukeBoxMock::get_metadata / @K8sJukeBoxMock::get_spec / @K8sJukeBoxMock::get_status —
+    `pub fn(&mut self) -> @crate::RhaiRes<@rhai::Dynamic>`, cloned section or
+    @rhai::Dynamic::UNIT.
+  @K8sJukeBoxMock::set_status_updated(@rhai::Dynamic) / @K8sJukeBoxMock::set_status_packages_merge(@std::string::String,
+    @rhai::Dynamic) / @K8sJukeBoxMock::set_status_failed(@std::string::String) —
+    `pub fn(&mut self, ...) -> @crate::RhaiRes<Self>`; package writers and the failure
+    stub, handle-local only.
+  @K8sInstanceMockObj — `pub struct { pub obj: @rhai::Dynamic }`, serializable wrapper
+    used only to encode listed instance documents; never registered on any @rhai::Engine.
+  @oci_mock_rhai_register — `pub use` re-export of @vynil_core::oci_mock::oci_mock_rhai_register
+    for consumers (including mock-path setup) that import the OCI stub through this module.
+
+Accepts:
+  @k8smock_rhai_register accepts any mutable @rhai::Engine, the initial mock database as
+    an owned @Vec<@rhai::Dynamic>, and the `created` recorder Arc consumed by the
+    forwarded core registration only.
+  Database entries are expected to be plain k8s-shaped maps (`kind`, `metadata.name`,
+    `metadata.namespace`, `spec`, `status`, `labels` for tenant resolution); non-map
+    entries are inert in every matcher, and an entry lacking a string
+    `metadata.namespace` can never match an instance lookup or a persist, only the
+    namespace-blind JukeBox lookup.
+  Lookups accept any `@std::string::String` arguments; matching is exact string equality
+    on `kind` plus `metadata.name` (plus `metadata.namespace` for instances) with no
+    selectors or partial matching.
+  The `Dynamic`-taking setters accept arbitrary values and store them verbatim under the
+    mapped `status` key; nothing validates the shape against the real CRD models.
+  @get_tenant_name reads process environment variable `TENANT_LABEL` on call.
+  Property assignment from scripts (`instance.spec = x`) is not accepted: only
+    @rhai::Engine::register_get bindings exist for `metadata`/`spec`/`status`, no
+    @rhai::Engine::register_set, so a script write fails at runtime.
+
+Returns:
+  Lookups return @crate::RhaiRes handles: @K8sInstanceMock sharing the database Arc,
+    @K8sJukeBoxMock holding just its document clone.
+  List calls return @crate::RhaiRes<@rhai::Dynamic> with `{"items": [{"obj": <doc>}, ...]}`
+    in database order; an empty match set yields `items: []`.
+  Section getters, state getters and setters return as itemised in `Exposes`; every
+    setter's @Ok is a clone of the handle carrying the updated (or untouched) document.
+
+Raises:
+  Lookup misses raise @rhai::EvalAltResult string errors with the exact texts
+    `Failed to find {kind} {name} in namespace {namespace} in the Mock database`
+    (@find_instance_mock) and `Failed to find JukeBox {name} in the Mock database`
+    (@find_jukebox_mock).
+  Non-map handle documents raise `mock object is not a map: {e}` — from
+    @K8sInstanceMock::get_metadata / @get_spec / @get_status / @get_tfstate /
+    @get_rhaistate / @get_tenant_name / @get_tenant_namespaces and their
+    @K8sJukeBoxMock counterparts when `obj` fails @as_map_ref.
+  @list_instance_mocks / @list_jukebox_mocks surface a @rhai::serde::to_dynamic failure as
+    the call's error, reachable only when a database entry holds a Dynamic serde cannot
+    serialize.
+  Setters, @get_services_string, @get_options_digest and the empty-collection stubs raise
+    on no input — malformed shapes degrade to silent drops or their `""` / empty defaults.
+
+Handles:
+  `status` absent on a field write — an empty map is created first; `status` or `metadata`
+    present but non-map on a write — the value is discarded, the call still answers
+    `@Ok`; on a state read — the `""` default.
+  `status.services` entries that are not maps or lack a string `key` — skipped in the
+    joined result.
+  Tenant label resolution edges — Namespace mock without `labels`, or without the tenant
+    key — fall back to the namespace string; duplicate matching Namespace entries — the
+    first labelled one wins, unlabelled matches are skipped and the scan continues;
+    `TENANT_LABEL` unset — the default key `vynil.solidite.fr/tenant`.
+  Database entries with the same (`kind`, name, namespace) triple — @persist updates only
+    the first while lists keep showing every copy.
+  Poisoned database mutex — @std::sync::PoisonError::into_inner reuses the inner state.
+
+Tasks:
+  [ ] Cover lookup misses with both exact error texts, and lookups matching on
+      (`kind`, `metadata.name`, `metadata.namespace`) while ignoring all other fields.
+  [ ] Cover persist: field write visible to a later script lookup of the same entry,
+      non-match or key-less handle persisting nothing, duplicate triples taking only the
+      first update, and the stale-handle clobber over an intervening write.
+  [ ] Cover the write-shape tolerances: non-map `obj`, auto-created `status`, non-map
+      `status` discarding the value, each still answering @Ok with a handle clone.
+  [ ] Cover that all sixteen instance recorder stubs and the JukeBox failure stub change
+      no observable state on repeated lookups.
+  [ ] Cover @K8sInstanceMock::get_services_string: sorted-key join from `{key:...}` entries,
+      skipped malformed entries, `""` for missing/non-array `services`.
+  [ ] Cover @K8sInstanceMock::get_tenant_name: tenant label hit, `TENANT_LABEL` override,
+      default key, namespace fallbacks, `""` with no usable `metadata.namespace`, and
+      @K8sInstanceMock::get_tenant_namespaces wrapping the result (including `[""]`).
+  [ ] Cover the constant stubs: `options_digest` `""`, global `list_services_names` `[]`,
+      `get_tenant_services_names` `[]`, and raw (non-decoded) `get_tfstate`/`get_rhaistate`
+      round-trips of whatever @set_tfstate/@set_rhaistate stored.
+  [ ] Cover list wire shape: each item wrapped under `obj` (scripts must read
+      `.items[i].obj.kind`), `items: []` when nothing matches, instance lists filtering by
+      kind+namespace only.
+  [ ] Cover the @K8sJukeBoxMock asymmetry: after a @K8sJukeBoxMock::set_status_updated call
+      the handle sees `status.packages` while a later `get_jukebox` still returns the
+      stored document unchanged. Existing package-scan scripts only pin the @Ok success
+      leg of the JukeBox setters, never the lost write-back.
+  [ ] Cover getter clone semantics: mutating the @rhai::Dynamic returned by
+      `metadata`/`spec`/`status` never reaches the database, and a script property write
+      on those names fails.
+  [?] The module is compiled into product builds: ./lib.rs declares `pub mod k8smock;`
+      ungated and @crate::rhaihandler::Script::new_mock — the path that ships inside
+      `agent package test` — is the reason it can stay; decide later whether a feature or
+      `#[cfg(test)]`-adjacent gate replaces this, or whether the shipped mock surface is
+      the intended design, per the crate rule against widening public surface.
+  [?] Registering all three script names over one @K8sInstanceMock erases the real
+      registries' per-kind partition: mock values of `"TenantInstance"` answer
+      `set_status_crds` and `"SystemInstance"` answers tenant stubs, while production
+      rejects those names; scripts can pass here and fail on-cluster. Decide later whether
+      distinct stub types are needed, and drop the redundant extra
+      `set_missing_init_version` registration in the System block either way.
+  [?] The recorder stubs' doc-comments claim they "record" failures, missing boxes or
+      agent start, yet they store nothing — failure paths are unobservable to scripts and
+      to fixtures; @set_status_tofu_failed / @set_status_rhai_failed also discard the
+      state and reason arguments the real methods persist. Decide later whether the stubs
+      write visible `status` markers or the comments are dropped.
+  [?] @K8sInstanceMock::get_options_digest returns `""` where every real model answers a
+      64-char sha256 (even options-less instances digest `""`); scripts branching on
+      digest equality compare differently under mock. Decide the stub's fidelity later.
+  [?] @K8sInstanceMock::get_tfstate / @set_tfstate trade raw strings while the real
+      registries base64+gzip-encode on write and decode on read; fixtures copied from real
+      instance `status.tfstate`, or scripts peeking at the raw field, disagree between
+      mock and cluster. Decide later whether the mock should encode/encode-decode.
+  [?] @K8sJukeBoxMock writes are handle-local by design-as-written asymmetry (@persist is
+      never called), and @persist itself never inserts a non-matching entry — both losses
+      are silent. Decide later whether JukeBox persists and whether persist should
+      upsert.
+  [?] List results wrap each item as `{"obj": <doc>}` and yield inert maps, while the
+      real list registrations return typed mock-capable items directly; `.items[i]` paths
+      therefore differ between mock and production scripts. Also decide later whether
+      @K8sInstanceMockObj is meaningful API or an implementation leak.
+  [?] @get_tenant_namespaces always answers a single-element array (the tenant name or
+      `""`), never multiple namespaces; confirm single-namespace tenants are the intended
+      mock semantics for scripts that iterate it.
+  [?] The internal database Arc is never exposed and `created` is unused here, so Rust
+      callers (fixture drivers) cannot assert mock writes without re-running scripts.
+      Decide later whether the Arc is handed back.
+  [?] Re-registration by the shared blocks (`register_instance_common` three times,
+      `register_instance_children` twice, `set_status_crds` twice) binds identical names
+      repeatedly — harmless today but a drift risk if the blocks ever diverge. Decide
+      whether the calls are deduplicated.
+
+Done when:
+  Every Scenario above has a passing in-file test, the coverage Tasks are closed, and
+    `cargo test -p common` with `cargo clippy --all-targets -- -D warnings` are green.
+
+Scenario: Lookup of an absent instance raises the exact miss text
+  Given a mock database holding no `ServiceInstance` named `web` in namespace `app`
+  When a script calls `get_service_instance("app", "web")`
+  Then the run fails with `Failed to find ServiceInstance web in namespace app in the Mock database`
+  And `get_jukebox("nope")` fails with `Failed to find JukeBox nope in the Mock database`
+  No mapped test exists.
+
+Scenario: Field write is visible to a later lookup on the same engine
+  Given a database holding a `ServiceInstance` with `metadata` {name: web, namespace: app}
+    and no `status`
+  When a script gets the instance and calls `set_status_ready("1.2.0")` and
+    `set_tfstate("STATE")`, then re-runs `get_service_instance("app", "web")`
+  Then the fresh handle's `status.tag` is `1.2.0` and `status.tfstate` is the raw `STATE`
+    with no decoding
+  No mapped test exists.
+
+Scenario: Recorder stubs leave the document untouched
+  Given a looked-up instance handle
+  When the script calls any of `set_agent_started()`, `set_missing_box("b")`,
+    `set_status_tofu_failed("state", "why")` or the other recorder stubs
+  Then each returns a handle clone without raising
+  And a re-lookup shows the stored document unchanged
+  No mapped test exists.
+
+Scenario: Malformed object shapes drop writes silently, never fail
+  Given a handle whose `obj` is not a map, another whose `status` is a string
+  When `set_status_ready` runs on each
+  Then both calls answer @Ok with a handle clone
+  And the non-map handle stays unchanged, the string-`status` handle keeps its string
+    `status` with no `tag` inserted, and @persist never inserts a phantom entry for them
+  No mapped test exists.
+
+Scenario: Stale handle clobbers a newer database write
+  Given one database entry with `metadata` {name: web, namespace: app}
+  When two handles are looked up, the first stores `tfstate` `"v2"` and persists, then the
+    second stores `tfstate` `"v1"` from its stale document and persists
+  Then the entry holds `"v1"` — @persist replaces the whole document, last write wins
+  No mapped test exists.
+
+Scenario: get_services joins sorted keys and ignores junk
+  Given `status.services` is an array of maps `{key: "b"}`, `{key: "a"}`, a non-map item,
+    an item without `key`, and an item with numeric `key`
+  When the script calls `get_services()`
+  Then the answer is `a,b`
+  But with `status.services` absent or not an array the answer is `""` and no call raises
+  No mapped test exists.
+
+Scenario: Tenant name resolves by Namespace label with namespace fallback
+  Given the instance's `metadata.namespace` is `team-a`, the environment sets
+    `TENANT_LABEL=vynil.io/t`, and the database holds a `Namespace` named `team-a` with
+    `labels: {"vynil.io/t": "acme"}`
+  When `get_tenant_name()` runs
+  Then the answer is `acme`
+  But with no matching `Namespace`, or one without the label key, the answer is `team-a`
+  And with an unreadable `metadata.namespace` the answer is `""`, and
+    `get_tenant_namespaces()` then answers `[""]`
+  And with any match found `get_tenant_namespaces()` answers exactly one element — the
+    tenant name
+  No mapped test exists.
+
+Scenario: JukeBox status writes stay on the handle
+  Given a database with a `JukeBox` named `test-box` having no `status`
+  When a script gets it via `get_jukebox("test-box")`, calls `set_status_updated([...])`
+    and `set_status_packages_merge("filter", [...])`, then calls `get_jukebox` again
+  Then the original handle's `status.packages` holds the last stored array
+  But the re-looked-up document still has no `status.packages`
+  Existing package-scan scripts pin only the @Ok legs of these setters; the lost
+    write-back is unpinned.
+
+Scenario: Lists return wrapped raw documents
+  Given the database holds two `ServiceInstance` documents in namespace `app` plus a
+    `JukeBox` and a bare non-map entry
+  When a script calls `list_service_instance("app")` and `list_jukebox()`
+  Then each result is a map with an `items` array in database order, each item readable
+    only as `{obj: <the stored document>}`
+  And the non-map entry appears in no list, a namespace with no matches yields
+    `items: []`, and instance listing ignores the name entirely
+  No mapped test exists.
+
+Scenario: Any instance member answers under any instance type name
+  Given the mock registration installed by one @k8smock_rhai_register call
+  When a script holds a `"TenantInstance"` value and calls `set_status_crds([...])` or
+    `options_digest()` on `"SystemInstance"`
+  Then the calls succeed — the methods bind to the shared @K8sInstanceMock type, not to
+    the registration block — and `options_digest()` returns `""`
+  No mapped test exists.
+
+Example:
+  database entry: `{"kind": "ServiceInstance", "metadata": {"name": "web", "namespace": "app"}}`
+    — the shape every matcher reads
+  list wire: `{"items": [{"obj": {"kind": ..., "metadata": ...}}, ...]}` — one `obj`
+    wrapper per item for both instance and JukeBox lists
+  getter defaults: absent section → `()`; absent `status.tfstate` → `""`; absent
+    `status.services` → `""`; `get_tenant_services_names()` → `[]`

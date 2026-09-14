@@ -12,21 +12,22 @@ Purpose:
   the order-preserving YAML helpers, and the status-condition macros.
 
 Structure:
-  ./src/lib.rs: Crate root — `@Error`, `@Result`, `@RhaiRes`, shared constants
-  ./src/context.rs: `@VynilContext` reconcile context and async client helpers
-  ./src/jukebox.rs: `@JukeBox` model, source variants, package cache
+  ./src/lib.rs: Crate root — `@Error` (33 variants), `@Result`, `@RhaiRes`, `@rhai_err`,
+    shared wire types, re-exports
+  ./src/context.rs: `@VynilContext` process context, async client and owner-label helpers
+  ./src/jukebox.rs: CRD-backed `@JukeBox` model, source variants, status setters
   ./src/jukebox_file.rs: file-scan JukeBox variant (no cluster connection)
-  ./src/vynilpackage.rs: `@VynilPackage` model, requirements, waypoint selection
-  ./src/instanceservice.rs: `@ServiceInstance` model and Rhai bridge
-  ./src/instancesystem.rs: `@SystemInstance` model
-  ./src/instancetenant.rs: `@TenantInstance` model
-  ./src/instance_macros.rs: `impl_condition_common!` status-condition codegen
-  ./src/handlebarshandler.rs: Vynil Handlebars layer and context-aware helpers
-  ./src/rhaihandler.rs: Vynil Rhai constructors and bindings
-  ./src/yamlhandler.rs: order-preserving `@YamlDoc` helpers
-  ./src/tools.rs: base64/gzip and misc helpers
-  ./src/ttl_cache.rs: `@TtlCache` async TTL cache
-  ./src/k8smock.rs: test-support Kubernetes/OCI mock re-exports
+  ./src/vynilpackage.rs: `@VynilPackage` model, requirements, version/cluster checks
+  ./src/instanceservice.rs: `@ServiceInstance` model, service-name TTL index, Rhai bridge
+  ./src/instancesystem.rs: `@SystemInstance` model and Rhai bridge
+  ./src/instancetenant.rs: `@TenantInstance` model, tenant identity helpers, Rhai bridge
+  ./src/instance_macros.rs: six `#[macro_export]` status-condition and instance codegen macros
+  ./src/handlebarshandler.rs: Vynil Handlebars layer and nine contextual helpers
+  ./src/rhaihandler.rs: `@Script` engine constructors (core, real, file-scan, mock)
+  ./src/yamlhandler.rs: order-preserving `@YamlDoc` helpers and serde_yaml re-exports
+  ./src/tools.rs: base64+gzip text codec for tfstate/rhaistate payloads
+  ./src/ttl_cache.rs: `@TtlCache` async single-slot TTL cache
+  ./src/k8smock.rs: in-memory Kubernetes/OCI Rhai mocks (product-compiled, ungated)
 
 Owns:
   ./src/lib.rs
@@ -34,8 +35,10 @@ Owns:
 
 Must:
   Expose only types and helpers genuinely shared across two or more consuming crates.
-  Keep the serde-YAML path order-preserving only through `./src/yamlhandler.rs`; elsewhere rely
-    on `vynil-core` alphabetical serde.
+  Keep the Rust-level ordered-YAML surface (`@YamlDoc`) confined to `./src/yamlhandler.rs`;
+    the `vynil-core` JSON paths (`@yaml_str_to_json` and friends) order their objects by
+    document insertion, not alphabetically — `handlebars` unifies the `preserve_order`
+    `serde_json` feature across the workspace graph, so no path in this crate sorts keys.
   Re-export the generic `vynil-core` engines behind Vynil newtypes so consumers do not select
     the engine layer themselves.
 
@@ -47,11 +50,21 @@ Depends on:
   `vynil-core`
   `kube`, `k8s-openapi`, `handlebars`, `rhai`, `serde_yaml`, `rust-yaml`
 
+References:
+  ./src/lib.sdd, ./src/context.sdd, ./src/jukebox.sdd, ./src/jukebox_file.sdd
+  ./src/vynilpackage.sdd, ./src/instanceservice.sdd, ./src/instancesystem.sdd
+  ./src/instancetenant.sdd, ./src/instance_macros.sdd, ./src/handlebarshandler.sdd
+  ./src/rhaihandler.sdd, ./src/yamlhandler.sdd, ./src/tools.sdd, ./src/ttl_cache.sdd
+  ./src/k8smock.sdd — the file-level contracts; this directory spec stays coarse and defers
+    all file behavior to them.
+
 Done when:
   Each domain module above has a reviewed same-basename spec and `cargo test -p common` is green.
 
 Tasks:
-  [ ] #0 Spec `./src/vynilpackage.rs` (package model, requirements, waypoint selection).
-  [ ] #1 Spec the four instance-model modules and `./src/instance_macros.rs`.
-  [ ] #2 Spec `./src/jukebox.rs` and `./src/jukebox_file.rs`.
-  [ ] #3 Spec the Handlebars, Rhai, and YAML handler modules.
+  [x] #0 Spec `./src/vynilpackage.rs` (package model, requirements, checks).
+  [x] #1 Spec the four instance-model modules and `./src/instance_macros.rs`.
+  [x] #2 Spec `./src/jukebox.rs` and `./src/jukebox_file.rs`.
+  [x] #3 Spec the Handlebars, Rhai, and YAML handler modules.
+  [x] #4 Spec `./src/lib.rs`, `./src/context.rs`, `./src/tools.rs`, `./src/ttl_cache.rs`,
+      `./src/k8smock.rs`.

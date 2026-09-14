@@ -1,0 +1,140 @@
+Spec: TtlCache
+
+Purpose:
+  Provide a reusable async single-slot TTL cache so an expensive async lookup repeats at
+  most once per window per cache instance: @TtlCache::get_or_refresh returns the cached `T`
+  while the entry is fresh and recomputes it through the caller's @refresh closure once the
+  window elapses, coalescing concurrent misses onto one refresh.
+
+Owns:
+  ./ttl_cache.rs
+
+Must:
+  Freshness is monotonic-clock based: an entry is fresh only while
+    @std::time::Instant::elapsed on its stored @std::time::Instant is strictly less than
+    @ttl; an age equal to or greater than @ttl is stale, so a zero @Duration @ttl makes
+    every entry stale the moment it is inserted.
+  A fresh entry is served by @Clone under the @tokio::sync::RwLock read guard without
+    calling @refresh.
+  On a miss (empty or stale slot) the caller takes the write guard, rechecks freshness at
+    the write gate, then awaits @refresh while holding the write guard; on success it
+    stores (@std::time::Instant::now(), @Clone of the value), releases the guard, and
+    returns the value.
+  The stored timestamp is captured after @refresh resolves, so the freshness window starts
+    at value production, not at call start, and @refresh latency never consumes the window.
+  Concurrent misses coalesce to at most one @refresh per expired window: holding the write
+    guard across @refresh serializes callers, and each write-gate recheck returns the
+    winning value to later callers without a second @refresh.
+  The read guard is released before the write guard is requested, so one task cannot
+    deadlock against itself between the two phases.
+  A failing @refresh propagates unchanged and leaves the slot exactly as it was — a stale
+    value is kept, no new timestamp is recorded — and the next call retries @refresh.
+  Eviction is purely lazy: the slot changes only through a successful @refresh inside
+    @TtlCache::get_or_refresh; nothing clears or recomputes it on a timer or by an
+    explicit call.
+  The manual @std::fmt::Debug impl renders struct name `TtlCache` with fields `inner`
+    showing the literal string `tokio::sync::RwLock<Option<(Instant, T)>>` and `ttl`
+    showing the real @ttl; it must lock or read nothing and must not require @T to
+    implement @std::fmt::Debug.
+
+Depends on:
+  @tokio::sync::RwLock — async guard for the slot; read guard on hits, write guard held
+    across @refresh.
+  @crate::Result and @crate::Error in `./lib.rs` — the result and error contract the cache
+    propagates verbatim.
+  The workspace lint `missing_debug_implementations = "warn"` in `/Cargo.toml` (harness:
+    `/linting.sdd`) — the reason @TtlCache carries a manual @std::fmt::Debug impl: it
+    satisfies the lint for any @T without forcing a `T: @std::fmt::Debug` bound.
+
+Exposes:
+  @TtlCache — single-slot async TTL cache struct, generic over `T: @Clone + @Send + @Sync + 'static`,
+    with private state only: @inner, an @Option<(@std::time::Instant, T)> slot behind a
+    @tokio::sync::RwLock, and the @ttl window.
+  @TtlCache::new — synchronous constructor; starts empty with a caller-chosen window.
+  @TtlCache::get_or_refresh — the sole async read-and-refill entry point.
+  Manual @std::fmt::Debug impl for @TtlCache via @std::fmt::Debug::fmt — value-opaque
+    rendering required by the Must section above.
+
+Accepts:
+  The cached type @T must satisfy `T: @Clone + @Send + @Sync + 'static`: @Clone because each
+    hit hands out a copy of the stored value, and @Send + @Sync + `'static` because the slot
+    is guarded and shared across tasks.
+  @TtlCache::new accepts the freshness window as one @std::time::Duration @ttl, unvalidated;
+    a zero @Duration is accepted and yields a cache that refreshes on every call.
+  @TtlCache::get_or_refresh accepts one @refresh, an @FnOnce closure returning a
+    @std::future::Future with output @crate::Result<T>; it is called only when no fresh
+    entry exists.
+
+Returns:
+  @TtlCache::new returns a cache whose slot is @None and whose window is @ttl.
+  @TtlCache::get_or_refresh returns @crate::Result<T>: on success `Ok` holds either the
+    cloned cached value (hit) or the freshly produced value (miss); the stored copy and the
+    returned value are equal @Clone copies, and on a miss the timestamp paired with them is
+    captured at completion.
+
+Raises:
+  @TtlCache::get_or_refresh raises no error of its own; the only failure is the @crate::Error
+    returned by @refresh while no fresh entry exists, propagated unchanged through the `?`
+    operator.
+
+Handles:
+  Empty or stale slot at read time — falls through to the write-gate path instead of
+    returning @None.
+  Slot refreshed by a concurrent caller while waiting for the write guard — the write-gate
+    recheck serves the fresh value and skips @refresh.
+  @refresh resolving to `Err` — the error is propagated and the slot keeps its previous
+    content.
+
+Tasks:
+  [ ] Cover the coalescing Scenario below with a concurrent test in the @tests module; the
+      existing in-file tests exercise only sequential call sequences.
+
+Done when:
+  Every Scenario above has a passing in-file test and `cargo test -p common` is green.
+
+Scenario: Empty cache refreshes on first call
+  Given a cache built by @TtlCache::new with a `1 min` window and nothing cached
+  When @TtlCache::get_or_refresh is awaited with a @refresh closure that increments a
+    counter and returns `Ok(42)`
+  Then the call returns `Ok(42)`
+  And the counter reads `1`
+  And the slot holds `42` paired with a just-captured @std::time::Instant
+  Maps to test @returns_value_on_first_call
+
+Scenario: Fresh entry is served from the cache
+  Given a cache with a `1 min` window already holding `7` from a prior successful @refresh
+  When @TtlCache::get_or_refresh is awaited three times within the window
+  Then the @refresh counter stays at `1` across all calls
+  And every call returns `7`
+  Maps to test @returns_cached_value_within_ttl
+
+Scenario: Expired entry triggers a new refresh
+  Given a cache with a `10 ms` window holding `1` from a prior successful @refresh
+  When `20 ms` of sleep elapse and @TtlCache::get_or_refresh is awaited with a @refresh
+    closure returning `Ok(2)`
+  Then the call returns `Ok(2)`
+  And the total @refresh invocations are `2`
+  Maps to test @refreshes_after_ttl_expires
+
+Scenario: Refresh failure propagates unchanged
+  Given a cache whose @refresh closure immediately fails with a @crate::Error
+  When @TtlCache::get_or_refresh is awaited
+  Then the call returns `Err` carrying that same @crate::Error
+  And the slot holds nothing it did not hold before
+  Maps to test @propagates_refresh_error
+
+Scenario: Cache recovers after a failed refresh
+  Given a cache whose first @TtlCache::get_or_refresh failed because @refresh returned `Err`
+  When @TtlCache::get_or_refresh is awaited again with a @refresh closure returning `Ok(99)`
+  Then the call returns `Ok(99)`
+  And the second @refresh closure ran exactly once — the earlier failure left nothing to
+    block or serve
+  Maps to test @cache_stays_empty_after_error
+
+Scenario: Concurrent misses share one refresh
+  Given several tasks awaiting @TtlCache::get_or_refresh on one empty cache instance
+  When the first task's @refresh completes while the others still wait on the write guard
+  Then @refresh executes exactly once for that expired window
+  And every other task returns the winning value from the write-gate recheck without
+    running its own @refresh
+  This path has no in-file test yet; it is tracked as the open task above.

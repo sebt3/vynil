@@ -1,0 +1,363 @@
+Spec: ServiceInstance
+
+Purpose:
+  Carry the full cluster-side contract of one service-package installation: declare the install
+    coordinate (`jukebox`, `category`, `package`, opaque `options`, optional `initFrom`
+    restore request), track per-stage install progress and children/services inventory in
+    @ServiceInstanceStatus through @ApplicationCondition records, serve a TTL-cached
+    cluster-wide index of published service keys, and register @ServiceInstance with its full
+    accessor and mutator bridge onto package @rhai::Engine instances.
+
+Owns:
+  ./instanceservice.rs
+
+References:
+  ./instance_macros.sdd — frozen contract of every macro-attached lookup, status patch, event
+    publication, stage setter and Rhai bridge this file attaches and names in `Exposes`; their
+    behaviour is owned there and not restated here.
+  ./ttl_cache.sdd — freshness, coalescing and error-keeps-slot contract governing the cache
+    inside @ServiceInstance::get_all_services_names.
+
+Must:
+  The @kube::CustomResource derive over @ServiceInstanceSpec generates the @ServiceInstance
+    resource kind `ServiceInstance` in group `vynil.solidite.fr`, version `v1`, namespaced
+    scope, shortname `vsvc`, plural `serviceinstances`, with status type @ServiceInstanceStatus
+    and CRD doc `Custom resource representing an Vynil service package installation`.
+  The CRD printer columns are, in order and by `jsonPath`: `Juke` -> `.spec.jukebox`,
+    `cat` -> `.spec.category`, `pkg` -> `.spec.package`, `tag` -> `.status.tag`,
+    `last_updated` -> `.status.conditions[?(@.type == 'Ready')].lastTransitionTime`
+    (column type `date`, format `date-time`; the other six columns are type `string`),
+    `stage` -> `.status.conditions[-1:].type`,
+    `errors` -> `.status.conditions[?(@.status == 'False')].message`.
+  Wire keys are fixed: the spec keys are `jukebox`, `category`, `package`, `initFrom`,
+    `options`; @InitFrom serializes camelCase keys `secretName`, `subPath`, `snapshot`,
+    `version`; the status struct carries no serde rename attribute so the status keys are
+    verbatim `conditions`, `tag`, `digest`, `tfstate`, `rhaistate`, `befores`, `vitals`,
+    `scalables`, `others`, `posts`, `crds`, `services`; @ApplicationCondition serializes
+    camelCase keys `lastTransitionTime`, `message`, `type` (fixed by the @serde rename on
+    @ApplicationCondition::condition_type), `status`, `generation`; @ConditionsType and
+    @ConditionsStatus serialize as bare variant strings.
+  @ConditionsType declares exactly fifteen variants serialized as their names: `Ready`
+    (@Default), `Installed`, `Backuped`, `Restored`, `AgentStarted`, `CrdApplied`,
+    `TofuInstalled`, `BeforeApplied`, `VitalApplied`, `ScalableApplied`, `InitFrom`,
+    `ScheduleBackup`, `OtherApplied`, `RhaiApplied`, `PostApplied`; macro-attached constructors
+    and setters write all of them except `Backuped` and `Restored`.
+  @ServiceInstance::have_child answers `true` exactly when a status is present and at least one
+    probe succeeds: `rhaistate` is `@Some` or `tfstate` is `@Some` regardless of content, or
+    `befores`, `vitals`, `others`, `scalables`, `posts` or `crds` (in that order) is `@Some` and
+    non-empty; probes short-circuit.
+  @ServiceInstance::get_all_services_names owns a process-wide cache: a function-local
+    `static CACHE` @std::sync::LazyLock wrapping a @crate::TtlCache<@Vec<@String>> with a `30`
+    second freshness window; a hit serves the cloned key list without building a client or
+    touching the API server.
+  On a miss the refresh performs one cluster-wide list (@kube::api::Api::all plus
+    @kube::api::ListParams::default, every namespace) bounded by a separate `30` second
+    @tokio::time::timeout literal, then flattens the @crate::Published `key` of every listed
+    instance's `status.services` (@ServiceInstance::get_services defaults to empty), sorts the
+    whole list lexicographically keeping duplicates, and on success caches and returns that
+    sorted vector; on any failure the slot keeps its previous content and the next miss retries
+    the full list (./ttl_cache.sdd).
+  @ServiceInstance::rhai_list_services_names drives the async listing through
+    @tokio::task::block_in_place combined with @tokio::runtime::Handle::block_on, so it must
+    run on a multi-thread runtime (@tokio::task::block_in_place panics on a current-thread
+    runtime) and converts any failure through @crate::rhai_err into a string-carrying
+    @rhai::EvalAltResult, losing the @crate::Error variant.
+  @service_rhai_register registers the type under the script name `ServiceInstance` and wires
+    exactly the script-visible surface mapped in `Exposes` — no other registration happens in
+    this file; every mutator behind that surface, and the merge-patch/condition-rebuild semantics
+    it triggers, behave as frozen in ./instance_macros.sdd.
+
+Depends on:
+  @impl_condition_common!, @impl_condition_children! and @impl_condition_crds! in
+    ./instance_macros.rs — stamp @ApplicationCondition::new and supply the preset constructors
+    for every stage this file's status enum names: ready/installed/agent/missing/tofu/rhai
+    presets, the ten children-stage constructors plus @init_ko, @init_version_ko and
+    @schedule_ko used by the befores expansion, and @crd_ok/@crd_ko; the expansion contract is
+    ./instance_macros.sdd.
+  @impl_instance_common!(ServiceInstance, "ServiceInstance") in ./instance_macros.rs — attach
+    the status merge-patch (@ServiceInstance::patch_status, embedding the call-site kind literal
+    `ServiceInstance`), the event recorder (@ServiceInstance::send_event), the private
+    condition-rebuild helpers, and the shared lookup, options-digest, tfstate/rhaistate,
+    agent/missing, tofu/rhai and metadata/spec/status Rhai surface that @service_rhai_register
+    republishes; its @rhai_set_status_ready delegates to the @ServiceInstance::set_status_ready
+    supplied by befores expansion.
+  @impl_instance_befores!(ServiceInstance) in ./instance_macros.rs — attach
+    @ServiceInstance::set_status_ready (the ready close the common macro's bridge compiles —
+    the coupling recorded in ./instance_macros.sdd — is satisfied only by this expansion), the
+    five children-stage success/failure setters, the init and schedule-backup failure setters,
+    @ServiceInstance::set_services, and the synchronous @ServiceInstance::get_services read this
+    file's cluster listing runs over every instance.
+  @impl_instance_crds!(ServiceInstance) in ./instance_macros.rs — attach the CRD-stage setters
+    and their Rhai wrappers, completing the stage @ConditionsType::CrdApplied names.
+  @crate::TtlCache in ./ttl_cache.rs — the single-slot cache instance (window, coalescing and
+    failure semantics owned by ./ttl_cache.sdd).
+  @crate::context::get_client_async in ./context.rs — the shared @kube::Client for the
+    cluster-wide list, fetched at refresh time only (cache hits build no client); it panics
+    upstream when no client can be built.
+  @crate::Published and @crate::Children in ./lib.rs — the published-service records flattened
+    by the cluster listing and the child object records stored in the status lists.
+  @crate::Error, @crate::Result, @crate::RhaiRes and @crate::rhai_err in ./lib.rs — the error
+    contract propagated by the async listing and flattened to strings at the Rhai bridge.
+  @kube::CustomResource, @kube::Resource, @kube::ResourceExt — the derive generating
+    @ServiceInstance and the metadata/object-ref plumbing behind the macro-owned patching and
+    event recording.
+  @kube::api::Api and @kube::api::ListParams — the cluster-wide instance listing.
+  @tokio::time::timeout, @tokio::task::block_in_place and @tokio::runtime::Handle — the call
+    deadline on the listing and the sync-to-async bridge under the Rhai bridge.
+  @rhai::Engine — the engine this file registers the bridge onto.
+
+Exposes:
+  @InitFrom — restore-request record with public fields @InitFrom::secret_name
+    (`@Option<@String>`, wire `secretName`), @InitFrom::sub_path (`@Option<@String>`, wire
+    `subPath`), @InitFrom::snapshot (`@String`, wire `snapshot`, the only required field) and
+    @InitFrom::version (`@Option<@String>`, wire `version`); derives @Serialize, @Deserialize,
+    @Eq, @PartialEq, @Clone, @Debug, @JsonSchema. The doc comments declare defaults
+    (`backup-settings` secret, `<namespace-name>/<app-slug>` path) that no code in this file
+    applies.
+  @ServiceInstanceSpec — CRD spec struct with public fields @ServiceInstanceSpec::jukebox,
+    @ServiceInstanceSpec::category, @ServiceInstanceSpec::package,
+    @ServiceInstanceSpec::init_from (`@Option<@InitFrom>`) and
+    @ServiceInstanceSpec::options (`@Option<@serde_json::Map<@String, @serde_json::Value>>`);
+    derives @Serialize, @Deserialize, @Clone, @Debug, @JsonSchema via the
+    @kube::CustomResource derive.
+  @ServiceInstance — resource root generated by the @kube::CustomResource derive over
+    @ServiceInstanceSpec, with fields `spec` (@ServiceInstanceSpec) and `status`
+    (`@Option<@ServiceInstanceStatus>`).
+  @ConditionsType — install-stage enum, the fifteen variants listed under `Must`, serialized as
+    bare strings; derives @Serialize, @Deserialize, @Eq, @PartialEq, @Clone, @Debug,
+    @JsonSchema and @Default selecting `Ready`.
+  @ConditionsStatus — enum `True` or `False`, serialized as those strings, with @Default
+    selecting `True`; derives @Eq and @PartialEq, @Clone, @Debug, @JsonSchema.
+  @ApplicationCondition — one recorded condition with public fields
+    @ApplicationCondition::last_transition_time (`@Option<@chrono::DateTime<@chrono::Utc>>`),
+    @ApplicationCondition::message, @ApplicationCondition::condition_type,
+    @ApplicationCondition::status and @ApplicationCondition::generation (`@i64`); derives
+    @Eq and @PartialEq, compared field-by-field by the macro-owned dedup gate.
+  Constructors attached to @ApplicationCondition by @impl_condition_common!:
+    @ApplicationCondition::new,
+    @ApplicationCondition::ready_ok, @ApplicationCondition::ready_ko,
+    @ApplicationCondition::installed_ok, @ApplicationCondition::installed_ko,
+    @ApplicationCondition::agent_started, @ApplicationCondition::missing_package,
+    @ApplicationCondition::missing_box, @ApplicationCondition::missing_requirement,
+    @ApplicationCondition::tofu_ok, @ApplicationCondition::tofu_ko,
+    @ApplicationCondition::rhai_ok, @ApplicationCondition::rhai_ko.
+  Constructors attached by @impl_condition_children!: @ApplicationCondition::before_ok,
+    @ApplicationCondition::before_ko, @ApplicationCondition::vital_ok,
+    @ApplicationCondition::vital_ko, @ApplicationCondition::scalable_ok,
+    @ApplicationCondition::scalable_ko, @ApplicationCondition::other_ok,
+    @ApplicationCondition::other_ko, @ApplicationCondition::post_ok,
+    @ApplicationCondition::post_ko, @ApplicationCondition::init_ko,
+    @ApplicationCondition::init_version_ko, @ApplicationCondition::schedule_ko.
+  Constructors attached by @impl_condition_crds!: @ApplicationCondition::crd_ok and
+    @ApplicationCondition::crd_ko for @ConditionsType::CrdApplied.
+  @ServiceInstanceStatus — status struct with public fields @ServiceInstanceStatus::conditions,
+    @ServiceInstanceStatus::tag, @ServiceInstanceStatus::digest, @ServiceInstanceStatus::tfstate,
+    @ServiceInstanceStatus::rhaistate, @ServiceInstanceStatus::befores,
+    @ServiceInstanceStatus::vitals, @ServiceInstanceStatus::scalables,
+    @ServiceInstanceStatus::others, @ServiceInstanceStatus::posts (each
+    `@Option<@Vec<@crate::Children>>`), @ServiceInstanceStatus::crds (`@Option<@Vec<@String>>`)
+    and @ServiceInstanceStatus::services (`@Option<@Vec<@crate::Published>>`); derives
+    @Serialize, @Deserialize, @Clone, @Debug, @JsonSchema.
+  @ServiceInstance::have_child — child-state probe.
+  @ServiceInstance::get_all_services_names — cached cluster-wide published-key index.
+  @ServiceInstance::rhai_list_services_names — synchronous Rhai bridge over the index.
+  Methods attached by @impl_instance_common!: async @ServiceInstance::get, @ServiceInstance::list,
+    @ServiceInstance::get_options_digest, @ServiceInstance::get_tfstate,
+    @ServiceInstance::get_rhaistate, @ServiceInstance::set_tfstate,
+    @ServiceInstance::set_status_tofu_failed, @ServiceInstance::set_rhaistate,
+    @ServiceInstance::set_status_rhai_failed, @ServiceInstance::set_agent_started,
+    @ServiceInstance::set_missing_box, @ServiceInstance::set_missing_package and
+    @ServiceInstance::set_missing_requirement; Rhai bridges @ServiceInstance::rhai_get,
+    @ServiceInstance::rhai_list, @ServiceInstance::get_metadata, @ServiceInstance::get_spec,
+    @ServiceInstance::get_status, @ServiceInstance::rhai_get_tfstate,
+    @ServiceInstance::rhai_get_rhaistate, @ServiceInstance::rhai_set_status_ready,
+    @ServiceInstance::rhai_set_tfstate, @ServiceInstance::rhai_set_status_tofu_failed,
+    @ServiceInstance::rhai_set_rhaistate, @ServiceInstance::rhai_set_status_rhai_failed,
+    @ServiceInstance::rhai_set_agent_started, @ServiceInstance::rhai_set_missing_box,
+    @ServiceInstance::rhai_set_missing_package and
+    @ServiceInstance::rhai_set_missing_requirement.
+  Methods attached by @impl_instance_crds!: @ServiceInstance::set_status_crds,
+    @ServiceInstance::set_status_crd_failed, @ServiceInstance::rhai_set_status_crds and
+    @ServiceInstance::rhai_set_status_crd_failed.
+  Methods attached by @impl_instance_befores!: async @ServiceInstance::set_status_ready,
+    @ServiceInstance::set_services, @ServiceInstance::set_status_befores,
+    @ServiceInstance::set_status_before_failed, @ServiceInstance::set_status_vitals,
+    @ServiceInstance::set_status_vital_failed, @ServiceInstance::set_status_scalables,
+    @ServiceInstance::set_status_scalable_failed, @ServiceInstance::set_status_others,
+    @ServiceInstance::set_status_other_failed, @ServiceInstance::set_status_posts,
+    @ServiceInstance::set_status_post_failed, @ServiceInstance::set_status_init_failed,
+    @ServiceInstance::set_status_schedule_backup_failed and
+    @ServiceInstance::set_missing_init_version; synchronous @ServiceInstance::get_services and
+    @ServiceInstance::get_services_string (attached, but not registered onto Rhai); Rhai bridges
+    @ServiceInstance::rhai_set_services, @ServiceInstance::rhai_get_services,
+    @ServiceInstance::rhai_set_status_befores, @ServiceInstance::rhai_set_status_before_failed,
+    @ServiceInstance::rhai_set_status_vitals, @ServiceInstance::rhai_set_status_vital_failed,
+    @ServiceInstance::rhai_set_status_scalables,
+    @ServiceInstance::rhai_set_status_scalable_failed, @ServiceInstance::rhai_set_status_others,
+    @ServiceInstance::rhai_set_status_other_failed, @ServiceInstance::rhai_set_status_posts,
+    @ServiceInstance::rhai_set_status_post_failed, @ServiceInstance::rhai_set_status_init_failed,
+    @ServiceInstance::rhai_set_status_schedule_backup_failed and
+    @ServiceInstance::rhai_set_missing_init_version.
+  @service_rhai_register — installs the script-visible surface on a caller @rhai::Engine under
+    the registered type name `ServiceInstance`. Free functions: `get_service_instance` ->
+    @ServiceInstance::rhai_get, `list_service_instance` -> @ServiceInstance::rhai_list,
+    `list_services_names` -> @ServiceInstance::rhai_list_services_names, `options_digest` ->
+    @ServiceInstance::get_options_digest, `get_tfstate` -> @ServiceInstance::rhai_get_tfstate,
+    `get_rhaistate` -> @ServiceInstance::rhai_get_rhaistate, `set_services` ->
+    @ServiceInstance::rhai_set_services, `get_services` -> @ServiceInstance::rhai_get_services,
+    `set_agent_started` -> @ServiceInstance::rhai_set_agent_started, `set_missing_box` ->
+    @ServiceInstance::rhai_set_missing_box, `set_missing_package` ->
+    @ServiceInstance::rhai_set_missing_package, `set_missing_requirement` ->
+    @ServiceInstance::rhai_set_missing_requirement, `set_missing_init_version` ->
+    @ServiceInstance::rhai_set_missing_init_version, `set_status_ready` ->
+    @ServiceInstance::rhai_set_status_ready, `set_status_crds` ->
+    @ServiceInstance::rhai_set_status_crds, `set_status_crd_failed` ->
+    @ServiceInstance::rhai_set_status_crd_failed, `set_status_befores` ->
+    @ServiceInstance::rhai_set_status_befores, `set_status_before_failed` ->
+    @ServiceInstance::rhai_set_status_before_failed, `set_status_vitals` ->
+    @ServiceInstance::rhai_set_status_vitals, `set_status_vital_failed` ->
+    @ServiceInstance::rhai_set_status_vital_failed, `set_status_scalables` ->
+    @ServiceInstance::rhai_set_status_scalables, `set_status_scalable_failed` ->
+    @ServiceInstance::rhai_set_status_scalable_failed, `set_status_others` ->
+    @ServiceInstance::rhai_set_status_others, `set_status_other_failed` ->
+    @ServiceInstance::rhai_set_status_other_failed, `set_status_posts` ->
+    @ServiceInstance::rhai_set_status_posts, `set_status_post_failed` ->
+    @ServiceInstance::rhai_set_status_post_failed, `set_tfstate` ->
+    @ServiceInstance::rhai_set_tfstate, `set_status_tofu_failed` ->
+    @ServiceInstance::rhai_set_status_tofu_failed, `set_rhaistate` ->
+    @ServiceInstance::rhai_set_rhaistate, `set_status_rhai_failed` ->
+    @ServiceInstance::rhai_set_status_rhai_failed, `set_status_schedule_backup_failed` ->
+    @ServiceInstance::rhai_set_status_schedule_backup_failed, `set_status_init_failed` ->
+    @ServiceInstance::rhai_set_status_init_failed; property getters `metadata` ->
+    @ServiceInstance::get_metadata, `spec` -> @ServiceInstance::get_spec, `status` ->
+    @ServiceInstance::get_status.
+
+Accepts:
+  Install coordinates as free-form strings in @ServiceInstanceSpec::jukebox,
+    @ServiceInstanceSpec::category and @ServiceInstanceSpec::package,
+    @ServiceInstanceSpec::options as any JSON object map or @None, and
+    @ServiceInstanceSpec::init_from as any @InitFrom record or @None — this file never
+    interprets `options` contents and never reads an @InitFrom field.
+  @service_rhai_register takes a borrowed @rhai::Engine to decorate.
+  The other in-file entry points take no arguments: @ServiceInstance::get_all_services_names
+    and @ServiceInstance::rhai_list_services_names are static, and @ServiceInstance::have_child
+    takes only `&self`.
+
+Returns:
+  @ServiceInstance::have_child returns a `@bool` per the probe rules under `Must`.
+  @ServiceInstance::get_all_services_names returns @crate::Result<@Vec<@String>>: the merged,
+    sorted, duplicates-kept list of every cached instance's published `key` values.
+  @ServiceInstance::rhai_list_services_names returns @crate::RhaiRes<@Vec<@String>> wrapping
+    the same vector.
+  @service_rhai_register returns nothing.
+  Returns of the macro-attached lookups, mutators and bridges follow ./instance_macros.sdd.
+
+Raises:
+  @crate::Error::Other with message `E_LIST_SERVICES_TIMEOUT: get_all_services_names exceeded 30s`
+    when the cluster list does not resolve within its `30` second budget.
+  @crate::Error::KubeError when the @kube listing call itself fails.
+  On a refresh only, the upstream panic of @crate::context::get_client_async when no
+    @kube::Client can be built; a cache hit never builds a client.
+  @ServiceInstance::rhai_list_services_names flattens any @crate::Error through
+    @crate::rhai_err into an @rhai::EvalAltResult message, and panics via
+    @tokio::task::block_in_place on a current-thread @tokio runtime.
+  Missing `snapshot` or a non-map `options` fails @ServiceInstanceSpec deserialization as a
+    serde error before any method runs.
+  Errors of the macro-attached mutators follow ./instance_macros.sdd.
+
+Handles:
+  Cluster list slower than `30` seconds — the timeout branch yields
+    @crate::Error::Other in place of the @kube::Error mapping.
+  @ServiceInstance with no status, or with `services` absent — contributes no key to the
+    index (@ServiceInstance::get_services defaults to empty).
+  The same `key` published by several instances — kept once per publisher; there is no dedup
+    step after the sort.
+  Fresh cache slot — clone served without any client or API call; concurrent misses coalesce
+    to one refresh (./ttl_cache.sdd).
+  Failed refresh — slot keeps its previous content, next call retries the full list.
+  Generation-absent stamping, absent-status rebuild, surviving-`Ready` detection and
+    event-publish failures during macro-attached mutators are owned by the expansions per
+    ./instance_macros.sdd.
+
+Tasks:
+  [ ] No in-file @tests module exists, so none of the Scenarios below has a mapping test yet;
+      cover them from these Scenario blocks under the project TTD rule when test work starts.
+  [?] @ConditionsType::Backuped and @ConditionsType::Restored are written by no constructor,
+      setter or event in the crate — wire-visible stage values the install flow can never
+      produce. Decide later whether a backup flow will write them or they retire.
+  [?] @ServiceInstance::get_all_services_names keeps duplicate `key` values across instances
+      (sort plus collect, no dedup). Decide later whether the index must be unique.
+  [?] The index cache is a function-local @std::sync::LazyLock with lazy expiry only and no
+      invalidation hook: a created, edited or deleted instance changes the visible index only
+      after up to `30` seconds. Decide later whether an invalidation path is needed.
+  [?] The cache window and the cluster-call timeout are two distinct `30` second literals that
+      happen to be equal. Decide later whether they share one configuration point.
+  [?] `list_service_instance` (@ServiceInstance::rhai_list, namespaced) and
+      `list_services_names` (cluster-scoped @kube::api::Api::all) differ in namespace scope, so
+      the latter requires cluster-wide read RBAC. Confirm the asymmetry is intended.
+  [?] @InitFrom is a near-verbatim parallel copy of the @InitFrom in ./instancetenant.rs, and
+      its doc-declared defaults (`backup-settings`, `<namespace-name>/<app-slug>`) are applied
+      nowhere in this crate. Decide later whether the structs unify and where the defaults
+      take effect.
+  [?] @ServiceInstance::have_child is asymmetric: `tfstate`/`rhaistate` as @Some of the empty
+      string count as a child, while @Some of an empty list in `befores`/`vitals`/`others`/
+      `scalables`/`posts`/`crds` does not. Same finding as ./instancesystem.sdd; confirm.
+  [?] Doc-comment drift: @ServiceInstanceSpec documents `Describe a source of vynil packages
+      jukebox` (copied from the `JukeBox` model), the `# Errors` block of
+      @ServiceInstance::get_all_services_names omits the @crate::Error::Other timeout branch it
+      raises before the @kube::Error one, and @InitFrom::version mixes French into the English
+      docs. Rewrite wordings later.
+  [?] @std::default::Default derives on @ConditionsType and @ConditionsStatus have no
+      detectable use repo-wide. Decide later whether they stay.
+  [?] @ServiceInstance::rhai_list_services_names joins the block_in_place bridge population:
+      panics on a current-thread runtime and flattens @crate::Error to a string. The central
+      multi-thread runtime decision is tracked in ./instance_macros.sdd and
+      ./instancesystem.sdd; resolve once there.
+
+Done when:
+  Every Scenario above has a passing in-file test and `cargo test -p common` is green.
+
+Scenario: Child-state probe
+  Given a @ServiceInstance with no status at all, @ServiceInstance::have_child answers `false`
+  But when only `rhaistate` or only `tfstate` is `@Some`, even the empty string, it answers
+    `true`
+  And when all six children lists are `@Some` of empty lists and no state is stored, it
+    answers `false`
+  And when only `crds` is `@Some` of one entry, it answers `true`
+  No mapped test exists for this Scenario yet; see the open task above.
+
+Scenario: Published-key index merges, sorts and keeps duplicates
+  Given an empty cache and a cluster holding instances that publish keys `db.example` and
+    `app.example`, one that publishes `db.example`, and one with no status at all
+  When @ServiceInstance::get_all_services_names is awaited
+  Then the `@Ok` list is `app.example`, `db.example`, `db.example` in sort order
+  And exactly one @kube listing is issued cluster-wide with @kube::api::ListParams::default
+  And that sorted vector is what the `30` second cache window stores
+
+Scenario: Fresh window absorbs the re-fetch
+  Given one completed successful refresh within the `30` second window
+  When @ServiceInstance::get_all_services_names is awaited again
+  Then the call returns the cloned cached list without a
+    @crate::context::get_client_async fetch or any @kube call (./ttl_cache.sdd)
+
+Scenario: Listing timeout names its error and caches nothing
+  Given a @kube cluster listing that has not resolved within `30` seconds
+  When @ServiceInstance::get_all_services_names is awaited
+  Then the call returns @crate::Error::Other carrying
+    `E_LIST_SERVICES_TIMEOUT: get_all_services_names exceeded 30s`
+  And the cache slot keeps whatever it held before, so the next call re-runs the listing
+
+Scenario: Script listing flattens a cluster failure
+  Given a cluster listing failing with a @crate::Error::KubeError (or the timeout error)
+  When a package script calls the registered `list_services_names` and
+    @ServiceInstance::rhai_list_services_names runs
+  Then the script receives an @rhai::EvalAltResult whose message is the flattened
+    @crate::Error display text, the typed variant lost (./instance_macros.sdd bridge shape)
+
+Scenario: initFrom wire shape requires a snapshot
+  Given a `spec.initFrom` carrying `secretName` `backup-settings`, `subPath` `ns/app` and
+    `snapshot` `abc123`
+  When the @ServiceInstanceSpec deserializes, the fields land on @InitFrom with `version`
+    @None
+  But when `snapshot` is absent, deserialization fails as serde missing-field on the required
+    @String, leaving no usable spec
