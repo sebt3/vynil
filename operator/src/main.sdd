@@ -1,0 +1,255 @@
+Spec: main
+
+Purpose:
+  Be the `operator` bin half of the crate: one straight-line startup — hand-built tokio
+    runtime, rustls `ring` provider pin, an inline tracing subscriber (not the dead
+    @telemetry::@init), `vynil-core` wiring, @manager::@Manager::new, an actix listener on
+    `0.0.0.0:9000` serving diagnostics, health and Prometheus text, then one @tokio::@select!
+    racing the four controller futures against the server until the first completes. The file
+    owns startup order, the three route answers and the process fate; the client, the watches
+    behind the futures and the metric bodies come from the specs referenced below.
+
+Owns:
+  ./main.rs
+
+References:
+  ./lib.sdd — the lib half, pulled wholesale by `pub use controller::*`; its
+    @get_client_name-vs-@common::@get_client_name client-name scenario is the identity split
+    this startup freezes with its @wire_core_k8s call.
+  ./manager.sdd — pending; @manager::@Manager owns the @kube::@Client build, the four CRD
+    probe panics, the base context, the futures this file only races, and the @String and
+    @Diagnostics bodies the routes here hand out.
+  ./metrics.sdd — content of the `/metrics` body; this file renders, never encodes.
+  ./telemetry.sdd — @init is dead: this file rebuilds its subscriber inline with a different
+    fmt style and different double-install fate; @telemetry::@init_tracer is a private fn even
+    the telemetry half here could not reach.
+  ./instance_common.sdd, ./jukebox.sdd, ./instanceservice.sdd, ./instancesystem.sdd,
+    ./instancetenant.sdd — pending; the @Action retry/backoff of the raced futures lives in
+    those reconciles and error policies.
+  /common/src/context.sdd — @init_k8s (observable no-op), @wire_core_k8s first-wins
+    registration, executable-derived @common::@get_client_name.
+  /common/src/lib.sdd — @Error and @Result: this file's sole @Error::@Other text and the @Debug
+    shape @main prints on the exit-1 lane; no stable unique id (Tasks).
+  /server/src/main.sdd — sibling bin startup frozen with a provider-pin debug line and
+    @std::process::@exit lanes; differs from this one on both counts.
+
+Must:
+  Carry exactly three crate attributes, in this order:
+    `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]`
+    `#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]`
+    `#![allow(unused_imports, unused_variables)]`
+    The blanket allow masks this bin's genuinely dead imports @HttpRequest and the @web
+    self-binding — no @unwrap or @expect site exists in the file; the two failure macros it
+    does use are bare @panic! calls, which the deny does not cover.
+  Name the bin surface `pub use controller::*`: the @Manager, @Error, @Result and @telemetry
+    names the handlers and @async_main use all resolve through the `controller` lib
+    root; the bin target is `operator` (../Cargo.toml `[[bin]]`), never imported itself.
+  Run @main synchronously — no #[tokio::main] — building its runtime by
+    @tokio::@runtime::@Builder::@new_multi_thread, then @enable_all, then @thread_stack_size of
+    `8 * 1024 * 1024` bytes, commented
+    `kube 2.0 + async_trait : state machines en debug sont larges` while /Cargo.lock pins kube
+    `3.1.0`; @build @Err is @panic! `failed to build Tokio runtime: {e}`; the sole body
+    statement is @block_on of @async_main, and @main hands its @Result to the std
+    Termination exit.
+  Run @async_main as exactly one pass, no loop or retry, in this order: rustls provider pin →
+    tracing build and @set_global_default install → @common::@context::@init_k8s() →
+    @common::@context::@wire_core_k8s() → @manager::@Manager::new awaited → actix factory +
+    bind @shutdown_timeout → @tokio::@select!.
+  Pin rustls before any kube client exists — @rustls::@crypto::@ring::@default_provider then
+    @install_default with the @Result discarded by @ok(): silent on success, silent on the
+    already-set @Err (unlike the sibling /server/src/main.sdd debug line), never verifying the
+    effective provider is `ring`; the in-file comment blames rustls `0.23.41` provider
+    autodetect loss against kube's client-creation-time TLS config.
+  Install as the process subscriber a hand-built stack — @tracing_subscriber::@fmt::@layer at
+    full defaults (stdout, UTC microsecond timestamps, ANSI colour unless @NO_COLOR is
+    non-empty), no `.compact()`, plus the registry-level @EnvFilter chain of
+    @try_from_default_env falling through @try_new(`"info"`) to @unwrap_or_else
+    @EnvFilter::@new(`"info"`) — layered into @Registry::@default and installed through
+    @tracing::@subscriber::@set_global_default, @panic! with
+    `failed to install the global tracing subscriber: {e}` on a duplicate install; @telemetry::@init
+    is never called and @init_k8s contributes nothing.
+  Keep the `telemetry`-feature half dead even for the bin: gated by
+    `#[cfg(feature = "telemetry")]`, a @tracing_opentelemetry::@layer with @telemetry::@init_tracer — a `fn` private to the lib
+    module, so the bin-side cfg build could not name it (E0603) even before the 0.32 API
+    breakage ./telemetry.sdd freezes; the feature defaults off, no build config enables it,
+    and @OPENTELEMETRY_ENDPOINT_URL therefore belongs to main's env surface only on a lane
+    that cannot compile.
+  Wire core exactly once before the first client use: @wire_core_k8s registers the five
+    `vynil-core` hooks whose client supplier runs on this runtime and whose name supplier is
+    the executable-derived @common::@get_client_name — for the shipped binary named `operator`
+    that is `controller.vynil.solidite.fr`, the same string as this crate's own
+    @get_client_name @PatchParams lane, so the divergence ./lib.sdd freezes stays invisible in
+    production.
+  Treat the four @BoxFuture values destructured in tuple order JukeBox, TenantInstance,
+    SystemInstance, ServiceInstance as lazy handles: nothing polls — no watch starts, no
+    reconcile runs — until @tokio::@select! after a successful bind, and a bind failure drops
+    all four unpollled; the watch order, `any_semantic` configs and @kube per-kind
+    @error_policy backoff belong to @manager::@Manager::new and the kind modules, as do its
+    `limit=1` CRD probe @panic! texts `cannot create the Kubernetes client: {e}` and
+    `is a CRD installed? {e}` which cross this file only as unwinds reaching exit `101`.
+  Build one actix @HttpServer from a @move factory: fresh @App per worker with
+    @app_data @Data of @manager::@Manager::clone (Arc-shared diagnostics and metrics
+    unchanged by the clone), @wrap of @middleware::@Logger::@default with @exclude of
+    `/health`, services @index, @health and @metrics registered in that order — each route's
+    method and path are fixed by the @get values `/`, `/health`
+    and `/metrics`; @bind the literal `0.0.0.0:9000` else @map_err to @Error::@Other formatting
+    `can not bind to 0.0.0.0:9000: {e}` and `?` out, then @shutdown_timeout to `5` seconds.
+  Race five branches in one @tokio::@select!, first completion winning and every other branch
+    dropped mid-poll: the four controller arms log `JukeBox controller exited`,
+    `TenantInstance controller exited`, `SystemInstance controller exited` and
+    `ServiceInstance controller exited` at @warn — reachable only when a watched stream ends,
+    because each kind's @error_policy @Action retry keeps it endless otherwise — while
+    @server.run's @Result is discarded by the `_` binding and logged as @info `actix exited`
+    whether it stops clean or errors; actix default signal stop (@disable_signals never
+    called) drains workers within the 5-second @shutdown_timeout before that arm can fire, and
+    a controller arm firing skips any drain.
+  End @async_main with @Ok after any arm and @main with it unchanged: runtime drop, exit
+    status `0`, no completion line beyond the winning arm's single log line.
+
+Exposes:
+  @main — `fn @main() -> @Result` of unit: the `operator` bin target entry; a bin is not
+    importable, so its surface is the sequence and exit statuses pinned in Must, Returns and
+    Raises.
+  @async_main — private @async fn holding that sequence.
+  Handlers @metrics, @health and @index — @actix_web @get attributes on `/metrics`, `/health`
+    and `/`, registered only here; @metrics and @index extract @app_data @Data of @Manager.
+
+Accepts:
+  No argv parsing, no flags, no config file, no stdin: @main takes nothing and this file
+    contains no @std::@env::@var at all. Its direct env surface is exactly `RUST_LOG` — read
+    once at @EnvFilter::@try_from_default_env — and `NO_COLOR`, read per event by the default
+    fmt ANSI path; `OPENTELEMETRY_ENDPOINT_URL` belongs only to the dead telemetry cfg.
+  Indirectly, values owned by others: the startup envs @manager::@build_context reads
+    (`CONTROLLER_BASE_DIR`, `VYNIL_NAMESPACE`, `AGENT_IMAGE`, `AGENT_ACCOUNT`,
+    `AGENT_LOG_LEVEL`, `TENANT_LABEL`) and cluster discovery through the @kube client belong
+    to ./manager.rs and @common, never rendered by this file, only racing what they produce.
+  Preconditions the file trusts: the literal `0.0.0.0:9000` bindable; @Manager present in
+    @app_data — registered in the factory, with @metrics and @index relying on actix's default
+    error response if that ever changed.
+
+Returns:
+  OS exit codes are the only value leaving the process: `101` whenever any @panic! wins — the
+    runtime builder, @manager::@Manager::new on client or CRD probes, or an unwinding
+    reconcile — message on stderr; `1` only via @main's @Err @Result on @bind failure, where
+    std renders `Error: ` plus the @Error @Debug, keeping the @thiserror variant name, so
+    stderr reads `Error: Other("can not bind to 0.0.0.0:9000: …")`; `0` for every @select!
+    arm, signal stop and early controller death alike, each followed by @Ok, runtime drop and
+    no further output.
+  Three route answers, status always @Ok: `GET /metrics` → `200`, body =
+    @manager::@Manager::metrics verbatim with @content_type
+    `application/openmetrics-text; version=1.0.0; charset=utf-8`, even when the encoder error
+    is logged downstream and the body lacks families or `# EOF`; `GET /health` → `200` JSON
+    string `"healthy"`; `GET /` → `200` JSON of @Diagnostics — the @Utc @DateTime `last_event`
+    field alone (@reporter is `#[serde(skip)]`), written by the reconciler, never by this
+    handler; unmatched paths and methods take actix defaults.
+
+Raises:
+  @Error::@Other — the one failure this file constructs: @bind rejection wrapped as
+    `can not bind to 0.0.0.0:9000: {e}` and returned up @main, ending the process at `1` with
+    no tracing line; the text carries no stable unique id (Tasks). The @panic! texts owned
+    here are `failed to build Tokio runtime: {e}` and
+    `failed to install the global tracing subscriber: {e}` — the second is dead in shipped
+    builds, since this is the process's first and only subscriber install. Everything else is
+    transit: @manager probe panics and reconcile unwinds pass through @block_on to the same
+    `101` fate, message on stderr, no cleanup.
+
+Handles:
+  Provider answer, both arms: installed-first @Ok and already-set @Err both drop through
+    @ok() — no branch in file ever logs, checks, or selects the provider.
+  Subscriber answers: fresh @Ok is the only reachable arm of the install, a second-install
+    @Err @panic!.
+  `RUST_LOG` unset → fallback `info`; malformed value → `info` too; set-but-empty →
+    directive-less @EnvFilter, the whole registry silent, fallback skipped — same
+    tracing-subscriber behaviour ./telemetry.sdd pins, through the live operator path.
+  @select! losers: dropped futures get no await, no cleanup and no graceful drain of in-flight
+    reconciles, whatever the winning arm was; @manager::@Manager and its Arc state just drop.
+  `NO_COLOR` honoured per event, unset, empty and non-empty values all compile-safe.
+  Access lines: @middleware::@Logger only excludes `/health`, so `/` and `/metrics` produce
+    access records through the `log` facade whether or not any subscriber captures them (Tasks).
+
+Tasks:
+  [ ] Cover this bin once: the file holds no #[cfg(test)] and nothing spawns the binary, so all
+      five Scenarios rest on reading alone; a harness must launch the built `operator` with a
+      cluster fixture and assert the stdout/stderr lines, the three `9000` answers, and the
+      exit codes — `0` for every @select! arm, `1` only on the @bind lane, `101` for the panic
+      and runtime-builder lanes.
+  [?] This startup duplicates @telemetry::@init rather than calling it and lands on a different
+      style — full fmt layer vs `.compact()`, @panic! on double install vs silent @install drop —
+      and the feature half is a use of @init_tracer the lib never exports; decide later
+      which file owns the operator bootstrap and delete the loser.
+  [?] Mixed failure styles: @manager and runtime builder @panic! (`101`) while @bind returns
+      @Err through @main's @Result (`1`, @Debug on stderr only, no tracing); decide later one
+      fatal path, one exit class, one channel for operator startup.
+  [?] A future ending on any of the four arms drops the other three reconciles and the listener
+      and still exits `0`; a crash loop then looks identical to a clean stop from inside
+      Kubernetes. Decide whether early arms should drain, log more loudly, or exit nonzero.
+  [?] The @middleware::@Logger records flow through the `log` facade while this file installs
+      its subscriber via @set_global_default rather than the builder @init that wires the
+      log→tracing bridge, so `/` and `/metrics` access lines likely reach nothing; decide later
+      (install and assert) or drop the middleware.
+  [?] @common::@context::@init_k8s is an empty `const fn`; calling it changes nothing here
+      either. Decide together with /common/src/context.sdd whether the no-op call stays.
+  [?] The crate-wide `#![allow(unused_imports, unused_variables)]` hides two dead actix imports
+      (@HttpRequest, @web self-binding); decide later to drop the allow with the imports.
+  [?] `can not bind to 0.0.0.0:9000: {e}` carries no stable unique id against the project error
+      rule. Decide later with the @Error policy in /common/src/lib.sdd.
+  [?] The @thread_stack_size comment blames `kube 2.0` while /Cargo.lock pins kube `3.1.0`;
+      decide whether the comment is stale or the sizing rationale still holds.
+
+Done when:
+  Every Scenario maps to a green process-level test or a decided `[?]`, the startup-failure
+    style and bootstrap-ownership decisions are recorded, and `cargo test -p operator`,
+    `cargo clippy --all-targets -- -D warnings`, `cargo +nightly fmt --check` and
+    `specdd lint` are green.
+
+Scenario: A good boot answers on 9000 and idles
+  Given a reachable cluster with all four CRDs installed and `0.0.0.0:9000` free
+  When the `operator` binary starts
+  Then stdout carries no boot banner at all — @main and @async_main log nothing themselves —
+    while the three routes answer `200`: `/metrics` as the four-registry OpenMetrics body,
+    `/health` as `"healthy"`, `/` as the one-key JSON holding `last_event`
+  And the four watches poll the cluster without any further route call or log line from this
+    file, and the process keeps running with the @select! unresolved
+  No mapped test exists.
+
+Scenario: Early controller exit drops every neighbour and exits 0
+  Given one of the four futures reaching stream end — a watcher terminal failure or a stopped
+    @Action that ends the stream
+  When its kind-specific @warn line lands
+  Then the other three reconciles mid-poll and the actix listener drop within the same
+    @select! poll, no @shutdown_timeout drain runs, and stdout carries only that one @warn line
+  And @async_main returns @Ok with `actix exited` never printed, and the exit status is `0`
+  No mapped test exists.
+
+Scenario: Signal stop drains and exits 0
+  Given boot completed and a request mid-flight
+  When SIGINT or SIGTERM reaches the process
+  Then actix stop handling drains within @shutdown_timeout `5`, @server.run resolves, @info
+    `actix exited` reaches stdout, the four @BoxFuture drop unpollled-clean, @async_main
+    returns @Ok and the exit status is `0`
+  No mapped test exists.
+
+Scenario: A port clash takes the Result lane to 1
+  Given `0.0.0.0:9000` already bound by another listener
+  When @bind fails after @Manager::new listed every CRD
+  Then @Error::@Other ends @main's @Result, stderr shows one line of the @Error @Debug
+    rendering — `Error: Other("can not bind to 0.0.0.0:9000: …")` — no tracing record mentions
+    it, and the exit status is `1`
+  Then none of the four futures was ever polled, so no watch touched the cluster
+  No mapped test exists.
+
+Scenario: RUST_LOG and NO_COLOR answer through this path
+  Given `RUST_LOG` unset then set to an invalid directive then set to the empty string, and
+    `NO_COLOR` set non-empty in a parallel boot
+  When @EnvFilter::@try_from_default_env and the fmt layer read them at boot
+  Then the first two fall back to global `info`, the empty string registers zero directives
+    and the registry logs nothing, and @NO_COLOR keeps every line plain
+  No mapped test exists.
+
+Example:
+  line shape this file alone produces: `<ts> WARN operator: ServiceInstance controller exited`
+    — @warn from @async_main, not from any module
+  stderr text on the bind lane: `Error: Other("can not bind to 0.0.0.0:9000: <io error>")`
+    — @Debug rendering, and this file writes nothing further there
+  startup stdout of a healthy boot: only the subscriber's own lines the reconcilers add
+    through the manager and kinds — @main adds none itself

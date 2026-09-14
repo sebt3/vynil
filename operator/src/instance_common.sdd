@@ -1,0 +1,499 @@
+Spec: InstanceCommon
+
+Purpose:
+  Own the reconcile engine shared by the three Vynil instance kinds: the @InstanceKind
+    trait freezing every per-kind decision (type literals, spec accessors, missing-state
+    setters, requirement and recommendation bodies, metric slots), the @run_with_finalizer
+    finalizer wrapper, and the two generic pipelines @do_reconcile (install) and
+    @do_cleanup (uninstall) that drive the agent Job — suspend and force-reinstall
+    annotation gates, cached-box package selection, init-version resolution, Handlebars
+    render of the `package.yaml` partial, Job upsert, the terminal wait, and the
+    children-blocked delete guard. The three kind modules implement the trait and delegate
+    @Reconciler here; @JukeBox enters only through @is_job_terminal.
+
+Owns:
+  ./instance_common.rs
+
+References:
+  ./lib.sdd — @Reconciler whose @Reconciler::reconcile and @Reconciler::cleanup the
+    @do_reconcile and @do_cleanup bodies implement; @Error and @Result; @get_client_name —
+    the `controller.vynil.solidite.fr` SSA field manager @upsert_job forces.
+  ./manager.sdd — @Context (@Context::client, @Context::diagnostics, @Context::metrics,
+    @Context::renderer, @Context::base_context, @Context::packages), @JukeCacheItem,
+    @Diagnostics::last_event, and the `{CONTROLLER_BASE_DIR}/templates` lane that makes the
+    `package.yaml` partial resolvable.
+  ./metrics.sdd — @ReconcileMeasurerInstance handed back by
+    @InstanceKind::count_and_measure_metrics and the observation its @Drop writes
+    (./metrics.sdd owns the exact ms→f64 encoding and exemplar lane).
+  ./telemetry.sdd — @telemetry::get_trace_id, whose stub always answers @TraceId::INVALID.
+  ./instanceservice.sdd, ./instancesystem.sdd, ./instancetenant.sdd — specs pending;
+    their @InstanceKind impls supply @InstanceKind::type_name, @InstanceKind::finalizer_name
+    and @InstanceKind::package_type, and their @error_policy lane consumes the @Error
+    variants raised here (including the 30-second @Error::CleanupInProgress lane).
+  /common/src/instance_macros.sdd — the macro-owned mutators each kind forwards through
+    the trait: @get_options_digest, @set_missing_box, @set_missing_package,
+    @set_missing_requirement, @set_missing_init_version.
+  /common/src/instanceservice.sdd — @ServiceInstance::get_all_services_names and the
+    @ServiceInstance::have_child probe behind the service kind's @InstanceKind::have_child.
+  /common/src/instancesystem.sdd — @SystemInstance, which keeps the
+    @InstanceKind::init_from_version and @InstanceKind::set_missing_init_version defaults.
+  /common/src/instancetenant.sdd — @TenantInstance and @InitFrom::version read by the
+    tenant (and service) @InstanceKind::init_from_version override.
+  /common/src/jukebox.sdd — @JukeBox, whose status packages and `pull_secret` seed the
+    @JukeCacheItem rows this engine reads.
+  /common/src/context.sdd — the client-name split; this file writes SSA only through the
+    crate-root @get_client_name of ./lib.sdd.
+  /common/src/vynilpackage.sdd — @VynilPackage, @VynilPackageRecommandation,
+    @VynilPackageRequirement, @VynilPackageType, @VynilPackage::is_min_version_ok,
+    @VynilPackage::is_vynil_version_ok, and the 900/300 requirement ttl owned there.
+  /common/src/rhaihandler.sdd — @Script::new and @Script::eval_map_string for the package
+    value script; the cluster-capable registration (trust boundary) is theirs.
+  /common/src/yamlhandler.sdd — @yamlhandler::yaml_str_to_json on the rendered Job YAML.
+  /common/src/handlebarshandler.sdd — @HandleBars, cloned per pass, rendered via Deref.
+
+Must:
+  Define @InstanceKind as one `#[async_trait] pub trait` bounded by
+    `@kube::Resource<@DynamicType = (), @Scope = @NamespaceResourceScope>` plus @Clone,
+    @Debug, @DeserializeOwned, @Serialize, @Send, @Sync and `'static`; @do_reconcile
+    @do_cleanup and @resolve_init_version are generic over `@T: @InstanceKind`.
+  Carry exactly seventeen required methods: @InstanceKind::type_name,
+    @InstanceKind::finalizer_name (both `&'static str`, `where Self: Sized`) and
+    @InstanceKind::package_type (@VynilPackageType, `where Self: Sized`); the borrowed
+    `&str` accessors @InstanceKind::spec_jukebox, @InstanceKind::spec_category,
+    @InstanceKind::spec_package; @InstanceKind::current_tag returning the installed
+    `status.tag` clone or the empty @String at absence; @InstanceKind::have_child;
+    @InstanceKind::get_options_digest over `&mut self` without mutating; the self-consuming
+    status setters @InstanceKind::set_missing_box, @InstanceKind::set_missing_package,
+    @InstanceKind::set_missing_requirement returning @Result<Self>;
+    @InstanceKind::check_requirements (list, @Client) -> @Result<@Option<@Action>>;
+    @InstanceKind::build_recommendations (@Option<@Vec<@VynilPackageRecommandation>>,
+    @Client) -> @Result<@RecoContext>; @InstanceKind::set_rhai_instance (&mut @Script);
+    @InstanceKind::count_and_measure_metrics (&@Context, &@TraceId) ->
+    @ReconcileMeasurerInstance; @InstanceKind::record_reconcile_failure (&@Context, &@Error).
+  Default exactly two methods: @InstanceKind::init_from_version answers @None — the
+    @SystemInstance kind has no `initFrom` and keeps the default, the service and tenant
+    kinds override by unwrapping `spec.init_from.version` — and
+    @InstanceKind::set_missing_init_version answers @Ok(self) unchanged for kinds without
+    the `InitFrom` stage.
+  Freeze @RecoContext as `#[derive(Debug)] pub struct` with the three `pub` @Vec<@String>
+    fields @RecoContext::crds, @RecoContext::system_services and @RecoContext::tenant_services;
+    the service and system kinds always ship @tenant_services empty, the tenant kind sorts
+    and fills it.
+  Run @run_with_finalizer in exactly this order: read @telemetry::get_trace_id; record its
+    value on the current @Span via @field::display; record the same field a second time under
+    `if trace_id != @TraceId::INVALID` — a dead duplicate while the stub stands; bind
+    @InstanceKind::count_and_measure_metrics as the scope RAII measurer so the drop-time
+    observation covers the whole finalizer transaction; stamp @Diagnostics::last_event with
+    @Utc::now; open @Api::namespaced on the instance namespace via @unwrap_or_default; then
+    hand @kube's @finalizer the @Api, the @InstanceKind::finalizer_name literal and the
+    instance @Arc — kube itself adds the finalizer on the apply path and removes it only
+    after cleanup answers @Ok — dispatching @Finalizer::Apply to @Reconciler::reconcile and
+    @Finalizer::Cleanup to @Reconciler::cleanup; map the transaction @Err into
+    @Error::FinalizerError by boxing.
+  Reach @run_with_finalizer and both pipelines only from the three kind modules (specs
+    pending): each instrumented `reconcile` free fn forwards the @Arc, each @Reconciler
+    impl @Box::pins @do_reconcile or @do_cleanup, and the kind @error_policy owns every
+    failure-path requeue duration — this file hands them @Err, never an @Action.
+  Route @do_reconcile through @InstanceKind::check_requirements unchanged: the action of
+    @InstanceKind::check_requirements is returned verbatim — @Some short-circuits @do_reconcile with
+    the @Action the kind built from the failing requirement's ttl, the message already
+    stored via @InstanceKind::set_missing_requirement, and no later requirement is evaluated;
+    an evaluation @Err propagates without recording a condition.
+  Run @do_reconcile in exactly this stage order: @tracing::debug! `Reconcilling {}Instance
+    {}/{}` (misspelling kept) → @Diagnostics::last_event stamp (a second write per Apply on
+    top of the wrapper's) → suspend gate → clone @Context::renderer and @Context::client →
+    controller namespace from @Client::default_namespace (the Job namespace, never the
+    instance one) → assemble the render context → lookup → pull-secret keys → tag resolution and
+    insertion → requirements → recommendations → value script → force-reinstall gate →
+    render, YAML-to-JSON, @upsert_job → @Ok(@Action::requeue(@tokio::time::Duration::from_mins(15))).
+  Suspend on annotation `vynil.solidite.fr/suspend` only when its value equals `true`
+    (@Option::is_some_and); log @tracing::info! skipping reconciliation; return
+    @Action::requeue(@tokio::time::Duration::from_mins(15)) without touching the cache, the
+    Job or any registry; `True`/`1`/anything else reconciles normally.
+  Name the agent Job by joining @InstanceKind::type_name, the instance namespace and
+    @name_any with the two-hyphen separator `--` (e.g. `service--apps--frontend`); install
+    and delete runs reuse the one name serially.
+  Assemble the render context from @Context::base_context plus this file's keys, every
+    insertion silently skipped when the @Value is not an object: @insert_base_context sets
+    `name` (@name_any), `namespace` (@unwrap_or_default), `package_type`
+    (@InstanceKind::type_name), `package_action` (`install` in @do_reconcile, `delete` in
+    @do_cleanup), `job_name`, `digest` (@InstanceKind::get_options_digest over a clone) and
+    `oci_mount` pinned to boolean `false`; @apply_pull_secret sets `use_secret` to the
+    box-secret presence and writes `pull_secret` only in the @Some arm; then @do_reconcile
+    appends `tag`/`image`/`registry`, the three `rec_*` keys joined on `,` (an empty list
+    renders the empty string) and `ctrl_values`; @do_cleanup appends `tag` (the cache
+    package tag — the init version is never resolved on delete) and forces the three
+    `rec_*` keys to the empty string.
+  Select the package in private @lookup_cached_package by a five-clause conjunction over
+    the cached box named by @InstanceKind::spec_jukebox: `name`, `category`, `type` equal to
+    @InstanceKind::package_type(), @VynilPackage::is_min_version_ok over the current tag,
+    @VynilPackage::is_vynil_version_ok — first match in cache order wins; the cluster
+    version is deliberately excluded here and arrives later as a requirement; @None marks
+    the whole box absent and answers the missing-box gate, a box without a matching entry
+    answers the missing-package gate; only the install lane clones the full cache list
+    (cleanup passes the flag `false` to spare the clone); the @Context::packages read guard
+    is dropped before any cluster call.
+  Drive both gates in @do_reconcile: missing box calls @InstanceKind::set_missing_box with
+    @InstanceKind::spec_jukebox, missing package calls @InstanceKind::set_missing_package
+    with @InstanceKind::spec_category and @InstanceKind::spec_package, each then returns
+    @Action::requeue(@tokio::time::Duration::from_mins(15)); a failing setter propagates
+    @Err instead of the requeue.
+  Resolve the install tag in @resolve_init_version with three ordered short-circuits:
+    @None request or a non-empty @InstanceKind::current_tag answers @Ok(None) (the pin is
+    ignored once installed); a cache entry of matching name/category/type whose `tag`
+    equals the request by @String equality answers @Ok(@Some(requested)) with zero network; else
+    verify the tag against the OCI registry through @common::ocihandler —
+    @common::ocihandler::OciRegistryAuth::Anonymous for a box without a pull secret, else
+    @common::ocihandler::resolve_registry_auth against the secret in the controller
+    namespace; a verified-missing tag runs @InstanceKind::set_missing_init_version first
+    (its returned object is discarded; its own @Err replaces the version error through `?`)
+    and then raises @Error::MissingInitVersion; a verified tag answers @Ok(Some(requested)).
+  Consume annotation `vynil.solidite.fr/force-reinstall` on plain key presence (the value
+    is never read): @do_reconcile first patches the instance @Api with @Patch::Json holding
+    the single `op: remove` entry at
+    `/metadata/annotations/vynil.solidite.fr~1force-reinstall`
+    (@Error::SerializationError / @Error::KubeError), and only then — annotation already
+    gone — probes @Api::get_metadata_opt: @Ok(Some) purges the old Job through
+    @delete_job_and_wait; an @Err or @None skips the purge.
+  Render the Job from the `{{> package.yaml }}` partial against the assembled context,
+    convert with @yamlhandler::yaml_str_to_json (@Error::HbsRenderError from the render,
+    @Error::Core from the YAML leg), then apply through @upsert_job; every 15-minute pass
+    re-applies the SSA patch — an unchanged render is a no-op apply, while an edit that
+    changes the template is rejected on the immutable @Job field and rebuilds through the
+    fallback lane below.
+  @upsert_job forces @Patch::Apply with @PatchParams::apply(&@get_client_name().@force
+    ()); @Ok returns immediately; a rejected patch is discarded unlogged — transient or
+    immutable-field — and falls to the rebuild lane: foreground @Api::delete (@Err →
+    @Error::KubeError, so an already-gone object answering the @kube::Error::Api lane
+    aborts this helper), on the @either::Left echo await @conditions::is_deleted over
+    `metadata.uid` under @tokio::time::timeout(@std::time::Duration::from_secs(20)) (expiry
+    @Error::Elapsed, watch @Err @Error::KubeWaitError), then @Api::create
+    (@PostParams::default, @serde_json decode @Err → @Error::SerializationError, create @Err
+    → @Error::KubeError). A racing create surfaces the `AlreadyExists` reply inside that variant).
+  Give @delete_job_and_wait the opposite delete polarity: same foreground params, same
+    20-second @conditions::is_deleted wait under @unwrap_or_default uid, but any @Api::delete
+    @Err becomes @tracing::warn! `Deleting Job {} failed with: {e}` and @Ok(()); the
+    @either::Right confirmation skips the wait; only wait failures escape as
+    @Error::Elapsed / @Error::KubeWaitError.
+  Run @apply_value_script as the private encoder: @None stores the four-character literal
+    `"{}"` (the @Debug form of the empty-map JSON text); @Some decodes the stored doubly
+    JSON-encoded @String (@Err → @Error::JsonError before the engine wakes), evaluates on a
+    fresh full-registration @Script::new(empty) with the instance bound through
+    @InstanceKind::set_rhai_instance, and stores the JSON text returned by
+    @Script::eval_map_string as a @Debug rendering — outer quotes plus escaped inner quotes —
+    into `ctrl_values`; an @Error::RhaiError or JSON-map @Error::SerializationError propagates
+    and aborts the pass, identically for install and delete.
+  Run @do_cleanup after the same base assembly with `package_action` `delete` and a
+    lookup-without-list: absent box returns @Ok(@Action::await_change()) immediately; a box
+    without the package calls @InstanceKind::have_child — `true` aborts with @Error::Other
+    carrying verbatim `This install have child but the package cannot be found` (the
+    @InstanceKind::set_missing_init_version never runs; the finalizer holds until the
+    package returns or children release), `false` releases with @Action::await_change(); a
+    found package pulls `pull_secret` keys, pins `tag` to the cache `tag`, forces the three
+    `rec_*` keys empty, runs both @apply_pull_secret and @apply_value_script, logs
+    @tracing::info! `Deleting with: {:?}` of the whole render context, purges any @Ok(Some)
+    same-named Job (@Err metadata probe again treated as absent — including a still-running
+    install), renders the same partial and plain-creates it through @Api::create — never
+    @upsert_job, so a racing same-named Job aborts the pass with @Error::KubeError instead of
+    rebasing.
+  Await the delete run with @await_condition plus @is_job_terminal_cond under
+    @tokio::time::timeout(@std::time::Duration::from_mins(3)); the @Err timeout logs
+    @tracing::info! `CLEANUP-JOB-002 delete job {} still running, will re-check` and raises
+    @Error::CleanupInProgress(job); an inner watch @Err raises @Error::KubeWaitError before
+    any purge; after an answered wait the verdict reads @Api::get_opt (@Err →
+    @Error::KubeError, vanished object reads as not-failed), then purges the Job foreground
+    in every terminal case with @Api::delete failures warned away only, and finally:
+    @is_job_failed `true` → @Err(@Error::CleanupJobFailed(job)) keeping the finalizer for the
+    failure retry, otherwise @Ok(@Action::await_change()) releasing it.
+  Freeze the Job predicates on exact status strings: @is_job_terminal matches any
+    `status.conditions` record with `status` `True` and `type_` `Complete` or `Failed`,
+    @is_job_failed the same for `Failed` alone; absent `status`, absent `conditions` or a
+    not-yet-`True` record answers false for both; @is_job_terminal_cond builds an
+    @Condition implementation never matching the deleted-object @None, so an out-of-band
+    deletion times the
+    3-minute wait out into @Error::CleanupInProgress instead of resolving.
+  Map every pipeline @Err to the kind @error_policy, never to an @Action, and keep
+    @Error::CleanupInProgress a distinct variant from @Error::CleanupJobFailed — the pending
+    kind specs fast-lane the former at 30 seconds without failure metrics and count the
+    rest into @InstanceKind::record_reconcile_failure lanes.
+  Use no @unwrap / @expect panic lane in product code — @unwrap_or_default, @is_some_and and
+    the @either arms carry every absent value — the file's abrupt ends are upstream-owned
+    (@patch_status unwraps and Rhai-bridge panics of /common/src/instance_macros.sdd).
+
+Exposes:
+  @RecoContext — `pub` struct with three `pub` @Vec<@String> fields.
+  @InstanceKind — the `pub` async_trait trait; supertraits, all seventeen required and both
+    defaulted methods per the Must entries.
+  @run_with_finalizer — `pub async fn` bounded `@T: @InstanceKind + @Reconciler`, called
+    only by the three kind reconcile free fns.
+  @do_reconcile and @do_cleanup — `pub async fn` generic pipelines driven by @Reconciler.
+  @build_base_recommendations — `pub async fn` shared CRD/SystemService reco body reused by
+    all three @InstanceKind::build_recommendations impls.
+  @resolve_init_version — `pub async fn` first-install tag pin, install lane only.
+  @is_job_terminal and @is_job_failed — `#[must_use] pub fn` terminal readers;
+    @is_job_terminal additionally serves the ./jukebox.rs scan job.
+  @is_job_terminal_cond — `#[must_use] pub fn` returning the @await_condition @Condition.
+  @delete_job_and_wait and @upsert_job — `pub async fn` lifecycle pair over @Api<@Job>.
+  Crate-private, not exposed: @ns, @insert_base_context, @lookup_cached_package,
+    @apply_pull_secret, @apply_value_script.
+
+Accepts:
+  Instances whose `metadata.namespace` is @Some — @unwrap_or_default degrades an absent one
+    to namespace `""` for the finalizer @Api, the `namespace` key and the Job name instead
+    of failing; annotation maps are unvalidated free maps whose values the two gates read as
+    stated.
+  @upsert_job and cleanup's @Api::create take a @Value that must deserialize to @Job —
+    decode failure maps to @Error::SerializationError in the rebuild lane only.
+  The @InstanceKind::get_options_digest @String, `spec` strings, `tag` text and box
+    `pull_secret` names exactly as stored — none validated; the init-tag match is @String
+    equality, not semver, and a package `value_script` is arbitrary package-authored Rhai on
+    the full cluster-capable @Script engine (trust note in /common/src/rhaihandler.sdd).
+  The `--` job-name join is unescaped: two distinct (name, namespace) pairs that re-separate
+    into one `--`-joined string share one Job name.
+
+Returns:
+  @Action::requeue(@tokio::time::Duration::from_mins(15)) as the idle heartbeat and the
+    shared answer after suspend, missing box, missing package and a completed install Job
+    upsert; the 15-minute resync itself is frozen by the parent /operator/operator.sdd.
+  @Action::await_change() as the only finalizer-releasing cleanup answer — successful
+    uninstall, child-less missing package, missing box.
+  The @InstanceKind::check_requirements @Some short-circuit @Action (ttl requeue, 900/300
+    seconds owned by /common/src/vynilpackage.sdd) passes through unchanged; the 30-second transient
+    and 5-minute failure requeues belong to the kind @error_policy, not to this file.
+  @resolve_init_version @Ok(@Some(pinned tag)) on hit, @Ok(@None) on no-request / installed
+    / no-pin-needed cases; @RecoContext vectors sorted (@tenant_services sorted inside the
+    tenant kind); @is_job_terminal and @is_job_failed answer plain bools; @() from both Job
+    helpers —
+    @delete_job_and_wait answers @Ok even after warning away a failed delete.
+
+Raises:
+  @Error::FinalizerError — every finalizer transaction failure from the kube runtime,
+    boxed (the wrapper has no other failure channel).
+  @Error::MissingInitVersion after the condition setter; @Error::CleanupJobFailed(job) with
+    the Job already purged; @Error::CleanupInProgress(job) on the 3-minute overrun;
+    @Error::Other with the children-having text on the blocked delete.
+  @Error::KubeError — reco @Api::get_metadata_opt, force-reinstall patch, @Api::delete in the
+    @upsert_job rebuild, both @Api::create lanes, the @Api::get_opt verdict read;
+    @Error::KubeWaitError and @Error::Elapsed — the shared @is_deleted watches (20 s cap)
+    and the 3-minute terminal watch error (the 3-minute expiry itself is not Elapsed: it
+    becomes @Error::CleanupInProgress).
+  @Error::SerializationError — JSON-patch doc or Job @Value decode; @Error::JsonError —
+    a `value_script` not doubly encoded; @Error::HbsRenderError and the @Error::Core YAML
+    lane on template render/convert; @Error::RhaiError variants straight from
+    @Script::eval_map_string.
+  Anything hitting `?` — requirement evaluation, box/package/init-version status writes,
+    the script engine — aborts the pass as @Err before the Job stage with one exception: the
+    missing-init condition is recorded before @Error::MissingInitVersion is raised.
+
+Handles:
+  A delete whose package vanished while children remain — @Error::Other blocks; children
+    gone — release. A delete whose whole box vanished — silent release without any probe
+    (Tasks `[?]` for the asymmetry).
+  A failed install/upgrade of the install Job — never observed here: @do_reconcile reads no
+    Job status, only the 15-minute resync, an annotation purge or a template-change rebuild
+    drive retries; the agent's status writes are the sole install verdict.
+  @Api::get_metadata_opt @Err on either purge lane — treated as "no old Job"; the
+    @upsert_job rebuild and cleanup's create then surface the `AlreadyExists` @Api reply.
+  Force-reinstall annotation with an empty value — still purges and reinstalls; the patch
+    already removed the annotation before the purge could fail (Tasks `[?]`).
+  Out-of-band Job deletion mid-cleanup — the @Condition never matches @None, the timeout
+    lane re-enters cleanup ~30 s later which purges-or-skips and recreates from scratch
+    (Tasks `[?]` loop).
+  A value-script failure during uninstall — blocks the finalizer, counted as an ordinary
+    5-minute failure by the kind error policy.
+  Recos of @Some empty list still fetch the full service index; @None pays nothing.
+
+Tasks:
+  [x] Job-predicate coverage green under `cargo test -p operator`: @test_is_job_terminal_complete,
+      @test_is_job_terminal_failed, @test_is_job_terminal_active,
+      @test_is_job_terminal_no_status, @test_is_job_terminal_failed_not_yet_true,
+      @test_is_job_failed_true, @test_is_job_failed_complete, @test_is_job_failed_active,
+      @test_is_job_failed_no_status, @test_is_job_failed_not_yet_true.
+  [x] Selector-method coverage green: @test_init_from_version_tenant_with_version,
+      @test_init_from_version_tenant_no_init_from, @test_init_from_version_system_default
+      — @InstanceKind default vs the tenant override.
+  [x] @resolve_init_version short-circuit and cache-hit coverage green:
+      @test_resolve_init_version_no_version, @test_resolve_init_version_already_installed,
+      @test_resolve_init_version_found_in_cache; the OCI-miss lane stays @`#[ignore]`
+      (@test_resolve_init_version_missing_in_registry, requires a real registry).
+  [x] Effective-tag documentation tests green — but they call @resolve_init_version as a
+      stand-in, never @do_reconcile itself: @test_do_reconcile_tag_no_init_from,
+      @test_do_reconcile_tag_init_from_version_in_cache,
+      @test_do_reconcile_tag_already_installed_ignores_init_from;
+      @test_do_reconcile_tag_init_from_version_missing stays @`#[ignore]`.
+  [ ] Zero tests touch @run_with_finalizer, the @do_reconcile / @do_cleanup bodies,
+      @upsert_job, @delete_job_and_wait, @build_base_recommendations or the two annotations —
+      cover from the Scenarios below with mocked cluster and template fixtures per TTD.
+  [?] Cleanup retries tear down their own progress: every @Error::CleanupInProgress requeue
+      re-runs cleanup, whose first Job step purges the still-`Active` delete Job and
+      recreates it, so an uninstall exceeding the 3-minute window can restart forever.
+      Decide the idempotent order: wait-existing-vs-purge-first.
+  [?] Missing-box cleanup releases the finalizer with no @InstanceKind::have_child probe —
+      deleting the
+      @JukeBox first silently orphans children; decide whether the guard must also cover
+      the missing-box arm.
+  [?] Force-reinstall strips the annotation before purging the Job — a crash between them
+      loses the reinstall intent; and @delete_job_and_wait warns-away-purges while
+      @upsert_job's equal delete propagates @Error::KubeError. Decide crash-safe ordering
+      and one delete-failure polarity.
+  [?] @upsert_job discards the SSA rejection unlogged and rebuilds on any failure class
+      (transient @Api error included), and its rebuild-delete surfaces an already-gone
+      object as @Error::KubeError where @delete_job_and_wait answers @Ok. Decide which
+      failures merit logging and rebuild.
+  [?] `oci_mount` is hard-pinned `false`, keeping the partial's `imagePullSecrets`
+      conditional (`use_secret and oci_mount`) permanently dead while the `use_secret`
+      `true` arm still fires the init-container secret mount; the per-kind 15-minute full
+      stage re-run follows /operator/operator.sdd but re-does every requirement/reco cluster
+      read each pass. Decide whether `oci_mount` awaits an OCI-mount mode or the key and the
+      partial lane retire.
+  [?] The duplicate `trace_id` @Span record behind the unreachable @TraceId::INVALID guard
+      is dead code while ./telemetry.sdd stubs the getter; @Error::Other for the children
+      guard carries no stable id, and @tracing::info! `Deleting with: {:?}` dumps the
+      entire render context — secret name and `ctrl_values` included. Decide on all three
+      log/error hygiene items.
+  [x] ./metrics.sdd claimed the tenant metric lane had no call site, yet @run_with_finalizer
+      drives @InstanceKind::count_and_measure_metrics for all three kinds and the tenant kind
+      wires both metric slots. Resolved: ./metrics.sdd idle-lane wording corrected to state all
+      four registries serve live call sites.
+
+Done when:
+  Every Scenario has a green mapped test or a decided `[?]` Task, the three pending kind
+    specs land their @error_policy consumption of the variants raised here, and
+    `cargo test -p operator`, `cargo clippy --all-targets -- -D warnings`,
+    `cargo +nightly fmt --check` and `specdd lint` are green.
+
+Scenario: Terminal job predicates read exact status strings
+  Given a @Job with any `status.conditions` combination
+  When @is_job_terminal and @is_job_failed run
+  Then (`Complete`, `True`) and (`Failed`, `True`) make @is_job_terminal true and only
+    (`Failed`, `True`) makes @is_job_failed true, while (`Failed`, `False`) answers false for
+    both, and an absent `status` or absent `conditions` answers false too
+  Maps to tests @test_is_job_terminal_complete, @test_is_job_terminal_failed,
+    @test_is_job_terminal_active, @test_is_job_terminal_no_status,
+    @test_is_job_terminal_failed_not_yet_true, @test_is_job_failed_true,
+    @test_is_job_failed_complete, @test_is_job_failed_active, @test_is_job_failed_no_status,
+    @test_is_job_failed_not_yet_true
+
+Scenario: init-version pins the fresh-install tag only
+  Given an uninstalled instance requesting `spec.init_from.version`
+  When @resolve_init_version answers
+  Then an exact cache-tag match yields @Ok(@Some(pinned)) and the `tag` key survives the
+    package default; no request or already-installed yield @Ok(@None); the tenant keeps the
+    request only with the @InstanceKind::init_from_version override, @SystemInstance answers
+    the default @None
+  Maps to tests @test_resolve_init_version_no_version,
+    @test_resolve_init_version_already_installed, @test_resolve_init_version_found_in_cache,
+    @test_init_from_version_tenant_with_version, @test_init_from_version_tenant_no_init_from,
+    @test_init_from_version_system_default, @test_do_reconcile_tag_no_init_from,
+    @test_do_reconcile_tag_init_from_version_in_cache,
+    @test_do_reconcile_tag_already_installed_ignores_init_from
+
+Scenario: Unknown init version marks the instance then fails the pass
+  Given a requested version absent from the cache and unverified in the registry
+  When @resolve_init_version finishes the fallback leg
+  Then @InstanceKind::set_missing_init_version records the `InitFrom` condition first and the
+    call raises @Error::MissingInitVersion — no Job stage runs and the kind @error_policy
+    counts the failure
+  No mapped test exists — the registry legs are @`#[ignore]`.
+
+Scenario: Suspend skips the pass but keeps the heartbeat
+  Given the `vynil.solidite.fr/suspend` annotation with value `true`
+  When @do_reconcile runs
+  Then only the stamps happen, the @tracing::info! skip line logs, and the answer is
+    @Action::requeue(@tokio::time::Duration::from_mins(15)) before the cache read
+  But with value `True`, `1` or empty the pass reconciles normally (case exact)
+  No mapped test exists.
+
+Scenario: Box or package gone requeues on the 15-minute clock
+  Given the instance's jukebox absent from the cache
+  When @do_reconcile looks the package up
+  Then @InstanceKind::set_missing_box records the name and the answer is the 15-minute
+    requeue; the same shape via @InstanceKind::set_missing_package when the box exists,
+    while a failing setter raises @Err instead of the requeue.
+  Maps to none — @do_reconcile itself has no test.
+
+Scenario: First unmet requirement short-circuits the install
+  Given a requirement list whose second entry fails
+  When @do_reconcile reaches @InstanceKind::check_requirements
+  Then the third ttl member rides back as the pass's @Action, the failing message is stored
+    via @InstanceKind::set_missing_requirement, and neither later requirement nor the Job
+    stage runs
+  And an evaluation error propagates as @Err with no condition recorded
+  No mapped test exists.
+
+Scenario: Force-reinstall consumes the annotation then recreates the job
+  Given an instance annotated `vynil.solidite.fr/force-reinstall` (any value) with a live
+    same-named Job and a passing package
+  When @do_reconcile reaches the reinstall gate
+  Then the JSON patch removes the annotation first, @delete_job_and_wait purges the Job when
+    metadata sees it, and the pass recreates it from the template in the same cycle
+  And a later annotation-free pass takes the plain @upsert_job lane
+  No mapped test exists.
+
+Scenario: Upsert rebuilds on immutable template change
+  Given a completed live Job and a package edit changing the rendered template
+  When @upsert_job's forced SSA patch is rejected on the immutable spec
+  Then the error is discarded unlogged and the rebuild runs: foreground delete,
+    @conditions::is_deleted wait capped at 20 seconds by uid, then create; a watch expiry
+    raises @Error::Elapsed, any delete failure maps to @Error::KubeError
+  No mapped test exists.
+
+Scenario: Rejected patch on an already-vanished job maps to KubeError
+  Given @upsert_job's patch rejected while the Job was deleted concurrently
+  When the rebuild's @Api::delete meets the gone object
+  Then @Error::KubeError aborts @upsert_job — contrast @delete_job_and_wait, which warns and
+    returns @Ok(()) for the same @Api::delete failure class
+  No mapped test exists.
+
+Scenario: Cleanup uninstalls through a terminal job and releases
+  Given a passing package lookup on the delete side
+  When @do_cleanup creates its delete Job and the wait answers
+  Then a `Complete` job is purged (purge @Err warn-only) and @Ok(@Action::await_change())
+    comes back, letting the wrapper's finalizer removal drop the finalizer
+  And any pre-existing install Job under the name was purged first, including a still-running one
+  No mapped test exists.
+
+Scenario: A failed or stuck delete job keeps the finalizer
+  Given the delete Job ends `Failed`, or is still `Active` past 3 minutes
+  When the wait verdict runs
+  Then both lanes purge first (Failed case), Failed raises @Error::CleanupJobFailed and the
+    overrun logs the `CLEANUP-JOB-002` line then raises @Error::CleanupInProgress — the
+    pending kind error policies fast-lane the latter at 30 seconds uncounted and count the
+    former into failure metrics
+  And an out-of-band-deleted job never matches @is_job_terminal_cond, so it also lands in the
+    overrun lane and the next retry recreates it (Tasks `[?]` loop)
+  No mapped test exists.
+
+Scenario: A missing package with children blocks the delete
+  Given the cached box without the instance's package and @InstanceKind::have_child true
+  When @do_cleanup probes the guard
+  Then @Error::Other aborts with the children-having text and the finalizer holds
+  But `false` children release on @Ok(@Action::await_change())
+  And a fully missing box releases too — with no children probe (Tasks `[?]` hole)
+  No mapped test exists.
+
+Scenario: Value script encodes ctrl_values through two layers
+  Given a package with a `value_script` whose script returns a Rhai map
+  When @apply_value_script stores the `ctrl_values` key
+  Then the render context receives the @Debug rendering of the JSON string wrapped in quotes
+    with inner quotes escaped; @None stores exactly `"{}"`
+  But a script value that is not a JSON-encoded string raises @Error::JsonError before the
+    engine starts, and a failing script aborts install and delete alike (finalizer-blocked)
+  No mapped test exists.
+
+Scenario: Context injection no-ops off JSON objects
+  Given a non-object @Context::base_context fragment (a JSON string or list)
+  When @insert_base_context, @apply_pull_secret or @apply_value_script runs
+  Then every insertion silently skips and the @Value stays untouched — no error is raised
+  No mapped test exists.
+
+Example:
+  Job name join: `service--apps--frontend`; type literals come from the kind modules —
+    `service`, `system`, `tenant`.
+  `ctrl_values` for script map `#{a: 1}`: engine yields `{"a":1}`, stored as `"{\"a\":1}"`.
+  Render context key set layered on `base_context`: `name`, `namespace`, `package_type`,
+    `package_action`, `job_name`, `digest`, `oci_mount` (`false`), `use_secret`,
+    `pull_secret` (@Some arm only), `tag`, `image`, `registry`, `rec_crds`,
+    `rec_system_services`, `rec_tenant_services`, `ctrl_values`.
+  Delete-side diffs from install: `package_action` `delete`, un-resolved `tag`, empty
+    `rec_*`, plain @Api::create instead of @upsert_job, final @Action::await_change().

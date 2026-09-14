@@ -1,0 +1,238 @@
+Spec: telemetry
+
+Purpose:
+  Be the operator library's tracing bootstrap: install the process-wide @tracing
+    subscriber — a compact console fmt layer gated by an @EnvFilter built from `RUST_LOG`
+    — and, in `telemetry`-feature builds, stack an OTLP gRPC span exporter under the same
+    filter; expose @get_trace_id so reconciles and the metrics layer can tag spans and
+    measurements with the active trace id.
+
+Owns:
+  ./telemetry.rs
+
+Must:
+  Open with the inner attribute `#![allow(unused_imports)]` commented by this file as
+    holding imports used only for the `telemetry` feature, and carry the three fixed top
+    imports @opentelemetry::trace::@TraceId, @tracing::@Instrument, and
+    `tracing_subscriber::{@EnvFilter, @Registry, prelude::*}`; @Instrument is used by
+    nothing in the file today and survives solely through that allow attribute.
+  Compile under the module declaration `pub mod telemetry` (./lib.rs) of the `controller`
+    library while ./main.rs re-exports the lib root via `pub use controller::*`, so the bin
+    crate reaches this module's public items only as `controller::telemetry::*`.
+  @get_trace_id is an ungated `#[must_use] pub const fn get_trace_id() -> @TraceId` whose
+    body is the literal @TraceId::INVALID: the imports @TraceContextExt and
+    @OpenTelemetrySpanExt (each `use ... as _` inside the body) sit unused, no
+    @tracing::Span or context is ever consulted, and the doc comment promising a trace
+    "through the full tracing stack" describes intent the stub never executes.
+  Build @env_filter (private) through the exact chain @EnvFilter::try_from_default_env() →
+    `.or_else` @EnvFilter::try_new(`"info"`) → `.unwrap_or_else` @EnvFilter::new(`"info"`):
+    the consulted variable is `RUST_LOG` only in tracing-subscriber `0.3.23`; unset and
+    unparseable values are indistinguishable and both fall back to the literal `info`
+    global level; a set-but-empty `RUST_LOG` parses into a directive-less filter that
+    enables nothing and skips all fallbacks; the third arm is unreachable because `info`
+    always parses; no extra directives are ever added; the filter is rebuilt on every
+    @init call with no caching.
+  Route every install through @install (private, generic over
+    `S: @tracing::Subscriber + Send + Sync + 'static`) which calls
+    @tracing::subscriber::set_global_default and discards the @SetGlobalDefaultError with
+    `let _ =`: a second registration silently keeps the first subscriber, with no log, no
+    panic and no returned signal — the in-file comment accepts this because it is called
+    once at process startup.
+  Layer the subscriber identically in both @init variants — @Registry plus the compact fmt
+    layer plus @env_filter — with the telemetry variant (`pub async fn`) prefixing
+    @tracing_opentelemetry::layer().with_tracer(@init_tracer().await) before the fmt layer;
+    the last-positioned @EnvFilter is a registry-level layer whose callsite interest gates
+    the whole stack, trace export included.
+  Settle every fmt detail except the format at the crate defaults: `.compact()` is the only
+    formatting choice, so stdout, the default UTC microsecond timestamp
+    (`YYYY-MM-DDTHH:MM:SS.ffffffZ`), and `NO_COLOR`-aware ANSI
+    (`NO_COLOR` unset or empty keeps colours, non-empty drops them) behave as the
+    `0.3.23` defaults; nothing calls `with_writer`, `with_timer` or `with_ansi`, and the
+    compiled `json` subscriber feature is unused.
+  Freeze the OTLP wiring (telemetry-gated private @init_tracer) as written: @std::env::var
+    of `OPENTELEMETRY_ENDPOINT_URL` with the @expect message
+    `Need a otel tracing collector configured`; the raw value fed verbatim to
+    @tonic::transport::@Channel::from_shared then @connect().await; the exporter built by
+    @opentelemetry_otlp::@new_exporter().@tonic().@with_channel(channel), which bypasses all
+    SDK-side OTLP env auto-configuration; a trace config carrying exactly one resource
+    attribute, `service.name` = literal `restpath-controller`; batch export via
+    @install_batch on the Tokio runtime; and no batch, timeout, compression,
+    TLS or header customization anywhere.
+  Acknowledge the frozen build state of the feature-gated half: against the locked
+    opentelemetry `0.32.0` / opentelemetry-otlp `0.32.0`, code written to the removed
+    ≤0.27 API fails compilation with E0433 (`@opentelemetry::sdk` and
+    `@opentelemetry::runtime` absent) and E0425 (@opentelemetry_otlp::@new_pipeline and
+    @new_exporter gone);
+    the crate feature `telemetry = ["tonic", "opentelemetry-otlp"]` defaults off
+    (../Cargo.toml) and no Makefile, Dockerfile or CI job enables it, so every shipped
+    build contains only @get_trace_id, @env_filter, @install and the sync @init.
+  Record that @init is orphaned: no workspace call site exists — ./main.rs rebuilds a
+    near-copy inline (same @EnvFilter chain, but the default non-compact fmt layer, and it
+    @panic!s `failed to install the global tracing subscriber: {e}` where @install stays
+    silent), and its telemetry-cfg half references `telemetry::init_tracer()`, a
+    module-private @fn the separate bin crate could not reach even once the compile errors
+    above are fixed. @get_trace_id is the module's only live consumer: ./jukebox.rs
+    @reconcile and ./instance_common.rs @run_with_finalizer record the span field
+    `trace_id` and hand the id to the ./metrics.rs @count_and_measure helpers.
+  Keep the `#[cfg(test)] mod test` exactly one item: @get_trace_id_returns_valid_traces,
+    gated `#[cfg(feature = "telemetry")]`, a `#[tokio::test]`, marked
+    `#[ignore = "requires a trace exporter"]`, requiring a live collector and
+    `#[tracing::instrument(name = "test_span")]`, asserting @assert_ne! against
+    @TraceId::INVALID.
+
+Depends on:
+  @tracing `0.1` and @tracing_subscriber `0.3.23` — requested `0.3.22` with features
+    `json` + `env-filter` over default features in ../Cargo.toml, locked in /Cargo.lock;
+    supplies @EnvFilter, @Registry, the compact @fmt::layer, @set_global_default, and the
+    `RUST_LOG` / `NO_COLOR` reads of init.
+  @tracing_opentelemetry `0.33.0` — @layer for the subscriber stack and
+    @OpenTelemetrySpanExt in @get_trace_id's dead import.
+  @opentelemetry `0.32.0` (feature `trace`) and @opentelemetry_sdk `0.32.1` (`rt-tokio`) —
+    @TraceId crossing the feature boundary everywhere, and the tracer/@Resource/@KeyValue/
+    Tokio-runtime side the feature code targets with an API level 0.32 no longer offers.
+  `opentelemetry-otlp` `0.32.0` (feature `tokio`, optional) and @tonic `0.14.6` (optional) —
+    the exporter pipeline and gRPC channel of the `telemetry` feature only.
+  @std::env — `OPENTELEMETRY_ENDPOINT_URL` inside @init_tracer, `RUST_LOG` through
+    @EnvFilter and `NO_COLOR` through fmt-layer defaults.
+
+Exposes:
+  @get_trace_id — `#[must_use] pub const fn @get_trace_id() -> @opentelemetry::trace::@TraceId`,
+    compiled in every configuration; a stub that returns @TraceId::INVALID by construction
+    and reads no tracing state.
+  @init — `pub async fn @init()` under `#[cfg(feature = "telemetry")]` and `pub fn @init()`
+    under `#[cfg(not(feature = "telemetry"))]`, same name, one compiled per feature state:
+    the global subscriber installer, currently referenced by nothing in the workspace.
+  Those two names are the whole public surface — @init_tracer, @env_filter, @install and
+    the @test module are private and frozen through Must, Raises and Scenario only.
+
+Accepts:
+  No arguments whatsoever: @get_trace_id and both @init variants are nullary in every
+    configuration; @get_trace_id additionally has no preconditions — it logs correctly
+    installed or not, runtime present or not, feature on or off.
+  A process env as sole external input: `RUST_LOG` read at every @init call through
+    @env_filter, and `OPENTELEMETRY_ENDPOINT_URL` in telemetry builds; no config file, CRD
+    field, CLI flag or function parameter feeds this module.
+  @install accepts one collector of any `S: @tracing::Subscriber + Send + Sync + 'static`;
+    the async @init's implicit precondition is a live tokio runtime for the gRPC connect —
+    a lane that never compiles today.
+
+Returns:
+  @get_trace_id returns @TraceId::INVALID always; opentelemetry `0.32` renders @TraceId
+    through @Display/@Debug as exactly 32 zero-padded lowercase hex digits, so the stub
+    always yields `00000000000000000000000000000000` to span fields and metric labels.
+  Both @init variants return `()`; the installed subscriber and the resulting log stream
+    are the only observed outputs, and a repeat call changes and reports nothing.
+  @env_filter returns an @EnvFilter — `RUST_LOG`'s directives when unset-or-invalid as a
+    global level `info`, or a silent empty-directive filter when `RUST_LOG` is set to the
+    empty string; @install and @init_tracer's caller-visible contract is `()`/tracer.
+
+Raises:
+  No fallible API: nothing here returns a @Result or @Option; the compilable surface fails
+    invisibly — @install swallows the duplicate-subscriber error, @env_filter's chain
+    cannot fail, @get_trace_id cannot misbehave further.
+  Every @init_tracer failure is a panic: @expect on a missing or non-UTF-8
+    `OPENTELEMETRY_ENDPOINT_URL` with the fixed text
+    `Need a otel tracing collector configured`, and @unwrap of the @Err in each of the
+    @Channel::from_shared rejection, the failed gRPC @connect().await, and a failed
+    @install_batch — all frozen in code that today cannot build at all.
+  Those panic lanes sit behind `expect()`/`unwrap()` that the /operator crate-level
+    `deny(clippy::unwrap_used, clippy::expect_used)` (./lib.rs) forbids in product code and
+    carry no stable unique error id as the project error rule asks; only the never-built cfg
+    keeps the deny satisfied, and the first "raise" of the feature is the E0433/E0425
+    compile failure itself (see Must).
+
+Handles:
+  `RUST_LOG` unset, unparsable, or empty — respectively the `info` fallback, the `info`
+    fallback, and a silent filter with zero directives that drops every event.
+  A subscriber already installed — the second @install call is a silent no-op preserving
+    the incumbent, by design of @install's `let _ =`.
+  @TraceId::INVALID as the cross-module no-trace sentinel: ./metrics.rs @TraceLabel
+    @TryFrom refuses it, the `!= INVALID` guards of ./jukebox.rs and ./instance_common.rs
+    skip their valid-trace branch, and @get_trace_id's stub pins every call onto that
+    lane — the span field still records the all-zero id, twice, because the unconditional
+    record and the guard's record are the same call.
+  Feature-off builds (every repo build) — @init_tracer, the OTLP layer and the async @init
+    are cfg-ed out entirely, leaving console-only logging.
+
+Tasks:
+  [ ] Give this file its first runnable coverage: the single in-file test never builds
+      (feature-gated and `#[ignore]`), so all five Scenarios rest on reading; cover
+      @get_trace_id constancy, @env_filter over unset/valid/invalid/empty `RUST_LOG`, and
+      the silent second @install — the process-global subscriber limits test design.
+  [?] @get_trace_id is a hard-coded stub returning @TraceId::INVALID with two dead trait
+      imports, which keeps every consumer's trace-tagging branch permanently dead; the
+      doc comment shows the original lookup was intended. Decide later whether to restore
+      the real span-context fetch or delete the trace plumbing crate-wide.
+  [?] The whole `telemetry` feature is uncompilable against the locked 0.32 stack (removed
+      @new_pipeline/@new_exporter/@opentelemetry::sdk/@opentelemetry::runtime) and no
+      build config ever enables it. Decide later whether to port it to the 0.32 API or
+      remove the feature, the optional deps and the broken @main.rs half.
+  [?] @init is dead code and ./main.rs privately re-implements its clone with different
+      failure handling (@panic! vs silent drop) and a privacy-violating @init_tracer
+      reference. Decide later which file owns tracing bootstrap.
+  [?] Set-but-empty `RUST_LOG` silences the whole process (empty filter wins over the
+      `info` fallback); only reading the crate source proves it is crate behaviour, not a
+      local bug. Decide later whether empty input should fall through to `info` here.
+  [?] The OTLP resource name is the unrelated literal `restpath-controller`, not `operator`
+      or `vynil`, so any future traces land under a foreign service. Decide later.
+  [?] Once rebuilt, @init_tracer would take `OPENTELEMETRY_ENDPOINT_URL` verbatim through
+      @with_channel — bypassing OTLP env auto-configuration — with no scheme, TLS or
+      exporter-timeout expectations asserted anywhere. Decide the endpoint contract then.
+  [?] The ignored test asserts @get_trace_id `@assert_ne!` @TraceId::INVALID, so it cannot
+      pass against the stub even with a live collector; it freezes the intended behaviour
+      while the code freezes the opposite. Resolve together with the stub decision.
+
+Done when:
+  Every Scenario has a green mapped test or a decided `[?]` Task, the fate of the
+    `telemetry` feature is recorded as a decision, and `cargo test -p operator`,
+    `cargo clippy --all-targets -- -D warnings`, `cargo +nightly fmt --check` and
+    `specdd lint` are green.
+
+Scenario: Log level defaults to info without RUST_LOG
+  Given `RUST_LOG` unset
+  When @init installs the subscriber in a feature-off build
+  Then @env_filter yields the literal `info` global level, so events at info and above
+    reach the compact fmt layer on stdout while debug and trace are dropped
+  No mapped test exists.
+
+Scenario: Bad RUST_LOG falls back, empty RUST_LOG silences
+  Given `RUST_LOG` set to an unparseable directive string, and separately set to the empty
+    string
+  When @init runs in each case
+  Then the invalid value fails @try_from_default_env and the fallback filter is the global
+    level `info`
+  But the empty value parses successfully into a filter with no directives, which enables
+    no event at all — the `info` fallback does not fire and the process logs nothing
+  No mapped test exists.
+
+Scenario: get_trace_id never yields a trace
+  Given any feature state, subscriber installed or not
+  When @get_trace_id runs from ./jukebox.rs @reconcile or ./instance_common.rs
+    @run_with_finalizer
+  Then the returned id is always @TraceId::INVALID, recorded as
+    `00000000000000000000000000000000` on the `trace_id` span field
+  And every consumer stays on its no-trace branch: the invalid guard skips and @TraceLabel
+    refuses, so metrics carry no trace label
+  Maps to test @get_trace_id_returns_valid_traces — `#[ignore]`d, feature-gated, never
+    built today, and its assertion contradicts this stub by design.
+
+Scenario: Second subscriber install is a silent no-op
+  Given a global subscriber already installed by an earlier @init, @install or any other
+    @set_global_default call
+  When a later @init installs its fresh registry
+  Then the @SetGlobalDefaultError is discarded, the incumbent subscriber keeps receiving
+    every event, and neither a log line nor a panic ever surfaces
+  No mapped test exists.
+
+Scenario: Telemetry build dies on a missing OTLP endpoint
+  Given a `telemetry`-feature build — today uncompilable; the lane is frozen from source
+    per Must
+  When @init_tracer runs with `OPENTELEMETRY_ENDPOINT_URL` unset
+  Then the process panics on the @expect text `Need a otel tracing collector configured`
+    before creating any channel or installing any subscriber
+  No mapped test exists.
+
+Example:
+  compact stdout line shape: `2026-09-14T08:15:30.123456Z  INFO controller::manager: … {fields}`
+    — coloured level and target while `NO_COLOR` is unset or empty
+  stub trace id as any consumer sees it: `00000000000000000000000000000000`

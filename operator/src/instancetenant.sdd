@@ -1,0 +1,299 @@
+Spec: InstanceTenant
+
+Purpose:
+  Be the @TenantInstance implementation of the shared reconcile engine: fix the tenant kind's
+    identity literals (`tenant`, its finalizer, the Tenant package type), forward the
+    macro-attached accessors and status setters to the CR model, run the tenant-side requirement
+    evaluator @VynilPackageRequirement::check_tenant, override the engine's init-version pair
+    (the tenant has the `InitFrom` stage), fill the one recommendation lane no sibling uses —
+    filtering @VynilPackageRecommandation::TenantService entries against @TenantInstance::get_tenant_services_names
+    — feed the two tenant metric slots, delegate @Reconciler to @do_reconcile/@do_cleanup, and
+    own the controller entry pair @reconcile/@error_policy that ./manager.rs wires on the
+    @TenantInstance watch, including this kind's consumption of the 30-second
+    @Error::CleanupInProgress transient lane and the 5-minute counted-failure lane.
+
+References:
+  ./instance_common.sdd — @InstanceKind engine whose implementation this is: every method here
+    is bound by that contract (supertraits, the seventeen required methods, the two defaults this
+    kind overrides, the discard-the-returned-@Self setter lanes, the verbatim
+    @InstanceKind::check_requirements action pass-through, engine-owned stages and durations);
+    @RecoContext, @run_with_finalizer, @do_reconcile, @do_cleanup and
+    @build_base_recommendations all run from there.
+  ./lib.sdd — @Reconciler implemented here per its Must; crate-root re-exported
+    @TenantInstance, @Error and @Result are the names this file imports through @crate.
+  ./manager.sdd — @Context (its @metrics field is the only @Context member read here) and the
+    @Controller::@run wiring that pairs this file's @instancetenant::@reconcile with
+    @instancetenant::@error_policy on an @any_semantic cluster-wide watch; the @TenantInstance
+    CRD probe is @Manager::new's second.
+  ./metrics.sdd — @Metrics::tenant_instance, the @count_and_measure runs increment with the five
+    @LabelInstance labels, @reconcile_failure's single six-label increment and the
+    @ReconcileMeasurerInstance; that spec confirms the tenant lane is live from this file's
+    call sites.
+  /common/src/instancetenant.sdd — the @TenantInstance CRD model this file attaches to (that
+    spec sits in the common crate under the same basename as this spec: it owns the type, the
+    @TenantInstance::have_child probe, @TenantInstance::get_tenant_services_names and the
+    macro-attached method set; this spec owns only the operator-side @crate impls and entry fns
+    co-named in ./instancetenant.rs).
+  /common/src/instance_macros.sdd — the mutator contract the forwarding methods pass through
+    unchanged (@TenantInstance::get_options_digest, @TenantInstance::set_missing_box,
+    @TenantInstance::set_missing_package, @TenantInstance::set_missing_requirement,
+    @TenantInstance::set_missing_init_version and the server-side patch/condition semantics
+    behind them).
+  /common/src/vynilpackage.sdd — @VynilPackageType::Tenant,
+    @VynilPackageRecommandation::TenantService and the @VynilPackageRequirement::check_tenant
+    evaluator, including its tenant-specific arms (`TenantPackage`, `TenantService`), its
+    per-arm ttl seconds and the always-satisfied catch-all arm.
+  /common/src/rhaihandler.sdd — @Script whose @ctx receives the instance binding.
+
+Must:
+  Implement @InstanceKind for @TenantInstance under @async_trait, overriding both engine
+    defaults: @InstanceKind::init_from_version and @InstanceKind::set_missing_init_version are
+    real tenant-lane methods, not the @None/@Ok(self) defaults (the service kind overrides the
+    same pair; @SystemInstance has no `initFrom` and keeps the defaults).
+  Fix the three identity literals: @InstanceKind::type_name answers exactly `tenant` (pinning,
+    through the engine, the `tenant--<namespace>--<name>` Job name and the `package_type` render
+    key), @InstanceKind::finalizer_name answers exactly `tenantinstances.vynil.solidite.fr` (the
+    string kube adds on apply and removes after a @Ok cleanup), and @InstanceKind::package_type
+    answers @VynilPackageType::Tenant (the cache-lookup type clause).
+  Borrow @TenantInstanceSpec::jukebox, @TenantInstanceSpec::category and
+    @TenantInstanceSpec::package verbatim from @InstanceKind::spec_jukebox,
+    @InstanceKind::spec_category and @InstanceKind::spec_package.
+  Gate install state in @InstanceKind::current_tag: `status.tag` clone when both the status and
+    the tag are present, the empty @String through @unwrap_or_default otherwise;
+    @InstanceKind::init_from_version answers the @Option<@InitFrom>::version borrow — @None when
+    `initFrom` is absent or its `version` is @None.
+  Forward, unmodified, the model-owned methods: @InstanceKind::have_child calls the inherent
+    @TenantInstance::have_child — Rust resolves the same-name call to the inherent probe, not
+    recursively to the trait method; @InstanceKind::get_options_digest passes the `&mut self`
+    receiver to the macro digest; the four setters @InstanceKind::set_missing_box,
+    @InstanceKind::set_missing_package, @InstanceKind::set_missing_requirement and
+    @InstanceKind::set_missing_init_version call their macro counterparts on the moved copy's
+    @&mut self and hand back the macro's @Result<Self> unchanged (the tenant setter writes the
+    `InitFrom` stage condition owned by /common/src/instancetenant.sdd).
+  Run @InstanceKind::check_requirements as an in-order scan over the requirement list with the
+    moved @Client cloned per call: on the first @VynilPackageRequirement::check_tenant verdict
+    with a false outcome, record the message via @InstanceKind::set_missing_requirement on a
+    clone of self (its returned @Self discarded) and return @Some(@Action::requeue(
+    @tokio::time::@Duration::from_secs(ttl))) carrying that arm's ttl literal; evaluation @Err
+    propagates through `?` with no condition recorded; an all-true list answers @None.
+  Build @InstanceKind::build_recommendations as the tenant-only lane (the service and system
+    kinds purely delegate and leave @RecoContext::tenant_services empty): first await
+    @TenantInstance::get_tenant_services_names on self — an unconditional tenant-namespace
+    cluster read that runs before the recommendation list is inspected, whose @Err aborts the
+    whole reco stage — even when `recos` is @None or empty.
+  Partition the recos (@None taken as the empty list) on the
+    @VynilPackageRecommandation::TenantService variant via @matches!: keep one
+    @RecoContext::tenant_services entry per matching reco occurrence whose name the fetched list
+    contains (repeated recos repeat the entry; no dedup of the kept names), silently drop
+    tenant-service recos the tenant does not currently publish, then sort the kept list.
+  Always call @build_base_recommendations with @Some of the non-tenant residue — even when the
+    incoming `recos` was @None, which reaches the base lane as @Some of an empty list and still
+    pays its full service-index fetch — and return @RecoContext carrying the base pair plus the
+    sorted tenant list; the crds/system-services filtering and sorting stay engine-owned.
+  Bind, in @InstanceKind::set_rhai_instance, the cloned @TenantInstance onto @Script::ctx under
+    the key `instance`, so value scripts see the type registered by @tenant_rhai_register of
+    /common/src/instancetenant.sdd.
+  Wire both metric slots to @Metrics::tenant_instance: @InstanceKind::count_and_measure_metrics
+    forwards to its @count_and_measure, @InstanceKind::record_reconcile_failure to its
+    @reconcile_failure; this file adds no label of its own, and no other tenant metric call site
+    exists in it — the exemplar lane and the transient-lane failure skip come from ./metrics.sdd
+    and @error_policy below.
+  Delegate @Reconciler wholly to the engine — @Reconciler::reconcile @Box::pins @do_reconcile
+    and @Reconciler::cleanup @Box::pins @do_cleanup on `&self` with the @Arc<@Context> moved in,
+    no tenant-specific step between; the `# Errors` doc on each names the engine as the error
+    source.
+  Instrument @reconcile `#[instrument(skip(ctx, inst), fields(trace_id))]` — the attribute sits
+    above the fn's doc comment — the span carrying a declared-empty `trace_id` field (the engine
+    of ./instance_common.sdd records the same name on the current @Span), hiding both arguments;
+    its body is exactly @Box::pin(@run_with_finalizer(inst, ctx)).await with @Ok/@Err passed
+    through.
+  Split failure handling in @error_policy on @Error::CleanupInProgress as the first test: that
+    arm discards its @Job payload and answers @Action::requeue(@Duration::from_secs(30)) with no
+    log line, no metric and no @tracing::@warn!; every other @Error answers
+    @Action::requeue(@Duration::from_mins(5)) after the @tracing::@warn! line and exactly one
+    @InstanceKind::record_reconcile_failure increment, and is matched by nothing else.
+
+Must not:
+  Drive agent-side stage flow: no call here touches the tenant `ScheduleBackup`/backup or
+    children-stage setters — the only condition this file can write is the missing-requirement
+    or missing-box/package one the engine or @check_tenant asks the forwarded setters to record;
+    backup and schedule stages belong to scripts on /common/src/instancetenant.sdd.
+
+Exposes:
+  @reconcile — `#[instrument] pub async fn @reconcile(inst: @Arc<@TenantInstance>, ctx:
+    @Arc<@Context>) -> @Result<@Action>`; the controller entry for the @TenantInstance watch.
+  @error_policy — `#[must_use] pub fn @error_policy(inst: @Arc<@TenantInstance>, error:
+    &@Error, ctx: @Arc<@Context>) -> @Action`; consumes both @Arcs by value, borrows the error.
+  @InstanceKind for @TenantInstance — `#[async_trait]` impl, surface and literals per Must.
+  @Reconciler for @TenantInstance — `#[async_trait]` impl delegating to @do_reconcile and
+    @do_cleanup.
+
+Accepts:
+  A watch-event-carried @TenantInstance of any shape: `spec` strings unvalidated, `status`
+    @Option read opportunistically (@current_tag and @init_from_version never fail on absence),
+    a requirement list of any length or emptiness (empty answers @None without a single call),
+    and recos whose @None arm still costs this kind two cluster reads (see Must).
+  @error_policy accepts the @Arcs moved — nothing reads them after the metric call (the trailing
+    @drop calls are explicit no-ops on already-unused owners) — and any @Error variant, the
+    @Error::CleanupInProgress arm discriminating on the variant only, payload ignored.
+
+Returns:
+  @reconcile returns the @Action the engine pipeline produced for the tenant kind (15-minute
+    requeues, ttl requeues via the pass-through, @Action::await_change() releases) and @Err the
+    engine's errors — nothing here maps an @Err into an @Action.
+  @error_policy returns exactly one of two requeues: @Duration::from_secs(30) on the transient
+    cleanup arm, @Duration::from_mins(5) on everything else.
+  @InstanceKind::check_requirements returns @None or the single short-circuit @Some requeue;
+    @InstanceKind::build_recommendations a @RecoContext whose @RecoContext::tenant_services is
+    sorted and may be non-empty; @InstanceKind::count_and_measure_metrics the started
+    @ReconcileMeasurerInstance.
+
+Raises:
+  None of its own: every fallible body forwards. @InstanceKind::set_missing_box,
+    @InstanceKind::set_missing_package, @InstanceKind::set_missing_requirement,
+    @InstanceKind::set_missing_init_version, @InstanceKind::check_requirements (through
+    @VynilPackageRequirement::check_tenant and the condition write),
+    @InstanceKind::build_recommendations (through @TenantInstance::get_tenant_services_names —
+    @Error::KubeError or the no-namespace @Error::Other of /common/src/instancetenant.sdd — and
+    the base lane) and both @Reconciler methods propagate model, requirement or engine @Error
+    variants — the engine variant set belongs to ./instance_common.sdd.
+  @reconcile surfaces the same engine @Err, dominated by @Error::FinalizerError on wrapper
+    failures; @error_policy is total and @Action-valued, and raises nothing in either arm.
+
+Handles:
+  A delete Job still running (@Error::CleanupInProgress) — the expected-transient 30-second
+    lane: fast requeue, finalizer retained by the wrapper, runs already counted but no failure
+    increment; this file is one of three consumers of that engine variant.
+  Every other reconcile failure — one @tracing::@warn! naming kind, namespace and name, one
+    failures-series increment on `tenant_instance_reconcile_failures_total`, then the 5-minute
+    backoff; the warn @Debug-formats the @Option metadata, so absent-vs-present namespace reads
+    `Some("apps")` vs @None inside the message (Tasks `[?]`).
+  An unmet requirement — condition recorded on a discarded clone, only its ttl drives the
+    requeue, later requirements unevaluated; a requirement variant the tenant lane's catch-all
+    arm pronounces satisfied never reaches the condition write.
+  A `status`-less tenant during selection gates — empty tag and @None init version are plain
+    answers, not errors.
+  A TenantService reco naming a service the tenant does not currently publish — silently dropped
+    from @RecoContext::tenant_services, no condition, no error, the pass continues.
+  A failing @TenantInstance::get_tenant_services_names read — aborts @do_reconcile at the reco
+    stage as @Err even when no TenantService reco exists.
+
+Depends on:
+  ./instance_common.rs — @InstanceKind, @RecoContext, @build_base_recommendations,
+    @run_with_finalizer, @do_reconcile, @do_cleanup.
+  ./manager.rs — @Context; read through the trait signatures, only @Context::metrics touched.
+  ./metrics.rs paths — @ReconcileMeasurerInstance named in the trait surface; the
+    @ReconcileMetricsTenantInstance methods run there.
+  @common — @rhaihandler::@Script, @vynilpackage::@VynilPackageRecommandation,
+    @VynilPackageRequirement and @VynilPackageType via the crate-root @TenantInstance re-export;
+    @TenantInstance::get_tenant_services_names reaches the cluster on its own common-lane client.
+  @kube — @Client (cloned per requirement check), @kube::runtime::controller::@Action.
+  @tokio::time::@Duration, @opentelemetry::trace::@TraceId, @tracing (@instrument, @warn),
+    @async_trait, @std::sync::@Arc.
+
+Tasks:
+  [ ] No test covers this file directly: no in-file @cfg(test) module exists. Only the
+      ./instance_common.rs tests touch its lanes indirectly —
+      @test_init_from_version_tenant_with_version and @test_init_from_version_tenant_no_init_from
+      call @InstanceKind::init_from_version on a built @TenantInstance, and
+      @test_resolve_init_version_no_version / @test_resolve_init_version_already_installed /
+      @test_resolve_init_version_found_in_cache plus the @test_do_reconcile_tag_* documentation
+      tests drive the tenant selectors through @resolve_init_version, never @do_reconcile.
+      Cover the rest from the Scenarios — kind literals, forwarding, requirement-scan short
+      circuit, reco partition/filter/sort and its reads, both @error_policy lanes, entry
+      delegation — per TTD, reusing the ./instance_common.rs @make_tenant style.
+  [x] ./metrics.sdd contradicted this file: its Must claimed "no call site invokes the tenant
+      @reconcile_failure or @count_and_measure" and its Scenario froze the tenant registry at
+      zero, yet this impl wires both slots to @Metrics::tenant_instance (./instancetenant.rs
+      @reconcile and @error_policy sites) and the engine binds
+      @InstanceKind::count_and_measure_metrics for every kind's reconcile
+      (./instance_common.sdd). Resolved: ./metrics.sdd corrected — its Must now states all four
+      kind registries serve live call sites, the zero-scenario replaced by an all-kinds-children
+      scenario, and the `[?]` half-wired entry deleted.
+  [?] @InstanceKind::build_recommendations fetches @TenantInstance::get_tenant_services_names
+      unconditionally and hands @build_base_recommendations a forced @Some, so a tenant whose
+      package declares no recommendations at all still pays two cluster reads per pass (the
+      tenant-namespace service scan plus the base lane's service index) where service and system
+      pay none on @None. Decide whether the tenant lane gates on @Some (and forwards the original
+      @Option) instead.
+  [?] @error_policy warn reads `reconcile failed for TenantInstance '{:?}.{:?}': {:?}` with
+      namespace before name and @Debug on both @Option metadata fields, so shipped lines render
+      `Some("apps").Some("frontend")`; the trailing @drop(inst)/@drop(ctx) are no-ops that only
+      appease move analysis; @reconcile's `#[instrument]` sits above its doc comment; and
+      @error_policy takes @Arcs by value though only borrows are used — cosmetic-only drift, the
+      same findings filed `[?]` in ./instanceservice.sdd. Decide entry-fn style once for all
+      three kinds.
+
+Done when:
+  Every Scenario has a green mapped test or a decided `[?]` Task, the ./metrics.sdd idle-lane
+    contradiction is resolved in that spec, and `cargo test -p operator`,
+    `cargo clippy --all-targets -- -D warnings`, `cargo +nightly fmt --check` and
+    `specdd lint` are green.
+
+Scenario: Kind literals pin the tenant identity
+  Given any @TenantInstance
+  When @InstanceKind::type_name, @InstanceKind::finalizer_name and @InstanceKind::package_type
+    answer
+  Then they are exactly `tenant`, `tenantinstances.vynil.solidite.fr` and
+    @VynilPackageType::Tenant — so the engine names the agent Job `tenant--<ns>--<name>` and the
+    cache lookup matches only Tenant-type packages
+  No mapped test exists.
+
+Scenario: Tag and initFrom read the status gates
+  Given four tenants — no status, status without `tag`, installed `tag` `1.2.3`, and a fresh one
+    whose `spec.initFrom.version` is `0.9.0`
+  When @InstanceKind::current_tag and @InstanceKind::init_from_version run
+  Then the first two answer the empty @String, the third answers `1.2.3` regardless of initFrom
+    (the engine ignores the pin once installed), and @InstanceKind::init_from_version answers
+    @Some(`0.9.0`) only for the fourth, @None whenever `initFrom` is absent or its `version` is
+    @None — the tenant override, not the engine default
+  Maps to tests @test_init_from_version_tenant_with_version and
+    @test_init_from_version_tenant_no_init_from; the installed-tag arm is driven indirectly by
+    @test_resolve_init_version_already_installed
+
+Scenario: First unmet tenant requirement short-circuits on its own ttl
+  Given a requirement list whose second @VynilPackageRequirement fails @check_tenant with the
+    ttl of its arm
+  When @InstanceKind::check_requirements scans with a @Client
+  Then the evaluator's message is stored via @InstanceKind::set_missing_requirement and the
+    answer is @Some(@Action::requeue(ttl)) — the third requirement is never evaluated
+  But an all-satisfied list answers @None with zero condition writes, and an evaluator @Err
+    propagates with no condition written
+  No mapped test exists.
+
+Scenario: Recommendations keep only the tenant's live services
+  Given recos naming one installed CRD and TenantService entries `web` (published by the tenant
+    per @TenantInstance::get_tenant_services_names) and `gone` (not published)
+  When @InstanceKind::build_recommendations runs with @Some recos
+  Then @RecoContext carries the base-filtered sorted `crds` (plus `system_services`), and
+    @tenant_services is exactly the kept `web` — repeats when the reco list repeats a live name —
+    `gone` silently dropped
+  But with @None recos the tenant service scan and the base service-index fetch still happen,
+    both lists answer empty (Tasks `[?]`)
+  No mapped test exists.
+
+Scenario: CleanupInProgress requeues fast and uncounted
+  Given @error_policy met with @Error::CleanupInProgress carrying a @Job
+  When it runs
+  Then the answer is @Action::requeue(@tokio::time::@Duration::from_secs(30)), no
+    @tracing::@warn! line is written and the failures counter does not move
+  But met with any other @Error it warns once, increments
+    `tenant_instance_reconcile_failures_total` under the six labels of ./metrics.sdd exactly
+    once, and answers @Action::requeue(@tokio::time::@Duration::from_mins(5))
+  No mapped test exists.
+
+Scenario: Entry pair delegates with no local decision
+  Given a @TenantInstance handed to @reconcile
+  When the call resolves
+  Then exactly @run_with_finalizer ran — dispatching @Reconciler::reconcile, which runs
+    @do_reconcile, and @Reconciler::cleanup, which runs @do_cleanup — the whole pipeline body
+    belonging to ./instance_common.sdd, this file contributing only literals, the reco tenant
+    lane, metric forwards and forwards
+  No mapped test exists.
+
+Example:
+  error_policy input/output pairs: @Error::CleanupInProgress(@Job) → requeue `30` s silent;
+    @Error::Other("E_X") → warn + one failure inc + requeue `5` min.
+  check_requirements on [ok, fail(ttl 900)] @Ok answer: @Some(requeue `900` s) — ttl values
+    belong to /common/src/vynilpackage.sdd.
+  rec_tenant_services for recos [`web`, `web`, `gone`] with `web` live: @Vec [`web`, `web`].

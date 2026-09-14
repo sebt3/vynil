@@ -1,0 +1,420 @@
+Spec: JukeBoxReconcile
+
+Purpose:
+  Own the `operator` @Reconciler lane of the @JukeBox kind: the @reconcile entry with its own
+    finalizer transaction, the apply pipeline (cache upsert from `status` → running-/deleting-@Job
+    guard → render-context assembly → permanent `scan.yaml`/`cronscan.yaml` Job+CronJob maintenance
+    → `vynil.solidite.fr/force-scan` consumption with filter injection, Job recreation and
+    post-success annotation removal), the cleanup lane (cache eviction plus warn-only CronJob/Job
+    purge), and @error_policy — freezing every scan @Job/@CronJob template field contract the
+    parent specs deferred here, every @Action duration of the lane, and its @Error mapping. The
+    controller never
+    scans and never writes `status`: scanned data reaches the cache one-way from what the spawned
+    scan Jobs (agent) wrote through /common/src/jukebox.sdd.
+
+Owns:
+  ./jukebox.rs
+
+References:
+  ./lib.sdd — @Reconciler this file implements for @JukeBox, the crate-root @Error/@Result, the
+    @get_client_name SSA field manager both Job patches force, and the finalizer-dispatch contract
+    (this kind uses its own finalizer wrapper, not @run_with_finalizer).
+  ./manager.sdd — @Context (all six fields), the @Context::cache_needs_update,
+    @Context::upsert_jukebox_cache and @Context::remove_jukebox_cache call sites resolved here,
+    @cache_entry_differs/@upsert_cache_entry semantics, the @Diagnostics::last_event writes, and
+    the `base_context` env bake — keys `agent_image`, `log_level`, `service_account` are consumed
+    by this file's templates but owned there; the scan-job rules that spec deferred land in Must.
+  ./metrics.sdd — @Metrics::jukebox @count_and_measure (the @reconcile RAII measurer) and
+    @reconcile_failure (the @error_policy increment).
+  ./telemetry.sdd — @telemetry::get_trace_id and the @TraceId::INVALID sentinel this file guards.
+  ./instance_common.sdd — @is_job_terminal, exported to this file for the scan-job guard (the one
+    JukeBox tie into the instance engine); its cleanup/@upsert_job lanes are the documented
+    contrast for this file's opposite error polarities.
+  /common/src/jukebox.sdd — @JukeBox, @JukeBoxSpec::schedule, @JukeBoxStatus; a same-basename
+    collision to flag: /common/src/jukebox.sdd and this jukebox.sdd share the basename across
+    directories — that spec owns the CRD model and status mutators (`Spec: JukeBox`), this one the
+    operator reconcile engine; SCAN_PACKAGE filter values follow that spec's
+    @JukeBox::set_status_packages_merge `<category>`/`<category>/<name>` grammar.
+  /common/src/jukebox_file.sdd — not used on this path: the file-scan variant never reaches the
+    cluster; named only to exclude the engine context.
+  /common/src/context.sdd — @common::context::get_client_name; this file writes SSA under the crate
+    root @get_client_name of ./lib.sdd only (lib.sdd freezes the split).
+  /common/src/handlebarshandler.sdd — @HandleBars `Clone` + @Deref render lane and the core partial
+    registration that registers `../templates/*.hbs` minus the `.hbs` suffix, making
+    `scan.yaml`/`cronscan.yaml` renderable names.
+  /common/src/vynilpackage.sdd — @VynilPackage, opaque payload of the cache mirror and of tests'
+    @make_pkg.
+
+Must:
+  Freeze @JUKEBOX_FINALIZER as the private `static` `&str` `jukeboxes.vynil.solidite.fr` — the
+    finalizer @kube adds on the apply path and removes only after cleanup answers @Ok.
+  Run the entry @reconcile in exactly this order: `#[instrument(skip(ctx, dist), fields(trace_id))]`
+    span open → @telemetry::get_trace_id captured → @Span record of `trace_id` via @field::display,
+    then the same record repeated under `if trace_id != @TraceId::INVALID` — a dead duplicate while
+    ./telemetry.sdd stubs the getter — → @ctx.metrics.jukebox.@count_and_measure bound as `let _mes`
+    so the observation covers the whole finalizer transaction → @Diagnostics::last_event :=
+    @Utc::now → cluster-scope @Api::@all(@JukeBox) over @Context::client → @kube @finalizer with
+    @JUKEBOX_FINALIZER dispatching @Finalizer::Apply to @Reconciler::reconcile and
+    @Finalizer::Cleanup to @Reconciler::cleanup → @Err mapped to @Error::FinalizerError by boxing.
+  Stamp @Diagnostics::last_event again as the first action of both @Reconciler::reconcile and
+    @Reconciler::cleanup — every event therefore writes the stamp twice (entry plus body), like the
+    ./instance_common.sdd wrapper lane.
+  Run @Reconciler::reconcile stages in exactly this order: @tracing::debug! `Reconcilling JukeBox
+    {name}` (misspelling kept) → stamp → @Context::renderer clone, @Context::client, controller ns
+    from @Client::@default_namespace, @Job/@CronJob names, force-scan annotation read → gated cache
+    upsert → running/deleting @Job guard → render context → permanent CronJob @Patch::Apply →
+    conditional scan-@Job upsert → success debug `Reconcilling JukeBox {} Done` →
+    @Action::requeue(@tokio::time::Duration::from_mins(15)).
+  Compute the two workload names identically: @job_name is `scan-{@name_any}` for both the @Job
+    and the @CronJob (same text, different kinds), patched through namespace-scoped @Api::@namespaced
+    on @Client::@default_namespace — never the box namespace (@JukeBox is cluster-scoped), never the
+    `vynil_namespace` env bake, which this file never reads.
+  Read the single control annotation `vynil.solidite.fr/force-scan` as `.get(...).cloned()`, key
+    presence plus value mattering per Must below; every other annotation is inert — the instance
+    `suspend` annotation does not exist on this lane.
+  Upsert the package cache before any guard: @ctx.cache_needs_update(@self) answered @true →
+    @ctx.upsert_jukebox_cache(@self), so a `status` written by a scan Job enters the cache even when
+    the guard requeues or an annotation aborts the pass; the ./manager.sdd diff/upsert rules run here
+    unchanged and an unchanged status pays no write lock.
+  Guard on the @Job after the cache step via @Api::@get_opt(@job_name): @Ok(Some) with
+    `metadata.deletion_timestamp` set → @Action::requeue(@tokio::time::Duration::from_mins(1)) with
+    no log line and no CronJob maintenance; @Ok(Some) whose @is_job_terminal answers @false →
+    @tracing::info! `JukeBox {} scan job is still running, requeuing in 1 minute` and the same
+    1-minute requeue; @Ok(Some) terminal → remember @job_is_terminal(`true`) and continue;
+    @Ok(None) or any @Err (including a non-`NotFound` failure, indistinguishable here) →
+    @job_is_terminal(`false`) and continue as if absent.
+  Assemble the render context as @Context::base_context clone plus three insertions under an
+    `as_object_mut` guard that silently skips all of them on a non-object @Value: `name`
+    (@name_any), `job_name`, `schedule` (@JukeBoxSpec::schedule verbatim — this file never parses
+    or validates the cron text; server-side CronJob acceptance is the only check).
+  Maintain the CronJob on every pass that reaches it: render `{{> cronscan.yaml }}` against the
+    context (@Err aborts), convert with @common::yamlhandler::@yaml_str_to_json (@Err aborts),
+    @Api::@patch(@Patch::@Apply, @PatchParams::@apply(&@get_client_name()).@force()) under
+    @job_name; @Err maps @Error::KubeError and aborts the pass, so an invalid schedule retries
+    through @error_policy. CronJob maintenance is skipped entirely by any guard requeue, so a long
+    or stuck scan delays edits to `schedule` until the job turns terminal.
+  Create or recreate the scan @Job exactly when private @should_create_scan_job answers — the `const fn`
+    rule `! @job_is_terminal || @force_scan.is_some()`: absent terminal @Job creates once, a present
+    terminal @Job without force is never re-created (periodic rescans are the CronJob's exclusive
+    duty), force-scan re-creates regardless.
+  Run the force branch in this order when the annotation value is present: if the terminal @Job
+    exists, foreground @Api::@delete and — only on the @either::Left echo —
+    @wait_job_deleted (@Err propagates; @Err or the @either::Right confirmations skip the purge
+    quietly); then @inject_package_filter; then @upsert_scan_job; then and only after success
+    @remove_force_scan_annotation — the annotation stays on any earlier failure so the next pass
+    retries the whole intent.
+  Consume the annotation value exactly: @inject_package_filter inserts `package_filter` only when
+    the value is neither `true` nor the empty string — `true`/`""` mean a full rescan Job with no
+    `SCAN_PACKAGE`; any other text (free-form, typically `<category>` or `<category>/<name>` per
+    /common/src/jukebox.sdd's filter grammar) is inserted verbatim and the render context injection
+    affects only the direct @Job, never the CronJob template, so periodic cron scans always scan
+    complete boxes.
+  Run @upsert_scan_job as the @Job lane: render `{{> scan.yaml }}`, @yaml_str_to_json, forced SSA
+    @Patch::@Apply under @get_client_name; a rejected patch is kept un-inspected and
+    unlogged (transient or immutable-field alike) and rebuilds only when the same-call foreground
+    @Api::@delete answers @either::Left — @wait_job_deleted, then @Api::@create
+    (@PostParams::@default, @serde_json decode @Err → @Error::SerializationError, @Err →
+    @Error::KubeError); @Err from the patch plus @Err or @either::Right from the delete silently
+    returns @Ok — the pass reports success although the @Job was never updated (Tasks `[?]`,
+    contrast @upsert_job in ./instance_common.sdd which maps the delete @Err to @Error::KubeError).
+  Bound both waits of @wait_job_deleted at @std::time::Duration::from_secs(20) around
+    @await_condition with @conditions::@is_deleted over `metadata.uid` (@unwrap_or_default on an
+    absent uid), expiry → @Error::Elapsed, watch @Err → @Error::KubeWaitError; the resolved
+    confirmation value is discarded.
+  Remove the annotation in @remove_force_scan_annotation through cluster-scope @Api::@all(@JukeBox)
+    with one @Patch::@Json document — a single `op` `remove` entry at
+    `/metadata/annotations/vynil.solidite.fr~1force-scan` under @PatchParams::@default — decode
+    @Err → @Error::SerializationError, @Err → @Error::KubeError.
+  Run @Reconciler::cleanup in exactly this order: stamp @last_event → @ctx.remove_jukebox_cache on
+    @name_any unconditionally (absent key is a silent success, ./manager.sdd) → CronJob
+    @get_metadata_opt: only @Ok(Some) triggers a foreground @Api::@delete whose @Err is warned away
+    as `Deleting CronJob {} failed with: {e}` and whose get @Err counts as absent → the same
+    pattern for the scan @Job warning `Deleting Job {} failed with: {e}` →
+    @Ok(@Action::await_change()). Cleanup never waits for any deletion to land (unlike the instance
+    delete-job engine) and never removes the annotation; the finalizer releases whatever purge
+    outcome happened — see Tasks `[?]` on orphans.
+  Use the scan Job template (partial `scan.yaml`) verbatim as the @Job contract: @metadata.name
+    `{{job_name}}`; labels exactly `app.kubernetes.io/instance` → `{{name}}`,
+    `app.kubernetes.io/managed-by` → `vynil`, `vynil.solidite.fr/owner-type` → `jukebox`; no
+    annotations, no ownerReferences — the @Job outlives the reconcile purely by these lanes plus
+    its TTL. @spec.ttlSecondsAfterFinished `432000` and @spec.backoffLimit `3`; pod
+    `restartPolicy: OnFailure`; no volumes or mounts of any kind. The single container `scan` has
+    no `command` — @args exactly `box` then `scan` — @image `{{agent_image}}`, @imagePullPolicy
+    `IfNotPresent`, and no `imagePullSecrets`. Env exactly: `JUKEBOX` → `{{name}}`;
+    `VYNIL_NAMESPACE` via @fieldRef `metadata.namespace` (the Job's own namespace, not the
+    controller env bake); `POD_NAME` via @fieldRef `metadata.name`; `RUST_BACKTRACE` → `1`;
+    `LOG_LEVEL` → `{{log_level}}`; `RUST_LOG` → `info,controller=info,agent=info`; and — only when
+    `package_filter` is set — `SCAN_PACKAGE` → `{{package_filter}}`. Resources: limits cpu `1000m`
+    memory `1Gi`, requests cpu `50m` memory `64Mi`. Pod @securityContext
+    `fsGroup`/`runAsGroup`/`runAsUser` all `65534`; @serviceAccount and @serviceAccountName both
+    render `{{service_account}}`.
+  Use the cronscan template (partial `cronscan.yaml`) verbatim as the @CronJob contract: @metadata
+    same name and same three labels; @spec.concurrencyPolicy `Forbid`;
+    @spec.successfulJobsHistoryLimit `3` and no failed-history setting (cluster default applies);
+    @spec.schedule `{{schedule}}` injected as a raw unquoted YAML scalar; @spec.jobTemplate carries
+    the identical container `scan` (@image `{{agent_image}}`, same @args `box scan`, same six env
+    entries, same limits/requests and `65534` security context, same `{{service_account}}` pair,
+    `restartPolicy: OnFailure`) with no `SCAN_PACKAGE` conditional, no `ttlSecondsAfterFinished`
+    and no `backoffLimit` — cron-spawned child Jobs are named and GC'd by Kubernetes, never by
+    this file, and a `SCAN_PACKAGE`-carrying force @Job never shares a name with them.
+  Mirror @JukeBox `status` into the package cache one-way — the status mutators
+    @JukeBox::set_status_updated, @JukeBox::set_status_failed and
+    @JukeBox::set_status_packages_merge run in the agent's spawned scan Jobs per
+    /common/src/jukebox.sdd; the only cluster-side @JukeBox write of this lane anywhere is the
+    force-scan annotation JSON-patch.
+  Fix @error_policy as `#[must_use] pub fn`: @tracing::warn! `reconcile failed for JukeBox {:?}:
+    {:?}` (@Debug of `metadata.name` and of the @Error) →
+    @ctx.metrics.jukebox.@reconcile_failure(@dist, @error) → two no-op @drop calls →
+    @Action::requeue of @tokio::time::Duration::from_mins(5) — the single failure
+    requeue of the lane, taken by every raise including @Error::FinalizerError and every discarded
+    error class that still reached `?`.
+  Satisfy the ./lib.rs unwrap/expect deny: every absent value rides @unwrap_or_default,
+    `.cloned()` or the @either arms; no product @unwrap/@expect exists between the entry span and
+    @error_policy.
+
+Must not:
+  Honor `vynil.solidite.fr/suspend` or any instance-engine annotation: force-scan is the only
+    annotation this lane reads, and the reconcile body takes none to the cache, Job or CronJob
+    stages when absent.
+  Delete or edit the CronJob from the apply path — force-scan recreates the direct @Job only; the
+    CronJob exists until cleanup removes it.
+  Read tenant or instance resources: the scan Jobs touch package sources and box status, never
+    @TenantInstance/@ServiceInstance/@SystemInstance objects.
+
+Depends on:
+  @kube — @Api (@all/@namespaced/@get_opt/@get_metadata_opt/@patch/@delete/@create),
+    @Patch::@Apply/@Patch::@Json, @PatchParams, @DeleteParams::@foreground, @PostParams,
+    @ResourceExt::@name_any, @runtime::finalizer (@finalizer/@Event), @runtime::wait::@await_condition,
+    @api::conditions::@is_deleted, @runtime::controller::@Action, @Client::@default_namespace; the
+    kube `3.1.0` pins are ./manager.sdd's.
+  @k8s_openapi `batch/v1` @Job and @CronJob types.
+  @crate root (./lib.sdd) — @Error, @Result, @JukeBox, @Reconciler, @get_client_name,
+    @instance_common::@is_job_terminal, @manager::@Context, @telemetry.
+  @common — @handlebarshandler::@HandleBars (clone + @Deref render), @yamlhandler::@yaml_str_to_json
+    (owned by /common/src/yamlhandler.sdd as a @vynil_core re-export), the /common/src/jukebox.sdd
+    model fields.
+  ../templates/scan.yaml.hbs and ../templates/cronscan.yaml.hbs — render contract frozen in Must;
+    the files themselves are /operator/operator.sdd-owned (`./templates/**`).
+  @either — the @Api::@delete @either::Left/@either::Right echo arms both purge lanes branch on.
+  @tokio::time — @Duration::@from_mins clocks of all @Actions and @timeout of the 20 s wait;
+    @chrono::@Utc, @serde_json/@json, @tracing (plus the @instrument/@field/@Span attrs),
+    @async_trait, @std::sync::@Arc, @opentelemetry @TraceId for the INVALID sentinel.
+
+Exposes:
+  @reconcile — `#[instrument] pub async fn(@reconcile)(@std::sync::@Arc<@JukeBox>,
+    @std::sync::@Arc<@Context>) -> @Result<@Action>`; the ./manager.rs jukebox controller leg.
+  @error_policy — `#[must_use] pub fn(@error_policy)(@Arc<@JukeBox>, &@Error, @Arc<@Context>) ->
+    @Action`.
+  @Reconciler for @JukeBox — the @Reconciler::reconcile/@Reconciler::cleanup implementation reached
+    only from @reconcile's own finalizer match (./lib.sdd dispatch contract).
+  Crate-private, frozen through Must/Raises/Scenarios only: @JUKEBOX_FINALIZER, @should_create_scan_job,
+    @inject_package_filter, @wait_job_deleted, @upsert_scan_job, @remove_force_scan_annotation.
+
+Accepts:
+  A watch-event @Arc<@JukeBox> in any state — cluster-scoped CR, `spec.schedule` an uninterpreted
+    @String, annotation values uninterpreted free text, `status` absent or arbitrary payload
+    (@name_any `""` for a nameless box keys the cache write per the ./manager.sdd rule).
+  @Arc<@Context> with its tokio preconditions (@RwLock awaits) and a renderer whose partial dir was
+    registered by ./manager.rs @build_context — missing partials fail the first render, mid-reconcile,
+    not here.
+  @error_policy additionally accepts any &@Error, raising none itself.
+
+Returns:
+  @Action::requeue(@tokio::time::Duration::from_mins(1)) — deleting-timestamp guard and
+    still-running guard; @Action::requeue(@tokio::time::Duration::from_mins(15)) — every completed
+    apply pass; @Action::requeue(@tokio::time::Duration::from_mins(5)) — @error_policy only;
+    @Action::@await_change() — cleanup only, releasing the finalizer.
+  @Error::FinalizerError from @reconcile; @Ok(@())/@Err from @wait_job_deleted, @upsert_scan_job and
+    @remove_force_scan_annotation; @bool from @should_create_scan_job; @() from
+    @inject_package_filter (insertion or silent skip).
+  Side outputs: the @last_event stamps, cache mutation, the SSA Job/CronJob writes, the annotation
+    removal, the metrics run/failure increments and duration observation.
+
+Raises:
+  @Error::FinalizerError — boxed @kube finalizer transaction failure from @reconcile (the
+    the @Finalizer::@Apply and @Finalizer::@Cleanup body errors ride inside it back to
+    @error_policy).
+  @Error::KubeError — CronJob forced patch, the rebuild @Api::@create, the JSON-patch annotation
+    removal, upsert's decode-then-create leg.
+  @Error::KubeWaitError and @Error::Elapsed — the two legs of @wait_job_deleted (force purge and
+    rebuild purge alike, 20 s cap).
+  @Error::SerializationError — the Job decode in the rebuild create and the JSON-patch document
+    decode.
+  @Error::Core wrapping @vynil_core::@Error::HbsRenderError (both template renders) and
+    @Error::Core wrapping @vynil_core::@Error::YamlError (both conversions) — the render lane rides
+    the @vynil_core engine through @Deref, so the direct-common @Error::HbsRenderError variant stays
+    unused on this path while ./instance_common.sdd's Raises wording says otherwise (Tasks `[?]`).
+  Laundered without an @Error: every @Api::@get_opt probe @Err reads as "no job";
+    @upsert_scan_job discards its rejected patch and its own delete @Err alike (@Ok anyway); both
+    cleanup deletes warn; @error_policy only warns and counts.
+
+Handles:
+  A running or foreground-terminating scan @Job — requeue-1-minute loop; `schedule` edits and every
+    other pass work wait for the terminal turn (CronJob maintenance is behind the guard).
+  An API error (not just `NotFound`) on the @Api::@get_opt probe — indistinguishable from absent;
+    the pass continues and force-patches or rebuilds a possibly-live Job (Tasks `[?]`).
+  A terminal @Job without force — untouched on the apply path, aging out via
+    `ttlSecondsAfterFinished` `432000` (5 days), rescans meanwhile owned by the CronJob.
+  `force-scan=true` or `force-scan=""` — full rescan recreate; `force-scan=database` or
+    `force-scan=database/pg` — recreate carrying `SCAN_PACKAGE` verbatim for
+    @JukeBox::@set_status_packages_merge in the agent.
+  Any abort inside the force branch (delete-wait expiry, render failure, create conflict) — the
+    annotation survives; the 5-minute retry re-runs the whole intent, and a
+    deletion-timestamped half-deleted @Job parks on the 1-minute guard until gone, so the flow is
+    re-entrant but a late @remove_force_scan_annotation failure re-scans once more before sticking.
+  A base_context that is not a JSON object — all key insertions (@name/@job_name/@schedule plus
+    @inject_package_filter) silently no-op and the templates render empty holes (same lane as
+    ./instance_common.sdd's context guard).
+  Cleanup with either workload present-but-undeleteable or with get @Err — warns twice at most,
+    returns @Action::@await_change() and the finalizer releases anyway; cache eviction always
+    happens first. The scan workload can therefore outlive its @JukeBox (Tasks `[?]`).
+  @TraceId::INVALID — the entry records it on the span twice and the ./metrics.sdd exemplar lane
+    refuses it; every shipped run takes this lane because ./telemetry.sdd stubs @get_trace_id.
+
+Tasks:
+  [x] Pure-helper and engine-entry coverage green under `cargo test -p operator`:
+      @should_create_scan_job via @no_job_always_creates_scan_job,
+      @terminal_job_without_force_scan_skips_job_creation,
+      @terminal_job_with_force_scan_recreates_job; @inject_package_filter via
+      @partial_filter_injects_package_filter, @true_value_does_not_inject_package_filter,
+      @empty_value_does_not_inject_package_filter, @category_only_filter_injects_package_filter;
+      engine entry lanes via @cache_updated_from_status_while_job_running (running-job requeue +
+      pre-guard cache upsert) and @cleanup_removes_cache_entry (cache eviction through two `404`
+      metadata probes) — @make_test_ctx is the shared @Context builder.
+  [ ] Cover the guard matrix not on the two tested lanes: the deletion-timestamp requeue (no info
+      line, no CronJob call), and the terminal-without-force pass that patches the CronJob and
+      skips @Job creation without re-creating it.
+  [ ] Cover the force-scan end-to-end: terminal-@Job foreground delete + wait, filter injection into
+      the @Job render only, annotation removal strictly after creation, annotation retained on
+      creation failure, and re-entrant recovery from a mid-branch wait error.
+  [ ] Cover @upsert_scan_job polarities: patch @Ok; patch @Err + delete @either::Left rebuild-create; the
+      silent @Ok of patch @Err + delete @Err/@either::Right; rebuild decode/map failures — @make_test_ctx
+      with a @HandleBars that has the partial dir registered.
+  [ ] Cover @wait_job_deleted (expiry → @Error::Elapsed, watch @Err → @Error::KubeWaitError) and
+      @remove_force_scan_annotation patch body (the `~1` escaped path entry).
+  [ ] Cover the frozen template rendering — render both partials against a fixture context and
+      assert the Job/CronJob field sets of Must (labels, args `box scan`, env list incl. the
+      `SCAN_PACKAGE` conditional, ttl `432000`, backoffLimit `3`, `65534` security context,
+      `{{service_account}}` pair).
+  [ ] Cover @error_policy (warn line, `jukebox_reconcile_failures_total` growth via the
+      @make_test_ctx @Metrics read back the way ./metrics.sdd's `[ ]` asks) and the free-body
+      @reconcile finalizer transaction incl. @Error::FinalizerError mapping — controller/finalizer
+      harness needed.
+  [?] Silent-upsert: @upsert_scan_job answers @Ok when both the patch and the delete failed and
+      discards any patch reason unlogged — a permanently rejected @Job template can pin the lane on
+      15-minute no-op passes forever. ./instance_common.sdd's @upsert_job maps the delete @Err to
+      @Error::KubeError; decide one shared error polarity.
+  [?] Orphan workloads: the @Job/@CronJob carry no @ownerReferences; cleanup deletes the two exact
+      names warn-only and never awaits, so a failed purge or get @Err leaves a scan Job running (it
+      scans on and fails status writes against the gone box) and cron children cascade only while
+      the parent delete lands. Decide @ownerReference + awaited-purge ownership.
+  [?] Scan-@Job privilege: it runs as `{{service_account}}` (one bake shared with install Jobs,
+      uid/gid `65534`), cluster-privileged through RBAC owned outside these crates, and has no
+      `imagePullSecrets` even though @JukeBoxSpec::pull_secret exists — a private AGENT_IMAGE would
+      never pull. Decide a scan-dedicated @ServiceAccount and/or the pull-secret lane.
+  [?] Non-`NotFound` @Api::@get_opt @Err reads as "no job", letting a blippy API make the pass force-patch
+      or delete+recreate a live running scan. Decide whether wait/continue beats treat-as-absent.
+  [?] @schedule is never parsed or validated here and lands unquoted in the YAML — server-side
+      rejection becomes a 5-minute @error_policy loop, and structural YAML characters (`#`, `: `,
+      leading indicator) in the text can rewrite the manifest shape; the model-side gap is already
+      `[?]` in /common/src/jukebox.sdd. Decide where schedule validation lives.
+  [?] Lifecycle asymmetry: the direct @Job gets ttl `432000` + `backoffLimit 3`, cron children get
+      neither (history limits alone) — decide whether the two templates should share one retention
+      story.
+  [?] `RUST_LOG` is the literal `info,controller=info,agent=info` inside the `agent` image, naming
+      the `controller` crate tree — looks copied from the controller container. Decide the agent
+      directives.
+  [?] The dead duplicate `trace_id` @Span record rides the same unreachable @TraceId::INVALID guard
+      as the ./instance_common.sdd `[?]`; resolve with the ./telemetry.sdd stub decision.
+  [?] @Error::HbsRenderError is never produced on this lane (renders surface as @Error::Core wrapping
+      the core variant) although ./instance_common.sdd's Raises names it for the render leg —
+      correct that spec's wording at its next update; not edited from here.
+
+Done when:
+  Every Scenario has a green mapped test or a decided `[?]` Task, the silent-upsert and
+    orphan-workload decisions are recorded, and `cargo test -p operator`, `cargo clippy
+    --all-targets -- -D warnings`, `cargo +nightly fmt --check` and `specdd lint` are green.
+
+Scenario: Cache refresh precedes the running-job guard
+  Given a @JukeBox with a status differing from the cache and a still-running `scan-box-a` @Job
+    (active, no terminal condition)
+  When @Reconciler::reconcile runs
+  Then the cache gains the `box-a` entry anyway and the answer is
+    @Action::requeue(@tokio::time::Duration::from_mins(1)) with the info line, before any CronJob or
+    @Job write
+  Maps to test @cache_updated_from_status_while_job_running
+
+Scenario: A deleting or running job defers the whole pass
+  Given the named @Job with `metadata.deletion_timestamp` set
+  When @Reconciler::reconcile runs
+  Then the answer is the 1-minute requeue without log, CronJob patch or context work
+  And the same clock answers for the still-active @Job, but with its info line; terminal-ness is
+    decided solely by ./instance_common.sdd's @is_job_terminal strings
+  No mapped test exists for the deleting leg; the running leg rides
+    @cache_updated_from_status_while_job_running.
+
+Scenario: Terminal job without force-scan keeps the job, not the CronJob, off the table
+  Given a terminal `scan-box` @Job and no force-scan annotation
+  When @Reconciler::reconcile runs
+  Then the CronJob is SSA-patched with the current `schedule` yet the @Job is neither deleted nor
+    re-created, and the pass closes on @Action::requeue(@tokio::time::Duration::from_mins(15))
+  Maps to tests @no_job_always_creates_scan_job, @terminal_job_without_force_scan_skips_job_creation
+    for the decision fn only — the pass itself is untested.
+
+Scenario: Force-scan recreates the job, filters the render, consumes the annotation last
+  Given a terminal (or absent) `scan-box` @Job annotated `vynil.solidite.fr/force-scan` with value
+    `database/postgresql`
+  When @Reconciler::reconcile takes the force branch
+  Then the terminal @Job is foreground-deleted and awaited on the @either::Left echo, `package_filter`
+    enters the @Job render context (never the CronJob), `SCAN_PACKAGE: database/postgresql` appears
+    on the recreated @Job, and the JSON-patch removal of the annotation runs only after creation
+    success
+  And values `true` or the empty string recreate a full-scan @Job whose template renders no
+    `SCAN_PACKAGE` entry
+  Maps to tests @terminal_job_with_force_scan_recreates_job, @partial_filter_injects_package_filter,
+    @category_only_filter_injects_package_filter, @true_value_does_not_inject_package_filter,
+    @empty_value_does_not_inject_package_filter for the decisions — the end-to-end branch is untested.
+
+Scenario: Upsert rebuild and its silence classes
+  Given a scan @Job whose live spec rejects the forced SSA patch (immutable field)
+  When @upsert_scan_job runs
+  Then the delete-on-@either::Left rebuild chain runs — foreground delete, 20 s @is_deleted wait,
+    @PostParams::@default create — surfacing @Error::Elapsed/@Error::KubeWaitError/@Error::SerializationError/@Error::KubeError
+  But when the delete instead answers @Err or the @either::Right status confirmation, the whole rebuild is
+    skipped and the helper still returns @Ok, pass and metrics reporting success
+  No mapped test exists.
+
+Scenario: Cleanup evicts the cache and best-effort purges both workloads
+  Given a deleting @JukeBox `box-a` present in the package cache
+  When @Reconciler::cleanup runs against a cluster where `scan-box-a` @CronJob and @Job are absent
+    (`404` metadata probes)
+  Then the `box-a` cache key is removed and the answer is @Action::@await_change()
+  And when the resources exist, each is foreground-deleted with failures warned as
+    `Deleting CronJob {} failed with: {e}` / `Deleting Job {} failed with: {e}` and the release
+    happens anyway
+  Maps to test @cleanup_removes_cache_entry for the all-absent leg — the warn lanes are untested.
+
+Scenario: Every failure rides the five-minute policy
+  Given any @Err from a reconcile pass — render hole, CronJob `422` schedule rejection, wait expiry,
+    finalizer conflict — wrapped or direct
+  When @error_policy runs
+  Then one @tracing::warn! names the box name and @Error, `jukebox_reconcile_failures_total` grows
+    with the @Error::metric_label child and the answer is @Action::requeue(@tokio::time::Duration::from_mins(5))
+  No mapped test exists.
+
+Scenario: Invalid schedule text dies at the CronJob patch, never at parse
+  Given `spec.schedule` that is not a valid cron expression (e.g. `every noon`)
+  When @Reconciler::reconcile renders and patches the @CronJob
+  Then nothing client-side rejects it — the API's rejection returns @Error::KubeError and the lane
+    retries on the 5-minute failure clock while the @Job/cache lanes of earlier passes stand
+  No mapped test exists.
+
+Example:
+  Names: @JukeBox `home` → @Job name `scan-home` and @CronJob name `scan-home`, both in
+    @Client::@default_namespace (in-cluster: the controller @Pod's namespace).
+  Annotation semantics: `force-scan=true` → full rescan; `force-scan=database` →
+    `SCAN_PACKAGE` `database`; `force-scan=database/postgresql` → same text; `force-scan=""` →
+    full rescan and the annotation is still consumed and removed.
+  Render context delta over `base_context`: `name`, `job_name`, `schedule`, plus conditional
+    `package_filter`; templates consume `agent_image`, `log_level`, `service_account` from the bake
+    (./manager.sdd) and never `vynil_namespace` or `label_key`.

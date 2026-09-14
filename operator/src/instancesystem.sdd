@@ -1,0 +1,265 @@
+Spec: InstanceSystem
+
+Purpose:
+  Be the @SystemInstance implementation of the shared reconcile engine: fix the system
+    kind's identity literals (`system`, its finalizer, the System package type), forward the
+    macro-attached accessors and the three status setters to the CR model while keeping the
+    two engine defaults of the `initFrom` stage this kind carries no field for, run the
+    system-side requirement evaluator @VynilPackageRequirement::check_system, build
+    recommendations with a permanently empty tenant list, wire both system metric slots,
+    delegate @Reconciler to @do_reconcile/@do_cleanup, and own the controller entry pair
+    @reconcile/@error_policy that ./manager.rs wires on the @SystemInstance watch — including
+    this kind's consumption of the 30-second @Error::CleanupInProgress transient lane and the
+    5-minute counted-failure lane.
+
+Owns:
+  ./instancesystem.rs
+
+References:
+  ./instance_common.sdd — @InstanceKind engine whose implementation this is: every method here
+    is bound by that contract (supertraits, the seventeen required methods, the two defaults
+    this kind keeps rather than overrides, the discard-the-returned-@Self setter lanes, the
+    verbatim @InstanceKind::check_requirements action pass-through, engine-owned stages and
+    durations); @RecoContext, @run_with_finalizer, @do_reconcile, @do_cleanup and
+    @build_base_recommendations all run from there.
+  ./lib.sdd — @Reconciler implemented here per its Must; the crate-root re-exported
+    @SystemInstance, @Error and @Result are the names this file imports through @crate.
+  ./manager.sdd — @Context (its @metrics field is the only @Context member read here) and the
+    @Controller::@run wiring that pairs this file's @instancesystem::@reconcile with
+    @instancesystem::@error_policy on an @any_semantic cluster-wide watch, in the third tuple
+    slot of @Manager::new.
+  ./metrics.sdd — @Metrics::system_instance, the @count_and_measure runs increment with the
+    five @LabelInstance labels, @reconcile_failure's single six-label increment under the
+    `system_instance_reconcile` prefix, and the @ReconcileMeasurerInstance whose @Drop observes
+    the duration.
+  /common/src/instancesystem.sdd — the @SystemInstance CRD model this file attaches to (same
+    basename as this spec, different crate: that spec owns the type, its status probe
+    @SystemInstance::have_child and the macro-attached method set; this spec owns only the
+    operator-side @crate impls and entry fns co-named in ./instancesystem.rs).
+  /common/src/instance_macros.sdd — the mutator contract the forwarding methods pass through
+    unchanged (@SystemInstance::get_options_digest, @SystemInstance::set_missing_box,
+    @SystemInstance::set_missing_package, @SystemInstance::set_missing_requirement and the
+    server-side patch/condition semantics behind them); no @set_missing_init_version mutator
+    is attached to this kind.
+  /common/src/vynilpackage.sdd — @VynilPackageType::System, @VynilPackageRecommandation and the
+    @VynilPackageRequirement::check_system evaluator, including its per-arm ttl literals and
+    the arms it always satisfies (@VynilPackageRequirement::TenantPackage, @StorageCapability
+    and the catch-all).
+  /common/src/rhaihandler.sdd — @Script whose @ctx receives the instance binding.
+
+Must:
+  Implement @InstanceKind for @SystemInstance under @async_trait overriding neither engine
+    default: @InstanceKind::init_from_version and @InstanceKind::set_missing_init_version keep
+    the @None / @Ok(self) bodies — the model carries no `initFrom` field and the macros attach
+    no init-version mutator to this kind, so no version request or condition write exists here.
+  Fix the three identity literals: @InstanceKind::type_name answers exactly `system` (pinning,
+    through the engine, the `system--<namespace>--<name>` Job name and the `package_type`
+    render key), @InstanceKind::finalizer_name answers exactly `systeminstances.vynil.solidite.fr`
+    (added by kube on apply, removed only after a @Ok cleanup), and
+    @InstanceKind::package_type answers @VynilPackageType::System (the cache-lookup type clause).
+  Borrow @SystemInstanceSpec::jukebox, @SystemInstanceSpec::category and
+    @SystemInstanceSpec::package verbatim from @InstanceKind::spec_jukebox,
+    @InstanceKind::spec_category and @InstanceKind::spec_package.
+  Gate install state in @InstanceKind::current_tag on the status lane only: `status.tag` clone
+    when both the status and the tag are present, the empty @String through @unwrap_or_default
+    otherwise; the kept @InstanceKind::init_from_version default answers @None for every
+    @SystemInstance whatever the shape.
+  Forward, unmodified, the model-owned methods: @InstanceKind::have_child calls the inherent
+    @SystemInstance::have_child — Rust resolves the same-name call to the inherent probe, not
+    recursively to the trait method; @InstanceKind::get_options_digest passes the `&mut self`
+    receiver to the macro digest; the three setters @InstanceKind::set_missing_box,
+    @InstanceKind::set_missing_package and @InstanceKind::set_missing_requirement call their
+    macro counterparts on the moved copy's @&mut self and hand back the macro's @Result<Self>
+    unchanged.
+  Run @InstanceKind::check_requirements as an in-order scan over the requirement list with the
+    moved @Client cloned per call: on the first @VynilPackageRequirement::check_system verdict
+    with a false outcome, record the message via @InstanceKind::set_missing_requirement on a
+    clone of self (its returned @Self discarded) and return @Some(@Action::requeue(
+    @tokio::time::@Duration::from_secs(ttl))) carrying that arm's ttl literal; evaluation @Err
+    propagates through `?` with no condition recorded; an all-true list answers @None, and the
+    arms @check_system satisfies by construction (warn-skipped @VynilPackageRequirement::TenantPackage,
+    TODO @StorageCapability, empty-message catch-all) never reach the condition write.
+  Build @InstanceKind::build_recommendations as pure delegation plus an empty lane: the pair
+    from @build_base_recommendations becomes @RecoContext::crds and
+    @RecoContext::system_services, and @RecoContext::tenant_services is always @Vec::new() —
+    the system kind has no tenant recommendation path even when recos would mention one.
+  Bind, in @InstanceKind::set_rhai_instance, the cloned @SystemInstance onto @Script::ctx under
+    the key `instance`, so value scripts see the type registered by @system_rhai_register of
+    /common/src/instancesystem.sdd.
+  Wire both metric slots of @Metrics::system_instance — the only @Context member this file
+    reads: @InstanceKind::count_and_measure_metrics forwards to its @count_and_measure (runs
+    counter plus the started duration measurer), @InstanceKind::record_reconcile_failure to its
+    @reconcile_failure (single failures increment); this file adds no label of its own and
+    touches no other registry.
+  Delegate @Reconciler wholly to the engine — @Reconciler::reconcile @Box::pins @do_reconcile
+    and @Reconciler::cleanup @Box::pins @do_cleanup on `&self` with the @Arc<@Context> moved
+    in, no system-specific step between.
+  Instrument @reconcile `#[instrument(skip(ctx, inst), fields(trace_id))]`, written above its
+    doc comment — the span carries a declared-empty `trace_id` field (the engine of
+    ./instance_common.sdd records the same name on the current @Span), hides both arguments,
+    and its body is exactly @Box::pin(@run_with_finalizer(inst, ctx)).await with @Ok/@Err
+    passed through.
+  Split failure handling in @error_policy on @Error::CleanupInProgress as the first test: that
+    arm is plain @matches! on the variant only — its @Job payload is discarded — and answers
+    @Action::requeue(@Duration::from_secs(30)) with no log line, no metric and no
+    @tracing::@warn!; every other @Error answers @Action::requeue(@Duration::from_mins(5))
+    after the @tracing::@warn! line and exactly one @InstanceKind::record_reconcile_failure
+    increment, and is matched by nothing else.
+
+Exposes:
+  @reconcile — `#[instrument] pub async fn @reconcile(inst: @Arc<@SystemInstance>, ctx:
+    @Arc<@Context>) -> @Result<@Action>`; the controller entry for the @SystemInstance watch,
+    paired with @error_policy by ./manager.rs.
+  @error_policy — `#[must_use] pub fn @error_policy(inst: @Arc<@SystemInstance>, error:
+    &@Error, ctx: @Arc<@Context>) -> @Action`; consumes both @Arcs by value, borrows the error.
+  @InstanceKind for @SystemInstance — `#[async_trait]` impl, surface and literals per Must.
+  @Reconciler for @SystemInstance — `#[async_trait]` impl delegating to @do_reconcile and
+    @do_cleanup.
+
+Accepts:
+  A watch-event-carried @SystemInstance of any shape: `spec` strings unvalidated, `status`
+    @Option read opportunistically (@current_tag never fails on absence), a requirement list of
+    any length or emptiness (empty answers @None without a single call), and recos per the
+    engine's @None-does-nothing rule.
+  @error_policy accepts the @Arcs moved — nothing reads them after the metric call (the
+    trailing @drop calls are explicit no-ops on already-unused owners) — and any @Error
+    variant, the @Error::CleanupInProgress arm discriminating on the variant only, payload
+    ignored.
+
+Returns:
+  @reconcile returns the @Action the engine pipeline produced for the system kind (15-minute
+    requeues, ttl requeues via the pass-through, @Action::await_change() releases) and @Err the
+    engine's errors — nothing here maps an @Err into an @Action.
+  @error_policy returns exactly one of two requeues: @Duration::from_secs(30) on the transient
+    cleanup arm, @Duration::from_mins(5) on everything else.
+  @InstanceKind::check_requirements returns @None or the single short-circuit @Some requeue;
+    @InstanceKind::build_recommendations a @RecoContext whose @RecoContext::tenant_services is
+    empty; @InstanceKind::count_and_measure_metrics the started @ReconcileMeasurerInstance.
+
+Raises:
+  None of its own: every fallible body forwards. @InstanceKind::set_missing_box,
+    @InstanceKind::set_missing_package, @InstanceKind::set_missing_requirement,
+    @InstanceKind::check_requirements (through @VynilPackageRequirement::check_system and the
+    condition write) and both @Reconciler methods propagate model, requirement or engine
+    @Error variants — the engine variant set belongs to ./instance_common.sdd.
+  @reconcile surfaces the same engine @Err, dominated by @Error::FinalizerError on wrapper
+    failures; @error_policy is total and @Action-valued, and raises nothing in either arm.
+
+Handles:
+  A delete Job still running (@Error::CleanupInProgress) — the expected-transient 30-second
+    lane: fast requeue, finalizer retained by the wrapper, runs already counted but no failure
+    increment; the engine raises the variant kind-blind and this file consumes it under the
+    same contract the service kind froze in ./instanceservice.sdd.
+  Every other reconcile failure — one @tracing::@warn! naming kind, @Option metadata and
+    error, one failures-series increment on `system_instance_reconcile_failures_total`, then
+    the 5-minute backoff; the warn @Debug-formats the two @Option metadata fields, so
+    absent-vs-present namespace reads `Some("ops")` vs @None inside the message (Tasks `[?]`).
+  An unmet requirement — condition recorded on a discarded clone, only its ttl drives the
+    requeue, later requirements unevaluated; a requirement variant @check_system pronounces
+    satisfied never reaches the condition write (that spec's `[?]` owns the silent-satisfy
+    decision).
+  A `status`-less instance during selection gates — the empty tag is a plain answer, not an
+    error, and no init version can ever be requested for this kind.
+
+Depends on:
+  ./instance_common.rs — @InstanceKind, @RecoContext, @build_base_recommendations,
+    @run_with_finalizer, @do_reconcile, @do_cleanup.
+  ./manager.rs — @Context; read through the trait signatures, only @Context::metrics touched.
+  ./metrics.rs paths — @ReconcileMeasurerInstance named in the trait surface; the
+    @ReconcileMetricsSystemInstance methods run there.
+  @common — @rhaihandler::@Script, @vynilpackage::@VynilPackageRecommandation,
+    @VynilPackageRequirement and @VynilPackageType via the crate-root @SystemInstance
+    re-export.
+  @kube — @Client (cloned per requirement check), @kube::runtime::controller::@Action.
+  @tokio::time::@Duration, @opentelemetry::trace::@TraceId, @tracing (@instrument, @warn),
+    @async_trait, @std::sync::@Arc.
+
+Tasks:
+  [ ] No test anywhere covers this file: no in-file tests module, and the only test touching a
+      @SystemInstance through the @InstanceKind surface is @test_init_from_version_system_default
+      of ./instance_common.rs — it pins the engine default through a hand-built object literal,
+      not any method implemented here. Cover from the Scenarios — kind literals, tag gate,
+      system requirement short-circuit ttl, empty tenant reco list, both @error_policy lanes —
+      per TTD, reusing the ./jukebox.rs fake-cluster harness style.
+  [?] @error_policy warn reads `reconcile failed for SystemInstance '{:?}.{:?}': {:?}` with
+      namespace before name and @Debug on both @Option metadata fields, so shipped lines render
+      `Some("ops").Some("core")`; and the trailing @drop(inst)/@drop(ctx) are no-ops that only
+      appease move analysis. Byte-for-byte the sibling drift already `[?]`-ed in
+      ./instanceservice.sdd — decide format and dead-drop removal once for all kinds.
+  [?] @error_policy takes @Arcs by value while @Controller only ever needs borrows — the
+      signature survives solely to feed @drop — and @reconcile's `#[instrument]` sits above its
+      doc comment; the same entry-fn shape drift as ./instanceservice.sdd. Decide later whether
+      entry-fn style is normalized across the three kind specs.
+  [?] The parent ./operator.sdd `Owns` lists neither ./instancesystem.rs nor its two kind
+      siblings, though its `Structure` names them and ./lib.sdd points at this spec for the
+      module contract; this spec claims the file via `Owns`. Decide later whether ownership
+      stays here or moves upward into ./operator.sdd.
+
+Done when:
+  Every Scenario has a green mapped test or a decided `[?]` Task, and
+  `cargo test -p operator`, `cargo clippy --all-targets -- -D warnings`,
+  `cargo +nightly fmt --check` and `specdd lint` are green.
+
+Scenario: Kind literals pin the system identity
+  Given any @SystemInstance
+  When @InstanceKind::type_name, @InstanceKind::finalizer_name and @InstanceKind::package_type
+    answer
+  Then they are exactly `system`, `systeminstances.vynil.solidite.fr` and
+    @VynilPackageType::System — so the engine names the agent Job `system--<ns>--<name>` and
+    the cache lookup matches only System-type packages
+  No mapped test exists.
+
+Scenario: Tag reads the status lane and initFrom stays default
+  Given one @SystemInstance without a status and one installed with `tag` `1.2.3`
+  When @InstanceKind::current_tag and the kept @InstanceKind::init_from_version answer
+  Then @current_tag gives the empty @String for the first and `1.2.3` for the second, and
+    @init_from_version answers @None for both — this impl never overrides the engine default,
+    so no `initFrom` shape exists to read
+  Maps to @test_init_from_version_system_default for the kept default only — the
+    ./instance_common.rs test exercises the trait default through a @SystemInstance literal,
+    not this file's method bodies; the tag gate has no test.
+
+Scenario: First unmet system requirement short-circuits on its own ttl
+  Given a requirement list whose second entry is an absent @VynilPackageRequirement::CustomResourceDefinition
+  When @InstanceKind::check_requirements scans with a @Client
+  Then that arm's message is stored via @InstanceKind::set_missing_requirement and the answer
+    is @Some(@Action::requeue(@tokio::time::@Duration::from_secs(300))) — the `300` ttl owned by
+    /common/src/vynilpackage.sdd — while a third requirement is never evaluated
+  But an all-satisfied list answers @None with zero condition writes — arms satisfied by
+    construction included — and an evaluator @Err (cluster read, Rhai script, semver)
+    propagates with no condition written
+  No mapped test exists.
+
+Scenario: Recommendations keep the tenant list empty
+  Given recos naming one installed CRD and one installed system service
+  When @InstanceKind::build_recommendations runs with @Some recos
+  Then @RecoContext carries the filtered sorted `crds` and `system_services` from
+    @build_base_recommendations and an empty @Vec for @RecoContext::tenant_services
+  No mapped test exists.
+
+Scenario: CleanupInProgress requeues fast and uncounted
+  Given @error_policy met with @Error::CleanupInProgress carrying a @Job
+  When it runs
+  Then the answer is @Action::requeue(@tokio::time::@Duration::from_secs(30)), no
+    @tracing::@warn! line is written and the failures counter does not move
+  But met with any other @Error it warns once, increments
+    `system_instance_reconcile_failures_total` under the six labels of ./metrics.sdd exactly
+    once, and answers @Action::requeue(@tokio::time::@Duration::from_mins(5))
+  No mapped test exists.
+
+Scenario: Entry pair delegates with no local decision
+  Given a @SystemInstance handed to @reconcile
+  When the call resolves
+  Then exactly @run_with_finalizer ran — dispatching @Reconciler::reconcile, which runs
+    @do_reconcile, and @Reconciler::cleanup, which runs @do_cleanup — the whole pipeline body
+    belonging to ./instance_common.sdd, this file contributing only literals and forwards
+  No mapped test exists.
+
+Example:
+  error_policy input/output pairs: @Error::CleanupInProgress(@Job) → requeue `30` s silent;
+    @Error::Other("E_X") → warn + one failure inc + requeue `5` min.
+  check_requirements on [version ok, @VynilPackageRequirement::CustomResourceDefinition
+    missing] @Ok answer: @Some(requeue `300` s).
+  Metric series this file drives (labels owned by ./metrics.sdd):
+    `system_instance_reconcile_runs_total`, `system_instance_reconcile_failures_total`,
+    `system_instance_reconcile_duration_seconds`.

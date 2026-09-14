@@ -1,0 +1,174 @@
+Spec: OperatorLib
+
+Purpose:
+  Anchor the `controller` library of the `operator` crate: declare the module tree the
+    reconciling controller runs on — the shared instance algorithm, the three instance kinds,
+    the JukeBox scan, @Manager, telemetry and the private @metrics module — and own the
+    crate-wide @Reconciler contract every custom resource implements plus the identity
+    surfaces @OPERATOR and @get_client_name. The crate root is the whole import surface of the
+    separate `operator` binary, which pulls it via @controller in ./main.rs; the re-exported
+    @Error, @Result, @Manager and the four CR models are what that binary and every in-crate
+    @crate path then name. Module behaviour itself belongs to each module spec, referenced
+    below.
+
+Owns:
+  ./lib.rs
+
+References:
+  ./instance_common.sdd, ./instanceservice.sdd, ./instancesystem.sdd, ./instancetenant.sdd,
+    ./jukebox.sdd, ./manager.sdd, ./main.rs — specs pending; their owners own the module and
+    binary behaviour this file only declares and re-exports.
+  ./metrics.sdd, ./telemetry.sdd — module specs; @metrics and @telemetry behaviour lives
+    there, this file only fixes their visibility.
+  /common/src/lib.sdd — source of @Error, @Result and the four re-exported CR models.
+  /common/src/context.sdd — @common::get_client_name and its executable-derived client names;
+    the divergence from this file's @get_client_name is frozen in Handles.
+  /linting.sdd — the static-analysis harness whose per-crate `cfg_attr` form these crate
+    attributes carry.
+
+Must:
+  Carry exactly the two crate attributes, in order:
+    `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]`
+    `#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]`
+    Both lints are scoped to not(test), so the `cfg(test)` build runs without them.
+  Declare seven `pub mod` modules: @instance_common, @instanceservice, @instancesystem,
+    @instancetenant and @jukebox plain, @manager doc-commented
+    `/// State machinery for kube, as exposeable to actix`, @telemetry doc-commented
+    `/// Log and trace integrations`.
+  Declare @metrics as the single private module — `mod metrics;` doc-commented `/// Metrics`
+    — publishing @Metrics as its only crate-root name through @pub; every other item of
+    ./metrics.rs stays reachable only as a @crate:: path inside this package (./metrics.sdd
+    freezes the internal consumers).
+  Carry exactly eight name-only re-exports at the crate root: the grouped @pub from @common of
+    @Error, @Result and the CR models @ServiceInstance, @SystemInstance, @TenantInstance and
+    @JukeBox, plus @Manager from @manager and @Metrics from @metrics. Nothing else reaches the
+    root — in particular @common::get_client_name is not re-exported, so the root's
+    @get_client_name resolves to this crate's own fn.
+  Define @Reconciler as a `#[async_trait]` `pub trait` with exactly two async methods taking
+    `&self` and @std::sync::@Arc<@manager::@Context> and returning @Result<@Action> with
+    @Action from @kube::runtime::@controller: @Reconciler::reconcile and @Reconciler::cleanup.
+    The re-exported @Result makes @Error the fixed failure type of both methods.
+  Keep the @Reconciler implementations and dispatch where they are: all four root CR types
+    implement the trait — @JukeBox in ./jukebox.rs, @ServiceInstance in ./instanceservice.rs,
+    @SystemInstance in ./instancesystem.rs, @TenantInstance in ./instancetenant.rs — and the
+    trait methods run only from the finalizer match arms of @run_with_finalizer, bounded
+    @InstanceKind + @Reconciler, and of the jukebox finalizer wrapper (./instance_common.rs,
+    ./jukebox.rs) reached from the ./manager.rs controller wiring; @dyn dispatch of the trait
+    exists nowhere in the workspace.
+  Pin @OPERATOR as a `pub static` of type `&str` with the exact value
+    `operator.vynil.solidite.fr`.
+  Define @get_client_name as a `#[must_use]` `pub` fn taking nothing and returning the literal
+    `controller.vynil.solidite.fr` on every call, reading no environment or process state; the
+    three @PatchParams::apply SSA lanes of the crate (./instance_common.rs, ./jukebox.rs)
+    import this fn through the crate root, never the executable-derived @common twin.
+  Run no code and hold no state beyond the static: no constructor, registration, global
+    initialisation or @cfg test module lives here; the tokio runtime build, rustls provider
+    install, tracing setup, @wire_core_k8s call and controller wiring all belong to @main in
+    ./main.rs, and the @Manager/@Context construction to ./manager.rs.
+  Keep the lib/bin target split: this root is lib target `controller` named in ../Cargo.toml,
+    the `operator` bin is a separate crate that pulls it wholesale with
+    `pub use controller::*` in ./main.rs, and in-crate modules reach these same names through
+    @crate paths; dropping a `pub` here removes the name from both consumers at once.
+
+Exposes:
+  Modules @instance_common, @instanceservice, @instancesystem, @instancetenant, @jukebox,
+    @manager, @telemetry — `pub mod`; behaviour of each owned by the referenced spec.
+  @Reconciler — `pub` async_trait trait with @Reconciler::reconcile and
+    @Reconciler::cleanup per the Must signature.
+  @OPERATOR — `pub static` of type `&str`, value `operator.vynil.solidite.fr`.
+  @get_client_name — `#[must_use] pub fn @get_client_name() -> @String`.
+  Re-exports at crate root: @Error and @Result from @common; @ServiceInstance from
+    @common::instanceservice, @SystemInstance from @common::instancesystem, @TenantInstance
+    from @common::instancetenant, @JukeBox from @common::jukebox; @Manager aliasing
+    @manager::@Manager; @Metrics aliasing @crate::metrics::@Metrics — the module-private
+    type's only external name.
+
+Accepts:
+  This file branches on no input — every item is a module declaration, a re-export binding,
+    the trait, the static or a nullary fn; @get_client_name has no arguments and no
+    precondition in any feature or runtime state.
+
+Returns:
+  @get_client_name returns exactly `controller.vynil.solidite.fr`, identical on every call in
+    every environment.
+
+Handles:
+  Two client-name lanes crossing the cluster: the crate's own @PatchParams::apply SSA field
+    manager takes this file's invariant string, while @wire_core_k8s in ./main.rs registers
+    @common::get_client_name into `vynil-core` — for the shipped `operator` binary both lanes
+    resolve to `controller.vynil.solidite.fr` (that is the common fn's mapping of executable
+    name `operator`), so the split is invisible in production; any other executable name —
+    test harness, renamed binary — makes the common lane fall back to `vynil.solidite.fr`
+    while this file keeps the `controller.` value.
+  @OPERATOR — declared with no reader: no code, test, log line or annotation in the workspace
+    names it.
+
+Depends on:
+  @common — path dependency `../common` in ../Cargo.toml: the @Error, @Result and four CR
+    models this root mirrors.
+  @async-trait `0.1.68` (../Cargo.toml) — the `#[async_trait]` attribute on @Reconciler.
+  @kube — @kube::runtime::controller::@Action as both methods' success value (workspace kube,
+    locked in /Cargo.lock).
+  @std::sync::@Arc — the @Context carrier in both method signatures.
+  ./manager.rs and ./metrics.rs — the two local modules whose @Manager and @Metrics names this
+    root binds.
+  ./main.rs — the `operator` bin crate; sole external consumer of this root surface via
+    `pub use controller::*`.
+
+Tasks:
+  [ ] Cover the frozen root surface: the eight root names denote the same items as their
+      @common/@module paths, @get_client_name returns its literal regardless of environment,
+      and @OPERATOR carries its value. No mapped test exists — the ./jukebox.rs tests exercise
+      that type's @Reconciler impl, not this file.
+  [?] @OPERATOR is dead — zero use sites — and its value `operator.vynil.solidite.fr` is a
+      third spelling matching nothing in use: the actual SSA field manager is
+      @get_client_name's `controller.vynil.solidite.fr` and the CRD group is
+      `vynil.solidite.fr`. Decide later whether the static is removed or wired in.
+  [?] @get_client_name hard-codes at the crate root what @common::get_client_name derives from
+      the executable, keeping both only because the shipped binary is named `operator`; the
+      divergence and the executable-name scheme are already `[?]`-ed in
+      /common/src/context.sdd. Decide later which file owns operator write identity: the
+      crate-local copy or the shared dynamic fn.
+  [?] The parent ./operator.sdd `Structure` describes this file as "Library root re-exporting
+      the controllers and @InstanceKind", but this root re-exports neither controller funcs
+      nor @InstanceKind — both are reachable only through their `pub mod` paths. Decide later
+      whether the parent wording or a wider root surface is intended; the parent spec is not
+      edited here.
+
+Done when:
+  Every Scenario above has a passing mapped test or a decided `[?]` Task, the identity
+    decision is recorded, and `cargo test -p operator` with clippy, fmt and `specdd lint` are
+    green.
+
+Scenario: Crate-root names alias their source items
+  Given an @Error, a @Result, one CR model, an @Manager and a @Metrics named through their
+    @common or module paths
+  When the same five are named at this crate root instead
+  Then they are the same items and types, not copies or wrappers, and the root exposes nothing
+    beyond the seven modules plus those eight names
+  No mapped test exists.
+
+Scenario: get_client_name is constant while the common twin follows the binary
+  Given any executable name and environment — `operator`, a cargo-test harness, a renamed
+    binary
+  When @get_client_name runs
+  Then the result is always `controller.vynil.solidite.fr`
+  But @common::get_client_name returns `vynil.solidite.fr` for every executable name other
+    than `operator` and `agent`, so outside the shipped `operator` and `agent` binaries the
+    two client names diverge
+  No mapped test exists.
+
+Scenario: Every kind runs through the Reconciler contract
+  Given the four controller wires in ./manager.rs starting from the module-level @reconcile
+    free functions
+  When a watch event reaches a kind
+  Then the module free fn hands the object to its finalizer wrapper — @run_with_finalizer for
+    the three instance kinds, @reconcile's own wrapper for JukeBox — which dispatches
+    @Reconciler::reconcile on Apply and @Reconciler::cleanup on Cleanup
+  And a future kind joins that lane only by implementing both @Reconciler and @InstanceKind
+  Partial coverage only: the ./jukebox.rs tests call @Reconciler::reconcile and
+    @Reconciler::cleanup on @JukeBox; no test maps this trait contract across kinds.
+
+Example:
+  `@get_client_name()` in any process → `controller.vynil.solidite.fr`
+  `@OPERATOR` value `operator.vynil.solidite.fr` — reaches no request and no label today

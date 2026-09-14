@@ -30,6 +30,10 @@ Owns:
   ./src/lib.rs
   ./src/manager.rs
   ./src/instance_common.rs
+  ./src/instanceservice.rs
+  ./src/instancesystem.rs
+  ./src/instancetenant.rs
+  ./src/jukebox.rs
   ./src/metrics.rs
   ./src/telemetry.rs
   ./Cargo.toml
@@ -54,11 +58,17 @@ Depends on:
   ./common/common.sdd
   `kube`, `k8s-openapi`, `actix-web`, `prometheus-client`
 
+References:
+  ./src/main.sdd, ./src/lib.sdd, ./src/manager.sdd, ./src/instance_common.sdd,
+    ./src/instanceservice.sdd, ./src/instancesystem.sdd, ./src/instancetenant.sdd,
+    ./src/jukebox.sdd, ./src/metrics.sdd, ./src/telemetry.sdd — the file-level contracts;
+    this directory spec stays coarse and defers all file behavior to them.
+
 Done when:
   `./src/instance_common.rs` and each per-kind module have reviewed specs, and
     `cargo test -p operator` is green.
 
 Tasks:
-  [ ] #0 Spec `./src/instance_common.rs` (the shared reconcile/cleanup algorithm and annotations).
-  [ ] #1 Spec `./src/jukebox.rs` and the three per-kind impl modules.
-  [ ] #2 Spec `./src/manager.rs` and `./src/metrics.rs`.
+  [x] #0 Spec `./src/instance_common.rs` (the shared reconcile/cleanup algorithm and annotations).
+  [x] #1 Spec `./src/jukebox.rs` and the three per-kind impl modules.
+  [x] #2 Spec `./src/manager.rs` and `./src/metrics.rs`.
