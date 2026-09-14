@@ -1,0 +1,243 @@
+Spec: authz
+
+Purpose:
+  Decide the one authorization question each diagnostic-API instance request raises — may
+    this @Identity read this instance resource — by POSTing exactly one @SubjectAccessReview
+    carrying the verbatim subject and a fixed `get` on the plural kind in group
+    `vynil.solidite.fr`, where only a literal `true` in `status.allowed` counts as allowed and
+    every other reply — `false`, missing @status, failed POST — ends the lane denied or in
+    error and never grants access. @is_instance_scoped_item and @check_item_access turn that
+    verdict plus the `Config.enable_packages` flag into per-item lanes, generic items passing
+    with zero cluster calls.
+
+Owns:
+  ./authz.rs
+
+References:
+  ./auth.sdd — @Identity is the SAR subject source: @Identity.user and @Identity.groups are
+    cloned into the review verbatim, including the open `user` `""` identity ./auth.sdd
+    Tasks flag; this module never re-authenticates, reads headers or touches transport.
+  ./error.sdd — the @DiagError vocabulary drawn on here and the `DIAG-001`/`403`,
+    `DIAG-004`/`404`, `DIAG-007`/`404` and `DIAG-500`/`500` wire renderings of everything
+    this file raises.
+  ./server.rs — spec pending: the only consumer through `pub mod authz;` in ./lib.rs;
+    @instance_handler calls @check_item_access once authenticated and before the existence
+    lookup, whose gate reuses @is_instance_scoped_item, and item/kind membership
+    pre-validation (their @VALID_ITEMS and @VALID_KINDS) sits there, not here.
+
+Must:
+  @check_instance_access takes only the exact kind strings `tenantinstances`,
+    `serviceinstances`, `systeminstances`, each matched arm naming itself as the SAR
+    `resource`, so the match is a pass-through allow-list; every other kind string —
+    singular, case-variant or foreign — is @Err(@DiagError::UnknownKind) returned before the
+    @kube::@Api is built, so that lane performs zero cluster I/O.
+  One SAR POST per @check_instance_access call through @kube::@Api::all with
+    @kube::api::@PostParams::default on a per-call @kube::@Client clone: no cache, no
+    dedup, no memo across requests.
+  The SAR @spec is built verbatim from arguments and nothing else: @user is the
+    @Identity.user clone and @groups the @Identity.groups clone — an empty @Vec still rides
+    as @Some `[]`; @resource_attributes carry @verb `get`, @group `vynil.solidite.fr`,
+    @resource the kind's plural, @namespace and @name as given; every remaining field
+    (@uid, @extra, @non_resource_attributes, `api_version`, `subresource`, @status) is left
+    unset via @Default. @namespace and @name never undergo validation, trimming or
+    case-folding here.
+  Allowance is fail-closed on the literal verdict: @Ok(@true) only from a reply whose
+    @status is present and whose `allowed` is literally `true`; a `false` @allowed or a
+    reply with no @status is @Ok(@false) — a refusal, never an error — while `denied`,
+    `reason` and `evaluation_error` are never inspected, so `allowed: true` passes even
+    alongside them. @check_item_access turns @Ok(@false) into @DiagError::AuthorizationDenied.
+  A failing SAR POST is converted, never propagated raw: @tracing::error! logs
+    `SubjectAccessReview failed: {e}` with the raw @kube::@Error @Display and the call ends
+    @Err(@DiagError::InternalError) whose payload repeats that same text — @DiagError::KubeError
+    never issues from here and the @source chain survives nowhere but the message string,
+    so a cluster outage or an RBAC refusal of the server's own `subjectaccessreviews`
+    create right answers `500` and never grants access.
+  @check_item_access runs exactly one lane: an instance-scoped @item consults only the SAR —
+    @Ok(()) iff allowed, @Err(@DiagError::AuthorizationDenied) on refusal, the
+    @DiagError::UnknownKind and @DiagError::InternalError legs propagating by `?`; the
+    gated pair `packages` and `popularitycontest` under @packages_enabled `false` ends
+    @Err(@DiagError::PackagesDisabled) with no cluster call; every other @item ends
+    @Ok(()) unconditionally, with @identity, @kind, @namespace, @name and @packages_enabled
+    unread — the `else if` structure also means the flag never gates instance items.
+  Posture, stated neutrally: the instance-scoped tier is default-deny — anything short of
+    a present @status of `allowed: true` refuses or errors and no @Ok(@true) is ever
+    synthesized on fallback; the generic and enabled gated tiers are authz-free pass-through
+    for any identity that reached @check_item_access (authentication ordering is
+    ./server.rs' contract), and an unrecognised @item rides that pass-through because item
+    membership is never validated in this file — see Tasks.
+  All three functions reach consumers `pub` via `pub mod authz;` in ./lib.rs; no
+    crate-root re-export exists, and only @is_instance_scoped_item carries @must_use.
+
+Depends on:
+  @crate::auth::@Identity — ./auth.rs per ./auth.sdd, read only through its @user and @groups
+    clones.
+  @crate::error::@DiagError — ./error.sdd; every failure raised here is one of
+    @DiagError::UnknownKind, @DiagError::InternalError, @DiagError::AuthorizationDenied or
+    @DiagError::PackagesDisabled.
+  @kube::@Client, @kube::@Api and @kube::api::@PostParams — kube `3.1.0` from /Cargo.toml; the
+    SAR @create is the module's only cluster access.
+  @k8s_openapi::api::authorization::v1::@SubjectAccessReview, @SubjectAccessReviewSpec and
+    @ResourceAttributes — k8s-openapi `0.27.1` from /Cargo.toml, the SAR wire shape.
+  @tracing `0.1` — @tracing::error!, the file's single log statement.
+
+Exposes:
+  @check_instance_access — `pub async fn(@client: &@kube::@Client, @identity: &@Identity,
+    @kind: &@std::primitive::@str, @namespace: &@std::primitive::@str, @name:
+    &@std::primitive::@str) -> @Result<@bool, @DiagError>`: the SAR round trip, `pub`
+    although no in-crate caller outside this file uses it.
+  @is_instance_scoped_item — @must_use `pub fn(@item: &@std::primitive::@str) -> @bool`: the
+    sole item classifier, shared by @check_item_access and ./server.rs' existence gate.
+  @check_item_access — `pub async fn(@client: &@kube::@Client, @identity: &@Identity,
+    @kind: &@std::primitive::@str, @namespace: &@std::primitive::@str, @name:
+    &@std::primitive::@str, @item: &@std::primitive::@str, @packages_enabled: @bool) ->
+    @Result<(), @DiagError>`: the per-item authorization decision ./server.rs awaits.
+
+Accepts:
+  A borrowed @kube::@Client, touched only by the instance-scoped lane; an @Identity as-is,
+    empty-subject ones included; @kind, @namespace and @name as opaque strings with no
+    precondition — an out-of-list @kind is itself a refusal, and @namespace/@name bind only
+    into the SAR.
+  @check_item_access additionally takes any @item @str with no membership precondition and
+    one @bool @packages_enabled, the whole availability flag, flowing here as
+    `Config.enable_packages` through ./server.rs — this module reads no config itself.
+  @is_instance_scoped_item: any @str.
+
+Returns:
+  @check_instance_access: @Ok(@true) only from `status.allowed` literally `true`; @Ok(@false)
+    from `allowed: false` and from a reply missing @status alike, with no signal telling
+    those refusals apart.
+  @check_item_access: @Ok(()) for an allowed SAR, an enabled gated item or an @item in the
+    pass-through tier — the unit carries no marker of which lane granted it.
+  @is_instance_scoped_item: @true for `state`, `children`, `agentlog`, `childlogs`,
+    `operatorlog` and for nothing else.
+
+Raises:
+  @DiagError::UnknownKind (`404` `DIAG-004`) for any @kind beyond the three-word list, from
+    @check_instance_access entry with zero cluster write and up through @check_item_access'
+    `?` on instance items.
+  @DiagError::InternalError(`SubjectAccessReview failed: {e}`) (`500` `DIAG-500`) when the
+    SAR POST fails for any cause — outage, RBAC, undecodable reply — the only failure that
+    logs anywhere in this file.
+  @DiagError::AuthorizationDenied (`403` `DIAG-001`) from @check_item_access alone, for a
+    mapped kind whose verdict was not a literal allowed.
+  @DiagError::PackagesDisabled (`404` `DIAG-007`) from @check_item_access for
+    `packages`/`popularitycontest` while @packages_enabled is `false`, raised with zero
+    cluster call.
+  No panic path: @unwrap and @expect appear nowhere outside the `#[cfg(test)]` module, and
+    @option::@is_some_and absorbs a missing @status.
+
+Handles:
+  A @status-less SAR reply that still counts as a created object — routed to the refusal
+    lane (`403`), never the failure lane.
+  `reason`, @denied or `evaluation_error` in the verdict — `allowed` alone decides.
+  Singular or case-variant @kind spellings such as `tenantinstance` or `TenantInstances` —
+    @DiagError::UnknownKind before any cluster write.
+  An empty @groups or `""` @user subject — posted as present empty values, the cluster holds
+    the verdict.
+  @packages_enabled `false` during an instance-scoped request — unread, because the gate is
+    the `else if` branch.
+  Nonsense @kind/@namespace/@name under instance-unscoped items — the pass-through lane
+    never reads them, leaving validation entirely to ./server.rs.
+
+Tasks:
+  [ ] Cover the @check_instance_access kind allow-list and exact SAR construction — the
+      three plural kinds building the Must's fields, every other @kind ending
+      @DiagError::UnknownKind with zero @SubjectAccessReview POST — which needs a fake
+      apiserver or intercepted @create: /server/Cargo.toml @dev-dependencies is empty and no
+      harness ships.
+  [ ] Cover the verdict mapping — `allowed` `true` / `false` / @status-missing replies, the
+      mixed `allowed: true` verdict, and @check_item_access landing
+      @DiagError::AuthorizationDenied — blocked on the same harness.
+  [ ] Cover the failing-POST leg: @DiagError::InternalError payload and the @tracing::error!
+      line both rendering `SubjectAccessReview failed: {e}` verbatim.
+  [ ] Cover @check_item_access lanes — gate `false` flipping @item `packages` and
+      `popularitycontest` to @DiagError::PackagesDisabled, gate `true` plus `clusterinfo` /
+      `vynilconfig` / an unrecognised @item landing @Ok(()) with zero @SubjectAccessReview,
+      and the flag never gating instance items — even the no-cluster legs still construct a
+      borrowed @kube::@Client argument.
+  [?] @check_item_access default-allows unrecognised @item strings — @Ok(()) with zero
+      authority check; today's safety rests entirely on ./server.rs' @VALID_ITEMS pre-check
+      (spec pending). Decide later whether this module refuses unknown items itself or the
+      pass-through posture stands.
+  [?] @packages_enabled gates `popularitycontest` with the `packages` pair, although the flag
+      is named for packages and the doc comment speaks of `the disabled packages endpoint`
+      singularly. Decide later whether the availability flag splits per endpoint.
+  [?] SAR POST failures — outage and a missing `subjectaccessreviews` create right on the
+      server's own service account alike — collapse into one stringified
+      @DiagError::InternalError `500` with no @source chain in the payload even though
+      @DiagError::KubeError exists and never issues here. Decide later whether transport
+      failures convert instead of stringify.
+  [?] No verdict audit trail: only a failing POST logs — allows and @DiagError::AuthorizationDenied
+      refusals are silent, so a `403` is unattributable to identity or SAR outcome in this
+      module's output. Decide later whether deny legs log.
+  [?] The three-kind list is duplicated: this @match and ./server.rs' @VALID_KINDS hard-code
+      the same plurals separately, so a kind added to one side silently turns every item
+      request for it into `404` `DIAG-004` (fail-closed, never widened). Decide later
+      whether the list moves to one shared definition.
+  [?] @check_instance_access is `pub` with no consumer in-crate outside this file —
+      ./server.rs uses only @check_item_access and @is_instance_scoped_item — against the
+      keep-public-surface-narrow rule. Decide later whether it becomes `pub(crate)`.
+
+Done when:
+  Every Scenario below maps to a green test in `server` (the `[ ]` Tasks or their successors),
+    the `[?]` decisions above are recorded, and `cargo test -p server` is green.
+
+Scenario: Instance-scoped items are exactly the five
+  Given @item `state`, `children`, `agentlog`, `childlogs`, `operatorlog` and the
+    generic/gated `clusterinfo`, `vynilconfig`, `packages`, `popularitycontest`
+  When @is_instance_scoped_item classifies each
+  Then the first five are @true and the last four @false
+  Maps to test @test_is_instance_scoped_item
+  But every other string — `State`, `state ` — is @false by the @matches! list and no test
+    asserts those legs.
+
+Scenario: Unknown kind is refused before any cluster write
+  Given @check_instance_access with @kind `tenantinstances`, `serviceinstances`,
+    `systeminstances` and off-list ones `jukeboxes`, `TenantInstances`, `tenantinstance`
+  When each runs
+  Then only the three listed kinds reach a SAR POST, each as its own @resource plural
+  And the off-list three end @Err(@DiagError::UnknownKind) (`404` `DIAG-004`) with zero
+    cluster I/O
+  No mapped test exists.
+
+Scenario: Only a literal allowed verdict proceeds
+  Given SAR replies whose @status carries `allowed: true`; one with `allowed: false`; @status
+    absent; and a mixed `allowed: true` alongside `reason` or @denied
+  When @check_instance_access maps them and @check_item_access consumes the results
+  Then the `true` replies — mixed fields included — end @Ok(())
+  And the `false` and @status-less replies end @Err(@DiagError::AuthorizationDenied)
+    (`403` `DIAG-001`), indistinguishable from each other
+  No mapped test exists.
+
+Scenario: SAR transport failure fails closed at 500
+  Given a POST that errors — unreachable cluster or an RBAC refusal on the server's own
+    `subjectaccessreviews` create
+  When @check_instance_access maps it
+  Then @tracing::error! logs `SubjectAccessReview failed: {e}` with the raw @kube::@Error
+    @Display
+  And the call ends @DiagError::InternalError (`500` `DIAG-500`) carrying that text and no
+    @source chain
+  And no @Ok value ever leaves that lane
+  No mapped test exists.
+
+Scenario: Availability lane grants or refuses without the cluster
+  Given @item `packages` and `popularitycontest` under @packages_enabled `false` then `true`,
+    `clusterinfo`, `vynilconfig`, the unrecognised `statisticss`, and `state` under the gate
+    `false`
+  When @check_item_access branches
+  Then the two gated items end @Err(@DiagError::PackagesDisabled) (`404` `DIAG-007`) while
+    the gate is `false`
+  And the enabled pair, the generic two and the unrecognised string end @Ok(()) with zero
+    @SubjectAccessReview
+  And `state` ignores the gate and goes to the SAR lane
+  No mapped test exists.
+
+Example:
+  SAR for @user `alice` with @groups [`dev`], @kind `tenantinstances`, @namespace `tenant-a`,
+    @name `web`: @spec `user: "alice"`, `groups: ["dev"]`, @resource_attributes
+    `verb: "get"`, `group: "vynil.solidite.fr"`, `resource: "tenantinstances"`,
+    `namespace: "tenant-a"`, `name: "web"` — @uid, @extra, @non_resource_attributes,
+    `api_version`, `subresource` and @status absent; one cluster-scoped POST with
+    @PostParams::default on a cloned @client.
+  Lane wire outcomes: SAR refusal `403` `DIAG-001`; off-list @kind `404` `DIAG-004`; gated
+    item under the disabled flag `404` `DIAG-007`; POST failure `500` `DIAG-500`.

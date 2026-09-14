@@ -1,0 +1,351 @@
+Spec: Logs
+
+Purpose:
+  Collect, assemble and redact the three per-instance log tiers the diagnostic API serves as
+    plain text: the `agent` install-job pods (@get_agent_log, the `agentlog` endpoint), the
+    instance child-workload pods (@get_child_logs, `childlogs`), and the controller's own lines
+    attributed to this instance (@get_operator_log, `operatorlog`). Each tier builds one
+    `=== … ===`-sectioned blob from cluster reads, runs it through one final @scrub pass and
+    hands back the @ScrubStats tally ./server.rs renders as the `X-Diag-Redactions` header. The
+    three tiers differ deliberately in pod-selection rule, container-read strategy, window/cap
+    treatment and failure-degradation profile — the config window @Config.log_since_hours and cap
+    @Config.log_cap_bytes act on the child tier only.
+
+Owns:
+  ./logs.rs
+
+References:
+  ../anonymize.sdd — @scrub is the single redaction applied here, once per non-empty blob after
+    assembly; its empty-input short-circuits and @ScrubStats::default() contract match this file's
+    empty-blob paths.
+  ../dto.sdd — @ScrubStats is this file's second return slot on every tier; the
+    `X-Diag-Redactions` rendering of the returned value lives in ./server.rs.
+  ../error.sdd — the failure vocabulary: @DiagError::UnknownKind answers `404`, while every
+    @DiagError::KubeError / @DiagError::SerializationError raised here answers `500` — including a
+    Kubernetes-side `404` for a genuinely missing instance or job.
+  ../config.sdd — the two knobs reach @get_child_logs only, as @Config.log_since_hours /
+    @Config.log_cap_bytes (env `LOG_SINCE_HOURS` default `5`, `LOG_CAP_BYTES` default `2097152`)
+    injected by ./server.rs at the `childlogs` branch.
+  /common/src/lib.sdd — @common::@Children (`kind`, `name`, optional `namespace`) is the child
+    iteration unit @get_child_logs walks; its producer is ./children.rs (@all_children_from_status).
+  /server/src/server.rs — sole consumer of the three `pub` fns; it validates `ns`/`name` against
+    RFC-1123 (@validate_dns1123 → @DiagError::InvalidNameFormat) and checks instance existence
+    before dispatch. Named here as upstream-gating context only; this file depends on nothing in it.
+
+Depends on:
+  @crate::anonymize::@scrub (../anonymize.rs), @crate::dto::@ScrubStats (../dto.rs),
+    @crate::error::@DiagError (../error.rs) — the mask, the counters, the error lane.
+  @crate::collect::children::@all_children_from_status (./children.rs) — resolves the child list
+    for @get_child_logs across status categories; child order is that walker's contract.
+  @common — @common::@Children (/common/src/lib.rs) plus the typed CRDs @common::@TenantInstance
+    (/common/src/instancetenant.rs), @common::@ServiceInstance (/common/src/instanceservice.rs),
+    @common::@SystemInstance (/common/src/instancesystem.rs) for the instance read.
+  @kube `3.1.0` and `k8s-openapi` `0.27.1` (/Cargo.lock) — @kube::@Api namespaced @get/@list and
+    the @logs subresource, @Client (cloned per call site), @ListParams (@labels),
+    @kube::api::@LogParams, and the @BatchJob / @Pod / @Deployment / @StatefulSet / @DaemonSet /
+    @ReplicaSet models; a workload selector's @match_labels field is an
+    @Option<@std::collections::@BTreeMap<@String, @String>>, i.e. key-sorted iteration.
+  @tracing `0.1` (/server/Cargo.toml) — the file's two @tracing::warn! calls, its only log output.
+  @serde_json — @serde_json::to_value feeding the generic child walk in @get_instance_children.
+
+Must:
+  Accept exactly the three CRD plural literals `tenantinstances`, `serviceinstances`,
+    `systeminstances` — case-sensitive full-string @match arms in @kind_camel, @kind_type_label and
+    @get_instance_children alike; any other kind aborts before any cluster read: @get_agent_log and
+    @get_operator_log via their private mappers, @get_child_logs via @get_instance_children, each
+    surfacing @DiagError::UnknownKind.
+  The agent tier selects jobs by server-side label selector only, string
+    `instance={name},namespace={namespace},type={t}` with `t` ∈ `tenant` / `service` / `system`,
+    `batch/v1` @Job resources listed in @vynil_namespace — jobs never live in the instance
+    namespace and carry no owner-ref to it, so labels are the only instance link; every matching
+    job contributes, past runs included (no completion-time filter), and selector values are
+    interpolated verbatim.
+  Job pods are resolved by listing all pods in @vynil_namespace with @ListParams::default() (no
+    selector) and keeping, client-side, any pod whose @metadata.owner_references contains an
+    @ownerReference with `kind == "Job" && name == {job name}` — the @controller flag is not
+    checked, and a job @metadata.name of @None matches under @unwrap_or_default's `""`.
+  The operator tier lists every pod of @vynil_namespace (@ListParams::default(), no server-side
+    selector) and keeps, client-side, those whose `app.kubernetes.io/name` label equals exactly
+    `vynil`; each kept pod's complete current container-@None log is fetched, then only
+    @str::contains matches of the token `{Kind}.v1.vynil.solidite.fr/{name}.{namespace}` (Kind ∈
+    `TenantInstance` / `ServiceInstance` / `SystemInstance`, the exact
+    kube controller-runtime `object.ref` span shape) survive @filter_operator_lines, joined by
+    `\n` — matching on bare name or namespace alone cannot leak a sibling instance because the
+    token is required whole.
+  The child tier resolves pods per @common::@Children from @all_children_from_status, only for the
+    four kinds `Deployment` / `StatefulSet` / `DaemonSet` / `ReplicaSet`, via the workload's own
+    `@spec.selector.match_labels` rendered to `{k}={v}` pairs joined by `,` in @BTreeMap
+    key-sorted order and applied as a server-side @ListParams @labels selector; @None spec, @None
+    or empty match_labels, or any other child kind (pod-bearing `Job`/`CronJob` included) yield
+    @Vec::new() pods.
+  A child @namespace of @None falls back to the instance namespace via @Option::or — an explicitly
+    @Some empty-string namespace is used as-is; a child with no resolvable pods contributes no
+    section.
+  @LOG_SINCE_HOURS-style windowing and @LOG_CAP_BYTES-style capping are applied in this file on
+    the child tier only: @since_seconds is `log_since_hours.saturating_mul(3600)` widened with
+    @i64::try_from(...).unwrap_or(@i64::MAX) and rides on both child read lanes; @get_agent_log and
+    @get_operator_log take neither parameter and read each selected pod's full stored log.
+    @tail_lines is @None on every @LogParams in the file — no path limits by lines, and
+    @limit_bytes is never set.
+  Child pods are read through @get_pod_logs_with_options in two lanes per container in
+    @spec.containers declaration order — current (`previous: false`) first, then the crash-loop
+    lane (`previous: true`) — each labelled read capped individually by @cap before concatenation;
+    a current-lane failure @warn!s `logs {pod}/{container}: {…}`, the previous lane's error is
+    dropped with no warn at all, and @spec.init_containers is never read for any pod.
+  @cap is byte-counted, direction = keep head: `logs.len() <= max` returns the whole string
+    verbatim, otherwise the prefix `[0..end]` survives — with `end` walked down to the nearest
+    @is_char_boundary — and the literal marker `\n... [truncated]` is appended after it, so the
+    result can exceed `max` by the marker's 16 bytes and `max == 0` yields the marker alone.
+  The agent and operator tiers read each pod once through @get_pod_logs with @container @None
+    and `previous: false` (comment-pinned: `previous=true` alone returned only the prior
+    terminated instance) — the multi-container outcome is the API server's default-container
+    behavior, and @get_pod_logs's `container` argument never receives @Some anywhere in the file.
+  Blob assembly emits one section per successful read and omits anything whose payload is
+    @str::is_empty: agent/operator sections are `=== pod/{pod_name} ===\n{logs}\n`, child
+    sections `=== pod/{pod_name} ({child.kind}/{child.name}) ===\n{logs}\n` wrapping the
+    container sections `=== container/{name} ===\n{capped}\n` and (crash-loops)
+    `=== container/{name} (previous) ===\n{capped}\n`; section order follows iteration —
+    agent: job-list order, then pod-list order; child: @all_children_from_status order, pod-list
+    order, container order, current-before-previous.
+  @scrub is applied exactly once per non-empty blob, after assembly, over the headers and bodies
+    together, with the instance namespace and @vynil_namespace as its two secret lanes; the single
+    returned @ScrubStats is that call's tally — unlike ./children.rs there is no per-child
+    @saturating_add accumulation here.
+  An empty assembly short-circuits before any @scrub call: @get_agent_log and @get_child_logs
+    return `("", @ScrubStats::default())`; @get_operator_log instead returns the unscrubbed refusal
+    line `# no operator log lines matched instance {namespace}/{name} in the retained window\n`
+    with @ScrubStats::default().
+  Two failure profiles coexist: metadata/list reads propagate `?` — @get_job_pods pod list, child
+    workload pod list, operator pod list, instance @get, and the child-tier pod @get — aborting the
+    whole endpoint and discarding sections already collected; log-content reads degrade —
+    @get_pod_logs converts every @Api::logs failure into
+    @tracing::warn!(`Failed to get logs for pod {}: {}`) + `Ok(String::new())`, so both its `?`
+    call sites never fire, and the child tier's workload @get failures are erased by @Result::ok()
+    into zero pods.
+
+Must not:
+  Fall back to an unfiltered operator-log dump when the `object.ref` filter matches nothing —
+    that would leak every other tenant's lines; the refusal marker plus default stats is the only
+    zero-match outcome.
+
+Exposes:
+  Full public surface — reachable because /server/src/collect/mod.rs declares `pub mod logs;` and
+    /server/src/lib.rs declares `pub mod collect;` — is the three tier collectors below; every
+    other item stays private to this module (@kind_camel, @kind_type_label, @install_job_selector,
+    @instance_object_ref, @filter_operator_lines, @get_job_pods, @get_pod_logs,
+    @get_instance_children, @get_child_pods, @get_pod_logs_with_options, @cap, and the
+    `#[cfg(test)] mod tests`).
+  @get_agent_log — `pub async fn(client: &@kube::@Client, kind: &@str, namespace: &@str, name: &@str, vynil_namespace: &@str) -> @Result<(@std::string::@String, @ScrubStats), @DiagError>`;
+    install-job tier, full stored logs, no window and no cap.
+  @get_child_logs — `pub async fn(client: &@kube::@Client, kind: &@str, namespace: &@str, instance_name: &@str, log_since_hours: @u64, log_cap_bytes: @usize, vynil_namespace: &@str) -> @Result<(@std::string::@String, @ScrubStats), @DiagError>`;
+    child tier, the only consumer of the window and cap, per-container current+previous reads.
+  @get_operator_log — `pub async fn(client: &@kube::@Client, kind: &@str, instance_namespace: &@str, instance_name: &@str, vynil_namespace: &@str) -> @Result<(@std::string::@String, @ScrubStats), @DiagError>`;
+    operator tier, filtered to this instance by `object.ref` with refusal-marker-on-zero-match.
+
+Accepts:
+  Any @str @kind — matched literally against the three plural forms, no normalization (no
+    singular, no case-insensitive, no `Kind` CamelCase input).
+  Namespace, name and @vynil_namespace strings interpolated verbatim into label selectors, the
+    `object.ref` token and the refusal marker — this file performs zero validation; the
+    DNS-1123 guarantee that keeps those strings label/token-safe is imposed upstream by
+    ./server.rs, and a direct crate-level call bypasses it into kube-request failures.
+  @log_since_hours: any @u64, window `0` accepted and forwarded as `since_seconds: @Some(0)`;
+    @log_cap_bytes: any @usize, `0` legal (see @cap).
+  A live @kube::@Client whose identity can list batch Jobs, core Pods and the pod `log`
+    subresource, read the three instance CRDs in the instance namespace and the four
+    apps-workload kinds in child namespaces — RBAC-denied reads follow the two profiles above.
+
+Returns:
+  `(@String, @ScrubStats)` — a `text/plain`-bound blob whose sections are emitted in the
+    iteration order pinned in Must, already scrubbed, with the returned @ScrubStats feeding
+    `X-Diag-Redactions` upstream.
+  Empty-instance outcomes: `("", @ScrubStats::default())` for agent/child tiers with nothing to
+    show; the marker line (ends in `\n`, stats default, never scrubbed) for the operator tier.
+  A matching operator tier returns only whole lines carrying the token, last line stripped of its
+    trailing newline by @str::lines + @join (the wrapping section header re-adds a `\n`).
+
+Raises:
+  @DiagError::UnknownKind — unmapped @kind on all three tiers, raised before the first cluster
+    call (`404`).
+  @DiagError::KubeError wrapping: the agent job @list, @get_job_pods / @get_child_pods /
+    @get_operator_log pod @lists, the instance @get in @get_instance_children, and the child-tier
+    pod @get in @get_pod_logs_with_options — a mid-loop one discards all previously collected
+    sections; Kubernetes `404`s (missing job pods, missing instance) ride this lane as `500`s.
+  @DiagError::SerializationError — @serde_json::to_value of the fetched instance fails in
+    @get_instance_children (effectively unreachable for an object the client just deserialized).
+  Never: an @Api::logs HTTP failure — @get_pod_logs swallows it to warn + empty and
+    @get_pod_logs_with_options swallows per-container failures — and never a child workload @get
+    failure; neither reaches a caller.
+
+Handles:
+  Instance with no matching job / no children / no child pods / all-empty logs — empty blob per the
+    empty-return rules, no error.
+  Crash-looped child container — second labelled section `(previous)` under the same container
+    name; absent previous data adds nothing and logs nothing.
+  Agent lane container restarts — only the current logs are read (`previous: false`,
+    comment-pinned), the agent lane never shows a dead pod's last words.
+  Log lines with no `object.ref` at all (raw `K8s error:` dumps outside any reconcile span) —
+    intentionally dropped with the tenant's other unattributable lines.
+  Pod whose fetched log is empty — section omitted, header never printed.
+  `previous: true` returning @Err (no prior instance) — silently skipped on the child lane while
+    the current lane's failure @warn!s.
+
+Tasks:
+  [x] Map today's four in-file tests: @install_job_selector_uses_instance_namespace_type_labels,
+      @object_ref_matches_controller_runtime_format, @operator_filter_keeps_only_the_target_instance,
+      @operator_filter_does_not_match_on_bare_namespace — each mapped to a Scenario below.
+  [ ] Cover @cap (pure, directly callable): verbatim under/at limit, head-kept truncation with the
+      exact `\n... [truncated]` marker, marker bytes counted over `max` not inside it, multi-byte
+      boundary walk-back landing short of `max`, and `max == 0` yielding the marker alone.
+  [ ] Cover since-window arithmetic (currently only reachable through @get_pod_logs_with_options —
+      needs extraction or the faked client below): hours `5` → `18000`, hours `0` → @Some(0)
+      verbatim, hours past @u64/@i64 range clamped via @unwrap_or(@i64::MAX), @tail_lines stays @None.
+  [ ] Cover the whole async surface — @get_agent_log, @get_job_pods, @get_pod_logs,
+      @get_child_logs, @get_instance_children, @get_child_pods, @get_pod_logs_with_options,
+      @get_operator_log and the @scrub application point / @ScrubStats passthrough — with zero
+      coverage today and @server/Cargo.toml `dev-dependencies` empty, so a seeded env or a mock
+      transport must be chosen first.
+  [?] `LOG_SINCE_HOURS` / `LOG_CAP_BYTES` bind to the child tier only: @get_agent_log and
+      @get_operator_log read full stored logs with no window and no size cap — unbounded response
+      size on those endpoints — and the operator zero-match marker even says "in the retained
+      window" while that lane keeps no window. Decide later whether the knobs apply to all tiers.
+  [?] @cap keeps the head of each read, i.e. the oldest lines (kube streams chronologically), so
+      under cap the newest lines — the incident — are exactly what gets dropped. Decide later
+      whether truncation should keep the tail.
+  [?] Truncation runs before @scrub: @cap cuts mid-value, and @scrub only masks whole collected
+      secret values, so a secret straddling the cut keeps its partial form verbatim in the
+      redacted payload. Decide later whether to cap after scrubbing or re-check cut boundaries.
+  [?] @log_cap_bytes caps each individual container read (current and previous each) — a fat
+      multi-pod, multi-container instance still renders count × cap bytes plus headers, no
+      response-level overall bound exists. Decide later what the knob should bound.
+  [?] @get_pod_logs always receives @container @None (both call sites), so its container argument
+      and @Option::map arm are dead, and multi-container agent/operator pods depend on the API
+      server's default-container behavior. Decide later whether the child tier's per-container
+      fan-out replaces the container-@None single read.
+  [?] @get_pod_logs can never return @Err — every failure already became warn + empty — yet it
+      keeps a @Result signature and both callers apply `?`: dead error lanes. Decide later whether
+      to drop the @Result or restore propagation.
+  [?] Child-tier failure split: a pod vanishing between list and @get makes @get_pod_logs_with_options
+      raise @DiagError::KubeError and the whole response 500s, discarding sections already
+      collected — inconsistent with the log-read degradation the same file applies everywhere else.
+      Decide later whether a failing pod get should skip the pod instead.
+  [?] @get_job_pods and @get_operator_log list the entire @vynil_namespace pod set and filter
+      client-side, per matching job for the former; the comment says the operator stamps no other
+      pod link. Decide later whether a server-side selector (job pod-template labels /
+      `app.kubernetes.io/name=vynil` in @ListParams) can replace the full lists.
+  [?] Job pod matching accepts any @ownerReference with `kind == "Job"` — @controller unchecked —
+      and an unnamed job matches on `""`; a pod naming a same-named Job in a non-controller ref is
+      misattributed. Decide later whether @controller == @true is required.
+  [?] @spec.init_containers are never read on any tier: a child stuck crashing in an init container
+      yields an empty or misleading childlogs blob. Decide later whether init containers get their
+      own sections.
+  [?] Pod-bearing child kinds `Job` / `CronJob` land in @get_child_pods's zero-pod fallback — the
+      "only pod-bearing workloads are handled" comment overstates coverage. Decide later whether
+      job children resolve pods directly.
+  [?] The operator refusal marker interpolates caller-influenced `{namespace}/{name}` into an
+      unscrubbed response body — safe only by the ./server.rs DNS-1123 gate outside this file.
+      Decide later whether the marker escapes or scrubs its inputs locally.
+
+Done when:
+  Every Scenario below maps to a passing test in the `server` crate (the coverage `[ ]` entries
+    closed), the `[?]` decisions above are all recorded and resolved, and `cargo test -p server`
+    with `cargo clippy --all-targets -- -D warnings` and `cargo +nightly fmt --check` stay green.
+
+Scenario: The install-job selector maps the three kinds on exact labels
+  Given kinds `tenantinstances`, `serviceinstances`, `systeminstances`
+  When @install_job_selector builds the string
+  Then the results are exactly `instance=gitea,namespace=media-test,type=tenant`,
+    `instance=db,namespace=apps,type=service`, `instance=reloader,namespace=kydah-core,type=system`
+  And any other kind yields @None and the tier raises @DiagError::UnknownKind before listing
+  Maps to test @install_job_selector_uses_instance_namespace_type_labels
+
+Scenario: object.ref token matches the controller-runtime span
+  Given kind `tenantinstances`, name `gitea`, namespace `media-test`
+  When @instance_object_ref builds the token
+  Then it is exactly `TenantInstance.v1.vynil.solidite.fr/gitea.media-test`, and a bogus kind
+    yields @None → @DiagError::UnknownKind
+  Maps to test @object_ref_matches_controller_runtime_format
+
+Scenario: Operator filter keeps only the target instance's lines
+  Given a captured operator log with two `object.ref=…gitea.media-test` lines, one sibling
+    `plane.media-test` line and one bare `K8s error:` line without any `object.ref`
+  When @filter_operator_lines runs with gitea's token
+  Then both gitea lines survive joined by `\n`, the sibling line is dropped (bare namespace must
+    not match) and the unattributable line is dropped
+  Maps to test @operator_filter_keeps_only_the_target_instance
+
+Scenario: A same-namespace sibling token matches nothing
+  Given text carrying only `object.ref=TenantInstance.v1.vynil.solidite.fr/other.media-test`
+  When @filter_operator_lines runs with gitea's token
+  Then the result is `""` — driving @get_operator_log to the refusal marker, not a full dump
+  Maps to test @operator_filter_does_not_match_on_bare_namespace
+
+Scenario: Cap keeps the head and marks truncation
+  Given logs ≤ @max, logs > @max ending mid-multi-byte-char, and @max `0`
+  When @cap truncates
+  Then the first case is verbatim, the second keeps the head prefix back-walked to a char
+    boundary plus exactly `\n... [truncated]`, and the third yields the marker alone; the marker
+    always adds 16 bytes on top of the ≤@max prefix
+  No mapped test exists.
+
+Scenario: Child window converts hours and never tails lines
+  Given @log_since_hours `5`, then `0`, then a value whose @saturating_mul(3600) overflows @i64
+  When @get_pod_logs_with_options builds @LogParams for both lanes
+  Then @since_seconds is `18000`, then @Some(0) verbatim, then clamped to @i64::MAX via
+    @unwrap_or — and @tail_lines and @previous-side @container handling stay as pinned in Must
+  No mapped test exists.
+
+Scenario: Child pod selection is the four workloads' matchLabels exactly
+  Given children of kinds `Deployment`, `StatefulSet`, `DaemonSet`, `ReplicaSet`, `Service`,
+    `ConfigMap`, `Job`
+  When @get_child_pods resolves pods per child in a child namespace (own @namespace else the
+    instance's)
+  Then the four workloads list pods by their selector's `k=v,`-joined, key-sorted `matchLabels` and
+    every other kind — `Job` included — gets none, while @None spec, missing/empty matchLabels or a
+    failed workload @get also yield none without any error
+  No mapped test exists.
+
+Scenario: Crash-loop siblings show up as a previous section
+  Given a child pod with containers `app` (crash-looped, previous terminated logs) and `sidecar`,
+    and a crashing init container
+  When @get_pod_logs_with_options walks @spec.containers
+  Then the blob is current `=== container/app ===`, then `=== container/app (previous) ===`, then
+    `=== container/sidecar ===` under one `=== pod/{name} ({kind}/{name}) ===` wrapper, each body
+    capped independently, init-container logs absent, current-lane failure @warn!s while a failing
+    previous lane stays silent
+  No mapped test exists.
+
+Scenario: Agent job pods aggregate across runs without window or cap
+  Given two matching install jobs (one old completed run) whose pods are found through the full
+    operator-namespace list filtered on a `Job` owner-reference
+  When @get_agent_log reads them
+  Then every pod's current container-@None log joins as `=== pod/{name} ===\n{logs}\n`, empty pods
+    omitted, whatever @Api::logs answers for @container on the instance pod, and neither
+    @log_since_hours nor @cap shortens anything
+  No mapped test exists.
+
+Scenario: List failures abort, log-read failures degrade
+  Given a pod-list @Err mid-@get_job_pods (or child pods, operator pods, child pod @get), versus an
+    @Api::logs @Err on an agent or operator pod
+  When either tier loops
+  Then the first raises @DiagError::KubeError from `?` and the already-assembled sections vanish,
+    while the second @warn!s inside @get_pod_logs and the blob continues from surviving pods
+  No mapped test exists.
+
+Scenario: One final scrub or none at all
+  Given three tiers whose assemblies end up empty versus one non-empty assembly carrying a secret
+    occurrence in a body and one in a section header
+  When each returns
+  Then empty agent/child answer `("", @ScrubStats::default())` with @scrub never called, the empty
+    operator answers the refusal marker with default stats unscrubbed, and the non-empty blob makes
+    exactly one @scrub call over headers-plus bodies whose @ScrubStats passes through untouched
+  No mapped test exists.
+
+Example:
+  childlogs pod wrapper: `=== pod/web-abc12 (Deployment/web) ===` opening a section whose body
+    holds `=== container/app ===`, `=== container/app (previous) ===` and
+    `=== container/sidecar ===` blocks in that order, each capped separately
+  operator zero-match body: `# no operator log lines matched instance media-test/gitea in the retained window\n`
+    — plus header `X-Diag-Redactions: distinct=0;occurrences=0`, never scrubbed
+  capped container section: `=== container/app ===\n{first bytes …}\n... [truncated]\n`
+  empty childlogs body: `""` with `X-Diag-Redactions: distinct=0;occurrences=0`

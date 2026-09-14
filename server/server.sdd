@@ -58,5 +58,15 @@ Done when:
   Each API module has a reviewed spec and `cargo test -p server` is green.
 
 Tasks:
-  [ ] #0 Spec `./src/authz.rs` and `./src/collect/`.
-  [ ] #1 Spec `./src/discovery.rs`, `./src/anonymize.rs`, and `./src/dto.rs`.
+  [x] #0 Spec `./src/authz.rs` and `./src/collect/`.
+  [x] #1 Spec `./src/discovery.rs`, `./src/anonymize.rs`, and `./src/dto.rs`.
+
+References:
+  ./src/main.sdd, ./src/lib.sdd, ./src/server.sdd, ./src/auth.sdd, ./src/authz.sdd,
+    ./src/discovery.sdd, ./src/dto.sdd, ./src/error.sdd, ./src/anonymize.sdd,
+    ./src/config.sdd, ./src/state.sdd, ./src/collect/children.sdd,
+    ./src/collect/clusterinfo.sdd, ./src/collect/logs.sdd, ./src/collect/packages.sdd,
+    ./src/collect/popularity_contest.sdd, ./src/collect/state.sdd,
+    ./src/collect/vynilconfig.sdd — the file-level contracts; this directory spec stays
+    coarse and defers all file behavior to them. `./src/collect/mod.rs` is a re-export
+    shim with no behavior and carries no file spec per `.specdd/bootstrap.project.md`.

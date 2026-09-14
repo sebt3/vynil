@@ -1,0 +1,455 @@
+Spec: server
+
+Purpose:
+  Own the whole HTTP surface and transport posture of the diagnostic server: the three-GET-route
+    axum @Router built by @create_router; @instance_handler's fixed pipeline that answers
+    shape, kind, item and dot-lane rejections before any identity is touched, then
+    authenticates (./auth.rs), authorizes (./authz.rs), gates instance existence and dispatches
+    to ./collect/; @run_server's listener choice — plain HTTP, plain TLS, or the mandatory
+    client-cert-mTLS that makes `--trust-request-header` safe, with the startup refusal of the
+    trust flag without TLS; the `application/yaml` labelling of YAML bodies; and the
+    `X-Diag-Redactions` scrub tally injected into every response a redacting collector produced.
+    This file is the crate's security boundary for transport: nothing in ./auth.sdd binds a
+    parsed header to a verified channel — that guarantee exists only in the TLS code here.
+
+Owns:
+  ./server.rs
+
+References:
+  ./error.sdd — the @DiagError vocabulary every `?` here feeds; the per-variant `DIAG-` id,
+    status and JSON `{code,message}` @IntoResponse rendering every failure leg below names.
+  ./auth.sdd — the @extract_identity decision this file places in the pipeline and feeds with
+    cloned headers; its trust-boundary `[?]` and the flag's `--trust-request-header` flag/env
+    pair from ./config.sdd own the header-trust semantics, the TLS binding here does not.
+  ./authz.sdd — @check_item_access and @is_instance_scoped_item consumed once each; item
+    membership pre-validation exists because @check_item_access default-allows unknown items.
+  ./config.sdd — the @Config fields @run_server and the handler read; parse-time validation
+    boundaries (empty `bind` accepted, missing TLS files not detected).
+  ./state.sdd — the @AppState cloned into the router and re-read per request; the ./main.rs
+    `ring` provider pin this file's plain-TLS listener depends on.
+  ./dto.sdd — @ScrubStats, whose @distinct and @occurrences @usize fields the
+    `X-Diag-Redactions` grammar hardcodes.
+  ./discovery.sdd — @discovery_handler as mounted here unauthenticated; the duplicated
+    @API_GROUP and @API_VERSION constants and the unauthenticated-discovery exemption are
+    `[?]` there.
+  ./collect/clusterinfo.sdd, ./collect/vynilconfig.sdd, ./collect/packages.sdd,
+    ./collect/popularity_contest.sdd, ./collect/state.sdd, ./collect/children.sdd,
+    ./collect/logs.sdd — the collectors each dispatch arm awaits, including who returns
+    @ScrubStats and who returns plain @String bodies (./collect/logs.sdd: all three are
+    (@String, @ScrubStats) pairs).
+  ./common/src/instancetenant.sdd, ./common/src/instanceservice.sdd,
+    ./common/src/instancesystem.sdd — the typed gets @check_instance_exists needs installed.
+  /server/src/error.sdd, /common/src/context.sdd — approved calibration references.
+
+Must:
+  @create_router registers exactly the three GET routes @API_PATH and @INSTANCE_PATH spell and
+    nothing else — no fallback, no middleware layer, no nest or merge — so on
+    this one @Router matched paths answer `200` (item lanes), unmatched paths the bare `404`
+    axum 0.8.9 produces, matched paths other methods `405` (@StatusCode::METHOD_NOT_ALLOWED per
+    axum 0.8.9), and trailing-slash variants miss their routes: `GET /healthz` →
+    @healthz_handler, `GET /apis/admin.vynil.solidite.fr/v1` → @discovery_handler,
+    `GET /apis/admin.vynil.solidite.fr/v1/namespaces/{ns}/{kind}/{name}/{item}` →
+    @instance_handler, all closed over the cloned @AppState by @with_state.
+  @VALID_KINDS is the literal @str array [`tenantinstances`, `serviceinstances`,
+    `systeminstances`] and @VALID_ITEMS the nine-item array [`clusterinfo`, `vynilconfig`,
+    `packages`, `popularitycontest`, `state`, `children`, `agentlog`, `childlogs`,
+    `operatorlog`]; membership is an exact, whole-value, case-sensitive @contains of the
+    percent-decoded params on @as_str — no trim, no case fold, no partial match.
+  @DNS_1123_RE is the literal `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$` (regex `1.12.4` @Regex behind a
+    std @LazyLock) and @validate_dns1123 applies it to the `{ns}` and `{name}` params only, as
+    an anchored full match: a leading or trailing `.` or `-` and the bare two-byte `..` are
+    rejected, embedded dot runs — `a..b` — pass, a single alphanumeric passes. `{kind}` and
+    `{item}` never face the regex, only the two allow-lists above.
+  @instance_handler runs, first error short-circuiting via `?`: @validate_dns1123 on ns then on
+    name (`@DiagError::InvalidNameFormat`, `400` `DIAG-003`) → @VALID_KINDS membership
+    (`@DiagError::UnknownKind`, `404` `DIAG-004`) → @VALID_ITEMS membership
+    (`@DiagError::UnknownItem`, `404` `DIAG-005`) → @extract_identity(client, headers,
+    @state.config.trust_request_header) (`401` `DIAG-006` leg) →
+    @check_item_access(client, identity, kind, ns, name, item, @state.config.enable_packages)
+    (SAR refusal `403` `DIAG-001`, gated items `404` `DIAG-007`) → the existence gate, firing
+    only when @is_instance_scoped_item(&item) and reached only after authz passed: @false from
+    @check_instance_exists is @DiagError::InstanceNotFound (`404` `DIAG-002`) → the nine-arm
+    @match on item. Shape, kind and item lanes therefore answer before any identity, before any
+    cluster call and with no log line; the in-file comment gives the ordering rationale that
+    authentication precedes cluster reads so the caller cannot probe instance existence
+    unauthenticated — every read that touches the cluster with the server's own rights sits at
+    or after @check_item_access.
+  @check_instance_exists maps typed existence by @kind arm onto
+    @common::instancetenant::@TenantInstance, @common::instanceservice::@ServiceInstance and
+    @common::instancesystem::@SystemInstance through @kube::@Api::@namespaced(client, ns) and its
+    @get: any @Ok answers @true, any @Err answers @false with the @kube::@Error discarded and
+    unlogged, so absent, RBAC-denied and cluster-unreachable existence reads are one
+    `404` `DIAG-002` lane; the `_` arm is unreachable behind the @VALID_KINDS pre-check.
+  Generic-tier items never probe existence and never read the SAR lane (./authz.sdd tiering):
+    `clusterinfo` serves regardless of path ns/name (which are never consulted by
+    @get_cluster_info), `vynilconfig` serves the caller's `{ns}` into @get_vynil_config, and
+    `packages`/`popularitycontest` answer for any authenticated identity while
+    @state.config.enable_packages holds.
+  Dispatch success envelopes on the locked axum `0.8.9`: every success is `200`; @axum::Json
+    arms — `clusterinfo`, `packages`, `popularitycontest` (`@Json(...)` tuples) and `children`
+    (@Json of @Vec<@ChildWithState> then @into_response) — carry `application/json`;
+    `vynilconfig` and `state` go through @yaml_response and carry exactly
+    `application/yaml` (CONTENT_TYPE inserted, no `charset` suffix); `agentlog`, `childlogs` and
+    `operatorlog` hand the collectors' @String to axum @into_response and carry
+    `text/plain; charset=utf-8`. @add_scrub_header runs on those six redacting arms — `state`,
+    `children`, `vynilconfig`, `agentlog`, `childlogs`, `operatorlog` — via
+    @response.headers_mut() after the body became a @Response (@insert, replacing any existing
+    value), never on `clusterinfo`, `packages` or `popularitycontest`.
+  @add_scrub_header builds the literal `distinct={distinct};occurrences={occurrences}`
+    interpolated from @ScrubStats' decimal @usize fields under header name
+    `X-Diag-Redactions`, and silently omits the header when @from_str refuses the value; digits
+    and visible-ASCII grammar mean that omission is unreachable, but it errors into silence,
+    not into a 500.
+  @healthz_handler answers `(StatusCode::OK, "ok")` — `200`, body exactly `ok`, no extractor,
+    no auth, and it is the only unauthenticated non-discovery route.
+  @run_server runs this sequence in this order, every failure @DiagError and the binary's exit-1
+    handling owned by ./main.rs: build the @Router with @create_router from a cloned state →
+    parse @config.bind into @std::net::@SocketAddr via @str::@parse, payload
+    `Invalid bind address: {e}` → guardrail: the combination of @config.trust_request_header with
+    @config.insecure_no_tls is refused at startup with payload `DIAG-CONFIG: --trust-request-header requires TLS (mandatory mTLS). Refusing to start in an impersonable configuration.` →
+    @config.insecure_no_tls branch: @tracing::warn! with `Starting HTTP server (no TLS) on {addr} — Bearer/TokenReview auth only`, then @axum::@serve on one @tokio::net::@TcpListener::@bind
+    (addr) with payloads `HTTP bind error: {e}` and `HTTP server error: {e}`, returning @Ok when
+    @serve finishes → TLS pair presence: @config.tls_cert and @config.tls_key both @Some else
+    payload `TLS certificates not provided for HTTPS server` → @config.trust_request_header
+    branch: @load_requestheader_ca then @build_mtls_config under the @tracing::info! line
+    `Starting HTTPS server with MANDATORY mTLS (front-proxy CA self-loaded)` (that info line
+    names no addr, unlike the plain-TLS one) → else
+    @axum_server::tls_rustls::@RustlsConfig::from_pem_file on the two paths with payload
+    `TLS config error: {e}` under the @tracing::info! line
+    `Starting HTTPS server (server-side TLS) on {addr}` → finally @axum_server::@bind_rustls on
+    the address and config, then its @serve of @into_make_service, with payload
+    `HTTPS server error: {e}`. In
+    the TLS paths @serve never returns in normal operation, so @Ok(()) is only ever observed
+    after the listener stops.
+  The trust flag is a single @bool read twice on this boundary — once at startup
+    (@run_server: `true` with TLS builds the mTLS listener, `true` combined with no-TLS is
+    refused) and
+    once per request (@instance_handler hands it to @extract_identity) — no per-request
+    transport fact reaches @instance_handler at all, and the file itself never reads
+    `X-Remote-*` beyond the verbatim clone @RequestHeaders performs.
+  @build_mtls_config: server cert chain via @rustls_pemfile::@certs and @rustls_pemfile::@private_key
+    from the two @File paths (a @None key yields payload `no private key in key file`, file and
+    PEM failures surface as @std::io::@Error or rustls text); the CA PEM @str is streamed through
+    @rustls_pemfile::@cert and every certificate goes through @RootCertStore::@add; a
+    @rustls::server::@WebPkiClientVerifier is @build from those roots on an explicit @Arc of
+    @rustls::crypto::ring's @default_provider — the same provider ./main.rs installed globally,
+    re-pinned locally — and
+    installed via @with_client_cert_verifier, which on rustls `0.23.41` rejects handshakes
+    without a client certificate chained to those roots, so reaching the application on this
+    listener proves the front-proxy spoke with a certificate @load_requestheader_ca supplied;
+    @with_safe_default_protocol_versions keeps rustls' own default versions; @ServerConfig is
+    wrapped by @RustlsConfig::from_config in an @Arc. Every failure carries the payload prefix
+    `mTLS config: `.
+  @load_requestheader_ca prefers the override and is the only cluster reader in the startup
+    path: @config.requestheader_ca @Some → @std::fs::@read_to_string verbatim, IO failure
+    payload `requestheader CA file: {e}`; else one @get, through a namespaced
+    @kube::@Api<@k8s_openapi::api::core::v1::@ConfigMap>, of
+    `extension-apiserver-authentication` in `kube-system` (the
+    `extension-apiserver-authentication-reader` RBAC grant is a deployment fact, not code here);
+    a get failure is @map_err-d to @DiagError::KubeError — the only origin of that variant in
+    this file — and a reply lacking the
+    `requestheader-client-ca-file` key yields @DiagError::InternalError with payload
+    `requestheader-client-ca-file absent de extension-apiserver-authentication`.
+  @RequestHeaders is the file's only @FromRequestParts impl: its @from_request_parts clones
+    @parts.headers wholesale, @Ok-ing unconditionally, so its @type Rejection @DiagError is
+    declared but never produced and no header leg here can reject before the handler body.
+
+Depends on:
+  @crate::error::@DiagError — ./error.sdd: the only error type the router handlers yield; the
+    @Debug and @thiserror derives plus @DiagError's @axum::response::IntoResponse impl are what let
+    @instance_handler return `@Result<@Response, @DiagError>`; the derived @From conversions
+    carry the collectors' `?` legs; @DiagError::KubeError enters only from the @ConfigMap leg.
+  @crate::auth::@extract_identity (./auth.sdd), @crate::authz::@check_item_access and
+    @crate::authz::@is_instance_scoped_item (./authz.sdd) — the auth and authz calls of the
+    pipeline; @crate::discovery::@discovery_handler (./discovery.sdd) the mounted discovery
+    body; @crate::config::@Config and @crate::state::@AppState (./config.sdd, ./state.sdd).
+  ./collect/: @crate::collect::clusterinfo::@get_cluster_info, @vynilconfig::@get_vynil_config,
+    @packages::@get_packages, @popularity_contest::@get_popularity_contest,
+    @state::@get_instance_state, @children::@get_children, @logs::@get_agent_log,
+    @logs::@get_child_logs, @logs::@get_operator_log — one per dispatch arm, payload and
+    @ScrubStats ownership belongs to each sibling spec.
+  @crate::dto::@ScrubStats (./dto.sdd) — the header tally's field names are coupled to it.
+  @common::instancetenant::@TenantInstance, @common::instanceservice::@ServiceInstance,
+    @common::instancesystem::@SystemInstance via /common/src/lib.rs — the typed existence gets;
+    those CRDs must exist in the cluster for @Ok(true) ever.
+  axum `0.8.9` locked in /Cargo.lock (`0.8` in /server/Cargo.toml): @Router, @get, @route,
+    @with_state, @axum::extract::@Path, @State and @FromRequestParts, @axum::http::@StatusCode,
+    @HeaderMap, @HeaderValue and @header::@CONTENT_TYPE, @axum::Json and @String's @IntoResponse
+    lanes; the `404`/`405` defaults, automatic percent-decoding and per-param UTF-8 checks of
+    @Path are that build's behavior, since no custom rejection or fallback overrides them here.
+  axum-server `0.7.3` (`tls-rustls` feature): @RustlsConfig::from_pem_file and @from_config, plus
+    @bind_rustls; the bind happens inside the @serve future (0.7.3 binds via @TcpListener there),
+    and @from_pem_file builds its @rustls::@ServerConfig on the process default provider the
+    ./main.rs `ring` pin supplied — @ring is passed explicitly only in @build_mtls_config.
+  rustls `0.23.41` with the `ring` feature, rustls-pemfile `2.2.0` — verifier, roots, builder.
+  kube `3.1.0` (@Client, @Api, @Api::@get) and k8s-openapi `0.27.1` (@ConfigMap) — CA load and
+    existence gets only.
+  regex `1.12.4` (@Regex::@new and @is_match), std @LazyLock, tokio `1.52.3` @TcpListener,
+    @std::fs, @std::net — startup plumbing.
+  @tracing `0.1` — the @warn! and @info! startup lines quoted in Must (the file logs nothing
+    else).
+
+Exposes:
+  @create_router — `pub fn(@AppState) -> @Router`: the exact three-route table, GET-only,
+    spelled in Must and Example; the sole registration site of every endpoint; no in-crate
+    caller outside @run_server.
+  @run_server — `pub async fn(@AppState, @Config) -> @Result<(), @DiagError>`: the binary's
+    listener bootstrap consumed by ./main.rs, with the startup ladder and guardrail spelled out
+    in Must; the
+    doc comment names @DiagError::InternalError as the failure but a ConfigMap get failure
+    leaves as @DiagError::KubeError and TLS/mTLS/CA-file/bind/guardrail payloads as
+    @DiagError::InternalError — `500` `DIAG-500` renderings none of which reach a client because
+    no listener is up yet.
+  @RequestHeaders — `#[derive(@Debug)] pub struct(@pub @HeaderMap)` plus its
+    @FromRequestParts impl (@type Rejection @DiagError, never produced): the crate-wide
+    whole-request-header extractor, consumed so far only by @instance_handler, used nowhere
+    else, and `pub` through `pub mod server;` in ./lib.rs.
+  @API_GROUP — `pub const @API_GROUP: &@str =` `admin.vynil.solidite.fr`; @API_VERSION —
+    `pub const @API_VERSION: &@str =` `v1`; duplicates of ./discovery.rs' same-named consts
+    (there `[?]`'d) that neither file re-uses: the route literals repeat both strings inline.
+  Private but observable on the wire, frozen at their own entries: the @API_PATH literal
+    `/apis/admin.vynil.solidite.fr/v1` and @INSTANCE_PATH literal
+    `/apis/admin.vynil.solidite.fr/v1/namespaces/{ns}/{kind}/{name}/{item}`; @VALID_KINDS and
+    @VALID_ITEMS; @DNS_1123_RE and @validate_dns1123; @healthz_handler, @instance_handler,
+    @check_instance_exists, @yaml_response, @add_scrub_header, @load_requestheader_ca,
+    @build_mtls_config.
+
+Accepts:
+  @create_router: one @AppState by value, cloned in; the accepted request shapes per route:
+    `GET /healthz` and `GET /apis/admin.vynil.solidite.fr/v1` take no body, no param, no header
+    and no credential; `GET {INSTANCE_PATH}` accepts any four percent-decoding, UTF-8 path
+    segments for `{ns}`, `{kind}`, `{name}`, `{item}` — arbitrary dot runs, `+`, other visible
+    punctuation included (a non-UTF-8 or bad-escape param dies in @Path's default axum-0.8.9
+    rejection, a bare `400` outside the @DiagError lane) — and headers, of which only the ones
+    ./auth.sdd reads matter downstream. No body is ever read; @run_server accepts the resolved
+    @Config read-only: `bind` gets its only shape check here, and TLS/CA paths are opened only
+    by their branch, existence never probed first (./config.sdd).
+
+Returns:
+  @create_router: the @Router described; @run_server: @Ok(()) when the @serve future has
+    returned — plain-HTTP mode ends only on a @serve error in practice, TLS modes not at all in
+    normal operation; no other value.
+  A wire table per lane: `200` on all successes (body/content-type per Dispatch Must; six arms
+    additionally carry `X-Diag-Redactions: distinct={distinct};occurrences={occurrences}`);
+    `400` `DIAG-003` ns/name regex, first failing param wins, name never tested when ns failed;
+    `404` `DIAG-004` off-list kind; `404` `DIAG-005` off-list item; `401` `DIAG-006` every
+    ./auth.sdd failure; `403` `DIAG-001` SAR denial; `404` `DIAG-007` gated item under the
+    disabled flag; `404` `DIAG-002` gated-item existence @false; `500` `DIAG-500` for collector,
+    SAR-post, kube and @DiagError::InternalError legs, all rendered as the JSON
+    `{code,message}` ./error.sdd pins. `405` (bare) on a matched path's wrong method, `404` on
+    unmatched paths, `400` from @Path rejections — axum 0.8.9 defaults, no `DIAG-` body. Startup
+    lane payloads — `Invalid bind address:`, the guardrail `DIAG-CONFIG:` text, `HTTP bind error:`,
+    `HTTP server error:`, `TLS certificates not provided`, `TLS config error:`,
+    the `mTLS config: ` prefix, `requestheader CA file:`,
+    `requestheader-client-ca-file absent`, and the @ConfigMap get's @DiagError::KubeError —
+    never render to a client and go to ./main.rs's `error!` line and exit code `1`.
+
+Raises:
+  From this file's own code: @DiagError::InvalidNameFormat and @DiagError::UnknownKind from the
+    shape and membership legs, @DiagError::UnknownItem, @DiagError::InstanceNotFound,
+    @DiagError::InternalError at the bind, guardrail, insecure and TLS bootstrap legs listed in
+    Must, @DiagError::KubeError at the @ConfigMap get. It forwards, untouched, whatever
+    @extract_identity and @check_item_access raise. Collectors' errors propagate through `?`
+    unaltered.
+  @instance_handler is total: every leg answers @Ok or @Err, no @unwrap outside the @DNS_1123_RE
+    build and no @panic anywhere reachable — the one @panic is the @unwrap_or_else arm for an
+    invalid static pattern, impossible for the committed literal. @run_server raises before
+    serving and blocks while serving; nothing in this file retries, times out, rate-limits or
+    shuts listeners down gracefully.
+
+Handles:
+  All four `{@trust_request_header, @insecure_no_tls}` startup combinations: `true`+`false` →
+    mandatory client-cert mTLS; `false`+`true` → plain HTTP with the warn line (mode note in
+    Tasks `[?]`); `false`+`false` → plain server-side TLS; `true`+`true` → refused startup, the
+    only combination with no listener.
+  A `&&`-short-circuiting guardrail ordered after @SocketAddr parsing and router construction
+    — with an unparsable bind plus the refused pair, the client-visible-elsewhere refusal loses
+    to `Invalid bind address`, and neither is ever rendered until ./main.rs logs it.
+  A partially supplied TLS pair (either @Some, @None) is refused by one message naming neither
+    missing member.
+  Path traversal input, stated frozen: `{ns}`/`{name}` reject leading/trailing `.` and the bare
+    `..` at `400` (pre-auth, no cluster touch) and pass embedded dot runs `a..b` to
+    @kube::@Api::@namespaced and its @get unaltered — gated items collapse any such collect or
+    existence failure into `404` `DIAG-002`, ungated ones into a `500` kube lane; `{kind}` and
+    `{item}` reject dots only incidentally — `..` and `.` answer `404` `DIAG-004`/`DIAG-005`
+    because they match no list entry, pre-auth; this file performs no traversal-specific
+    normalization beyond that.
+  Percent-encodings decode before the checks (`%2e%2e` reaches the same lanes as `..`), while a
+    bad escape or non-UTF-8 param dies at `400` in @Path, outside the @DiagError rendering.
+  Existence-check failures at @instance_handler: `state`, `children`, `agentlog`, `childlogs`,
+    `operatorlog` gate on it; the four generic/gated arms never probe it, so nonsense-but-valid
+    ns/name combinations still serve cluster-wide or ns-scoped data on those arms.
+  Scrub tally absence on the three non-redacting arms; @insert replacing a pre-existing
+    `X-Diag-Redactions` value; the unreachable @from_str failure lane silently.
+  Header-clone posture: @RequestHeaders copies the entire @HeaderMap — bearer tokens and
+    `X-Remote-*` alike — into handler scope although @extract_identity, per ./auth.sdd, reads
+    just three header names out of it.
+
+Tasks:
+  [ ] Cover @create_router with in-memory @oneshot: 200 `ok` on `GET /healthz`; the fixed
+      discovery body on the base path; `405` for non-GET on each registered path; bare `404` on
+      unmatched and on trailing-slash variants.
+  [ ] Cover the pipeline ordering with @tower on a @Router: off-shape ns (`..`, leading `-`)
+      `400` before any auth; `..` kind and `..` item answered `404` `DIAG-004`/`DIAG-005`
+      without credentials; `a..b` ns passing the regex and landing in the post-auth lanes;
+      non-UTF-8 and bad-escape params taking the bare-`400` @Path lane, not `DIAG-003`.
+  [ ] Cover the nine dispatch arms and header matrix (content types, `200`s, presence/absence of
+      `X-Diag-Redactions`) with fake collectors or a fake apiserver; /server/Cargo.toml
+      @dev-dependencies is empty and no httpmock/tower-test harness ships — the same missing
+      harness ./auth.sdd and ./authz.sdd `[ ]` legs report.
+  [ ] Cover @add_scrub_header grammar and @insert replacement, @yaml_response's
+      `application/yaml` @CONTENT_TYPE.
+  [ ] Cover @run_server startup refusals via @Config::try_parse_from-shaped test Configs: the
+      `DIAG-CONFIG:` guardrail payload on trust+insecure (with a bind that parses, else the bind
+      error wins — pin both orders), `Invalid bind address:` on garbage and on empty `bind`, the
+      partial-pair TLS payload, and the warn line on insecure-only (loopback @SocketAddr +
+      immediate connect, or assert before bind).
+  [ ] Cover @build_mtls_config and @load_requestheader_ca with temp files: unreadable cert, PEM
+      without key → `mTLS config: no private key in key file`, CA override reading verbatim; a
+      rustls-level @ClientConfig handshake test could pin verifier refusal of
+      certificate-less clients once rustls test tooling is agreed.
+  [ ] Cover @check_instance_exists against fake-apiserver present/absent/denied replies — the
+      present leg answers @true, denied and unreachable lanes still need the harness.
+  [?] Existence error collapse: @check_instance_exists discards every @kube::@Error as @false,
+      so RBAC gaps on the server's own instance reads and cluster outages answer
+      `404` `DIAG-002` (false, not absent). Decide later whether existence `Err` should become
+      `500`/`DIAG-500`.
+  [?] Existence-blind generic arms: `clusterinfo` with an arbitrary valid ns and
+      `vynilconfig` reading the caller's `{ns}` both answer after an authenticated-but
+      possibly-empty identity; authz.sdd's pass-through posture is `[?]`'d there but this
+      endpoint shape freezes whether it should keep accepting. Decide later after ./authz.sdd
+      `[?]`.
+  [?] Trust-flag coupling: `X-Remote-User` is trusted iff the process-wide flag is `true`, made
+      safe by exactly one startup decision — @run_server checks the trust+insecure pair once,
+      @instance_handler re-reads @state.config.trust_request_header per request, and no code
+      rebinds a listener today, but a config mutated at runtime would open the header lane
+      without any @Router rebuild. Decide later whether the lane should re-prove the startup
+      pairing.
+  [?] Guardrail payload `DIAG-CONFIG:` — the refusal payload begins `DIAG-CONFIG:`, an id
+      format none of the eleven ./error.sdd variants produces, so a second pseudo-id rides
+      inside the `500` `DIAG-500` @Display, alongside the mixed-French CA text
+      `requestheader-client-ca-file absent de extension-apiserver-authentication` which today
+      reaches only ./main.rs's log but is shaped like wire text. Decide later whether both
+      strings are normalized, localized or kept.
+  [?] Guardrail ordering: the trust+insecure check runs after @SocketAddr parsing and after
+      @create_router, so a typo'd bind masks the security refusal (and a refused config builds
+      a discarded router). Decide later whether it should become the first check.
+  [?] Doc comment vs reality on @run_server: the `# Errors` doc names @DiagError::InternalError
+      as the failure, but the ConfigMap get leg yields @DiagError::KubeError. Decide later
+      whether the startup lane normalizes onto @DiagError::InternalError or the doc broadens to
+      name both.
+  [?] Dead/never lanes kept for defense: the `_` arms of @check_instance_exists and the
+      @instance_handler @match are unreachable behind the allow-lists; @RequestHeaders'
+      @Rejection is never produced; @API_GROUP and @API_VERSION are `pub` but unread crate-wide
+      (./discovery.sdd `[?]` names the duplication). Decide later whether these get cfg'd away,
+      folded into shared consts or stay.
+  [?] @RequestHeaders clones every request header — credentials and front-proxy headers
+      included — though nothing but @extract_identity reads them; @Debug on the struct makes the
+      whole set printable, currently unlogged. Decide later whether
+      the extractor (or a filtered subset) replaces the clone.
+  [?] No listener-shape hardening exists: nothing wraps @serve in a graceful shutdown, a
+      timeout or a rate limit; the guardrail refuses only the flag pair while
+      `insecure_no_tls`-alone binds plaintext on the configured `bind` (default
+      `0.0.0.0:8443` — ./config.sdd), so Bearer tokens cross the network in cleartext with a
+      warn line as the only ceremony, and no branch restricts the bind to loopback. Decide
+      later whether the posture gains a TLS-on-by-default rule, a loopback-only insecure mode,
+      or stays warn-line documentation.
+
+Done when:
+  Every Scenario below maps to a green test in `server` (the `[ ]` Tasks or their successors),
+    every `[?]` above is a recorded decision, `cargo test -p server`,
+    `cargo clippy --all-targets -- -D warnings`, `cargo +nightly fmt --check` and
+    `specdd lint` are green.
+
+Scenario: Router surface and method defaults
+  Given @create_router over any @AppState
+  When `GET /healthz`, `GET` the base path, `GET` the instance path, `POST` any registered
+    path, and unmatched paths — including trailing-slash variants — hit the @Router
+  Then health answers `200` body `ok`, discovery answers `200` with the ./discovery.sdd body,
+    a bare instance path without its fourth segment is unmatched, methods other than `GET` on a
+    matched path answer `405` and unmatched paths the bare `404` — all axum 0.8.9 defaults, not
+    @DiagError bodies
+  No mapped test exists.
+
+Scenario: Instance pipeline short-circuit order
+  Given requests with {ns/name regex-failing, off-list kind, off-list item, valid shape without
+    credentials, valid shape with denied SAR}
+  When each reaches @instance_handler
+  Then the legs end `400` `DIAG-003`, `404` `DIAG-004`, `404` `DIAG-005`, `401` `DIAG-006`,
+    `403` `DIAG-001` in exactly that precedence — no identity read or cluster call before the
+    auth leg, none before the SAR leg
+  No mapped test exists.
+
+Scenario: Dot runs in path params
+  Given `{name}` values `..` and `a..b`, `{ns}` values `.foo` and `foo..bar`, `{kind}` and
+    `{item}` values `..`
+  When each pipeline runs its checks
+  Then `..` `.foo` die at `400` `DIAG-003`; `a..b` and `foo..bar` pass the regex and, if
+    authenticated and gated, hit the existence/collect lanes unchanged; `..` in kind or item dies
+    at `404` `DIAG-004`/`DIAG-005` before the regex ever sees a dot
+  No mapped test exists.
+
+Scenario: Generic tier skips the existence gate
+  Given a shape-valid, authenticated request for `clusterinfo`, or for `packages` with the
+    enable flag set, or for `vynilconfig`, where the referenced `{ns}`/`{name}` pair is not an
+    existing instance
+  When it dispatches
+  Then existence is never checked and the arm answers `200` with its collector's payload
+  No mapped test exists.
+
+Scenario: Existence failures answer not-found
+  Given a gated item, an allowed SAR, and existence gets that yield the object, absence, an
+    RBAC denial and an unreachable cluster
+  When each runs
+  Then the present instance dispatches as its item arm, and the three failure shapes all answer
+    the same `404` `DIAG-002` — no log, no `500`
+  No mapped test exists.
+
+Scenario: Nine arms and the X-Diag-Redactions matrix
+  Given authenticated allowed requests for all nine items, collectors answering successfully
+    with a @ScrubStats of `distinct=2`, `occurrences=7` where applicable
+  When each dispatches
+  Then `clusterinfo`/`packages`/`popularitycontest` answer `200` `application/json` with no
+    scrub header, `children` `200` `application/json` and `state`/`vynilconfig` `200`
+    `application/yaml` with `X-Diag-Redactions: distinct=2;occurrences=7`, `agentlog`/`childlogs`
+    /`operatorlog` `200` `text/plain; charset=utf-8` with the same header
+  No mapped test exists.
+
+Scenario: Trust/insecure startup matrix
+  Given @Config pairs {trust+insecure, trust+TLS material, insecure-only, plain TLS pair}
+  When @run_server starts each with a bind address that parses
+  Then insecure+trust returns the `500` `DIAG-500` payload containing
+    `DIAG-CONFIG: --trust-request-header requires TLS` and serves nothing, trust+TLS loads CA
+    and serves mTLS with the `MANDATORY` info line, insecure-only binds plain HTTP after the
+    warn line, TLS-pair serves `from_pem_file` TLS after the `(server-side TLS)` info line —
+    trust+insecure refuses before any bind or listener
+  No mapped test exists.
+
+Scenario: CA load and mTLS builder failure legs
+  Given an @config.requestheader_ca override file, then an override-unset ConfigMap get that
+    fails, then one whose key is absent, and a key file with no PEM key
+  When @load_requestheader_ca and @build_mtls_config run on each
+  Then the override reads verbatim, a bad path yields the payload `requestheader CA file: …`, a
+    get failure yields @DiagError::KubeError, the missing key yields the
+    `requestheader-client-ca-file absent de …` @DiagError::InternalError, and the keyless file
+    yields `mTLS config: no private key in key file` — every text `500` `DIAG-500` rendered to a
+    log, never to a socket
+  No mapped test exists.
+
+Scenario: TLS material half pair and bind ordering before the guardrail
+  Given @Config with @Some cert @None key while insecure is `false`, and one with garbage bind
+    and trust+insecure together
+  When @run_server runs each
+  Then the first yields `TLS certificates not provided for HTTPS server`, the second yields
+    `Invalid bind address: …` — the bind parse error masks the refused-pair `DIAG-CONFIG:` text
+    on the ./main.rs error line
+  No mapped test exists.
+
+Example:
+  @INSTANCE_PATH verbatim: `/apis/admin.vynil.solidite.fr/v1/namespaces/{ns}/{kind}/{name}/{item}`;
+    full instance URL shape:
+    `/apis/admin.vynil.solidite.fr/v1/namespaces/tenant-a/tenantinstances/web/childlogs`
+  Scrub header literal: `X-Diag-Redactions: distinct=3;occurrences=14`; guardrail payload:
+    `DIAG-CONFIG: --trust-request-header requires TLS (mandatory mTLS). Refusing to start in an impersonable configuration.`
+  Guardrail rendered @Display: `DIAG-500: Internal server error - DIAG-CONFIG: --trust-request-header requires TLS (mandatory mTLS). Refusing to start in an impersonable configuration.`
+  Insecure warn: `Starting HTTP server (no TLS) on 0.0.0.0:8443 — Bearer/TokenReview auth only`

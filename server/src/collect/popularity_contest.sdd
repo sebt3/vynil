@@ -1,0 +1,230 @@
+Spec: popularity_contest
+
+Purpose:
+  Build the diagnostic API's cluster-wide "popularity contest" tally: list every platform-layer
+    package install — @ServiceInstance and @SystemInstance only, @TenantInstance deliberately
+    excluded — and count each instance once into an ordered jukebox → category → package → count
+    @PopularityContest tree, so the `popularitycontest` endpoint can answer which packages are
+    installed most widely. The doc comment pins the exclusion rationale of the sibling
+    ./packages.rs: a cluster-wide tenant list would leak every other tenant's workloads to any
+    caller of the diagnostic API; the platform inventory is the legitimate debug surface.
+
+Owns:
+  ./popularity_contest.rs
+
+References:
+  ../dto.sdd — @PopularityContest and @JukeboxCategory are this file's output types; the
+    `jukeboxes` / `categories` snake_case wire keys, the @u32 width of counts, and the
+    byte-stable alphabetical rendering of every map level are owned there.
+  ../error.sdd — the exit lane: @DiagError::KubeError is the only variant that ever leaves this
+    file, and its `500` / `DIAG-500` status and wire text are owned there.
+  ../state.sdd — the client arriving as the @get_popularity_contest argument is the
+    @AppState.client handle cloned by ../server.rs; the server identity whose RBAC decides
+    whether the two cluster lists succeed is specified there.
+  ../authz.sdd — the upstream gate: `popularitycontest` is a generic-tier item with no SAR and no
+    instance-existence pre-check — only the @Config `enable_packages` switch guards it (else
+    @DiagError::PackagesDisabled before this file runs), so every authenticated caller sees the
+    same whole-cluster tally from here.
+  /common/src/instanceservice.sdd, /common/src/instancesystem.sdd — the two CRDs listed here:
+    this file reads only `category` and `package` off their typed specs plus @ObjectMeta::name;
+    the specs' `jukebox` field is never consulted (Tasks).
+
+Must:
+  Exactly two data sources, both cluster-scoped full lists, in fixed order — @ServiceInstance
+    first, then @SystemInstance — each one @Api::all + @list(@ListParams::default) on a client
+    clone, awaited sequentially. No namespaced read, no @ListParams beyond its default: no label
+    or field selector, no limit, no resource-version pin; the @Api::list response is consumed
+    whole and a @ListMeta::continue_ token is never followed (Tasks). @TenantInstance is never
+    requested at all.
+  Counting is unconditional and merge-heavy: every item of both lists adds exactly one increment
+    at (instance @ObjectMeta::name with @unwrap_or_default, `spec.category`, `spec.package`) in
+    one shared `@std::collections::@BTreeMap<@String, @BTreeMap<@String, @BTreeMap<@String, @u32>>>`.
+    Kind and namespace never enter the keys, and nothing filters, dedupes, or drops an instance
+    — one @ServiceInstance and one @SystemInstance of the same name, category and package in
+    different namespaces share one counter (contrast ./packages.rs, which tags kind and namespace
+    per row).
+  The first tree level is the instance's own @ObjectMeta::name (empty string `""` when the name is
+    absent), not the spec `jukebox`: both the in-file variable name `jukebox` and the doc
+    comment's "per jukebox" label key on the instance name (see Tasks).
+  Count arithmetic is @or_insert(0) plus @saturating_add(1): every counted bucket starts at `0`
+    and grows by `1` per instance capped at @u32::MAX `4294967295` — it never wraps and never
+    panics, in debug or release builds.
+  Output wraps the count tree one-for-one via @into_iter/@map/@collect — one @JukeboxCategory per
+    jukebox key holding exactly its category → package counts, never a dropped, added, or
+    renamed level. Every map of the output tree is non-empty by construction because levels are
+    created only while counting, and no ranking, top-N, trimming or truncation happens here —
+    ordering is purely the alphabetical @std::collections::BTreeMap key order ../dto.sdd renders.
+  Aggregation is all-or-nothing per call: state is only the call-local map; if either list fails
+    the call @Errs having silently discarded everything counted so far — no partial tree, no
+    retry, no cache, no informer or background state between calls.
+  The file knows no tenant, namespace, or caller: it takes no such parameter and applies no such
+    filter, every success being the whole cluster's platform tally. Keeping @TenantInstance out of
+    the read set is the security invariant that makes answering generic-tier callers acceptable,
+    and only this file's own two-kind list enforces it.
+
+Depends on:
+  @kube `3.1.0` — @kube::Client, @Api (@Api::all) and @ListParams (@ListParams::default); only
+    @all plus @list are used, the client cloned once per @Api build (versions locked in
+    /Cargo.lock, same locked build as ./children.sdd).
+  @crate::dto in ../dto.rs — @PopularityContest and @JukeboxCategory, the output types built
+    field-by-field here.
+  @crate::error::@DiagError in ../error.rs — the return lane; only the @DiagError::KubeError
+    variant is constructed, by @map_err on each list await.
+  @common — @ServiceInstance from /common/src/instanceservice.rs and @SystemInstance from
+    /common/src/instancesystem.rs; the read spec fields are `category` and `package`, `jukebox`
+    unread, plus @ObjectMeta::name from each object's metadata.
+  @std::collections::BTreeMap plus @std::string::@String and @std::default::@Default via
+    @unwrap_or_default — the aggregation containers and key/value types.
+
+Exposes:
+  Whole file surface — `pub mod popularity_contest;` in ./mod.rs under `pub mod collect;` in
+    /server/src/lib.rs; the sole consumer is ../server.rs, whose `popularitycontest` item branch
+    awaits @get_popularity_contest(&state.client) and serves the value as @Json with `200`.
+  @get_popularity_contest — `pub async fn @get_popularity_contest(client: &@kube::Client) ->
+    @Result<@PopularityContest, @DiagError>` — the file's single item: no private helper, no
+    state, no @tests module; its doc block states purpose, the exclusion-security rationale and
+    the propagated-error promise.
+
+Accepts:
+  One borrowed @kube::Client and nothing else: no kind, namespace, name, selector, limit,
+    tenant or config argument, so the effective input set is exactly what the server identity may
+    cluster-list on the two platform kinds.
+  No precondition on listed objects: absent @ObjectMeta::name (→ `""` bucket), empty `category`
+    or `package` @String values, a missing @status and unusual free-form coordinate text all
+    arrive verbatim as keys; nothing is trimmed, parsed, validated, or skipped.
+
+Returns:
+  @Ok of one @PopularityContest whose @PopularityContest::jukeboxes holds one entry per distinct
+    instance @ObjectMeta::name that had at least one counted instance; every reachable inner map
+    is non-empty.
+  Zero listed instances is a plain @Ok with an empty @jukeboxes map — ../server.rs answers `200`
+    with `{"jukeboxes":{}}` — "nothing installed" is not an error.
+  Total increments across all buckets equal the number of listed service plus system objects,
+    per-bucket capped by the @u32::MAX saturation rule.
+
+Raises:
+  @DiagError::KubeError — every @kube::Error leg: a transport failure, RBAC `403`, the `404` of
+    an uninstalled CRD on either kind, or an @Api::list decode failure; mapped verbatim by
+    @map_err(@DiagError::KubeError) on both awaits with no variant inspection, never re-typed —
+    even a `404` stays on the `500`/`DIAG-500` ../error.sdd lane. The doc block's "# Errors"
+    promise ("propagates the @DiagError raised while listing platform instances") is complete.
+  Nothing else raises: no @unwrap, @expect, panicking index or fallible call exists here —
+    @unwrap_or_default is total. @DiagError::PackagesDisabled and the authentication/authz
+    failures are raised upstream by ../authz.rs / ../server.rs before this file runs and can
+    never be raised from it.
+
+Handles:
+  Absent @ObjectMeta::name — the typed @Option is @unwrap_or_default'ed to `""` and the instance
+    counts into the `""` jukebox bucket; API-listed objects always carry a name, so this is the
+    type-level fallback only.
+  Failed or half-installed platform installs — @status is never read, so instances ./packages.rs
+    drops for a missing status still count here; the tally is installed-ever, not healthy.
+  Same-name, same-category, same-package instances across kinds and namespaces — silently pooled
+    into one number with nothing on the wire separating the contributors.
+  Mid-aggregation abort — a first-list failure skips the second list entirely; a second-list
+    failure discards the already-counted first kind, and only the wrapped @kube::Error text tells
+    the caller — through the `500` body — which leg broke.
+  A cluster with the CRDs absent — each uninstalled kind fails with its own `404` on the kube
+    lane, so "no CRDs installed" surfaces as `500`, not as "nothing installed".
+
+Tasks:
+  [ ] No @cfg(test) module exists here and the server crate has no integration test files today;
+      cover all Scenarios below from these blocks under the project TTD rule once a cluster
+      double exists (same coverage gap as ./children.sdd).
+  [?] First-level key is @ObjectMeta::name while everything calls it a jukebox — the variable, the
+      doc comment ("counts per jukebox") and ../dto.sdd ("keyed by `JuKebox` name") all promise
+      the source, yet @ServiceInstanceSpec::jukebox / @SystemInstanceSpec::jukebox exist on both
+      specs and are never read; unless instance names coincide with jukebox names the tally
+      groups by the wrong field. Decide later whether the key moves to `spec.jukebox`.
+  [?] No kind or namespace discriminator in any bucket (./packages.rs tags both per row), so
+      service and system counts pool invisibly and same-name instances merge across namespaces.
+      Decide later whether the tally stays this flat.
+  [?] Exactly one unpaginated @list per kind and a never-consulted @ListMeta::continue_ — a
+      server-truncated response would silently undercount a very large cluster. Decide later
+      whether pagination belongs here.
+  [!] The loops @clone each whole metadata and spec before plucking three @String fields, then
+      drop the copies — per listed object of both kinds, per request, the annotations and options
+      maps copied for nothing; ./packages.rs moves fields out of an owned iterator instead. Pure
+      cost, no behaviour change noticed.
+  [?] A "contest" with no ranking: nothing orders by count, caps, or truncates in this file or
+      ../dto.sdd — clients get the full alphabetical tree and rank it themselves. Decide later
+      whether ranking/top-N is intended here or client-side.
+
+Done when:
+  Every Scenario below maps to a green test in `server`, the `[?]` decisions above are recorded,
+    and `cargo test -p server` with `cargo clippy --all-targets -- -D warnings` and
+    `cargo +nightly fmt --check` stays green.
+
+Scenario: Two cluster lists in fixed order and nothing else
+  Given a live client and both platform CRDs installed
+  When @get_popularity_contest runs
+  Then exactly two cluster-scoped @list calls are issued, @ServiceInstance first and
+    @SystemInstance second, each with @ListParams::default carrying no selector, limit, or
+    continuation
+  And no @TenantInstance, @namespaced, get or watch request appears at all
+  No mapped test exists.
+
+Scenario: Same-name instances pool across kinds and namespaces
+  Given @ServiceInstance objects `longhorn` in `ns-b` and `longhorn` in `vynil-system`, both
+    category `storage` package `longhorn`, plus a @SystemInstance `longhorn` in `vynil-system`
+    with the same category and package
+  When the tally runs
+  Then the tree carries exactly one bucket @PopularityContest::jukeboxes → `longhorn` → `storage`
+    → `longhorn` = `3`, with no kind or namespace marker separating contributors
+  And the package counts serialize as @u32 integers per ../dto.sdd
+  No mapped test exists.
+
+Scenario: The instance name is the key, not spec.jukebox
+  Given one @ServiceInstance named `web-prod` with spec.jukebox `prod-repo`, category `apps`,
+    package `nginx`
+  When @get_popularity_contest runs
+  Then its single count lands under the `web-prod` key and the string `prod-repo` appears nowhere
+    in the returned @PopularityContest
+  No mapped test exists.
+
+Scenario: Half-installed instances still count
+  Given one @SystemInstance with @status @None, category `infrastructure`, package `longhorn`
+  When the tally runs over a cluster holding only it
+  Then @Ok carries `infrastructure` → `longhorn` = `1` — ./packages.rs drops the same object for
+    the missing status
+  No mapped test exists.
+
+Scenario: Empty cluster answers empty tree, not an error
+  Given both @list calls answering @Ok with zero items
+  When @get_popularity_contest runs
+  Then @Ok carries one @PopularityContest whose @PopularityContest::jukeboxes map is empty, and
+    ../server.rs answers `200` `{"jukeboxes":{}}`
+  No mapped test exists.
+
+Scenario: First-list failure short-circuits the second
+  Given cluster RBAC denying the @ServiceInstance list (`403`) while @SystemInstance lists would
+    succeed
+  When @get_popularity_contest runs
+  Then @Err of @DiagError::KubeError is returned and the @SystemInstance list never hits the wire
+  No mapped test exists.
+
+Scenario: Second-list failure discards everything counted
+  Given five @ServiceInstance objects listing cleanly and a @SystemInstance list failing with the
+    `404` of its uninstalled CRD
+  When @get_popularity_contest runs
+  Then @Err of @DiagError::KubeError is returned on the `500`-lane, the five counted objects
+    discarded — no partial tree is ever delivered
+  No mapped test exists.
+
+Scenario: Nameless object falls into the empty-string bucket
+  Given one decodable @ServiceInstance whose @ObjectMeta::name is absent, category `misc`,
+    package `app`
+  When the tally runs
+  Then its count lands under the `""` jukebox key — a type-level fallback, since the API server
+    never lists a nameless object
+  No mapped test exists.
+
+Example:
+  Services `web-prod` `apps`/`nginx`, `web-prod` `apps`/`nginx` (other namespace) and
+    `longhorn` `storage`/`longhorn`, plus system `longhorn` `storage`/`longhorn` and `longhorn`
+    `db`/`mysql` serialize as
+    `{"jukeboxes":{"longhorn":{"categories":{"db":{"mysql":1},"storage":{"longhorn":2}}},"web-prod":{"categories":{"apps":{"nginx":2}}}}}`
+  A nameless instance with `""` category and `""` package serializes as
+    `{"jukeboxes":{"":{"categories":{"":{"":1}}}}}`
+  One further increment on a bucket already at `4294967295` stays `4294967295` —
+    @saturating_add caps the @u32 rather than wrapping or panicking

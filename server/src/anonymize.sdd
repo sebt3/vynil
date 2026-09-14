@@ -1,0 +1,309 @@
+Spec: Anonymize
+
+Purpose:
+  Mask every outbound diagnostic payload before it leaves `vynil-server`: turn arbitrary text —
+  instance YAML, child-object JSON, concatenated logs — into a redacted copy by replacing (1) every
+  value held in the cluster @Secret objects of the request's namespace and of the `vynil` namespace
+  and (2) three fixed token shapes (`JWT`, `Bearer` header, `PEM` private key block) with the
+  literal `<anonymized>`, and handing back the replacement tally (@ScrubStats) that ./server.rs
+  renders as the `X-Diag-Redactions` header. Redaction is value-driven: there is no key-name, path
+  or structure rule anywhere — a string is masked exactly when it equals a collected secret value
+  or a frozen regex matches it.
+
+Owns:
+  ./anonymize.rs
+
+References:
+  ./dto.sdd — @ScrubStats is this file's return type and its counter semantics; the
+    `X-Diag-Redactions` rendering and its field-name coupling live there (@add_scrub_header in
+    ./server.rs).
+  ./error.sdd — @DiagError::SerializationError is the lane a @scrub_json failure surfaces in once a
+    ./collect/ consumer applies `?` (./collect/children.rs).
+  ./collect/state.rs and ./collect/vynilconfig.rs (@scrub_yaml), ./collect/logs.rs (@scrub, with its
+    empty-log short-circuits returning @ScrubStats::default()), ./collect/children.rs (@scrub_json
+    once per child, stats re-accumulated with @saturating_add) — current consumers named for test
+    mapping only; this file depends on none of them.
+
+Depends on:
+  @kube `3.1.0` and `k8s-openapi` `0.27.1` (/Cargo.lock) — @kube::Client / @kube::Api /
+    @kube::ListParams / @kube::Error and @k8s_openapi::api::core::v1::@Secret drive the Secret
+    capture; a @Secret `data` value is an @k8s_openapi @ByteString, an already base64-decoded
+    byte vec.
+  @regex `1.12.4` (/server/Cargo.toml) — @Regex @replace_all, leftmost non-overlapping, with
+    @std::sync::@LazyLock compiling each static once.
+  @base64 `0.22.1` (/server/Cargo.toml) — @base64::engine::general_purpose::STANDARD, used only by
+    the defensive JSON lane of @extract_secret_values (see Tasks `[?]`).
+  @serde_json `1.0.150` (/Cargo.lock) — @serde_json::to_string / @serde_json::from_str round-trip in
+    @scrub_json; @handlebars `6.4.2` unifies @serde_json's `preserve_order` feature onto the
+    crate-wide build graph, so a re-parse keeps object key insertion order.
+  @crate::dto::@ScrubStats in ./dto.rs — the two @usize counters every entry point returns.
+
+Must:
+  The mask is exactly two passes over a flat view of the text — no key-name, path, or YAML/JSON
+    structure rule exists:
+    1. @scrub_secrets replaces every non-overlapping occurrence of each collected secret value with
+      the marker @ANONYMIZED_TEXT (`<anonymized>`);
+    2. @apply_patterns then applies @JWT_RE, @BEARER_RE, @PEM_RE in that order, each @Regex::replace_all
+      replacing the whole match with the same marker.
+    @scrub runs pass 1 over the caller's raw text then pass 2 over pass 1's output, and the
+    @ScrubStats it returns are pass 1's tally alone — every pattern redaction is invisible to the
+    counters (@ScrubStats::default() for a JWT-only payload).
+  @collect_secret_values lists Secrets afresh on every call and nothing is cached:
+    @list_secrets returns @kube::Api<@Secret>::namespaced(...).list(@ListParams::default()) — every
+    Secret in the namespace, no label/field selector — for `namespace`, then `vynil_namespace` only
+    when the two strings differ. Failure of either call is dropped silently, so a missing-RBAC or
+    bad-namespace lane contributes zero patterns and that namespace's secrets stay verbatim (see
+    Tasks `[?]`).
+  Candidate values enter a @std::collections::@HashSet through three @extract_secret_values lanes:
+    valid-UTF-8 @Secret.data values, every @Secret.string_data value, and one defensive lane that
+    re-serializes the @Secret with @serde_json and standard-base64-decodes each `data` string when
+    it yields valid UTF-8. Secret key names are never collection patterns, and invalid-UTF-8 binary
+    `data` never becomes one. The set is then filtered by @is_scrubbable: a value must be at least
+    @MIN_SECRET_LEN `8` bytes (@str::len counts bytes, so an 8-byte multibyte secret qualifies)
+    AND its @str::to_ascii_lowercase must not equal one of the eleven @COMMON_DENYLIST tokens `true`,
+    `false`, `default`, `vynil`, `system`, `kubernetes`, `cluster`, `enabled`, `disabled`, `password`,
+    `username` — only exact whole-value matches deny, so `Password123456` stays a pattern.
+  @scrub_secrets applies one @str::replace pass per value in collected-slice order, and a pass never
+    consumes its own inserted marker: a secret equal to `anonymized`, a substring of the marker,
+    terminates with the marker present instead of hanging as the removed while-loop did. That
+    guarantee is single-pass, not list-idempotence — a later value can still match inside a marker
+    an earlier replacement inserted, ending as `<<anonymized>>`. Within one call the result is fully
+    determined by the slice order; across calls @std::collections::@HashSet iteration order is not
+    stable, so with two collected secrets where one literal contains the other, final text and
+    counters vary call to call (see Tasks `[?]`).
+  @scrub_json round-trips @serde_json text — serialize, mask, re-parse — and the only
+    JSON-structural effect on the result is @ScrubStats; the `preserve_order` graph keeps object key
+    order from input to output, and the replacement string contains no JSON metacharacters so an
+    intact re-parse is the normal outcome. But collection is blind to serialization escaping: a
+    secret containing `"`, `\` or a raw control character has no literal occurrence in
+    @serde_json::to_string text and therefore survives @scrub_json while the same secret still masks
+    in the YAML and log lanes, which are masked as raw text (see Tasks `[?]`).
+  @scrub_yaml does no YAML at all: it is a direct pass-through of @scrub. No @serde_yaml / @rust_yaml
+    document ever gets parsed or re-emitted here, so byte-level YAML fidelity claims belong to no
+    backend — comments, quotes, ordering, indentation and `---` separators survive exactly where the
+    masked bytes do not overlap them, multi-document streams are every document's text in one pass,
+    and a marker landing in a plain scalar keeps the document parseable.
+  The pattern surface is three file-private @LazyLock<@Regex> statics fed through @compile_static, a
+    @Regex::new wrapper that @panic!s with `invalid static scrubbing pattern {pattern}: {e}` — an
+    unreachable path while the three literals stay valid (first-call init timing, see Tasks `[?]`).
+    Compiled once, process-stable. Literals and their exact reach:
+    @JWT_RE `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+` — case-sensitive `eyJ` start (base64
+      of `{`), no word boundary required (`blobeyJ…` matches at `eyJ`), masks exactly the first
+      three dot-separated segments — a fourth segment leaves its `.tail` exposed in the output —
+      and everything not starting `eyJ` (opaque tokens, hashes) passes through.
+    @BEARER_RE `(?i)Bearer\s+[A-Za-z0-9._~+/=-]+` — the word `Bearer` in any case, required `\s+`,
+      then one or more token characters; the whole span, `Bearer` word included, becomes the marker;
+      `Bearer` without whitespace, or with only non-token text after it, does not match, and because
+      pass 2 runs JWT-first, `Bearer eyJ…` ends as `Bearer <anonymized>` with the word surviving.
+    @PEM_RE `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----` — uppercase
+      `-----BEGIN …PRIVATE KEY-----` header, any `[A-Z ]*` qualifier (`RSA`, `EC`, `ENCRYPTED`,
+      none), non-greedy body across newlines to the first closing `-----END [A-Z ]*PRIVATE KEY-----`
+      tag — two well-formed blocks mask each separately, while an unterminated or lowercase header
+      leaves the material verbatim.
+  The marker `<anonymized>` matches none of the three regexes and cannot bridge one, so pass 2 is a
+    fixed point of itself: @apply_patterns over its own output changes nothing, and @scrub over
+    pattern-masked text can only still move if a collected secret value occurs inside the marker
+    (`anonymized`-style values).
+  @ScrubStats counts pass 1 only: @distinct counts values matching at least once at their turn
+    through the slice and @occurrences sums those non-overlapping match counts, both via
+    @saturating_add — a value already swallowed by an earlier replacement counts `0`, values removed
+    by @is_scrubbable or the empty-value skip count `0`, and pattern-pass redactions are never
+    counted at all.
+  The file is infallible and silent: @kube::Error and @serde_json failures inside
+    @extract_secret_values and @collect_secret_values are dropped by `if let Ok(...)` guards and
+    never reach the caller, the public text lanes return no @Result, and no @tracing / logging call
+    exists here — degradation as invisible as it is total.
+
+Exposes:
+  Full public surface — reachable because /server/src/lib.rs declares `pub mod anonymize;` — is the
+    three functions below; every other item in the file (@ANONYMIZED_TEXT, @MIN_SECRET_LEN,
+    @COMMON_DENYLIST, @JWT_RE, @BEARER_RE, @PEM_RE, @collect_secret_values, @is_scrubbable,
+    @list_secrets, @extract_secret_values, @scrub_secrets, @compile_static, @apply_patterns and the
+    `#[cfg(test)] mod tests`) is private to this module.
+  @scrub — `pub async fn scrub(text: &str, client: &@kube::Client, namespace: &str, vynil_namespace: &str) -> (@std::string::@String, @ScrubStats)`;
+    the complete two-pass mask, infallible; the raw-text and log lane.
+  @scrub_json — `pub async fn scrub_json(value: @serde_json::@Value, client: &@kube::Client, namespace: &str, vynil_namespace: &str) -> @std::result::@Result<(@serde_json::@Value, @ScrubStats), @serde_json::@Error>`;
+    the same mask applied to the serialized form, result re-parsed.
+  @scrub_yaml — `pub async fn scrub_yaml(yaml: &str, client: &@kube::Client, namespace: &str, vynil_namespace: &str) -> (@std::string::@String, @ScrubStats)`;
+    alias of @scrub under a separate name for the YAML-consuming collectors.
+
+Accepts:
+  Text of any provenance and size — logs, YAML (including multi-document text), JSON as
+    @serde_json::@Value, `""`; all of it is just a byte string to the two passes, with no length or
+    shape precondition.
+  Two namespace strings, taken verbatim with no validation — a bad, typo'd or inaccessible namespace
+    simply degrades to whatever the other lane contributes; a usable @kube::Client carrying the
+    server's identity must exist and is cloned per list call; a client without `list` permission on
+    core `v1/Secret` is accepted and degrades the same way as a bad namespace.
+
+Returns:
+  Masked text plus @ScrubStats on every success path; on @scrub_json success a fresh
+    @serde_json::@Value of the same shape and key order as the input, counters describing the text
+    pass.
+  The masked text is byte-faithful to the input anywhere the rules did not fire, and every
+    replacement is exactly @ANONYMIZED_TEXT (`<anonymized>`), no surrounding context consumed
+    except by @BEARER_RE and @PEM_RE, whose whole spans (header word, full key block) go.
+
+Raises:
+  @scrub and @scrub_yaml: nothing, ever — failed Secret lists leave the text under-masked, not an
+    error.
+  @scrub_json: @Err(@serde_json::@Error) when @serde_json::to_string of the input fails or, far
+    more relevantly, when the masked text no longer parses back as JSON — possible because pass-1
+    replacement can swallow structural characters, and a secret literal spanning a closing `"` plus
+    `,"next":` boundary rewrites the document grammar. A cluster @kube::Error never enters this path.
+  @compile_static: a @panic! arm that no reachable path fires with the three shipped literals
+    (lazy first-use timing per Tasks `[?]`).
+
+Handles:
+  List failure, empty Secret set, empty text — the run completes with zero counts and whatever
+    pass 2 can still catch.
+  Secret text that looks like markup (`<anonymized>` itself, `---`, `key: v`) — it is a pattern like
+    any other, replaced on sight.
+  Overlapping / containment-adjacent secrets within one call — first replacement in slice order
+    claims the bytes and later overlapping candidates lose without error.
+  Binary secret values (invalid UTF-8 after decode) — skipped, never patterns, and their content
+    therefore never masked by pass 1.
+  Unterminated/lowercase PEM, no-separator `Bearer`, 4-segment JWT, `eyJ`-less tokens, sha256 digests
+    and long hex/base64 hashes — survive deliberately by regex shape: no blanket long-base64/hex
+    rules exist because the file's comment says they would destroy digests, UIDs and hashes needed
+    for auditability.
+
+Tasks:
+  [x] Map today's five in-file tests: @replaces_secret_values_and_counts,
+      @secret_substring_of_replacement_does_not_loop, @does_not_redact_digests_or_long_hashes,
+      @short_or_common_values_are_not_scrubbable, @redacts_jwt_and_pem — mapped scenario-by-scenario
+      below.
+  [ ] Cover the async surface (needs a faked or seeded client; dev deps are empty today):
+      @collect_secret_values / @list_secrets / @extract_secret_values / @scrub / @scrub_json /
+      @scrub_yaml have zero coverage.
+  [ ] Cover the @BEARER_RE lane (no test exists): opaque token, case-insensitivity, the
+      `Bearer <anonymized>` residue after the JWT pass, and no-whitespace refusal.
+  [ ] Cover the pass-2 negatives in @apply_patterns without a client (call @apply_patterns directly):
+      unterminated/lowercase PEM, two-block pair-masking, 4-segment JWT tail, mid-word `eyJ`.
+  [ ] Counter the first `[?]` below with a regression test once order is pinned (equal input,
+      repeated calls, identical text and counts).
+  [?] @collect_secret_values collects through @std::collections::@HashSet and @std::collections::@HashSet::into_iter
+      has no defined order — with two secrets where one value contains the other, output text and
+      both counters vary call to call, breaking the audit stability of the `X-Diag-Redactions`
+      header. Decide later whether to sort before returning or dedupe by containment.
+  [?] Seven of the eleven @COMMON_DENYLIST entries (`true`, `false`, `default`, `vynil`, `system`,
+      `cluster`, `enabled`) are shorter than @MIN_SECRET_LEN and therefore dead weight — the length
+      gate already rejects them before the denylist is consulted. Decide later whether to keep as
+      documentation or trim.
+  [?] The defensive base64 lane in @extract_secret_values re-serializes via @serde_json exactly what
+      @k8s_openapi @ByteString already stores and then decodes back — it cannot discover a value the
+      `data` lane missed; candidate dead code. Decide later after verifying the `k8s-openapi`
+      `0.27.1` @ByteString serialization round-trip whether to delete or justify.
+  [?] The mask is value- and shape-driven only: short secrets (<8 bytes), denylisted values, secrets
+      containing JSON metacharacters (survive the @scrub_json text form while masking in YAML/log
+      lanes), non-UTF-8 binary values, opaque non-`eyJ` tokens, truncated/lowercase PEM, and any
+      secret in a namespace whose list failed all leak into diagnostic payloads. Review the
+      redaction rule set — denylist scope, escape-safe @scrub_json matching, structural (key-name
+      based) rules — and decide later what must become mandatory.
+  [?] Mask counts reach clients through the `X-Diag-Redactions` header: a requester with log-write
+      ability can plant a guess and learn from the count whether it matches a Secret value in either
+      collected namespace — a Secret-value probe oracle. Decide later whether counts move to a
+      privileged channel or a different audit surface.
+  [?] @is_scrubbable compares denylist membership by lowercase-equality only — no prefix/substring or
+      Unicode-case folding — and the `8` gate is measured in bytes. Decide later whether a stronger
+      predicate is wanted.
+  [?] @compile_static's @panic! is a product-code panic (legal under the crate lint shape, which only
+      denies @unwrap / @expect) and lands on lazy first-use, so a future literal typo poisons the
+      first payload at runtime. Decide later whether patterns move to eager checked init or a
+      regex-less degraded mask.
+
+Done when:
+  Every Scenario below maps to a passing test in the `server` crate (the coverage `[ ]` entries
+    closed), the `[?]` decisions are all recorded and resolved,
+    and `cargo test -p server` with `cargo clippy --all-targets -- -D warnings` and
+    `cargo +nightly fmt --check` stay green.
+
+Scenario: Secret values are masked and both counters follow
+  Given `conn: postgres://user:Sup3rL0ngP4ss@db, again Sup3rL0ngP4ss` and one secret value
+    `Sup3rL0ngP4ss`
+  When @scrub_secrets runs
+  Then neither `Sup3rL0ngP4ss` occurrence remains, @ScrubStats.distinct is `1` and
+    @ScrubStats.occurrences is `2`
+  Maps to test @replaces_secret_values_and_counts
+
+Scenario: A secret that is a substring of the marker does not hang
+  Given secret `anonymized` against text `value anonymized-data`
+  When @scrub_secrets runs
+  Then the result contains `<anonymized>` and the call returns (the removed while-loop hung here)
+  And @apply_patterns over pattern-masked text is a fixed point — its output changes nothing fed
+    back in
+  Maps to test @secret_substring_of_replacement_does_not_loop; the fixed-point leg has no mapped
+    test yet
+
+Scenario: Digests, UIDs and hashes survive the pattern pass
+  Given an image reference with a `sha256:` 64-char hex digest
+  When @apply_patterns runs
+  Then the output equals the input — no JWT/Bearer/PEM match, and no blanket base64/hex rule exists
+  Maps to test @does_not_redact_digests_or_long_hashes
+
+Scenario: Short, denylisted and ordinary values are never patterns
+  Given `true`, `admin`, `vynil` and `aV3ryL0ngSecretValue`
+  When @is_scrubbable answers
+  Then the first three fail (`true` and `vynil` denylisted, `admin` 5 bytes < 8) and the last passes
+  And membership is exact-match after @str::to_ascii_lowercase — `PassWord4me` passes while
+    `password` fails, and only ASCII case folds
+  Maps to test @short_or_common_values_are_not_scrubbable for the four asserts; the exact-match and
+    ASCII-fold legs have no mapped test yet
+
+Scenario: JWT and PEM blocks are redacted whole
+  Given a JWT `eyJ….….…` token in text, and a `-----BEGIN RSA PRIVATE KEY-----` block with body
+    and END line
+  When @apply_patterns runs
+  Then `eyJ` no longer appears and neither does the PEM body, each span replaced by `<anonymized>`
+  But a 4-segment token keeps its 4th-segment `.tail`, a block with no END line and a lowercase
+    `-----begin private key-----` block survive untouched, and two valid blocks each mask to their
+    own marker with no greedy swallow of the text between them
+  Maps to test @redacts_jwt_and_pem for the positive legs; the negative legs have no mapped test yet
+
+Scenario: Bearer redaction consumes its own header word
+  Given `Authorization: Bearer dG9rZW4xMjM0`
+  When @BEARER_RE matches
+  Then the whole span including the word `Bearer` becomes `<anonymized>`
+  But `Bearer` followed by no whitespace, or by text already replaced as `<anonymized>`, is
+    untouched — after the JWT pass, `Bearer eyJ…` ends as `Bearer <anonymized>` standing
+  No mapped test exists.
+
+Scenario: JSON round-trip keeps structure, escaping decides masking
+  Given a collected secret value that contains `"` or a raw newline (its JSON-serialized form would
+    show `\"` and `\n`)
+  When @scrub_json runs over a payload carrying that value
+  Then the returned @serde_json::@Value re-parses with key order preserved, yet the escaped value
+    has no literal occurrence in the serialized text, so it survives @scrub_json — the same secret
+    is masked when it reaches the YAML/log lanes — and a secret instead spanning a closing-string
+    plus key separator can break the re-parse and raise @Err(@serde_json::@Error)
+  No mapped test exists.
+
+Scenario: YAML survives as bytes, masked ranges are the only change
+  Given multi-document YAML carrying comments, quoting and indentation, plus one secret occurrence on
+    each document
+  When @scrub_yaml runs
+  Then every document's secret becomes `<anonymized>` while comments, `---` separators and every
+    byte outside the masked ranges are unchanged — nothing parses or re-emits the YAML here, so no
+    @serde_yaml / @rust_yaml fidelity claim is involved
+  No mapped test exists.
+
+Scenario: Secret capture spans both namespaces and fails open
+  Given Secrets in `namespace` and (when it differs) `vynil_namespace`
+  When @collect_secret_values runs
+  Then every Secret's valid-UTF-8 `data` and `stringData` values become deduplicated candidates,
+    key names are never patterns, and a failed or RBAC-denied list of either namespace contributes
+    nothing silently, leaving that namespace's secret values verbatim in the output
+  And no value < 8 bytes or denylist-equal (`kubernetes`, `password`, `username`, `disabled`) ever
+    reaches @scrub_secrets
+  No mapped test exists.
+
+Example:
+  `conn: postgres://user:Sup3rL0ngP4ss@db, again Sup3rL0ngP4ss` with collected secret
+    `Sup3rL0ngP4ss` → `conn: postgres://user:<anonymized>@db, again <anonymized>` under stats
+    `distinct=1;occurrences=2`
+  Pattern-only mask of a JWT-bearing text → `<anonymized>` in the text while the header still says
+    `X-Diag-Redactions: distinct=0;occurrences=0` — the counters cannot see pattern redaction
+  `Bearer eyJAAA.BBB.CCC` → `Bearer <anonymized>` (JWT pass first; the word survives because `<`
+    ends @BEARER_RE's token class); `Bearer dG9rZW4xMjM0` → `<anonymized>`
+  `-----BEGIN PRIVATE KEY-----\nA-----END PRIVATE KEY-----z-----BEGIN EC PRIVATE KEY-----\nB-----END EC PRIVATE KEY-----`
+    → `<anonymized>z<anonymized>`

@@ -1,0 +1,281 @@
+Spec: Config
+
+Purpose:
+  Carry the diagnostic server's whole startup configuration as one clap-derived option
+    table: ten options each declared once with its long flag, environment variable, type
+    and default, resolved by @Config::parse in a CLI-over-env-over-default precedence, so
+    the process holds one resolved, cloned-around @Config value for its lifetime.
+
+Owns:
+  ./config.rs
+
+References:
+  /common/src/context.sdd, /common/src/tools.sdd — approved calibration references.
+
+Must:
+  Each option resolves from exactly three sources, first hit wins: its command-line flag,
+    else its environment variable when the flag is absent, else the declared literal
+    default — the environment is consulted only for options no flag supplied this parse,
+    and the default applies only when neither source was present.
+  Environment variables are captured per @Config::parse/@Config::default call through
+    @std::env::var_os while the command is built, so a later @std::env::set_var needs a
+    fresh parse to take effect; a set-but-empty variable counts as present and only an
+    unset one is skipped.
+  The three @bool options are presence-only flags: supplying the flag anywhere on the
+    command line yields `true` and there is no CLI spelling of `false` for them; their env
+    values go through @clap::builder::BoolValueParser, which accepts the exact byte
+    sequences `true` and `false` and nothing else — case-sensitive, no `1`/`yes`/`on`.
+  `bind` and `vynil_namespace` are @String accepted verbatim, empty included; socket-shape
+    validation happens downstream in @server::server::run_server/@std::net::SocketAddr
+    parsing, not here.
+  `tls_cert`, `tls_key` and `requestheader_ca` are @Option<@std::path::PathBuf>: @None when
+    no flag and no variable is set, and when present the value must be non-empty — an
+    exported empty variable or a trailing-equals inline value (`--tls-cert=`) is rejected
+    at parse; this file never opens, `stat`s or authenticates those paths.
+  `log_since_hours` (@u64) and `log_cap_bytes` (@usize) parse as plain unsigned decimals —
+    canonical non-negative decimal digits only, no sign, separator or base prefixes; every
+    rejection carries the @std::num::ParseIntError Display as its reason.
+  No two occurrences of the same flag are allowed in one command line, for value options
+    and presence flags alike — a repeat is an ArgumentConflict failure, not a last-wins.
+  All ten fields are `pub` and the @Debug derive renders every resolved value — the
+    startup log at ./main.rs publishes
+    `info!("Starting vynil-diag server with config: {:?}", config)`,
+    and the struct holds TLS material only as filesystem paths, so no certificate or key
+    bytes ever transit @Config or its @Debug output.
+  Automatic `--help`/`-h` prints an options document whose lines echo the current value of
+    a set environment variable (`[env: DIAG_BIND=10.0.0.1:1]` when exported), the header is
+    the struct doc comment, usage lines name the argv[0] file; `--version`/`-V` prints
+    `vynil-diag <workspace version>` from the `#[command(name = "vynil-diag")]` override;
+    both end the process with code `0`.
+  @Default::default is a delegating alias for @Config::parse — constructing @Config
+    through @std::default::Default re-reads argv/env and shares the parse failure exits.
+  `requestheader_ca` documents itself as the escape hatch over the
+    `extension-apiserver-authentication` front-proxy CA; that default load lives in
+    @server::server::load_requestheader_ca and @Config only carries the override path.
+
+Must not:
+  Consult a config file, a Kubernetes object or a secret source for any value — the
+    `requestheader_ca` doc comment's `ConfigMap` fallback is server behavior, not parse
+    behavior; @Config itself never fetches or embeds the CA there.
+  Reject or canonicalize values beyond clap's per-type parse — TLS/CA existence, bind
+    address shape and namespace validity all belong to the consuming modules.
+
+Depends on:
+  @clap `4.6.1`/`clap_builder 4.6.0` in `/server/Cargo.toml` with features `derive`, `env`
+    — the generated @clap::Parser/@clap::CommandFactory impl, precedence chain, value
+    parsers (@clap::builder::BoolValueParser, the @u64 and @usize range factories,
+    @std::path::PathBuf and @String) and all error texts and exits documented here are
+    that build's behavior.
+  @std::path::PathBuf — value type of the three optional path fields.
+  @std::env::var_os — the per-option environment capture clap performs at command build.
+
+Exposes:
+  @Config — `pub struct` deriving @clap::Parser, @Debug, @Clone; command name
+    `vynil-diag`; re-exported at the crate root by ./lib.rs `pub use config::Config`.
+  Field `bind` — @String, long `--bind <BIND>`, env `DIAG_BIND`, default
+    `0.0.0.0:8443`, no short flag.
+  Field `insecure_no_tls` — @bool presence flag `--insecure-no-tls`, env
+    `INSECURE_NO_TLS`, default `false`.
+  Field `tls_cert` — @Option<@std::path::PathBuf>, flag `--tls-cert <TLS_CERT>`, env
+    `TLS_CERT`, default @None.
+  Field `tls_key` — @Option<@std::path::PathBuf>, flag `--tls-key <TLS_KEY>`, env
+    `TLS_KEY`, default @None.
+  Field `requestheader_ca` — @Option<@std::path::PathBuf>, flag
+    `--requestheader-ca <REQUESTHEADER_CA>`, env `REQUESTHEADER_CLIENT_CA`, default @None.
+  Field `trust_request_header` — @bool presence flag `--trust-request-header`, env
+    `DIAG_TRUST_REQUEST_HEADER`, default `false`.
+  Field `vynil_namespace` — @String, flag `--vynil-namespace <VYNIL_NAMESPACE>`, env
+    `VYNIL_NAMESPACE`, default `vynil-system`.
+  Field `log_since_hours` — @u64, flag `--log-since-hours <LOG_SINCE_HOURS>`, env
+    `LOG_SINCE_HOURS`, default `5`.
+  Field `log_cap_bytes` — @usize, flag `--log-cap-bytes <LOG_CAP_BYTES>`, env
+    `LOG_CAP_BYTES`, default `2097152`.
+  Field `enable_packages` — @bool presence flag `--enable-packages`, env
+    `DIAG_ENABLE_PACKAGES`, default `true`.
+  @Config::parse, @Config::try_parse, @Config::parse_from, @Config::try_parse_from and
+    @Config::command plus the rest of the standard @clap::Parser/@clap::CommandFactory and
+    @clap::Args surface generated for the struct.
+  @Clone — copy semantics for holders of the resolved value.
+  @Debug — full ten-field rendering used for startup logging.
+  @Default::default — delegates to @Config::parse, see Must.
+
+Accepts:
+  Process argv (argv[0] feeds only the usage banners) and the current process environment
+    at each parse call; no option accepts a positional, a bare token fails
+    @clap::error::ErrorKind::UnknownArgument, and `--` is accepted as the options
+    terminator.
+  Per-field accepted shapes exactly as pinned in Exposes/Must: any @String for the two
+    string options, exact `true`/`false` for the three boolean env variables, canonical
+    unsigned decimals for the two integer options, non-empty @std::ffi::OsString values
+    for the three path options (absent yields @None).
+  No credential, config file or cluster read participates in acceptance.
+
+Returns:
+  A fully populated @Config on success: the five defaulted options are never @None, the
+    three @Option<@std::path::PathBuf> are @None unless a flag or variable supplied them.
+  @Config::try_parse and @Config::try_parse_from return @Result<@Config, @clap::Error> —
+    the only Rust-visible error channel of this surface.
+  @Config::parse and @Default::default never return a failure — the outcome is either a
+    @Config or the process is already gone (see Raises).
+
+Raises:
+  @Config::parse and @Default::default carry no Rust error: on any parse failure @clap
+    prints an `error: …` line plus a `For more information, try '--help'.` trailer to
+    stderr and the process exits with code `2`; `--help`/`--version` output goes to stdout
+    with exit code `0`.
+  @clap::error::ErrorKind::UnknownArgument — `unexpected argument '--nope' found` (also
+    for positional tokens), trailed by `Usage: <argv0 file> [OPTIONS]`.
+  @clap::error::ErrorKind::ArgumentConflict —
+    `the argument '--insecure-no-tls' cannot be used multiple times` and the value-flag
+    form `the argument '--bind <BIND>' cannot be used multiple times`.
+  @clap::error::ErrorKind::TooManyValues for any `=value` given to a presence flag —
+    `unexpected value 'false' for '--enable-packages' found; no more were expected`.
+  @clap::error::ErrorKind::InvalidValue for boolean env values —
+    `invalid value '1' for '--insecure-no-tls'` with `[possible values: true, false]` and,
+    near a valid spelling, the tip `a similar value exists: 'true'`; an empty value on a
+    presence flag yields `a value is required for '--insecure-no-tls' but none was supplied`
+    with the possible-values list, and an empty env or inline value on any value option
+    yields the same sentence without the list, e.g.
+    `a value is required for '--tls-cert <TLS_CERT>' but none was supplied`.
+  @clap::error::ErrorKind::ValueValidation for the two integer options — the message is
+    `invalid value '5.5' for '--log-since-hours <LOG_SINCE_HOURS>': invalid digit found in string`,
+    with `: cannot parse integer from empty string` for an empty `LOG_CAP_BYTES=` and
+    `: number too large to fit in target type` past the type maximum.
+  Nothing in this file raises for a nonexistent TLS/CA file, an unparsable bind address
+    or the trust-request-header-plus-insecure combination; those decisions are the
+    consuming modules' own.
+
+Handles:
+  Source precedence — flag beats set variable, set variable beats default, default fills
+    the unpresent rest.
+  Set-but-empty variables per type — empty passes through for the @String options, fails
+    as required-value for booleans and path options, as cannot-parse for the integers.
+  Absent option sources — the seven literal defaults `0.0.0.0:8443`, `false`, `false`,
+    `vynil-system`, `5`, `2097152`, `true`; the three paths @None.
+  `--` terminator and unknown flags/options — terminator accepted, unknowns exit `2`.
+  `VYNIL_NAMESPACE` collision — the name is read identically by the other Vynil binaries
+    and set wholesale on deployed pods, so one container value resolves every consumer.
+
+Tasks:
+  [ ] Cover the all-defaults parse and pin the ten resolved values from the Example block.
+  [ ] Cover precedence: flag+env, env-only, neither, per type family.
+  [ ] Cover boolean env strictness: `true`/`false` pass; `1`, `True`, empty each fail with
+      the exact kind and message named in Raises.
+  [ ] Cover presence-flag CLI rules: no `=value`, single occurrence only, default-true
+      `enable_packages` un-flippable by flags alone.
+  [ ] Cover integer rejections `5.5`, `-1`, beyond-maximum, and empty for both options.
+  [ ] Cover the path options: absent @None; empty env and empty inline value rejected; a
+      valid path lands verbatim in @Some with existence unchecked.
+  [ ] Cover the exit contract: `--help`, `--version` exit `0` (version line and
+      doc-comment header), unknown flag and repeated flag exit `2` with the usage banner
+      naming the argv[0] file.
+  [ ] Cover `--help` env-value echo and the ten-field @Debug rendering (log-surface audit).
+  [ ] Cover @Default::default equivalence with @Config::parse under a controlled argv.
+  [?] @Default::default delegating to @Config::parse has no caller in the crate: dead
+      code, and a landmine — any @Default use re-parses the real argv and can exit the
+      process. Decide later whether it is removed or replaced by a literal-defaults
+      constructor.
+  [?] The true-only flags cannot express `false` on the command line, and
+      `DIAG_ENABLE_PACKAGES` defaults `true`, so flags alone can never disable the
+      packages endpoint; only the env path can. Decide later whether `--no-*` pairs or
+      value-taking boolean flags replace this.
+  [?] Boolean env values accept only `true`/`false`, so deploy idioms like `1` or `yes`
+      hard-fail the container at startup with exit `2`. Decide later whether
+      @clap::builder::BoolishValueParser replaces the strict parser.
+  [?] Three identities coexist: command name `vynil-diag` (version line, doc comment),
+      crate `server` (argv[0] usage banners), parent spec calls it `vynil-server`, and the
+      env names mix `DIAG_*` with bare ones. Decide later on one identity and migrate.
+  [?] `bind` accepts the empty string, deferring an unusable-address failure to server
+      startup, while empty path options are refused here. Decide later whether the string
+      options gain non-empty validation.
+  [?] `--help` echoes current values of set env variables and startup logs the full
+      @Debug; harmless while every variable holds a flag, address or path, but any future
+      secret-bearing option would leak. Decide later whether hide-env-values applies.
+
+Done when:
+  Every Scenario has a passing mapped test, the `[?]` decisions above are recorded, and
+    `cargo test -p server` is green.
+
+Scenario: Full default configuration
+  Given no flags and none of the ten environment variables set
+  When @Config::parse runs
+  Then the seven literal defaults and three @None paths resolve as pinned in the Example
+  No mapped test exists.
+
+Scenario: Command line beats environment beats default
+  Given `DIAG_BIND` exported as `10.0.0.1:1`
+  When parse runs with `--bind 1.2.3.4:9999`, then with no flag, then with the variable
+    unset
+  Then `bind` is `1.2.3.4:9999`, `10.0.0.1:1`, `0.0.0.0:8443` in the three runs
+  No mapped test exists.
+
+Scenario: Boolean env values are strict literals
+  Given `INSECURE_NO_TLS` set to `true`, then `1`, then `True`, then empty
+  When @Config::parse runs on each
+  Then only `true` yields `insecure_no_tls` of `true`
+  And `1` fails @clap::error::ErrorKind::InvalidValue listing `possible values: true, false`
+  And `True` fails the same kind, additionally carrying the tip
+    `a similar value exists: 'true'`
+  And the empty value fails @clap::error::ErrorKind::InvalidValue with the
+    a-value-is-required text and the possible-values list
+  No mapped test exists.
+
+Scenario: Presence flags refuse values and repeats
+  Given the command lines `--enable-packages=false` and
+    `--insecure-no-tls --insecure-no-tls`
+  When @Config::parse runs on each
+  Then the first fails @clap::error::ErrorKind::TooManyValues with `no more were expected`
+  And the second fails @clap::error::ErrorKind::ArgumentConflict with
+    `cannot be used multiple times`, both exiting `2`
+  And no flag spelling can turn the defaulted-true `enable_packages` off
+  No mapped test exists.
+
+Scenario: Integer options reject non-canonical input
+  Given `LOG_SINCE_HOURS` set to `5.5`, then `-1`, then `18446744073709551616`, and
+    `LOG_CAP_BYTES` set to empty
+  When @Config::parse runs on each
+  Then every case fails @clap::error::ErrorKind::ValueValidation exiting `2`, with sources
+    `invalid digit found in string`, `invalid digit found in string`,
+    `number too large to fit in target type` and `cannot parse integer from empty string`
+    respectively
+  No mapped test exists.
+
+Scenario: Optional paths are absent or non-empty
+  Given no TLS input, then `TLS_CERT=` exported empty, then `--tls-key=` on the command
+    line, then `TLS_KEY=/etc/tls/key.pem` exported
+  When @Config::parse runs on each
+  Then the cases yield @None, a value-required refusal exiting `2`
+    @clap::error::ErrorKind::InvalidValue for the empty env, the same refusal for the
+    inline empty, and @Some of the verbatim path with no file access
+  No mapped test exists.
+
+Scenario: Usage surface exits the process
+  Given argv[0] as the invoked binary file
+  When `--help`, then `--version`, then `--nope` is parsed
+  Then help prints the doc-comment header with per-option `[env: NAME=value]` echoes for
+    the set variables and exits `0`; version prints `vynil-diag <workspace version>` and
+    exits `0`; the unknown flag prints the unexpected-argument error with a usage line
+    naming the argv[0] file and exits `2`
+  No mapped test exists.
+
+Scenario: Debug logs the whole resolved config and nothing secret
+  Given a fully defaulted parse
+  When the @Debug rendering (as in the ./main.rs startup log line) is produced
+  Then all ten fields appear, TLS entries are @None or plain paths, and no certificate or
+    key content can be present because the struct only ever carries paths
+  No mapped test exists.
+
+Scenario: Default::default parses like the entry point
+  Given a controlled argv and environment
+  When @Config::default runs
+  Then it returns the same @Config @Config::parse would, and the same invalid input exits
+    `2`
+  No mapped test exists; the impl currently has no caller.
+
+Example:
+  parsed defaults, @Debug rendering: `Config { bind: "0.0.0.0:8443", insecure_no_tls: false, tls_cert: None, tls_key: None, requestheader_ca: None, trust_request_header: false, vynil_namespace: "vynil-system", log_since_hours: 5, log_cap_bytes: 2097152, enable_packages: true }`
+  boolean env failure: `error: invalid value '1' for '--insecure-no-tls'` plus the list
+    `[possible values: true, false]`
+  empty-value refusals: `error: a value is required for '--insecure-no-tls' but none was supplied`
+    and `error: a value is required for '--tls-cert <TLS_CERT>' but none was supplied`
+  version line observed on workspace version `0.7.10`: `vynil-diag 0.7.10`

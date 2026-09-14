@@ -1,0 +1,242 @@
+Spec: packages
+
+Purpose:
+  Assemble the cluster-wide `packages` diagnostic payload: two cluster-scoped list reads —
+    one @ServiceInstance and one @SystemInstance @Api::all + @list — flattened into an
+    @PackagesState of @PackageState rows carrying the kind label, namespace, name, @spec.package,
+    a clone of @status.tag and a per-kind readiness bool computed from the status's first
+    @ConditionsType::Ready condition. Everything is listed live on every call — the file owns no
+    cache, no TTL constant, no JukeBox read, no config input, no auth check and no scrubbing.
+
+Owns:
+  ./packages.rs
+
+References:
+  ./children.sdd — approved calibration reference for this directory's spec style.
+  ../dto.sdd — @PackagesState and @PackageState are this file's output types; their wire keys,
+    explicit-`null` @tag rendering and free-form @String @kind discriminator are owned there —
+    the two `kind` string literals are minted here.
+  ../error.sdd — the exit lane: only @DiagError::KubeError ever leaves this file; its `500`
+    `DIAG-500` rendering is owned there.
+  ../state.sdd — the borrowed @kube::Client is the @AppState.client handle cloned by
+    ../server.rs; the server identity whose cluster-wide list RBAC decides whether this file
+    succeeds at all is specified there.
+  ../config.sdd — the `DIAG_ENABLE_PACKAGES` env / `--enable-packages` flag resolves
+    @Config.enable_packages upstream; this file reads no @Config and no env.
+  ../authz.sdd — the enable_packages gate: with @packages_enabled `false`, @check_item_access
+    raises @DiagError::PackagesDisabled (`404` `DIAG-007`) and @get_packages is never called —
+    the flag is enforced entirely one level up.
+  ../server.rs — spec pending: the only consumer, the `packages` item arm of @instance_handler,
+    which serves the @Ok payload as `200` `application/json` through @axum::Json after
+    authentication and @check_item_access.
+  /common/src/jukebox.sdd, /common/src/vynilpackage.sdd — provenance only: the shipped `package`
+    and `tag` strings are catalog-concept identities owned by those specs; this file never reads
+    a @JukeBox object or a @VynilPackage entry (see Tasks).
+
+Must:
+  Enumeration is exactly the two platform kinds, cluster-wide: @Api::all on a per-call @clone of
+    the borrowed @kube::Client builds one @kube::Api<@ServiceInstance> and one
+    @kube::Api<@SystemInstance>, and the two @list calls they make are the file's only cluster
+    access — no @Api::namespaced, no @get, no @watch and no @TenantInstance read exists, which is
+    the deliberate cross-tenant boundary the doc comment pins: tenant workloads stay invisible
+    here so a caller authorized for one instance cannot enumerate every other tenant.
+  The list requests are plain: @ListParams::default() only — no namespace, label selector, field
+    selector or limit is ever set, and a returned continuation token is never followed, so one
+    request per kind answers the whole inventory.
+  @PackageState.kind is one of the two literals `"ServiceInstance"` (service rows) or
+    `"SystemInstance"` (system rows), copied per row; no other kind can reach the wire from
+    this file.
+  A row exists only when @Some @namespace, @Some @name and @Some @status are all present: the
+    per-kind builders run @filter_map with `?` on those three Options, so any missing one drops
+    that instance from the payload silently and infallibly — with an API server that always
+    populates `metadata.name`/`metadata.namespace` on a namespaced CR, the reachable drop is an
+    instance whose `.status` has never been written (Tasks).
+  Readiness is a per-kind first-match scan: @is_ready_service and @is_ready_system walk
+    @status.conditions in vector order and, at the first entry whose @condition_type is
+    @ConditionsType::Ready of their kind's enum, return whether @status is
+    @ConditionsStatus::True; a @ConditionsStatus::False at that first Ready, no Ready condition
+    at all (only `Installed`, `AgentStarted`, … entries) or empty @conditions yield @false — and
+    @generation, @message and @last_transition_time are never consulted.
+  Row fields pass through verbatim: @namespace and @name are moved out of @metadata as stored,
+    @package moves @spec.package untrimmed and unvalidated, @tag clones @status.tag with @None
+    kept as @None (dto renders the explicit `null`); the sibling spec fields `jukebox`,
+    `category` and `options` and the other status fields are read by neither row nor predicate
+    and never ship.
+  Output order is fixed by assembly, not sorting: every ServiceInstance row in API-server list
+    order is @extend-ed first, then every SystemInstance row — no sort, no dedup, no merge of
+    same-namespace/name rows across the two kinds (the @kind label is what separates them).
+  The failure mode is all-or-nothing: each builder @map_err-maps any @kube::Error from its @list
+    to @DiagError::KubeError and @get_packages propagates it by `?` — the already-collected half
+    is discarded, no partial inventory, retry, timeout override or per-list degradation exists,
+    no logging call exists in this file, and because the service leg is awaited first, a failing
+    service @list short-circuits before the systeminstances request is ever issued.
+  The file is config-blind and path-blind: nothing here reads @Config, the gate bool or the
+    request's `namespace`/`kind`/`name` — the enable_packages interplay is one-way upstream, and
+    whenever @get_packages does run it answers the full platform inventory regardless of which
+    instance path authorized the call.
+
+Depends on:
+  @kube `3.1.0` (/Cargo.lock, imported as @Client, @Api, @ListParams) — only @Api::all,
+    @Api::list with @ListParams::default() and the client @clone feeding each @Api build are
+    used; no feature beyond the workspace-locked client/runtime set is consumed here.
+  @common — @ServiceInstance and @ServiceInstanceStatus with their @ConditionsType/
+    @ConditionsStatus from /common/src/instanceservice.rs, and the SystemInstance-shaped twins
+    from /common/src/instancesystem.rs; the custom-resource derives' generated
+    @metadata/@spec/@status fields plus @conditions and @tag are all this file touches, read
+    only and never mutated.
+  @crate::dto::@PackageState and @crate::dto::@PackagesState in ../dto.rs — output shapes
+    built field-by-field; no DTO is ever parsed back.
+  @crate::error::@DiagError in ../error.rs — the return lane; @DiagError::KubeError is the only
+    variant constructed.
+
+Exposes:
+  Full public surface — `pub mod packages;` in ./mod.rs under `pub mod collect;` in
+    /server/src/lib.rs; the only consumer is ../server.rs (item `packages`, via
+    `@crate::collect::packages::get_packages`):
+  @get_packages — `pub async fn @get_packages(client: &@kube::Client) -> @Result<@PackagesState,
+    @DiagError>`; doc-commented "Get the cluster-wide packages state" plus the SECURITY
+    platform-only rationale, and `# Errors` promising to propagate the @DiagError raised while
+    listing platform instances.
+  Everything else is private to this module, observable only through @get_packages:
+    @get_service_packages and @get_system_packages — each `async fn(&@kube::Client) ->
+      @Result<@Vec<@PackageState>, @DiagError>`, one list + @filter_map builder each.
+    @is_ready_service — `fn(&@common::instanceservice::@ServiceInstanceStatus) -> @bool` and
+      @is_ready_system — `fn(&@common::instancesystem::@SystemInstanceStatus) -> @bool`, the
+      per-kind Ready=True predicates; twin bodies over the two parallel enum pairs, no shared
+      helper (Tasks).
+  Nothing else is exposed — this file has no constants, cache handles, TTL literals or JukeBox
+    accessors of any kind.
+
+Accepts:
+  @get_packages takes one borrowed @kube::Client, used only through two per-@Api clones; no
+    namespace, kind, name, @Config, @Identity or any other parameter — the payload scope is
+    fixed at compile time, and the caller's already-validated path segments authorize but never
+    narrow it.
+  No precondition on cluster state: zero instances, instances without `status`, empty condition
+    vectors or arbitrary free-text in `spec.package`/`status.tag` are all ordinary @Ok inputs.
+
+Returns:
+  @Ok of @PackagesState { items }: ServiceInstance rows first, then SystemInstance rows, each
+    row the six @PackageState fields (`kind`, `namespace`, `name`, `package`, `tag`, `ready`)
+    as pinned under Must; @tag `@None` serializes as the explicit `null` per ../dto.sdd.
+  A cluster with no platform instances @Oks @items `[]` — ../server.rs renders `200`
+    `{"items":[]}`, not an error.
+  @ready is only ever the bool the per-kind predicate computed — never a pass-through of any
+    stored field.
+
+Raises:
+  @DiagError::KubeError — every @kube::Error from either @list, explicitly mapped by
+    `@map_err(@DiagError::KubeError)` in @get_service_packages and @get_system_packages; a raw
+    @kube::Error never propagates, no other @DiagError variant is ever constructed here, and a
+    refused cluster-wide list (`403` on the server's own list RBAC for
+    `serviceinstances`/`systeminstances` across all namespaces) answers as the whole-endpoint
+    `500` `DIAG-500` lane of ../error.sdd without inspecting the wrapped status.
+  Nothing else raises: no `unwrap`, `expect` or panic path exists, and the `?` operators inside
+    the @filter_map closures are @Option row-drops, not error returns.
+
+Handles:
+  Platform objects not yet reconciled — absent `.status` — via silent omission from the
+    inventory rather than a not-ready placeholder row.
+  Condition-list drift — duplicate Ready entries in unknown order, Ready-last orderings,
+    statuses carrying only non-Ready types: the first-position verdict decides, later entries
+    are never consulted.
+  A disabled packages endpoint never reaches this file at all — @DiagError::PackagesDisabled is
+    raised upstream by ../authz.rs, so this file holds no disabled-state branch.
+  Full-payload loss on any one @list failure — including the second list failing after the
+    first fully succeeded — with the half-built vector discarded.
+
+Tasks:
+  [ ] No `#[cfg(test)]` module exists in this file and the server crate still ships no
+      integration tests (dev-dependencies empty); cover all Scenarios below from these blocks
+      once a cluster double exists, per the ./children.sdd precedent.
+  [?] The @get_packages doc comment says the inventory "stays gated behind the
+      `diagnostic_expose_packages` option", but no option of that name exists — the real gate is
+      @Config.enable_packages (`--enable-packages`, env `DIAG_ENABLE_PACKAGES`, default `true`,
+      un-flippable by CLI alone, ../config.sdd). Decide later which name is canonical and fix
+      the wording to match.
+  [?] The reverse-engineering brief expected "JukeBox cache reads" and "caches/TTL literals";
+      the current file has neither — no @JukeBox read exists and no constant at all, and the
+      workspace's @TtlCache (/common/src/ttl_cache.rs) is not imported here, so every call
+      issues two live list round-trips. Decide later whether a TTL cache belongs in this file or
+      the always-live behaviour is the pinned contract.
+  [?] Instances with no `.status` vanish from the inventory entirely — an operator-stalled or
+      brand-new install reads to clients as "no such package" rather than not-ready, and the
+      drop is silent (no log, no marker). Decide later whether they ship as `ready: false` rows
+      with `package` from spec and null tag.
+  [?] First-Ready-wins over an unsorted conditions vector: @ConditionsType/@ConditionsStatus
+      order is operator-determined, so a stale `True` Ready recorded before a later `False` one
+      keeps reporting `ready: true`. Decide later whether last-wins (or any-worse-wins) fits
+      the operator's write pattern.
+  [?] `spec.jukebox` and `spec.category` are never shipped even though the sibling
+      ./popularity_contest.rs tallies by category, so the same package name from two JukeBoxes
+      (or two categories) is indistinguishable on the wire — ../dto.sdd already flags @kind as
+      free-form text. Decide later whether @PackageState grows the catalog identity.
+  [?] The two is_ready twins are byte-identical logic over the parallel per-CRD enum pairs, and
+      a third CRD (tenant) would mint a third — dedupe behind a shared trait/macro, or keep the
+      duplication as the tenant-isolation reminder. Decide later.
+
+Done when:
+  Every Scenario below maps to a green test in `server`, the `[?]` decisions above are recorded,
+    and `cargo test -p server` with `cargo clippy --all-targets -- -D warnings` and
+    `cargo +nightly fmt --check` stays green.
+
+Scenario: Platform layers only, tenants never enumerated
+  Given a cluster with two @ServiceInstance, one @SystemInstance and three @TenantInstance
+  When @get_packages runs for any authorized caller
+  Then exactly two cluster-scoped list requests are issued — the two platform kinds, all
+    namespaces, no selectors — and @items holds two `"ServiceInstance"` rows followed by one
+    `"SystemInstance"` row
+  And no tenant workload appears no matter which `{ns}/{kind}/{name}` path authorized the call
+  No mapped test exists.
+
+Scenario: Ready reads its first condition only
+  Given a service status whose conditions begin with @ConditionsType::Ready /
+    @ConditionsStatus::True, one that begins Installed then Ready/@ConditionsStatus::False then
+    Ready/@ConditionsStatus::True, one with Ready absent, and one with empty @conditions
+  When @is_ready_service maps each, and @is_ready_system maps the same shapes on its enum pair
+  Then only the first yields `true` — the False/True pair is decided `false` by its first Ready
+    and the trailing True is never read, and the absent and empty cases are `false`
+  No mapped test exists.
+
+Scenario: Instance without status is invisible, not false
+  Given one freshly applied @ServiceInstance with no `.status` written yet beside one fully
+    reconciled instance, plus hypothetical objects with missing `name`/`namespace`
+  When @get_packages runs
+  Then @Oks with only the reconciled row — the status-absent instance carries no `ready: false`
+    placeholder — and the call never errors over the dropped objects
+  No mapped test exists.
+
+Scenario: One list down, whole response down
+  Given the cluster-wide `systeminstances` list is RBAC-refused while `serviceinstances` lists
+    cleanly
+  When @get_packages runs
+  Then the call @Errs @DiagError::KubeError (client-visible `500` `DIAG-500`) and the fully
+    built service rows are discarded — no partial payload, no log line
+  Given instead the service list fails
+  Then the systeminstances request is never issued at all
+  No mapped test exists.
+
+Scenario: Row fields pass through verbatim
+  Given a @SystemInstance with `spec.package` `longhorn `, @None @status.tag and spec
+    `jukebox`/`category`/`options` values set
+  When its row is built
+  Then `package` is the stored text verbatim — untrimmed — `tag` is @None rendering as `null`,
+    and no jukebox/category/options value reaches the row
+  No mapped test exists.
+
+Scenario: Availability flag guards the caller, never the payload
+  Given @Config.enable_packages `false`
+  When any client requests `items/packages`
+  Then @check_item_access answers @DiagError::PackagesDisabled (`404` `DIAG-007`) upstream and
+    zero list requests issue from this file
+  Given the flag `true` via two different `{ns}/{kind}/{name}` paths
+  Then both calls @get_packages returns the identical cluster-wide @PackagesState — the file
+    branches on nothing
+  No mapped test exists.
+
+Example:
+  Both kinds present, @get_packages renders from ../server.rs as
+    `{"items":[{"kind":"ServiceInstance","namespace":"tenant-a","name":"web-shop","package":"shopware","tag":"6.1.0","ready":true},{"kind":"SystemInstance","namespace":"vynil-system","name":"longhorn","package":"longhorn","tag":null,"ready":false}]}`
+    — services first, unsorted within each block, `tag` an explicit `null`
+  Refused list body shape (../error.sdd): `500` with
+    `{"code":"DIAG-500","message":"Kubernetes API error: …"}`

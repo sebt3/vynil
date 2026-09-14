@@ -1,0 +1,211 @@
+Spec: main
+
+Purpose:
+  Be the process entry point of the `server` package's bin target: a thin, straight-line
+    startup that installs the logging subscriber, pins the rustls `ring` crypto provider,
+    parses @Config, builds @AppState and awaits @run_server, translating the two fallible
+    startup steps and a failed server into one @error! line each plus exit code `1`. The file
+    owns startup ordering and process fate only; every value, error text and listener
+    behaviour comes from the module specs referenced below.
+
+Owns:
+  ./main.rs
+
+References:
+  ./lib.sdd — the lib half of the same package; all API behaviour lives there and this bin is
+    the lib's only consumer.
+  ./config.sdd — @Config::parse runs here: the flag/env/default chain, the clap `error:` stderr
+    + usage lane exiting `2`, the `--help`/`--version` exit `0` lane, and the ten-field @Debug
+    this file's @info! line publishes.
+  ./state.sdd — @AppState::new is awaited here as the first and only call site; its
+    `Failed to create kube client: {e}` payload is the text interpolated into the exit-1
+    @error! line, and this file's provider pin is what that spec defers to.
+  ./server.sdd — @run_server is awaited here; its startup-ladder payloads
+    (`DIAG-CONFIG:` guardrail, bind, TLS, CA legs) shape what the second exit-1 lane prints,
+    while /server/server.sdd states the rule this file implements: pin `ring` before any
+    Kubernetes client is built.
+  ./error.sdd — @DiagError is the @Err type of both awaited calls; its @Display templates are
+    the exact payload grammar of both @error! lines.
+
+Must:
+  Carry exactly the two crate attributes in this order — the same pair ./lib.rs carries, here
+    gating the bin target:
+    `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]`
+    `#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]`
+  Run @main once through the fixed sequence, each step exactly once, no loop, no retry:
+    subscriber init → rustls provider install → @Config::parse → @info! banner →
+    `@AppState::new(&config)` awaited → `@run_server(state, config)` awaited. @main returns
+    `()`; the only failure mechanism in this file is @std::process::exit.
+  Initialize tracing first, before anything can log: `@tracing_subscriber::fmt()` +
+    `@with_env_filter("server=debug,info")` + @init — default `full` format written to
+    **stdout** with a UTC microsecond timestamp (`YYYY-MM-DDTHH:MM:SS.ffffffZ`), level and
+    target, no thread id/name and no file/line. Filtering is that literal directive string
+    only: prefix-directive `server=debug` lifts the whole `server` target tree to debug,
+    bare `info` sets the global default for every other target (kube, hyper, axum). Because
+    the filter is built from the literal (0.3.23 @EnvFilter::new reads no environment),
+    `RUST_LOG` never affects this process; the only env knob the init itself consults is
+    `NO_COLOR` (unset or empty keeps ANSI colours — the `ansi` default feature is on — a
+    non-empty value turns them off), and field values are ANSI-escaped on render
+    (`ansi_sanitization` default `true`), so the config @Debug cannot smuggle escape codes.
+  Pin the crypto provider second, before @Config::parse and long before @AppState::new builds
+    the first @kube::Client — a run of
+    @rustls::crypto::ring::default_provider().install_default()
+    is the process's only global-provider write. The in-file comment pins the reason: rustls 0.23
+    default features plus the explicit `ring` feature leave `ring` and `aws-lc-rs` both in the
+    tree, rustls then refuses to auto-pick, and kube's TLS path would panic. On @Err — a
+    default provider already installed — the outcome is one `tracing::debug!` line
+    `rustls crypto provider already installed` (visible, since the crate target is enabled to
+    debug) and startup continues on whatever provider won: the code never checks it is
+    `ring`. The @Ok branch logs nothing.
+  Let clap own @Config::parse: any rejection exits `2` with clap's stderr text and never
+    reaches the banner or @AppState; `--help`/`--version` exit `0` — sequences already
+    committed before those exits: logging is live and the provider installed (./config.sdd
+    owns the texts and codes).
+  Log the banner before touching the cluster: @info! with literal prefix
+    `Starting vynil-diag server with config: ` followed by `{:?}` of @Config — all ten
+    resolved values hit stdout; TLS entries are @None or paths, never key bytes
+    (./config.sdd owns what the render contains).
+  Handle @AppState::new: @Ok moves the state and the owned @Config into @run_server (the state
+    holds its own deep copy per ./state.sdd). @Err logs @error!
+    `Failed to create app state: {e}` — `{e}` being the @DiagError @Display, production shape
+    `DIAG-500: Internal server error - Failed to create kube client: …` — then calls
+    @std::process::exit(1) with no runtime shutdown, no cleanup, no second line.
+  Handle @run_server: @Err logs @error! `Server error: {e}` with @DiagError @Display verbatim
+    (e.g. the `DIAG-500: … - DIAG-CONFIG: …` guardrail refusal) and exits `1`. @Ok falls
+    through silently: @main returns, the @tokio::main (default multi-thread) runtime drops,
+    the exit code is `0`, and no completion or shutdown line is ever written — @Ok is the
+    listener-stopped lane since @serve does not return in normal service.
+  Exit-1 aborts flush their line: the fmt layer writes each event synchronously to the
+    line-buffered @std::io::stdout, and both @std::process::exit(1) calls come after the @error!
+    record. Both fatal texts therefore reach **stdout only** — this file writes nothing to
+    stderr itself; stderr carries clap's own failure text and nothing else.
+  Freeze the remaining process-level facts as the code does them, with no more: the binary is
+    the default bin target named `server` (no `[[bin]]` override in ./Cargo.toml) while clap's
+    command name prints `vynil-diag`; the only exits are clap's `0`/`2`, this file's two `1`
+    lanes and the natural `0`; no pidfile, no socket activation, no signal handling, no
+    daemonization, no privilege drop; @init's set-default @panic lane is unreachable because
+    this file is the process's first and only subscriber install.
+
+Depends on:
+  `use server::{@config::Config, @server::run_server, @state::AppState}` — the exact import
+    line ./lib.sdd promises to keep resolving; @Config::parse resolves through the imported
+    @clap::Parser trait.
+  `tracing-subscriber` 0.3.23 (default features + `env-filter`) and @tracing 0.1 — the fmt
+    builder, the `&str → @EnvFilter` conversion, @init, the @std::io::stdout writer, the
+    `NO_COLOR`-aware ANSI and the @info!/@error!/@tracing::debug! macros.
+  @rustls `0.23.41` — @rustls::crypto::ring::default_provider plus @CryptoProvider::install_default,
+    the process-wide provider slot consumed later by kube's TLS and re-pinned locally by
+    ./server.rs @build_mtls_config.
+  @tokio `1.52.3` via `#[tokio::main]` — multi-thread runtime, @block_on of the async main,
+    runtime drop on natural return only.
+  @clap `4.6` and @std::process per the referenced specs — used here, owned there.
+
+Exposes:
+  @main — `async fn main()` under `#[tokio::main]`: the entry point of the package's bin
+    target and the file's only item; a binary exports nothing importable, so its whole
+    surface is the startup sequence and exit codes frozen above.
+
+Accepts:
+  argv and process environment solely through @Config::parse — the ten flags/envs plus
+    `--help`/`--version` (./config.sdd); `NO_COLOR` at subscriber init affects colouring only.
+  Kubernetes discovery inputs (kubeconfig, `KUBECONFIG`, in-cluster variables) indirectly:
+    @AppState::new reads them inside ./state.rs while this file passes only `&config`.
+  Nothing else: no stdin, no file or socket read by this file, no arguments to @main.
+
+Returns:
+  @main returns `()` — no value crosses the boundary; the observable result is the exit status
+    and the stdout log stream. Exit codes: `0` via clap `--help`/`--version` or via @Ok from
+    @run_server, `2` from clap rejections, `1` from the two @error! lanes of this file.
+
+Raises:
+  Nothing Rust-visible — @main takes no `@Result`, and the crate attributes deny
+    `unwrap`/`expect`, which appear nowhere in this file: @main's own code never panics.
+  Fatal lanes, in first-failure order: clap exits `2` from @Config::parse (./config.sdd); the
+    @Err of @AppState::new is logged with its @Display shown, then exit `1`; the @Err from
+    @run_server likewise, then exit `1`. The only panic surface of the startup itself is
+    `tracing-subscriber`'s internal
+    one if a global subscriber somehow already existed at @init — unreachable while this file
+    runs first. @tokio or dependency panics after the handoff would exit `101` as process
+    abort, not as a lane of this file.
+
+Handles:
+  The provider install answers @Ok silently (today the only reachable lane — nothing upstream
+    installs a provider); @Err gets one visible debug line and full trust in the pre-installed
+    provider.
+  `@AppState::new` @Ok → serve; @Err → log + exit `1`.
+  `@run_server` @Ok → silent natural exit `0`; @Err → log + exit `1`.
+  Log audience: `server`-crate events and spans at debug and above, everything foreign at
+    info and above, colour unless `NO_COLOR` is non-empty at init.
+
+Tasks:
+  [ ] Cover this bin — today zero `#[cfg(test)]` code and empty `dev-dependencies`
+      (/server/Cargo.toml): no test constructs or spawns it, so all five lanes (banner, two
+      exit-1 lines, clap pre-banner exit, silent `0`) rest on compilation and manual startup
+      observation only. The Scenarios below need a process-level harness — spawn the `server`
+      binary with controlled argv/env, assert stdout/exit — which nothing provides yet.
+  [?] The literal filter `"server=debug,info"` ignores `RUST_LOG` entirely (0.3.23
+      @EnvFilter::new), so an operator's `RUST_LOG=debug` changes nothing and foreign crates
+      are pinned at info forever. Decide later whether @EnvFilter::from_default_env with the
+      literal as fallback is intended or the fixed posture is deliberate.
+  [?] Fatal texts land on stdout only (stdout being where the fmt subscriber writes); an
+      orchestrator tailing stderr sees nothing when the process dies at `1`. Decide later
+      whether the two exit-1 lanes also emit to @std::io::stderr before @std::process::exit.
+  [?] The @install_default @Err branch trusts whatever provider an earlier installer chose —
+      no check, no refusal, and today no earlier installer exists, so the branch is pure
+      defense whose debug line also never names which provider won. Decide later whether it
+      should verify `ring`, abort, or stay forgiving.
+  [?] @Ok from @run_server exits `0` without a single log line, so a listener that stopped
+      unexpectedly is indistinguishable from a clean stop in every supervisor metric. Decide
+      later whether the stopped lane logs and/or exits non-zero.
+
+Done when:
+  Every Scenario maps to a green spawn-based test through the harness named in the `[ ]`
+    Task, every `[?]` above is a recorded decision, and `cargo test -p server`,
+    `cargo clippy --all-targets -- -D warnings`, `cargo +nightly fmt --check` and
+    `specdd lint` are green.
+
+Scenario: Clean start hands over to the listener
+  Given defaults (no flags, none of the config env vars), a kube-resolvable environment, no
+    `NO_COLOR` and no pre-set crypto provider
+  When the process starts
+  Then stdout carries the ANSI-coloured full-format line with prefix
+    `Starting vynil-diag server with config: ` and the ten-field @Config @Debug
+  And @run_server is awaited serving; nothing further is logged while it holds, and a natural
+    @Ok return leaves no further line and exit `0`
+  No mapped test exists.
+
+Scenario: Missing cluster identity aborts through stdout and exit 1
+  Given an environment with neither resolvable kubeconfig nor in-cluster variables
+  When `@AppState::new` returns @Err
+  Then stdout carries the @error! line opening `Failed to create app state: ` with the
+    @DiagError render pinned in Example — `DIAG-500` id and all — on stdout, and stderr
+    stays empty
+  And the exit code is `1`, the runtime is never shut down, and no listener was attempted
+  No mapped test exists.
+
+Scenario: Server bootstrap refusal exits 1 with the DIAG text
+  Given a buildable @AppState and the trust+insecure pair @run_server refuses
+  When the @Err lane of `@run_server` runs
+  Then stdout carries the @error! line opening `Server error: ` followed by the refusal
+    @Display verbatim — the `DIAG-500` render carrying the `DIAG-CONFIG:` guardrail text
+    pinned in ./server.sdd — and the exit code is `1`
+  No mapped test exists.
+
+Scenario: Bad config dies in clap before the banner
+  Given an unknown flag or a bad boolean env value
+  When @Config::parse runs — logging init and the provider install having already completed
+  Then clap's `error:` + usage text goes to stderr with exit `2`, stdout shows no
+    `Starting vynil-diag server` line, and @AppState is never constructed
+  No mapped test exists.
+
+Scenario: RUST_LOG and NO_COLOR are read differently
+  Given `RUST_LOG` set to any value, and separately `NO_COLOR` set non-empty
+  When the process starts normally in each case
+  Then `RUST_LOG` changes nothing — the filter is exactly `server=debug` over the crate
+    targets plus global `info`
+  But `NO_COLOR` removes the ANSI colouring from the same lines without touching levels
+  No mapped test exists.
+
+Example:
+  startup line shape: `2026-09-14T08:15:30.123456Z  INFO server: Starting vynil-diag server with config: Config { bind: "0.0.0.0:8443", … }`
+  failure line shape: `2026-09-14T08:15:31.900004Z ERROR server: Failed to create app state: DIAG-500: Internal server error - Failed to create kube client: …`
