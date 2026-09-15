@@ -1,0 +1,211 @@
+Spec: Items
+
+Purpose:
+  Hold the plugin's diagnostic-item catalog as one static table — item ids, their bundle
+    placement, the Content-Type to file-extension classifier and the admin-API URL builder — so
+    ./actions.rs, ./bundle.rs and ./transport.rs speak one frozen item vocabulary through the
+    diagnostic flows. Pure string tables and formatting, no I/O and no async: every observable
+    of this file is what @ALL_ITEMS, @resolve_items, @item_path, @extension_for_content_type
+    and @api_path hand back for a given input, and a reader must be able to reimplement those
+    exact outputs from this spec alone.
+
+Owns:
+  ./items.rs
+
+References:
+  ./cli.sdd — both feeds into this file: the `--items` @Option<@Vec<@String>> arrives verbatim
+    (split-on-comma, empty segments kept, nothing trimmed or case-folded), and the four ids of
+    @InstanceVerb::as_item (`children`, `agentlog`, `childlogs`, `operatorlog`) are the tail four
+    of the catalog; @api_path consumes the same spec's @InstanceTarget.
+  /server/src/server.rs — the handler's item `match` accepts exactly the nine ids of
+    @ALL_ITEMS (unknown names there fail the server's @DiagError::UnknownItem); the lists are a
+    copied mirror, not a shared constant, so adding or renaming an item is a deliberate
+    two-file change.
+
+Depends on:
+  @crate::cli::InstanceTarget — @api_path borrows `namespace`, `kind`, `name` (see ./cli.sdd).
+  @std::collections::HashSet, @String::as_str, @str::to_lowercase, @format! — the entire
+    machinery: membership filtering, case folding, URL building.
+
+Must:
+  Keep @ALL_ITEMS a `pub const` of type `&[&str]` with the nine ids `clusterinfo`,
+    `vynilconfig`, `packages`, `popularitycontest`, `state`, `children`, `agentlog`,
+    `childlogs`, `operatorlog` in exactly that declaration order; the order is the collection
+    order. Its four tail ids are what @InstanceVerb::as_item emits; the first five lost their
+    verbs in ./cli.rs and only reach the catalog through `--items`. The in-crate readers of the
+    constant itself are @resolve_items and this file's tests.
+  Keep @resolve_items @must_use such that @None and @Some of an empty slice both return
+    @ALL_ITEMS.to_vec() — all nine — so an empty filter means no filter, never zero items.
+  Keep @resolve_items membership exact @str equality over the input's @String::as_str slices —
+    no trimming, no case folding, no prefix or wildcard handling, no `all`/`*` sentinel; the
+    @std::collections::HashSet exists only to fast-path the contains. The output walks
+    @ALL_ITEMS keeping requested ids, so results always land in catalog order and never request
+    order — `["agentlog", "state"]` resolves to `["state", "agentlog"]` — a requested id occurs
+    exactly once whatever its duplication, unknown names (including the `""` segments
+    ./cli.rs forwards) are silently dropped, and an unmatched filter yields an empty @Vec with
+    no error or warning — @run_diagnostic in ./actions.rs then fetches nothing at all and the
+    bundle ships with an empty item list only.
+  Return @&'static @str borrowed from the @ALL_ITEMS ids, never from the caller's strings, so
+    the resolved @Vec outlives the input slice borrow.
+  Map @item_path each catalog id, @must_use, to a static extension-less bundle basename:
+    `clusterinfo` → `cluster/clusterinfo`, `vynilconfig` → `config/vynilconfig`, `packages` →
+    `packages/packages`, `popularitycontest` → `cluster/popularitycontest`, `state` →
+    `instance/state`, `children` → `instance/children`, `agentlog` → `logs/agentlog`,
+    `childlogs` → `logs/childlogs`, `operatorlog` → `logs/operatorlog`; @item_path panics on any
+    other input with message `unknown item: {item}` (the doc-comment `# Panics` contract). The
+    panic is unreachable from current callers — the item names reaching ./bundle.rs always come
+    from @resolve_items or @InstanceVerb::as_item — so the raw panic survives the crate's
+    @unwrap / @expect denial while staying a hard process abort.
+  Classify @extension_for_content_type @must_use by lowercasing the input once with Unicode
+    @str::to_lowercase, then substring tests in fixed precedence: contains `application/json` →
+    `".json"`, else contains `application/yaml` or `text/yaml` → `".yaml"`, else contains
+    `text/plain` → `".log"`, else `".txt"`. Substring `contains`, not equality: parameters are
+    tolerated (`application/json; charset=utf-8` → `.json`), casing is irrelevant, a match hits
+    at any position, a type advertising several branches takes the earliest one tested so json
+    wins over plain, and media types such as `application/json-patch+json` resolve `.json`.
+    `text/plain` means `.log` — the log-family suffix — `".txt"` is purely the catch-all
+    fallback, empty input included.
+  Build @api_path @must_use as one owned @String
+    `/apis/admin.vynil.solidite.fr/v1/namespaces/{ns}/{plural}/{name}/{item}`
+    from `target.namespace`, then `target.kind`, then `target.name`, then the `item` argument —
+    the admin diagnostic group `admin.vynil.solidite.fr` (the server's @API_GROUP), not the
+    `vynil.solidite.fr` CRD group ./actions.rs @vynil_api_resource watches; `target.kind` carries
+    the plural (`systeminstances` …) because ./actions.rs builds @InstanceTarget from
+    @InstanceKindInfo.plural. No percent-encoding and no validation: whatever bytes the fields
+    carry, empty strings included, interpolate straight into the path text.
+
+Exposes:
+  @ALL_ITEMS — `pub const` `&[&str]`, the nine catalog ids in collection order.
+  @resolve_items — reachable outside the crate via `pub mod items;` in ./lib.rs:
+    `pub fn @resolve_items(filter: @Option<&[@Vec]<@String>>) -> @Vec<&'static @str>` +
+    @must_use.
+  @item_path — `pub fn @item_path(item: &@str) -> &'static @str` + @must_use, total over the
+    nine ids, panicking beyond them.
+  @extension_for_content_type — `pub fn @extension_for_content_type(content_type: &@str) -> &'static @str`
+    + @must_use.
+  @api_path — `pub fn @api_path(target: &@crate::cli::InstanceTarget, item: &@str) -> @String`
+    + @must_use.
+
+Accepts:
+  @resolve_items: any @Option<&[@Vec]<@String>> — duplicates, unknown spellings, case and
+    whitespace variants, empty segments — validated nothing; @item_path and
+    @extension_for_content_type: any `&str`, the defined domain of @item_path being the nine
+    catalog ids; @api_path: any @InstanceTarget and any item `&str`, and ./cli.rs delivers
+    exactly such verbatim parsed CLI text for both.
+
+Returns:
+  @resolve_items — the whole nine-id @Vec unfiltered, else the deduped catalog-ordered subset,
+    possibly empty; every element a @&'static @str from @ALL_ITEMS.
+  @item_path — the static basename per the Must table.
+  @extension_for_content_type — `".json"`, `".yaml"`, `".log"` or `".txt"`.
+  @api_path — the owned path per the Must format, e.g.
+    `/apis/admin.vynil.solidite.fr/v1/namespaces/kydah-core/systeminstances/reloader/clusterinfo`.
+  Consumer shapes: the @Vec from @resolve_items is fetched item-by-item by @run_diagnostic in
+    ./actions.rs — it fixes the fetch order — through @get_item, which takes @api_path's path as
+    the request target; ./bundle.rs pairs @item_path and @extension_for_content_type into
+    `{base_path}{ext}` for the manifest `file` fields and `{root_dir}/{base_path}{ext}` for the
+    tar entries.
+
+Raises:
+  The @panic! `unknown item: {item}` in @item_path is the only failure this file can produce,
+    and it aborts the process. No @Result, no error @Option: an unmatched filter is not an
+    error here, just an empty @Vec.
+
+Handles:
+  No filter vs empty filter vs unmatched filter — the first two collect everything, the third
+    collects nothing in silence.
+  Retired-verb items — `state`, `clusterinfo`, `vynilconfig`, `packages` and `popularitycontest`
+    stay collectible through `--items` although ./cli.rs no longer verbs them.
+  Out-of-order and duplicated filter entries — one pass through the catalog, deduped, stable.
+  Content-Type noise — charset parameters, any casing, substring collisions with json
+    precedence, and unknown or empty types falling to `".txt"`.
+
+Tasks:
+  [x] Freeze and map the tested surface — @test_resolve_items_all and
+      @test_resolve_items_empty_filter (`None` and `Some(&[])` both equal @ALL_ITEMS),
+      @test_resolve_items_filtered (`["state", "agentlog"]`, order matching the catalog only by
+      coincidence), @test_item_paths (all nine @item_path rows), @test_extension_for_content_type
+      (json, json+charset, both yaml spellings, both plain spellings, octet-stream → `".txt"`),
+      @test_api_path (one literal URL).
+  [ ] Cover the catalog reordering and dedup — `["agentlog", "state", "state"]` resolving to
+      `["state", "agentlog"]`; no test exists.
+  [ ] Cover the silent-drop boundary — unknown name, `"State"` casing, `" state"` untrimmed,
+      `""` segment, all-unmatched filter → empty @Vec; no test exists.
+  [ ] Cover the @item_path panic — exact `unknown item: nope` message; no test exists.
+  [ ] Cover @extension_for_content_type case folding and collisions — `APPLICATION/JSON`,
+      `application/json-patch+json`, a header carrying both json and text/plain tokens, and
+      empty input → `".txt"`; no test exists.
+  [?] Should unmatched or partly-unmatched `--items` names stay a silent partial collection —
+      today bogus-only yields a zero-item bundle — or error like the server's
+      @DiagError::UnknownItem? Links the ./cli.sdd `[?]` deferring empty-segment filtering to
+      downstream: nothing filters before this file and this file drops silently. Decide later.
+  [?] Is discarding request order (always returning catalog order) intended stability or a
+      surprise to freeze as-is? Decide later.
+  [?] No `all`/`*` sentinel exists: a `--items '*'` typo resolves to the empty selection, not
+      the whole catalog. Decide later whether the wildcard belongs here or stays a user error.
+  [?] @item_path's raw panic is the read-flow's in-scope panic; with @resolve_items already
+      whitelisting, keep panicking or convert @item_path to @Option/@Result? Decide later.
+  [?] Substring classification guesses `application/json-patch+json` as `.json` and would any
+      future type embedding `text/plain` anywhere as `.log`: keep the loose contains chain or
+      parse the media type properly? Decide later.
+  [?] The @Some-of-empty-slice alias to all-items is unreachable from the CLI — clap always
+      produces at least one element (`--items=` alone yields `[""]`, which resolves to the empty
+      selection) — so the branch only serves library callers; keep or retire? Decide later.
+
+Done when:
+  Every Scenario has a mapped passing test, each `[?]` decision is recorded, and
+    `cargo test -p kubectl-vynil` stays green with clippy and fmt.
+
+Scenario: unfiltered collection returns the whole catalog
+  Given @resolve_items with @None, and again with @Some of an empty slice
+  When resolving
+  Then both yield all nine @ALL_ITEMS ids in catalog order
+  Maps to @test_resolve_items_all and @test_resolve_items_empty_filter.
+
+Scenario: a filter selects in catalog order, deduped
+  Given the filter `["state", "agentlog"]`
+  When resolving
+  Then the result is `["state", "agentlog"]`, and the same answer comes back from
+    `["agentlog", "state", "state"]` — request order and duplicates never survive
+  Maps to @test_resolve_items_filtered for the in-order case; the reorder and dedup legs have
+    no mapped test.
+
+Scenario: unmatched names silently vanish
+  Given a filter mixing a catalog id with `bogus`, `"State"`, `" state"` and `""` segments
+  When resolving
+  Then only the exact catalog id resolves — case and whitespace are never normalized — and an
+    all-unmatched filter returns the empty @Vec without any error or warning, so
+    @run_diagnostic collects zero items
+  No mapped test exists.
+
+Scenario: every catalog id lands in one bundle directory
+  Given each of the nine @ALL_ITEMS ids at @item_path
+  When mapping
+  Then each returns its frozen `cluster/…`, `config/…`, `packages/…`, `instance/…` or `logs/…`
+    basename, extension deliberately absent
+  Maps to @test_item_paths; the panic on `nope` with message `unknown item: nope` has no
+    mapped test.
+
+Scenario: content type picks the file extension
+  Given `application/json`, `application/json; charset=utf-8`, `application/yaml`, `text/yaml`,
+    `text/plain`, `text/plain; charset=utf-8`, `application/octet-stream`
+  When classifying with @extension_for_content_type
+  Then the suffixes are `".json"`, `".json"`, `".yaml"`, `".yaml"`, `".log"`, `".log"`,
+    `".txt"` — and `text/plain` never means `".txt"`
+  Maps to @test_extension_for_content_type; case-folded inputs, multi-branch headers and the
+    empty string have no mapped test.
+
+Scenario: api path addresses the admin group route
+  Given @InstanceTarget{namespace `kydah-core`, kind `systeminstances`, name `reloader`} and
+    item `clusterinfo`
+  When building @api_path
+  Then the result is
+    `/apis/admin.vynil.solidite.fr/v1/namespaces/kydah-core/systeminstances/reloader/clusterinfo`
+  Maps to @test_api_path.
+
+Example:
+  composed bundle entry: item `state` with content type `application/yaml` → @item_path plus
+    @extension_for_content_type = manifest file `instance/state.yaml`, tar entry
+    `{root_dir}/instance/state.yaml`
+  zero-item diagnostic: `--items bogus` → @resolve_items `[]` → archive holds `manifest.yaml`
+    and nothing else

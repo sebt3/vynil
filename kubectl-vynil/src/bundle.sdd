@@ -1,0 +1,327 @@
+Spec: Bundle
+
+Platform: Rust/Kubernetes
+
+Purpose:
+  Turn already-fetched diagnostic answers into one self-contained `.tar.gz` archive — a single
+    `{ns}_{kind}_{name}-diag-{ts}` root directory holding one member per item at its
+    ./items.sdd path with a content-type-derived extension, plus three meta files:
+    `manifest.yaml` (the @Manifest through @serde_yaml), `redactions.json` (the
+    @RedactionReport through @serde_json) and `SUMMARY.md` (hand-built Markdown with a
+    best-effort conditions section) — and return a printable @BundleSummary. The file is a pure
+    writer: no fetches, no stdout, no process output at all — the archive has exactly one
+    output mode, the `output` path the caller opens via @std::fs::File::create, and `-o`
+    (./cli.sdd) reaches here only as that path, never as a stdout mode.
+
+Owns:
+  ./bundle.rs
+
+References:
+  ./cli.sdd — @InstanceTarget feeds the root-dir name verbatim and serializes (via its own
+    @Serialize) as the manifest `target` mapping; the `-o` value is verbatim clap text that
+    ./actions.rs resolves to a path before this file ever sees it.
+  ./items.sdd — @item_path and @extension_for_content_type own every member-name decision:
+    the nine-id basename table (with the `unknown item: {item}` panic this file inherits) and
+    the `.json`/`.yaml`/`.log`/`.txt` suffix rule; the extension is appended straight, a
+    suffix not a path segment.
+  ./transport.sdd — @GetResult is the only data input: `status`/`content_type`/`body`/
+    `redactions` map field-for-field, the redaction counts it parses from
+    `X-Diag-Redactions` are the only counts this file aggregates, and its status-`0`
+    `DIAG-ERR:` lane is the one lane this file's error filter silently misses (the `[?]`
+    there assigns the decision here, kept open below).
+  ./actions.rs — spec-pending, sole caller: @run_diagnostic fetches before calling, hands
+    `items` in @resolve_items (catalog) order, passes @transport_mode's literal label
+    (`"aggregation"` or `"direct"`), builds the `-o` default `{name}-diag-{ts}.tar.gz` from
+    its own @Utc::now third instance-stamp, then print-copies @BundleSummary to stdout;
+    @run_item never reaches this file.
+  /server/src/collect/logs.sdd — @cap mints the server truncation marker
+    `\n... [truncated]`; @TRUNC_MARKER is this file's byte-copy of the marker tail
+    `... [truncated]`, pinned by literal only.
+  /server/src/anonymize.sdd — the `<anonymized>` placeholder the static SUMMARY how-to-read
+    section claims for every artefact; no scrubbing happens on this side.
+  /server/src/dto.sdd — @ScrubStats `distinct`/`occurrences`: the counter pair (and through
+    @add_scrub_header the grammar keys) @RedactionCounts copies field names from, upstream of
+    every tally aggregated here.
+
+Depends on:
+  @tar `0.4` — @Builder (@new, @append_data, @finish), @Header (@new_gnu, @set_size,
+    @set_mode, @set_mtime, @set_username, @set_cksum).
+  @flate2 `1` — @GzEncoder @Compression::default wrapping the output file.
+  @chrono `0.4` — @Utc::now, the `%Y%m%dT%H%M%SZ` format, @to_rfc3339_opts with
+    @SecondsFormat::Secs.
+  serde — @Serialize derives, @serde_yaml `0.9` @to_string, @serde_json `1` @to_string.
+  @anyhow `1` — @Result for @build_bundle; std — @Path/@PathBuf, @std::fs::@File::create,
+    @std::io::@Cursor, @std::collections::@HashMap, `env!("CARGO_PKG_VERSION")`, slice
+    @windows scanning, @saturating_add.
+  @crate::items::@item_path and @crate::items::@extension_for_content_type (./items.sdd),
+    @crate::cli::@InstanceTarget (./cli.sdd), @crate::transport::@GetResult
+    (./transport.sdd).
+
+Exposes:
+  @build_bundle — `pub async fn(target: &@InstanceTarget, transport_label: &@str, items: @Vec<(&@str, @GetResult)>, output: &@std::path::@Path) -> @anyhow::Result<@BundleSummary>` —
+    `pub` through `pub mod bundle;` (./lib.rs), called only by @run_diagnostic; async in
+    shape only: the body awaits nothing (Tasks).
+  @Manifest — `pub @Debug @Serialize`: `tool_version`, `api`, `target` (@InstanceTarget),
+    `collected_at`, `transport`, `items: @Vec<@ManifestItem>`; the serialized body of
+    `manifest.yaml`.
+  @ManifestItem — `pub @Debug @Serialize`: `item`, `file`, `http_status` (@u16),
+    `content_type`, `bytes` (@usize), `redactions` (@Option<@RedactionCounts>
+    `skip_serializing_if @Option::is_none`), `truncated` (@bool
+    `skip_serializing_if @std::ops::Not::not`).
+  @RedactionCounts — `pub @Debug @Clone @Serialize`: `distinct`, `occurrences` (@usize).
+  @RedactionReport — `pub @Debug @Serialize`: `per_item`
+    (@std::collections::@HashMap<@String, @RedactionCounts>), `total` (@RedactionCounts);
+    the serialized body of `redactions.json`.
+  @BundleSummary — `pub @Debug`: `output_path` (@PathBuf), `item_count`,
+    `total_redactions_distinct`, `total_redactions_occurrences` (@usize), `error_items`
+    (@Vec<@String>); read only by @run_diagnostic for its stdout report.
+  Private @append_entry, @build_summary and @TRUNC_MARKER (`b"... [truncated]"`) — observable
+    through @build_bundle's archive and @BundleSummary only.
+
+Must:
+  Stamp the archive from two separate @Utc::now calls: the first gives the compact `ts`
+    formatted `%Y%m%dT%H%M%SZ`, used for the root-dir prefix
+    `{namespace}_{kind}_{name}-diag-{ts}` and echoed on SUMMARY's `Collected` line; the
+    second gives the manifest `collected_at` via
+    `@to_rfc3339_opts(@SecondsFormat::Secs, false)` — a `+00:00` suffix, never `Z`. The two
+    instants can differ by a second boundary, and ./actions.rs' default filename carries a
+    third stamp (Tasks).
+  Name every artefact through ./items.sdd, twice and independently: @extension_for_content_type
+    over @GetResult.content_type yields the suffix `ext` and @item_path the extension-less
+    base, paired into `{base_path}{ext}` — relative `file` in @ManifestItem, while tar member
+    names are the same text with the root prefix `{root_dir}/{base_path}{ext}`. The suffix
+    follows content type alone, never status: a `404` `application/json` item lands `.json`,
+    the status-`0` lane (`"text/plain"`) lands `.log`, and the
+    `"application/octet-stream"` fallback or any odd type lands `.txt`.
+  Copy @GetResult into @ManifestItem and @items order into @Manifest.items: `item` the raw
+    caller-provided id, `http_status` the `status` verbatim (any @u16 — `0` included —
+    membership is never status-gated), `content_type` verbatim, `bytes` the @body length,
+    `redactions` the @Some pair mapped to @RedactionCounts; `truncated` is the scan
+    `result.body.windows(TRUNC_MARKER.len()).any(...)` — a byte-exact
+    `... [truncated]` occurrence anywhere in the body, never derived from status, so the
+    server's log-lane cap marker raises it and any body that merely embeds that byte string
+    raises it too (Tasks).
+  Serialize @Manifest with the whole field set declared: `tool_version` from
+    `env!("CARGO_PKG_VERSION")` of the plugin crate; `api` the literal
+    `"admin.vynil.solidite.fr/v1"` (same group string @api_path requests through,
+    ./items.sdd); `target` the cloned @InstanceTarget rendered as its three snake_case keys;
+    `items: []` renders for an empty collection; and @ManifestItem drops exactly two keys —
+    `redactions` when @None, `truncated` when `false` — every other key always present.
+  Write the archive through @append_entry with private @Gnu headers: @Header::new_gnu, size
+    the member length, `mode` `0o644`, `mtime` `0` (no wall-clock leaks), @set_username with
+    `"vynil"` and its result discarded to @ok() (a rejected name is silent), @set_cksum, type
+    regular file, inside @GzEncoder @Compression::default over @std::fs::File::create —
+    existing file silently truncated, parents never created, relative paths relative to the
+    process cwd; @tar.finish() reports archive write failures but gzip-trailer failures at
+    encoder drop do not travel the @Result (Tasks).
+  Order member insertion exactly: item files first in @items order (./actions.rs delivers
+    catalog order), then `{root_dir}/manifest.yaml`, `{root_dir}/redactions.json`,
+    `{root_dir}/SUMMARY.md`; directory members are never appended — folders like `logs/`
+    exist only as name text; the fixed meta names cannot collide with an item member (every
+    @item_path base carries a `/`), while duplicated item ids from a library caller yield
+    duplicate same-name members with no dedup or warning and the last write wins on extract.
+  Aggregate only reported redactions: each @Some redaction pair records its
+    @RedactionCounts at both the item's manifest slot and @RedactionReport.per_item keyed by
+    raw item name (duplicate names overwrite, last write kept), and the totals
+    @saturating_add each present `distinct`/`occurrences`; @None contributes nothing —
+    headerless, unparsable and transport-failed items are indistinguishable from
+    zero-redaction items in the totals.
+  Always ship @RedactionReport, zero or not: @serde_json::to_string into
+    `{root_dir}/redactions.json` — one compact single-line JSON — with `per_item` key order
+    being @HashMap iteration order (unstable run to run, unlike /server/src/dto.sdd's
+    byte-stable counters, and the totals are the only order-sensitive-free facts) (Tasks).
+  Render `SUMMARY.md` through @build_summary as fixed Markdown: `# Vynil Diagnostic Bundle`
+    heading; an `Instance` line joining `kind`/`namespace`/`name` with `/` — slash order, the
+    reverse field order of the underscore root-dir name, with `kind` whatever the caller
+    stored (actions.rs stores the plural); `Collected` the compact `ts`; `Tool version`; an
+    `## Collected Items` table (`File` relative `{base_path}{ext}`, redaction column as
+    `{d}/{o}` or `—` when @None); `## Redactions Summary` with the two totals; a static
+    `## How to Read This Bundle` section whose closing line claims every artefact anonymized
+    with `<anonymized>` regardless of whether any header ever reported a redaction.
+  Append `## Instance Conditions` best-effort and silently: taken from the first @items entry
+    named `state` whose `status` is exactly `200` (a `0` or non-200 never enters) whose body
+    @String::from_utf8 ok and then parses via @serde_yaml as a mapping with a `status` →
+    `conditions` sequence — one table row per condition taking `type`/`status`/`reason`/
+    `message` with `—` fallbacks; a non-mapping condition, a missing key, non-UTF-8 or
+    malformed YAML yields no section at all.
+  Report through @BundleSummary: `output_path` the caller path echoed, `item_count` every
+    item whatever its lane, the total tally fields, and `error_items` names in @items order
+    the items with `status >= 400` only — the `0` lane, a 3xx or `1..399` never joins, so a
+    transport-failed `DIAG-ERR:` item sits in the archive unreported while @run_item fails on
+    it (decision `[?]`, inherited from ./transport.sdd).
+
+Must not:
+  Fetch, retry, sleep or time anything: `items` arrive complete; this file must not call
+    @get_item or touch ./transport.rs beyond the @GetResult type — the fetch loop belongs to
+    @run_diagnostic.
+  Print archive or item bytes anywhere: no @println/@eprintln call exists between here and
+    main, so bundle content reaches the console only via @BundleSummary numbers that
+    ./actions.rs formats.
+  Redact, anonymize or rewrite a byte of @body: member contents are the verbatim transport
+    answer (redaction or not), and an absent tally is never converted into a warning.
+
+Accepts:
+  @build_bundle: any @InstanceTarget — field bytes interpolate verbatim, `/`-carrying names
+    produce nested or escaping member paths with no sanitization (Tasks); any
+    `transport_label` &str, stored then emitted to manifest and nowhere else; @items — `item`
+    must be one of the nine @ALL_ITEMS ids for @item_path's sake (@Vec members are
+    (&@str, @GetResult) pairs in caller order, empty vec accepted); any plain `output` path.
+  @Manifest/@RedactionReport accept hand-built values from any caller (tests do);
+    @BundleSummary is pure data out.
+
+Returns:
+  @Ok(@BundleSummary) after flushing @tar.finish(); on disk a gzip archive whose item members
+    are byte-identical to the fetched @body (empty @Vec lanes give zero-byte entries), whose
+    `manifest.yaml` lists every item with `http_status` `0` as literally `0`, whose
+    `redactions.json` is always present (empty `per_item`, zero `total` when nothing
+    reported), and whose `SUMMARY.md` always renders the anonymization claim.
+  Empty collection returns @Ok: a valid three-member archive and @BundleSummary{item_count
+    `0`, totals `0`, empty `error_items`} — @BundleSummary never reflects disk reality.
+
+Raises:
+  @anyhow::Err only from @build_bundle, unwrapped IO/serde/tar errors via `?`: @File::create
+    failure, @tar write/@finish failure, @serde_yaml/@serde_json failure (the declared
+    `# Errors` doc), and @item_path's @panic! on `unknown item: {item}` for a non-catalog id —
+    before the manifest loop no file was created, mid tar loop a truncated output remains;
+    no error carries a stable identifier (Tasks) and @build_summary cannot fail.
+
+Handles:
+  Per @GetResult lane at build time: 2xx → real type, real bytes; 3xx pass-through —
+    archived normally, never in `error_items`; 4xx/5xx → JSON body archived as `.json`,
+    listed in `error_items`; `0` sentinel → `DIAG-ERR:` bytes as a `.log` member and
+    `http_status: 0` in the manifest, invisible to the filter; empty body (body-read-failure
+    lane) → zero-byte member.
+  Tally absent-vs-zero — @None skips manifest `redactions`, per_item and the totals alike
+    (`—` in SUMMARY), @Some((0, 0)) records and adds nothing.
+  Marker scan on bodies shorter than the 15-byte marker → always `false`; long bodies without
+    the byte string → `false`.
+  First-`state` rule with duplicates: only the first matching entry is inspected for the
+    conditions section, and its body clone is dropped immediately.
+
+Tasks:
+  [x] In-file serde surface mapped: @test_manifest_serialization (full @Manifest → `tool_version`,
+      `namespace`, `http_status`, `redactions` keys present in YAML — also exercises cloned
+      target and item fields), @test_redaction_report_serialization (@RedactionReport →
+      total `distinct:3`/`occurrences:8` in JSON), @test_manifest_skips_none_redactions
+      (@None drops `redactions`, the manifest-item lane), @test_manifest_skips_false_truncated
+      (`false` drops `truncated`), @test_manifest_includes_true_truncated (`true` emits
+      `truncated: true`).
+  [ ] Cover @build_bundle end-to-end with a tempdir + @tar read-back (member names and order,
+      byte-perfect bodies, header mode/mtime/uid, GNU layout) — zero coverage today.
+  [ ] Cover filename selection per lane (404 JSON → `.json`, status `0` → `.log`, octet-stream →
+      `.txt`) and the `http_status: 0`/`0` `DIAG-ERR:` presence in the archive (and its
+      absence from `error_items`); no test exists.
+  [ ] Cover `truncated` detection: body ending with the server `\n... [truncated]`, body
+      embedding the marker mid-content (false positive frozen), and sub-15-byte bodies —
+      nothing exercises @windows/@TRUNC_MARKER today.
+  [ ] Cover redaction aggregation: totals over present pairs (and their @saturating_add
+      ceiling), absent pairs adding nothing, duplicate item ids overwriting `per_item` while
+      totals double-count — @test_redaction_report_serialization only serializes a literal.
+  [ ] Cover SUMMARY generation: the empty-collection table, the `—` cells, the conditions
+      section on a synthetic YAML payload and its silent skip on bad YAML / non-`state` /
+      status `0` — @build_summary is private, needs @build_bundle or a pub(crate) seam.
+  [ ] Cover the @Ok lanes: @File::create failure (missing parent dir), @File::create overwrite
+      of an existing file, relative-path cwd behavior — no error-path test exists.
+  [ ] Cover the `manifest.yaml` member content and the three-meta ordering (not merely the
+      in-memory serde shapes the five tests reach) — the on-disk YAML has zero coverage.
+  [?] The >=400 filter misses the `0` lane: ./transport.sdd mints it, @run_item bails on it,
+      @run_diagnostic prints `Items with errors` from `error_items` only — decide which
+      posture is canonical and fix here.
+  [?] Two @now reads plus ./actions.rs' third: at a second boundary the root dir `ts`, the
+      `collected_at` and the default filename disagree — freeze one instant and thread it?
+      Decide later.
+  [?] `collected_at` renders `+00:00` while the compact `ts` uses `Z`, and the instance-order
+      differs between root dir (`ns_kind_name`) and SUMMARY (`kind/namespace/name`): freeze
+      the exact strings or normalize? Decide later.
+  [?] @TRUNC_MARKER is a byte-literal copy of the server @cap truncation suffix — a server-side
+      reword silently kills `truncated`. Decide whether to share the constant or stop
+      content-sniffing.
+  [?] Summary error-items naming duplicates: the duplicate item ids already break `per_item`
+      (last wins) while totals double-count; should `error_items` dedupe? Decide with the
+      duplicate-id policy.
+  [?] @HashMap `per_item` makes `redactions.json` byte-unstable run to run (a reproducible-bundle
+      goal would want @BTreeMap like /server/src/dto.sdd). Decide.
+  [?] No target-field sanitization: `/`-bearing `-n`/name values (./cli.sdd keeps them verbatim)
+      flow into root_dir and member paths. Decide where escaping or rejection belongs.
+  [?] Product errors carry no stable identifier (e.g. `BUNDLE-ERR-01:` prefixes) against the
+      workspace per-file error-id convention; gzip trailer failures at @GzEncoder drop also
+      go unreported since only @tar.finish errors surface. Decide later.
+
+Done when:
+  Every scenario above maps to passing tests (including an end-to-end archive read-back), each
+    `[?]` above is a recorded decision, and `cargo test -p kubectl-vynil` with clippy and fmt
+    stays green.
+
+Scenario: manifest optional keys follow their values
+  Given a @ManifestItem with `redactions` @None and `truncated` `false`
+  When @serde_yaml renders it
+  Then neither the `redactions` nor the `truncated` key appears, and a `true` item emits
+    `truncated: true`
+  Maps to @test_manifest_skips_none_redactions, @test_manifest_skips_false_truncated and
+    @test_manifest_includes_true_truncated.
+
+Scenario: manifest and redaction report serialize with their field names
+  Given @Manifest{`tool_version` `0.7.7`, target `test-ns`/`systeminstances`/`test-inst`, item
+    `clusterinfo` status `200` with @Some redactions} and @RedactionReport{totals `3`/`8`}
+  When @serde_yaml and @serde_json render them
+  Then the YAML contains `tool_version: 0.7.7`, `namespace: test-ns`, `http_status: 200` and
+    a `redactions:` block, and the JSON contains `"distinct":3` and `"occurrences":8`
+  Maps to @test_manifest_serialization and @test_redaction_report_serialization.
+
+Scenario: the archive layout is fixed and ordered
+  Given @build_bundle with items [clusterinfo (`application/json`), state (`application/yaml`)]
+    for target `ns`/`kind`/`name` and a tempdir output path
+  When the call returns @Ok
+  Then the member names are, in order, `{root}/cluster/clusterinfo.json`,
+    `{root}/instance/state.yaml`, `{root}/manifest.yaml`, `{root}/redactions.json`,
+    `{root}/SUMMARY.md` with root `{ns}_{kind}_{name}-diag-{ts}`; members carry the fetched
+    `body` bytes verbatim under mode `0o644`, mtime `0`, GNU layout, no directory entries
+  No mapped test exists.
+
+Scenario: transport failures archive silently
+  Given an item whose @GetResult is the status-`0` `DIAG-ERR:` lane, next to a `404`
+    `application/json` `DIAG-005` JSON body
+  When @build_bundle succeeds
+  Then both archive — the first as a `.log` member with `http_status: 0` — but only the `404`
+    joins @BundleSummary.error_items
+  No mapped test exists.
+
+Scenario: truncated flags on any embedded marker byte string
+  Given one agentlog body ending with the server's cap marker `\n... [truncated]` and one
+    clusterinfo body embedding `... [truncated]` mid-content, plus a short body
+  When their @ManifestItem values are computed
+  Then the first two are `truncated: true` (any position counts) and the short body `false`
+  No mapped test exists.
+
+Scenario: redaction totals sum reported pairs only
+  Given items `state` with @Some((2, 7)), `agentlog` with @Some((1, 3)) and `clusterinfo` @None
+  When @build_bundle finishes
+  Then @RedactionReport.total is `(3, 10)`, per_item has exactly `state` and `agentlog`, the
+    manifest lists redactions for those two only, and SUMMARY shows `2/7` and `1/3` with `—`
+    for `clusterinfo`
+  No mapped test exists.
+
+Scenario: SUMMARY conditions are best-effort
+  Given a `state` item at status `200` with body YAML `status.conditions` of two mappings, and
+    variants where the body is invalid UTF-8 or malformed YAML, where `status` or `conditions`
+    is absent, or where the sequence or a condition mapping is malformed
+  When @build_summary runs
+  Then the two-mapping body yields an `## Instance Conditions` table (`—` filling absent
+    fields) and every malformed variant yields no section at all, while a `state` at status
+    `0` or `500` never enters the section even with perfect YAML
+  No mapped test exists.
+
+Scenario: an empty collection still bundles
+  Given @items empty (./actions.rs' unmatched-filter case) and a fresh output path
+  When @build_bundle runs
+  Then @Ok carries @BundleSummary{`output_path` echo, `item_count` `0`, zero totals, empty
+    `error_items`} and the archive holds exactly the three meta members
+  No mapped test exists.
+
+Example:
+  root dir: `kydah-core_systeminstances_reloader-diag-20260628T140512Z` — SUMMARY instead
+    prints the `- **Instance**:` line as `systeminstances/kydah-core/reloader`
+  `collected_at` form: `2026-06-28T14:05:12+00:00`; compact stamp form `20260628T140512Z`
+  redactions.json single line:
+    `{"per_item":{"state":{"distinct":2,"occurrences":7}},"total":{"distinct":2,"occurrences":7}}`
+  @TRUNC_MARKER bytes: `... [truncated]`
