@@ -1,0 +1,314 @@
+Spec: Transport
+
+Platform: Rust/Kubernetes
+
+Purpose:
+  Own the plugin's diagnostic fetch layer: @get_item turns (mode, target, item) into a filled
+    @GetResult over exactly two transports — the kube apiserver aggregation leg
+    (@fetch_aggregation via @kube::@Client, the production path) and the direct HTTP leg
+    (@fetch_direct via @reqwest, the test/dev path) — plus the kubeconfig-context-aware
+    @make_client builder, the `X-Diag-Redactions` scrub-tally parse pair and the fixed-path
+    @read_sa_token reader. Fetches are total: no @get_item failure ever travels a Rust error
+    channel — every client-side failure becomes a @GetResult with status `0` and a
+    `DIAG-ERR: …` text body — while every server answer, success or `DIAG-*` error, passes
+    through with its own status and bytes.
+
+Owns:
+  ./transport.rs
+
+References:
+  ./cli.sdd — the upstream shapes: @InstanceTarget feeds @api_path, @TransportArgs'
+    `server_url`/`token`/`insecure` arrive verbatim-parsed, and `--timeout` belongs to the
+    scan/upgrade verbs only (it never reaches this file); `--context` is the global that
+    ./actions.rs routes into @TransportMode::Aggregation.
+  ./items.sdd — @api_path builds the request path this file consumes, unvalidated and
+    un-percent-encoded, from the @InstanceTarget fields.
+  ./actions.rs, ./bundle.rs, ./completion.rs — spec-pending consumers: ./actions.rs is the
+    only @TransportMode builder (@transport_mode), calls @read_sa_token when `--token` is
+    absent, and classifies @GetResult.status; ./bundle.rs maps the four @GetResult fields into
+    the manifest and tar entries; ./completion.rs is @make_client's second caller and wraps it
+    in its own @tokio::time::timeout.
+  /server/src/server.sdd — the server-side counterpart of every call: the one instance route,
+    the per-item `200` content types, and @add_scrub_header's
+    `X-Diag-Redactions: distinct={distinct};occurrences={occurrences}` grammar this file parses.
+  /server/src/auth.sdd — the `401` `DIAG-006` lane the direct leg's Bearer token is checked in
+    (via @TokenReview server-side); the aggregation leg carries kubeconfig identity instead.
+  /server/src/error.sdd — the JSON `{code,message}` `DIAG-*` bodies that a non-2xx pass-through
+    carries into @GetResult untouched.
+
+Must:
+  @get_item computes the request path exactly once through `@crate::items::@api_path(target, item)`
+    — inheriting that builder's no-validation, no-percent-encoding posture — then dispatches on
+    the mode: @TransportMode::Aggregation → @fetch_aggregation(path, context), @TransportMode::Direct
+    → @fetch_direct(server_url, path, token, insecure). The @InstanceTarget is used for nothing
+    else here and the direct leg carries no context at all (the @TransportMode variant proves
+    it: only Aggregation has the field).
+  Every fetch attempt issues exactly one request — no retry, no redirect-following logic, no
+    backoff anywhere in this file — and sets no timeout or response-size limit on either leg:
+    bodies collect unbounded into memory; `--timeout` (./cli.sdd) does not reach this file;
+    whatever request timeouts the @kube or @reqwest defaults bring are the only deadline, and
+    neither leg configures one.
+  The failure encoding is uniform across aggregation client-build, request-build and send
+    failures and direct client-build and send failures: an `eprintln!` warning on stderr with
+    the exact texts frozen in Raises, and a @GetResult of `status: ` `0`, `body` the bytes of
+    `format!("DIAG-ERR: {e}")` with `{e}` the failure's @Display, `content_type` `"text/plain"`,
+    `redactions` @None. Status `0` is the client-side sentinel — `0` is not an HTTP status —
+    and any real server reply, `200` or `401`/`403`/`404`/`500`, keeps its own status instead.
+  A failed response-body read (after headers arrived) is its own lane: `status`,
+    `content_type` and `redactions` keep the values already extracted from the response, only
+    `body` degrades to an empty @Vec, and the shared warning `warning: failed to read response
+    body: {e}` prints — no `DIAG-ERR:` prefix is synthesized in that lane, in either mode.
+  Both modes read a good response identically: `status` from @StatusCode::as_u16 as-is
+    (non-2xx is pass-through, never a fetch failure); `content_type` from the response
+    @header::CONTENT_TYPE through @to_str with fallback `"application/octet-stream"` for an
+    absent or non-visible-ASCII header; `redactions` from @parse_redactions_header over the
+    response @HeaderMap; `body` the whole collected payload (@BodyExt::collect then @to_bytes
+    in aggregation, @bytes in direct).
+  The aggregation request is @http::Request::get(path) with @kube::client::Body::empty() and
+    zero added headers: no @AUTHORIZATION, no `Impersonate-User`, no `X-Remote-*` — the
+    identity is the kubeconfig user (or in-cluster SA) as @kube::@Client applies it, and the
+    path rides the kubeconfig cluster server up to the apiserver aggregation layer, which
+    routes the admin group to the /server pods; this file never addresses the server itself on
+    this leg. Unparsable URI bytes from verbatim target fields fail at the request-build
+    warning lane here.
+  The direct leg builds the URL as `format!("{}{}", server_url.trim_end_matches('/'), path)`:
+    every trailing slash is cut (one or many joins as one `/`), everything else — scheme,
+    missing scheme, host, embedded paths, the empty string — passes to @reqwest verbatim and
+    fails there into the send-failure sentinel lane if unusable. A fresh @reqwest::ClientBuilder
+    is built per fetch; `insecure` is `true` only adds @danger_accept_invalid_certs(true) —
+    the entire wire effect of the `--insecure` flag, direct leg only, turning off full chain
+    and hostname verification while staying silent — and no custom-CA or client-cert surface
+    exists. The request carries exactly one header, @header::AUTHORIZATION with value
+    `format!("Bearer {token}")`, the token interpolated byte-identical with no scheme check
+    and no trimming.
+  @make_client with `Some(ctx)` sets @KubeConfigOptions{ context: @Some(ctx) copy, cluster:
+    @None, user: @None } — only the context is ever overridden, cluster and user never — loads
+    @Config::from_kubeconfig wrapped with `failed to load kubeconfig context '{ctx}'` and
+    converts through @Client::try_from wrapped with `failed to create kube client`; with @None
+    it runs @Client::try_default wrapped with `failed to create kube client`, keeping kube's
+    current-context-or-in-cluster contract. No cache lives here: each call re-reads
+    kubeconfig, @fetch_aggregation calls it per fetch, and a diagnostic over N items therefore
+    rebuilds the client and reloads the kubeconfig N times.
+  @read_sa_token reads the constant path `/var/run/secrets/kubernetes.io/serviceaccount/token`
+    through @std::fs::read_to_string, returns the file content verbatim — trimmed nothing — and
+    wraps any @std::io::Error with `cannot read SA token`. This file defines but never calls
+    it: the `--token`-absent fallback is @transport_mode in ./actions.rs.
+  @parse_redactions_header looks up `X-Diag-Redactions` through @HeaderMap::get (name matching
+    case-insensitive per @http), answers @None for an absent header or one failing @to_str
+    (non-visible ASCII), and otherwise delegates the value text to @parse_redactions.
+  @parse_redactions splits the value on `;` and per part runs @str::trim — outer whitespace
+    survives, whitespace around or inside the strict prefixes `distinct=` and `occurrences=`
+    does not match and the part is then silently ignored — parses each captured value with the
+    strict unsigned-decimal @usize::from_str grammar (no sign, no inner spacing), aborts the
+    whole call to @None at the first such parse failure even when the sibling key is valid,
+    lets a later occurrence of a key overwrite an earlier one, and answers @Some only when
+    both keys ultimately exist, in the tuple order `(distinct, occurrences)` regardless of
+    textual order.
+  The grammar pairs the server exactly: @add_scrub_header in /server/src/server.sdd emits the
+    canonical `distinct={distinct};occurrences={occurrences}` this parse always accepts
+    (zeroes included), so a redacting item's `200` always yields @Some; the strict tolerance
+    cases exist only for non-server speakers, and the `clusterinfo`/`packages`/
+    `popularitycontest` answers simply have no header and give @None.
+
+Must not:
+  Do any flag parsing, mode choosing, context defaulting or token fallback inside a fetch:
+    @TransportMode arrives fully built from @transport_mode in ./actions.rs, and the
+    `--token`-missing → @read_sa_token fallback happens there, before @get_item ever runs.
+  Log or echo the token: it is interpolated only into the @AUTHORIZATION header value; the
+    warnings print failure @Display texts only.
+
+Depends on:
+  kube `3.1.0` (/kubectl-vynil/Cargo.toml: default-features off, `client` + `rustls-tls` on
+    rustls `0.23` ring) — @Client (@try_default, @try_from, @send), @Config::from_kubeconfig,
+    @KubeConfigOptions, @kube::client::Body.
+  reqwest `0.12.28` (default-features off, `rustls-tls`) — @ClientBuilder (@new,
+    @danger_accept_invalid_certs, @build) and the @get/@header/@send/@bytes request path; the
+    TLS root set is whatever that feature pin ships — this file names none.
+  @http `1` — @Request::get/@body, @Response parts (@status, @headers), @HeaderMap,
+    @header::CONTENT_TYPE and @header::AUTHORIZATION; @http-body-util `0.1` @BodyExt::collect.
+  @anyhow `1` — @Result and @Context on @make_client and @read_sa_token.
+  @std::fs::read_to_string, @std::str::FromStr over @usize, @eprintln!.
+  @crate::items::api_path and @crate::cli::InstanceTarget — in-crate feed (./items.sdd,
+    ./cli.sdd); /kubectl-vynil/Cargo.toml — the feature posture quoted above.
+
+Exposes:
+  @make_client — `pub async fn(context: @Option<&@str>) -> @anyhow::Result<@kube::Client> +
+    @Debug`-free; doc `# Errors` names unreadable kubeconfig and unknown context; used by
+    ./actions.rs read flows and ./completion.rs.
+  @GetResult — `pub @Debug struct`, fields `status` (@u16), `body` (@Vec<@u8>),
+    `content_type` (@String), `redactions` (@Option<(@usize, @usize)>); `pub` through
+    `pub mod transport;` in ./lib.rs, mapped field-by-field by ./bundle.rs.
+  @TransportMode — `pub @Debug @Clone enum`: @TransportMode::Aggregation{ context:
+    @Option<@String> } and @TransportMode::Direct{ server_url: @String, token: @String,
+    insecure: @bool }.
+  @get_item — `pub async fn(mode: &@TransportMode, target: &@crate::cli::InstanceTarget,
+    item: &@str) -> @GetResult` — infallible by shape.
+  @parse_redactions_header — `pub fn(&@http::HeaderMap) -> @Option<(@usize, @usize)>` +
+    @must_use.
+  @parse_redactions — `pub fn(value: &@str) -> @Option<(@usize, @usize)>` + @must_use.
+  @read_sa_token — `pub fn() -> @anyhow::Result<@String>`; called only from ./actions.rs.
+  Private @fetch_aggregation and @fetch_direct — the two legs, observable only through
+    @get_item's @GetResult and stderr.
+
+Accepts:
+  @get_item: any @TransportMode as parsed — an empty `server_url`, an empty or
+  whitespace-bearing token (./cli.sdd keeps @String verbatim), `insecure` either way; any
+    @InstanceTarget (field bytes interpolate into the path unvalidated per ./items.sdd) and any
+    `item` &str — non-catalog names are not rejected here; they reach the server's `404`
+    `DIAG-005` lane as pass-through.
+  @make_client: @None, or any context-name &str — an unknown name errors at kube load, it is
+    not pre-checked; reachability of the cluster is never probed beforehand.
+  @parse_redactions_header / @parse_redactions: any @HeaderMap / any &str, garbage included.
+  @read_sa_token: no input; meaningful only where the in-cluster token projection exists.
+
+Returns:
+  @GetResult per leg: a server answer of any status → real status, real body bytes, header
+    content type or `"application/octet-stream"`, parsed redaction pair when the header says so.
+    Transport failure → `0` + `DIAG-ERR: {e}` bytes + `"text/plain"` + @None. Header arrived
+    but body unread → real status + empty @Vec body.
+  Consumer-visible consequences: ./actions.rs @run_item prints the body to stdout first and
+    then bails `DIAG-ERR-03` on `status >= 400 || status == 0`, and ./bundle.rs flags summary
+    error items on `status >= 400` only — the `0` lane escapes that filter (Tasks).
+  @make_client → @Ok(@kube::Client) on any readable config, @Err the anyhow chain around the
+    two context texts. @read_sa_token → the verbatim file @String. The parse pair →
+    @Some((distinct, occurrences)) or @None, never a partial pair.
+
+Raises:
+  @get_item, the two fetch fns and the parse pair raise nothing — no @Result, no @panic: every
+    failure is encoded per the uniform Must. @make_client and @read_sa_token are the file's
+    only @Result lane, with anyhow contexts `failed to load kubeconfig context '{ctx}'`,
+    `failed to create kube client` and `cannot read SA token`; @make_client's doc-comment
+    `# Errors` is honest — unknown contexts do land there.
+  The stderr warning texts, verbatim: `warning: failed to create kube client: {e}`,
+    `warning: failed to build request: {e}`, `warning: aggregation request failed: {e}`,
+    `warning: failed to read response body: {e}` (both modes),
+    `warning: failed to build HTTP client: {e}`, `warning: direct request failed: {e}`.
+
+Handles:
+  `--context` pinning vs current-context vs in-cluster: @Some forces that kubeconfig context
+    (a missing one fails @make_client into the status-`0` lane of @fetch_aggregation, the
+    warning text carrying the context-name anyhow layer below it); @None is @try_default.
+  server_url slash hygiene: `https://h/` and `https://h` and `https://h///` all join to one
+    `/apis/…`; an empty server_url degrades to a schemeless relative URL and dies in
+    `warning: direct request failed: …`.
+  Path text that breaks URI parsing (a space from a verbatim `-n`/name value) — request-build
+    warning lane in aggregation, reqwest's own URL verdict in direct.
+  Non-2xx server answers — `401` `DIAG-006` for a bad direct token, `403` `DIAG-001`,
+    `404` `DIAG-004`/`DIAG-005`/`DIAG-002`, `500` `DIAG-500` — as plain pass-through with the
+    JSON `{code,message}` body intact (/server/src/error.sdd shapes).
+  Missing, garbage or non-visible `X-Diag-Redactions`, absent CONTENT_TYPE fallback to
+    `"application/octet-stream"`, and the server's three non-redacting items answering @None.
+  Duplicate tally keys (last valid wins, a later invalid value aborts the pair) and per-part
+    outer spacing (`distinct=5 ;occurrences=6` survives, `distinct = 7` parts are skipped).
+
+Tasks:
+  [x] Cover the parse pair — @test_parse_redactions_valid (`distinct=5;occurrences=12` →
+      `(5, 12)`), @test_parse_redactions_reversed_order (`occurrences=20;distinct=3` →
+      `(3, 20)`: keys win over text order), @test_parse_redactions_with_spaces
+      (`distinct = 7 ; occurrences = 15` → @None, strict-prefix proof),
+      @test_parse_redactions_missing_distinct and @test_parse_redactions_missing_occurrences
+      (one key only → @None), @test_parse_redactions_malformed (`garbage`, `""`, and
+      `distinct=abc;occurrences=10` — the invalid value kills the pair though the sibling is
+      valid), @test_parse_redactions_header (present header → @Some, empty map → @None).
+  [ ] Cover @get_item pass-through against a fake HTTP server (both legs): real statuses kept,
+      body bytes verbatim, CONTENT_TYPE mapping incl. the `"application/octet-stream"`
+      fallback, redaction capture, body-read-failure empty-@Vec lane —
+      /kubectl-vynil/Cargo.toml `dev-dependencies` is empty: no httpmock/wiremock/fake-apiserver
+      harness ships, as ./completion.rs and the parent spec also report.
+  [ ] Cover the failure sentinel lanes: unknown `--context` (`0` + `DIAG-ERR:` +
+      `warning: failed to create kube client: …`), unreachable or schemeless `server_url`
+      (`warning: direct request failed: …`), and the six exact warning texts.
+  [ ] Cover @make_client legs with a temp-KUBECONFIG fixture: @None and @Some(known ctx)
+      building, @Some(unknown ctx) yielding `failed to load kubeconfig context '{ctx}'` in the
+      chain; cover @read_sa_token's verbatim return and `cannot read SA token` failure text.
+  [ ] Cover the direct leg request shape: URL join (trailing/repeated slashes, empty URL),
+      the single `Bearer {token}` header, and `insecure` toggling
+      @danger_accept_invalid_certs (observably: self-signed handshake accepted vs refused).
+  [?] `--timeout` never reaches this file — both fetch legs are deadline-free, so a hung
+      server hangs `diagnostic`/read verbs forever; ./completion.rs's own @tokio timeout
+      around @make_client is the crate's only guard, and the ./cli.sdd `[?]` premise that
+      timeout `0` semantics are "decided in ./actions.rs" does not extend to reads at all.
+      Decide later whether read verbs gain a real deadline.
+  [?] Failure-body leakage and id hygiene: the unnumbered pseudo-id `DIAG-ERR:` (against
+      ./actions.rs' `DIAG-ERR-01`…`03` and the server's `DIAG-00X`) embeds the raw failure
+      @Display into a body that @run_item writes to stdout and ./bundle.rs tars — kubeconfig
+      paths and endpoint URLs can surface as "item content". Decide later whether the body
+      gets a numbered id plus generic text with detail kept on stderr only.
+  [?] Cert-bypass UX: `--insecure` → @danger_accept_invalid_certs is the flag's whole effect —
+      silent full verification off (chain and hostname), no confirmation, no warning line, no
+      CA-pin alternative — and it does nothing to the aggregation leg, where kubeconfig trust
+      silently wins. Decide later whether a stderr notice or a narrower bypass ships.
+  [?] Bundle filter asymmetry (./bundle.rs owns the fix, noted here because this file mints
+      the `0`): its error-item summary counts `status >= 400` only, so transport-failed items
+      (`status` `0`, `DIAG-ERR:` bodies) sit in the archive unreported while @run_item bails on
+      them. Decide which posture is canonical.
+  [?] Per-fetch client churn: @fetch_aggregation rebuilds the kube client (full kubeconfig
+      re-read) and @fetch_direct a new @reqwest client for every single item of a diagnostic.
+      Decide later whether the flow shares one client per run.
+  [?] @read_sa_token returns the file verbatim; a hypothetical trailing-newline token would
+      give @AUTHORIZATION a value @reqwest's header setting cannot represent — whether that
+      errors or silently drops the header is untested here. Decide later whether the token is
+      trimmed/rejected at read.
+
+Done when:
+  Every Scenario below maps to a passing test (the `[ ]` Tasks or successors), each `[?]` is a
+    recorded decision, and `cargo test -p kubectl-vynil`, clippy and fmt stay green.
+
+Scenario: the server tally parses in either key order
+  Given `distinct=5;occurrences=12`, `occurrences=20;distinct=3`, and a header map carrying
+    `X-Diag-Redactions: distinct=4;occurrences=9`
+  When parsing through @parse_redactions and @parse_redactions_header
+  Then the pairs are `(5, 12)`, `(3, 20)` and `(4, 9)` — the tuple is always
+    (distinct, occurrences), not textual order
+  Maps to @test_parse_redactions_valid, @test_parse_redactions_reversed_order and
+    @test_parse_redactions_header.
+
+Scenario: the tally grammar is strict and all-or-nothing
+  Given `distinct = 7 ; occurrences = 15`, `occurrences=10`, `distinct=3`, `garbage`, `""`
+    and `distinct=abc;occurrences=10`
+  When parsing each
+  Then every one yields @None: spacing inside the name breaks the prefix, one missing key is
+    refused, and an unparsable value aborts the pair even though its sibling parses
+  Maps to @test_parse_redactions_with_spaces, @test_parse_redactions_missing_distinct,
+    @test_parse_redactions_missing_occurrences and @test_parse_redactions_malformed.
+
+Scenario: a transport failure is a result, not an error
+  Given @get_item over a @TransportMode::Direct whose server_url points nowhere reachable
+  When fetching one item
+  Then it returns instead of failing — `status` `0`, `content_type` `"text/plain"`,
+    `redactions` @None, body `DIAG-ERR: …` with the reqwest failure text — after printing
+    `warning: direct request failed: {e}` to stderr
+  And @run_item bails `DIAG-ERR-03 … status 0` on it while ./bundle.rs' `>= 400` filter does
+    not list it
+  No mapped test exists.
+
+Scenario: server error answers ride through untouched
+  Given a reachable server answering the Bearer-audit `401` `DIAG-006`, a `404` `DIAG-005`
+    for an off-catalog item name, or a `500` `DIAG-500`
+  When @get_item fetches through either leg
+  Then the @GetResult keeps the real status, the JSON `{code,message}` bytes verbatim and
+    `application/json` content type — non-2xx is the server's diagnosis, never a fetch failure
+  No mapped test exists.
+
+Scenario: context selection and the kubeconfig leg
+  Given @make_client with @Some of a context absent from the kubeconfig, and @None
+  When running each
+  Then the first @Errs with the chain around `failed to load kubeconfig context '{ctx}'` —
+    and inside @fetch_aggregation degrades to the status-`0` warning lane — while @None
+    follows kube's current-context-or-in-cluster default
+  No mapped test exists.
+
+Scenario: the direct request shape
+  Given server_url `https://diag.internal/`, an item path from @api_path and a token
+  When @fetch_direct runs with `insecure` `false`, then `true`
+  Then the URL is `https://diag.internal` + path (trailing slashes cut), the only added header
+    is `Authorization: Bearer ` plus the verbatim token, and `true` alone builds the client
+    with @danger_accept_invalid_certs — accepting a self-signed endpoint silently
+  No mapped test exists.
+
+Example:
+  failure sentinel body shape: `DIAG-ERR: error sending request for url (http://127.0.0.1:9/apis/…)`
+  observed success mapping: item `state`, content type `application/yaml`, header
+    `X-Diag-Redactions: distinct=2;occurrences=7` → @GetResult{status `200`, bytes, same type,
+    @Some((2, 7))}
+  strictness witness: @parse_redactions("distinct = 7 ; occurrences = 15") → @None

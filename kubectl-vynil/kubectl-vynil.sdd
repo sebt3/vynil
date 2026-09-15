@@ -48,10 +48,20 @@ Must not:
 Depends on:
   `kube`, `k8s-openapi`, `reqwest`, `clap`, `anyhow`
 
+References:
+  ./src/main.sdd, ./src/cli.sdd, ./src/actions.sdd, ./src/bundle.sdd, ./src/completion.sdd,
+    ./src/items.sdd, ./src/transport.sdd, ./kubectl_complete-vynil.sdd — the file-level
+    contracts; this directory spec stays coarse and defers all file behavior to them.
+    `./src/lib.rs` is a lint-attribute and `pub mod` shim: no crate attributes beyond the
+    shared `/linting.sdd` harness pair and no behavior, so it carries no file spec per
+    `.specdd/bootstrap.project.md`.
+
 Done when:
   The actions, bundle, and completion modules have reviewed specs and `cargo test -p kubectl-vynil`
     is green.
 
 Tasks:
-  [ ] #0 Spec `./src/actions.rs`, `./src/bundle.rs`, and `./src/transport.rs`.
-  [ ] #1 Spec `./src/completion.rs` and the shim.
+  [x] #0 Spec ./src/actions.rs, ./src/bundle.rs, and ./src/transport.rs.
+  [x] #1 Spec ./src/completion.rs and the shim.
+  [ ] #2 Spec the emitted loaders ./completions/bash.sh and ./completions/zsh.sh (only
+      reachable through ./src/completion.rs include_str! emission decided there).

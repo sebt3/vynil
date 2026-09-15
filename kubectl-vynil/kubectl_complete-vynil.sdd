@@ -1,0 +1,51 @@
+Spec: KubectlCompleteVynilShim
+
+Platform: POSIX shell
+
+Purpose:
+  Register the plugin with kubectl's dynamic-completion convention: kubectl discovers
+    completions by executing `kubectl_complete-vynil` with the user's partial words and
+    parses Cobra `__complete` output, so this file exists solely to forward those words to
+    the real binary's completion entry point.
+
+Owns:
+  ./kubectl_complete-vynil
+
+Must:
+  Start with the `#!/usr/bin/env sh` interpreter line so kubectl executes it through a
+    shell without depending on bash.
+  Invoke @kubectl-vynil with the first argument `__complete` followed by every forwarded
+    argument verbatim and unquoted-expansion-free, through @exec so the shim process is
+    replaced and kubectl sees the binary's exit code, stdout (`value[\tdesc]` lines plus
+    the directive) and stderr directly.
+  Resolve the binary from @PATH (@kubectl-vynil is looked up as bare `kubectl-vynil`); no
+    path probing, no fallback candidate, no wrapper logic before the @exec line.
+  Emit none of its own bytes on stdout or stderr; every byte kubectl parses originates from
+    @kubectl_vynil::completion::@run behind the `__complete` intercept frozen in
+    ./src/cli.sdd and ./src/main.sdd.
+
+Depends on:
+  ./src/main.sdd — the exact-argv[1] `__complete` intercept that consumes the forwarded tail.
+  ./src/completion.sdd — the candidate/directive output format kubectl parses.
+
+Handles:
+  Zero forwarded arguments — @kubectl-vynil __complete with no tail still answers the
+    top-level candidates and directive per ./src/completion.sdd.
+  `kubectl-vynil` absent from @PATH — the shell fails at @exec with its own
+    "not found" diagnostic and the kubectl completion simply shows nothing useful; the
+    shim does not detect or remap that failure.
+
+Tasks:
+  [ ] Decide later whether the shim needs the executable bit preserved by packaging
+      (kubectl only executes it by name), and whether a `vynil`-named twin shim is wanted
+      for a future rename.
+
+Done when:
+  The file is byte-stable at the documented @exec forward and package checks keep it
+    mode-executable.
+
+Scenario: kubectl asks for top-level candidates
+  Given `kubectlCompleteVynilShim` executes with no arguments
+  When the shell reaches @exec
+  Then `kubectl-vynil` runs with argv `__complete`
+  And kubectl receives exactly the binary's candidate lines and `:4` directive

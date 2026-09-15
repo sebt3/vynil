@@ -1,0 +1,326 @@
+Spec: Cli
+
+Purpose:
+  Define the whole `kubectl-vynil` command grammar as one clap derive tree — kind → name →
+    verb layout, floating `-n`/`--context` globals, the three instance kinds and the
+    `JukeBox` kind with their verb sets, read-verb transport flags, and a `completion`
+    verb — and carry the static instance-kind table plus the resolved @InstanceTarget, so
+    ./main.rs, ./completion.rs, ./actions.rs, ./items.rs and ./bundle.rs dispatch on typed
+    values instead of raw argv.
+
+Owns:
+  ./cli.rs
+
+References:
+  /server/src/config.sdd — approved clap-spec calibration; the error/exit behavior here was
+    probed empirically the same way (scratch crate mirroring this file outside the
+    workspace, locked build, deleted after) rather than asserted from clap lore.
+  ./main.rs — @Cli::parse dispatcher and pre-parse `__complete` intercept (not owned here).
+  ./completion.rs, ./actions.rs, ./items.rs, ./bundle.rs — in-crate consumers of these
+    types.
+
+Must:
+  Grammar is `kubectl-vynil [OPTIONS] <kind|completion> …` with the verb after the name,
+    the doc comment advertising `kubectl-vynil [-n <ns>] <kind> <name> <verb> [args]`;
+    @Cli::parse in ./main.rs is the consuming entry point.
+  `-n`/`--namespace` and `--context` are global flags (@arg `global = true`): accepted
+    before, between or after subcommand words, each @Option<@String> defaulting to @None;
+    defaulting them to the current kubectl context/namespace is consumer behavior, not
+    parse behavior.
+  The kind whitelist is structural — exactly the clap subcommands `jukebox` (visible alias
+    `box`), `vti` (visible alias `tenantinstance`, hidden alias `tenantinstances`), `vsvc`
+    (visible `serviceinstance`, hidden `serviceinstances`), `vsi` (visible `systeminstance`,
+    hidden `systeminstances`) and `completion`; aliases resolve to the same variant; the
+    legacy `ti`/`si`/`sysi` spellings are not accepted. Hidden aliases parse but stay out
+    of help, which annotates `[aliases: …]` for visible aliases only.
+  Verb sets: @JukeboxVerb has only `scan`; the three instance kinds share @InstanceVerb —
+    `upgrade`, `scan`, `diagnostic`, `children`, `agentlog`, `childlogs`, `operatorlog`;
+    the retired verbs `state`, `clusterinfo`, `vynilconfig`, `packages` parse-reject.
+  Per-verb surface:
+    `jukebox <name> scan [PACKAGE]` — optional positional kept verbatim,
+    `--vynil-namespace <VYNIL_NAMESPACE>` default `vynil-system`,
+    `--timeout <TIMEOUT>` default `90`.
+    instance `scan` — the same two flags, and no `-w` here.
+    `upgrade` — adds `-w`/`--watch` presence flag default `false`, and its `--timeout`
+    default is `300` (same `--vynil-namespace` `vynil-system`).
+    `diagnostic` — `--items <ITEMS>` (long only, `value_delimiter = ','`),
+    `-o`/`--output <OUTPUT>`, plus the transport block.
+    `children`/`agentlog`/`childlogs`/`operatorlog` — only the transport block.
+    `completion <SHELL>` — one positional valued `bash` or `zsh`, the @clap::ValueEnum
+    kebab names, case-sensitive.
+  The transport block @TransportArgs is `--server-url <SERVER_URL>`, `--token <TOKEN>` and
+    the `--insecure` presence flag (default `false`), and exists only on the four
+    single-item verbs and on `diagnostic` — `--server-url` on `upgrade` or on either `scan`
+    is a parse rejection, so direct mode reaches read verbs only.
+  No shape validation happens beyond clap's per-type parse: names, package subsets,
+    namespaces, contexts, server URLs, tokens, output paths and item names are @String
+    verbatim, empty strings included (`--server-url=` yields @Some of `""`); there is no
+    dns-1123 or name check anywhere; the item-name whitelist is not enforced here; @u64
+    `--timeout` accepts every canonical unsigned decimal including `0`; a hyphen-leading
+    word is never a numeric value — `--timeout -1` is an unexpected-argument rejection.
+  No environment variable feeds any option: the crate builds clap with the `env` feature
+    yet no `env` attribute exists, and exported `NAMESPACE`, `CONTEXT`, `VYNIL_NAMESPACE`,
+    `TIMEOUT` leave parse outputs untouched (probe-confirmed).
+  Every flag is single-occurrence, globals included — repeating `-n` or `--context` fails
+    @clap::error::ErrorKind::ArgumentConflict with the text
+    `the argument '--namespace <NAMESPACE>' cannot be used multiple times`
+    (same for `--context <CONTEXT>`), exit `2`, not last-wins.
+  Usage surface exits `0` printing to stdout: `-h`/`--help` at any level, `help`,
+    `help <cmd>`, `-V`/`--version`. The version line is `kubectl-vynil <workspace version>`
+    from the `#[command(name = "kubectl-vynil", version, about, long_about = None)]`
+    override — `kubectl-vynil 0.7.10` observed on workspace version `0.7.10`. Help banners
+    come from the doc comments: root has `long_about` disabled so root `-h` and `--help`
+    render the one-line about with its trailing `.` dropped; short about strings drop the
+    trailing `.`; the two-paragraph `completion` variant doc renders verbatim under
+    `--help` (sentence periods kept) with `[possible values: bash, zsh]` and each
+    @CompletionShell variant's doc line as its description, and `completion -h` is the
+    summary form; defaulted value options annotate `[default: vynil-system]` /
+    `[default: 300]` / `[default: 90]`, presence flags annotate no default; usage lines
+    name the argv[0] file — probe ran them as `weird-name` — not the `kubectl-vynil`
+    `name` override, which only drives the version line; a kubectl plugin invocation
+    always carries argv[0] `kubectl-vynil`, and `completion bash|zsh` exists to install
+    the direct-invocation scripts (see ./completion.rs), with the `kubectl <TAB>` path
+    running through the crate-root `kubectl_complete-vynil` shim per the parent spec.
+  Other failures print `error: …` to stderr plus the trailer
+    `For more information, try '--help'.` and exit `2`, texts owned by the locked clap
+    build. Observed exactly: unknown root token fails
+    `unrecognized subcommand 'toto'`
+    gaining the tip `a similar subcommand exists: 'vti'` when a neighbor is close; an
+    unknown verb fails `unexpected argument 'nope' found` on the kind-level usage; a
+    missing verb fails `error: 'kubectl-vynil vti' requires a subcommand but one was not provided`
+    listing `[subcommands: upgrade, scan, diagnostic, children, agentlog, childlogs, operatorlog, help]`;
+    a missing shell argument names `<SHELL>` in the following-required-arguments form.
+  Value-level rejections: `invalid value 'tcsh' for '<SHELL>'`
+    with `[possible values: bash, zsh]` and tip `a similar value exists: 'zsh'`
+    (@clap::error::ErrorKind::InvalidValue); `--timeout abc` fails
+    `invalid value 'abc' for '--timeout <TIMEOUT>': invalid digit found in string`
+    and overflow fails with source `number too large to fit in target type`
+    (@clap::error::ErrorKind::ValueValidation); dropping a value fails
+    `a value is required for '--timeout <TIMEOUT>' but none was supplied`;
+    putting `false` on the `--insecure` presence flag fails
+    `unexpected value 'false' for '--insecure' found; no more were expected`
+    (@clap::error::ErrorKind::TooManyValues). The three timeout texts carry only the
+    trailer, no usage line. A command line missing only its required positional(s) where
+    help fits (`kubectl-vynil`, `vti`, `box`) prints that level's full help to stderr and
+    exits `2` instead of a one-line error.
+  `--` ends option parsing; later tokens are positionals — root `-- jukebox …` fails with
+    the tip `subcommand 'jukebox' exists; to use it, remove the '--' before it`.
+  `--items` splits on every comma keeping empty segments: `--items a,b,,c` yields
+    @Some of `["a", "b", "", "c"]` and `--items=` yields @Some of `[""]`; no trimming or
+    filtering before the vec reaches `@items::resolve_items`.
+  @InstanceVerb::as_item is @must_use and @const, and for @InstanceVerb::Children,
+    @InstanceVerb::Agentlog, @InstanceVerb::Childlogs, @InstanceVerb::Operatorlog returns
+    @Some of the static item id (`children`, `agentlog`, `childlogs`, `operatorlog` —
+    equal to the verb spellings) with a borrow of that verb's @TransportArgs; every other
+    variant returns @None.
+  The kind table is @InstanceKindInfo rows — @TENANT_INSTANCE
+    (`tenantinstances`, `TenantInstance`, `tenant`), @SERVICE_INSTANCE
+    (`serviceinstances`, `ServiceInstance`, `service`), @SYSTEM_INSTANCE
+    (`systeminstances`, `SystemInstance`, `system`) — which ./actions.rs turns into the
+    job name `{type_label}--{namespace}--{name}` and label selector `type={type_label},…`
+    and into the @ApiResource `kind`/`plural`, and which @InstanceTarget carries into
+    `@items::api_path`:
+    `/apis/admin.vynil.solidite.fr/v1/namespaces/{ns}/{plural}/{name}/{item}`.
+  @InstanceTarget::new copies its three &str arguments into owned @String fields; the
+    @Serialize derive feed is ./bundle.rs, where @InstanceTarget serializes as the
+    `target` field of `@bundle::Manifest`.
+  The Cobra token `__complete` is not part of this grammar — clap rejects it as any
+    unknown subcommand (tip `a similar subcommand exists: 'completion'`) — and only works
+    because ./main.rs string-matches it as exactly argv[1] before parsing.
+  ./completion.rs drives this tree through @clap::CommandFactory: kind and verb
+    candidates are read from the command plus visible aliases (hidden plurals therefore
+    never complete), flag completions from the verb args, and name-listing reuses the
+    @TENANT_INSTANCE, @SERVICE_INSTANCE and @SYSTEM_INSTANCE `kind`/`plural` fields — so
+    alias sets, about texts and flag inventories of this file are live completion output.
+
+Must not:
+  Resolve or default a namespace, read kubeconfig, contact the cluster or do any I/O
+    during parse — the globals stay @None and consumers own defaulting.
+
+Depends on:
+  @clap `4.6.1` with @clap_builder `4.6.0` and @clap_derive `4.6.1` (`/Cargo.lock`),
+    features `derive` and `env` from `/kubectl-vynil/Cargo.toml` — the derived @clap::Parser,
+    @clap::Subcommand, @clap::Args and @clap::ValueEnum impls, and every behavior, error
+    text, exit code and help rendering above are that build's behavior.
+  @serde `Serialize` — carried by @InstanceTarget for the bundle manifest.
+
+Exposes:
+  @Cli — `pub struct` with @clap::Parser and @Debug; fields `context` and `namespace`
+    (@Option<@String>, global) and `command` (@Commands).
+  @Commands — `pub` @clap::Subcommand enum: @Commands::Jukebox(@JukeboxArgs),
+    @Commands::Vti(@InstanceArgs), @Commands::Vsvc(@InstanceArgs),
+    @Commands::Vsi(@InstanceArgs) and @Commands::Completion(@CompletionArgs); kind
+    variants pair with @TENANT_INSTANCE, @SERVICE_INSTANCE and @SYSTEM_INSTANCE in
+    ./main.rs dispatch; full @clap::Parser/@clap::CommandFactory surface derives along.
+  @CompletionArgs — field `shell` (@CompletionShell, positional value_enum).
+  @CompletionShell — @clap::ValueEnum, @Clone @Copy @PartialEq @Eq @Debug, variants
+    @CompletionShell::Bash (`bash`) and @CompletionShell::Zsh (`zsh`); consumed by @emit_script
+    in ./completion.rs.
+  @JukeboxArgs — fields `name` (@String positional), `verb` (@JukeboxVerb); @JukeboxVerb
+    with the single variant @JukeboxVerb::Scan(@JukeboxScanArgs).
+  @JukeboxScanArgs — fields `package` (@Option<@String> positional), `vynil_namespace`
+    (@String), `timeout` (@u64).
+  @InstanceArgs — fields `name` (@String positional), `verb` (@InstanceVerb); @InstanceVerb
+    variants @InstanceVerb::Upgrade(@UpgradeArgs), @InstanceVerb::Scan(@InstanceScanArgs),
+    @InstanceVerb::Diagnostic(@DiagnosticArgs), @InstanceVerb::Children(@ItemArgs),
+    @InstanceVerb::Agentlog(@ItemArgs), @InstanceVerb::Childlogs(@ItemArgs),
+    @InstanceVerb::Operatorlog(@ItemArgs).
+  @InstanceVerb::as_item — `pub const fn` + @must_use, returns @Option<(&@str,
+    &@TransportArgs)> per Must.
+  @UpgradeArgs — fields `watch` (@bool), `vynil_namespace` (@String), `timeout` (@u64).
+  @InstanceScanArgs — fields `vynil_namespace`, `timeout`.
+  @DiagnosticArgs — fields `items` (@Option<@Vec<@String>>), `output` (@Option<@String>),
+    `transport` (flattened @TransportArgs).
+  @ItemArgs — field `transport` (flattened @TransportArgs).
+  @TransportArgs — @Clone, fields `server_url` (@Option<@String>), `token`
+    (@Option<@String>), `insecure` (@bool).
+  @InstanceKindInfo — `pub` @Copy @Clone struct, fields `plural`, `kind`, `type_label`
+    (const &@str), with consts @TENANT_INSTANCE, @SERVICE_INSTANCE, @SYSTEM_INSTANCE.
+  @InstanceTarget — `pub` @Clone @Debug @Serialize struct, fields `namespace`, `kind`,
+    `name` (@String); @InstanceTarget::new is @must_use.
+
+Accepts:
+  Process argv through @Cli::parse (./main.rs) or @Cli::try_parse_from (tests); accepted
+    shapes exactly as pinned in Must — any @String for every text field including empty,
+    canonical unsigned decimals for the two timedouts, `bash`/`zsh` for the shell,
+    presence-only bools, no environment input, terminator `--` honored.
+  @InstanceVerb::as_item accepts any parsed @InstanceVerb; @InstanceTarget::new accepts any
+    three &str without validation.
+
+Returns:
+  A fully populated @Cli on success: defaulted `vynil-system`, `90`/`300` and `false`
+    flags; @None for `context`, `namespace`, `package`, `items`, `output`, `server_url`,
+    `token` when unflagged; the whole tree @Debug-renderable as probed in Example.
+  @Cli::try_parse and @Cli::try_parse_from give @Result with @clap::Error — the only
+    Rust-visible error channel; @Cli::parse itself never returns an error value.
+  @as_item returns @None outside the four single-item verbs.
+
+Raises:
+  No Rust error originates in this file. Via @Cli::parse the process contract is exit `0`
+    with stdout for help/version and exit `2` with the stderr texts and
+    @clap::error::ErrorKind::UnknownArgument, @clap::error::ErrorKind::ArgumentConflict,
+    @clap::error::ErrorKind::InvalidValue, @clap::error::ErrorKind::ValueValidation,
+    @clap::error::ErrorKind::TooManyValues and the missing-argument/missing-subcommand
+    forms frozen in Must.
+  @as_item and @InstanceTarget::new are infallible.
+
+Handles:
+  Global `-n`/`--context` floating anywhere in the word list, mirroring `kubectl`.
+  Kind alias fan-in — one variant per kind, hidden plurals accepted yet absent from help
+    and from completions.
+  Retired verbs and the removed `ti`/`si`/`sysi` alias set — parse-time rejections.
+  Read verbs versus mutating verbs — transport flags exist only where ./actions.rs has a
+    direct HTTP mode.
+  The automatic `help` subcommand and `-h`/`--help` at every level, root `--help` degraded
+    to about by `long_about` being disabled.
+
+Tasks:
+  [x] Cover grammar order, floating globals, alias fan-in, retired verbs and aliases, item
+      mapping and completion shells — mapped in-file tests
+      @cli_definition_is_valid, @parses_jukebox_scan_with_package, @context_defaults_to_none,
+      @context_flag_parses_before_subcommand, @context_flag_parses_after_subcommand,
+      @namespace_flag_parses_after_subcommand,
+      @parses_instance_upgrade_verb_last_with_floating_flag, @instance_kind_aliases_resolve,
+      @item_verb_maps_to_item_name, @cluster_and_state_verbs_are_no_longer_exposed,
+      @old_invented_aliases_are_rejected, @parses_completion_bash, @parses_completion_zsh,
+      @rejects_completion_invalid_shell.
+  [ ] Cover resolved defaults per verb family (`90`, `300`, `vynil-system`, `false`,
+      @None options) — current tests assert only the `package` field among them.
+  [ ] Cover direct-mode scoping: `--server-url` on `upgrade` and on both `scan` verbs
+      must reject; upgrade `-w` parses, instance `scan -w` rejects.
+  [ ] Cover the error/exit table: unknown subcommand with similar tip, unknown verb,
+      missing verb with the `[subcommands: …]` list, invalid `<SHELL>` with tip, the
+      three timeout texts, duplicate `-n`/`--context`, `--insecure=false`,
+      help-to-stderr-exit-`2` for missing positionals, `--` tip; exact texts and codes.
+  [ ] Cover `--items` splitting (`a,b,,c` keeping the empty segment, `--items=`) and the
+      empty-value passthrough of `-n ""` / `--server-url=` / `--token ""`.
+  [ ] Cover @as_item across all four single-item verbs, @None on `upgrade`/`scan`/
+      `diagnostic`, and @InstanceTarget::new field copying.
+  [ ] Cover `--version`/`--help` exit `0` and help/usage banner sources (about first line,
+      `[aliases: …]`, `[default: …]`, argv[0] in usage lines).
+  [?] `__complete` lives outside this grammar and only works as exactly argv[1] through
+      the ./main.rs string intercept — `kubectl-vynil -n ns __complete …` dies in clap.
+      Decide later whether a hidden clap subcommand replaces the intercept.
+  [?] Hidden plural aliases (`tenantinstances`) parse but never appear as completion
+      candidates (./completion.rs reads visible aliases only): intended asymmetry or
+      missing candidates? Decide later.
+  [?] `--timeout 0` parses; whether a zero deadline is meaningful is only decided in
+      ./actions.rs. Decide later whether the CLI should reject `0` locally.
+  [?] Empty `--items` segments survive the split and reach `@items::resolve_items` as
+      `""` item names. Decide later whether filtering belongs here or downstream.
+
+Done when:
+  Every Scenario has a passing mapped test, the `[?]` decisions are recorded, and
+    `cargo test -p kubectl-vynil` is green.
+
+Scenario: kind, name and verb with floating globals
+  Given `kubectl-vynil vsi -n toto titi upgrade`
+  When parsing
+  Then `namespace` is `toto`, name is `titi` and the verb is @InstanceVerb::Upgrade
+  And the same globals also parse trailing the verb, and absent globals leave `context`
+    @None
+  Maps to @parses_instance_upgrade_verb_last_with_floating_flag,
+    @namespace_flag_parses_after_subcommand, @context_flag_parses_after_subcommand and
+    @context_defaults_to_none.
+
+Scenario: kind aliases resolve to one variant each
+  Given `tenantinstance`, `serviceinstances`, `systeminstance` and `box` starting the kind
+    word
+  When parsing each with `-n ns x children`
+  Then the variants are @Commands::Vti, @Commands::Vsvc, @Commands::Vsi and
+    @Commands::Jukebox, and @as_item names item `agentlog` for that verb
+  Maps to @instance_kind_aliases_resolve and @item_verb_maps_to_item_name; `ti`, `si` and
+    `sysi` parse-reject per @old_invented_aliases_are_rejected.
+
+Scenario: retired verbs are no longer exposed
+  Given verbs `state`, `clusterinfo`, `vynilconfig` and `packages` after `vti -n ns x`
+  When parsing each
+  Then all four fail and `children`, `agentlog`, `childlogs`, `operatorlog` still parse
+  Maps to @cluster_and_state_verbs_are_no_longer_exposed.
+
+Scenario: jukebox scan package subset
+  Given `box kydah-alpha scan dev/code-server`
+  When parsing
+  Then name is `kydah-alpha` and the scan `package` is @Some of `dev/code-server`
+  Maps to @parses_jukebox_scan_with_package; a third positional after the package fails,
+    which has no mapped test.
+
+Scenario: completion accepts only bash and zsh
+  Given `completion bash`, `completion zsh`, `completion tcsh`, `completion Bash`
+  When parsing each
+  Then the shells yield @CompletionShell::Bash and @CompletionShell::Zsh, and `tcsh`
+    fails @clap::error::ErrorKind::InvalidValue listing `[possible values: bash, zsh]`
+    with the tip `a similar value exists: 'zsh'`
+  Maps to @parses_completion_bash, @parses_completion_zsh and @rejects_completion_invalid_shell
+    (the latter is_err-only; the exact text and the case-sensitivity have no mapped test).
+
+Scenario: verb args fill their defaults
+  Given bare `vti x diagnostic`, `jukebox x scan` and `vsi x upgrade`
+  When parsing
+  Then `items`/`output`/`server_url`/`token` are @None, flags are `false`,
+    `vynil_namespace` is `vynil-system` and `timeout` is `90` for scans, `300` for the
+    upgrade
+  No mapped test asserts these values.
+
+Scenario: direct mode is read-verb-only
+  Given `vti x upgrade --server-url http://x` and `vti x scan -w`
+  When parsing each
+  Then both fail `unexpected argument … found` at exit `2`
+  No mapped test exists.
+
+Scenario: usage surface and error exits
+  Given `--help`, then `help vti`, then `--version`, then `toto`, then bare `vti`
+  When running against the locked build
+  Then the first three print to stdout and exit `0` (`--version` printing
+    `kubectl-vynil 0.7.10` on workspace version `0.7.10`), `toto` exits `2` with
+    `unrecognized subcommand 'toto'`, and bare `vti` prints its help to stderr exiting `2`
+  No mapped test exists.
+
+Example:
+  probed defaults render: `Cli { context: None, namespace: None, command: Vti(InstanceArgs { name: "x", verb: Diagnostic(DiagnosticArgs { items: None, output: None, transport: TransportArgs { server_url: None, token: None, insecure: false } }) }) }`
+  version line observed: `kubectl-vynil 0.7.10`
+  root help annotates kinds as `[aliases: box]` for `jukebox` and
+    `[aliases: tenantinstance]` for `vti`, one-line abouts lose their trailing period
+  missing verb error: `error: 'kubectl-vynil vti' requires a subcommand but one was not provided` followed by `[subcommands: upgrade, scan, diagnostic, children, agentlog, childlogs, operatorlog, help]`
+  timeout rejections: `invalid value 'abc' for '--timeout <TIMEOUT>': invalid digit found in string` and `a value is required for '--timeout <TIMEOUT>' but none was supplied`
+  duplicate global: `error: the argument '--namespace <NAMESPACE>' cannot be used multiple times`

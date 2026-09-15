@@ -1,0 +1,248 @@
+Spec: main
+
+Purpose:
+  Be the `kubectl-vynil` bin half of the crate: one straight-line entry — rustls `ring`
+    provider pin, the exact-argv[1] `__complete` string intercept that hands the raw argv tail
+    to @completion::@run before clap ever runs, @Cli::@parse for everything else, a five-arm
+    fan-out onto @run_jukebox/@run_instance/@emit_script, and the @anyhow::@Result left to the
+    std Termination exit. The file mints no error, writes no byte and calls no
+    @std::process::@exit itself; the completion wire, the grammar and its exits, and every
+    diagnosed message belong to the specs referenced below.
+
+Owns:
+  ./main.rs
+
+References:
+  ./cli.sdd — the grammar and its in-@Cli::@parse exit surface: help/version on stdout exit
+    `0`, every failure exit `2`, and the absence of `__complete` from that grammar — clap
+    rejects it as an unknown subcommand (tip pointing at `completion`) wherever the intercept
+    below does not fire.
+  ./completion.sdd — @run: the sole `__complete` handler, infallible, always ending its stdout
+    with the `:4` directive, silent on cluster failure; @emit_script: the embedded loader print
+    behind the parsed `completion` verb. Both land in this file's exit `0`.
+  ./actions.sdd — the dispatch targets and the crate's exit posture: @Ok → `0`, @Err → one
+    `Error:` stderr record exit `1`, every `SCAN-ERR`/`UPG-ERR`/`DIAG-ERR`/`INST-ERR` id minted
+    there, and the @unreachable! panic lane that crosses @block_on as exit `101`; `-n` and
+    `--context` defaulting happens in actions, never here.
+  ./transport.sdd — the total fetch layer under the dispatched read verbs: no transport failure
+    can ever reach this @Result (it folds into status-`0` results ./actions.rs judges), which is
+    why the exit map has exactly one error lane.
+  ./lib.sdd — pending; the lib root whose `pub mod` surface this bin imports as
+    @kubectl_vynil (the `kubectl-vynil` package with hyphens underscored).
+  /operator/src/main.sdd, /server/src/main.sdd — sibling bin startups with the same
+    @install_default().@ok() ring pin (operator silent, server debug-lined); operator hand-
+    builds its tokio runtime while this one trusts the macro — Tasks.
+
+Depends on:
+  @tokio `1.52.3` (/kubectl-vynil/Cargo.toml features `full`) through #[tokio::@main] —
+    tokio-macros `2.7.0` (/Cargo.lock) supplies the runtime builder, @block_on and the exit
+    plumbing.
+  @rustls `0.23.41` with the `ring` feature — @install_default pin only; the same crate choice
+    behind the pure-rustls build the parent spec freezes.
+  @anyhow `1.0.103` — @main's @Result type; std @Termination on @Err is anyhow's @Debug
+    rendering, described in Returns.
+  @clap `4.6.1` — @Cli::@parse only; that call's exits and texts belong to ./cli.sdd.
+  @kube `3.1.0`/k8s-openapi indirectly — reached only through the callees; this file names no
+    client type.
+
+Must:
+  Carry exactly the crate's standard pair of attributes —
+    `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]` then
+    `#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]`
+    — and hold no literal @unwrap or @expect site: the only @expect is tokio-macros' own
+    expansion, exempt because tokio-macros wraps it in `#[allow(clippy::expect_used)]`.
+  Run @main as one pass, no loop or retry, in this order: rustls provider pin → argv intercept
+    scan → @Cli::@parse → one match on `&@cli.command` whose winning arm's awaited @Result is
+    @main's tail expression. No tracing subscriber, no cluster probe, no signal handling, no
+    version/banner line; `__complete` and `completion` are the only lanes that conclude inside
+    the file.
+  Pin rustls before any argument is read — @rustls::@crypto::@ring::@default_provider then
+    @install_default with the @Result dropped by @ok(): installed-first @Ok and already-set
+    @Err both silent, the effective provider never inspected, and the completion lane pays the
+    pin too (Tasks `[?]` on the three-bin copy).
+  Intercept `__complete` before parsing, at the frozen position taken from @std::@env::@args():
+    consume-then-discard argv[0] (its value is never used, plugin name included), byte-exact
+    @Some(`"__complete"`) comparison on argv[1], case-sensitive. On a match collect the rest of
+    argv verbatim — zero words possible, `""` and hyphen words included, no trimming or
+    filtering — await @completion::@run(words) and return @Ok(()): clap never runs, so a
+    completion tail never meets the grammar or @clap::error::ErrorKind::ArgumentConflict
+    (completion.sdd digests it by hand), and exit is `0` whatever @run printed.
+  Fall through completely when the comparison fails (any other argv[1], or none): the scan
+    iterator is dropped without replaying the consumed words, @Cli::@parse re-reads the original
+    process argv, and a `__complete` at any later position is clap's unknown-subcommand problem
+    — ./cli.sdd and ./completion.sdd both freeze that positional fragility; this file is the
+    sole enforcer of the position.
+  Take the runtime from the bare #[tokio::@main] — no flavor, @worker_threads, @thread_name or
+    @start_paused knob: tokio-macros `2.7.0` expands it to
+    @tokio::@runtime::@Builder::@new_multi_thread().@enable_all().@build().@expect(`"Failed building the Runtime"`).@block_on(body)
+    with `return` — multi-thread flavor, tokio's default worker count (available parallelism),
+    build failure a panic to exit `101` (Tasks `[?]`), and the compiled surface a sync
+    `fn @main() -> @anyhow::Result<@()>` whose @Ok/@Err hit std Termination exactly as a plain
+    Rust main's do.
+  Fan the five arms verbatim over borrowed args (match on `&@cli.command`, so @run_jukebox takes
+    @&@JukeboxArgs and @run_instance @&@InstanceArgs — nothing moved): @Commands::Jukebox →
+    @run_jukebox(args, context) and this is the only arm @cli.namespace never reaches (the kind
+    is cluster-scoped; Tasks `[?]`); @Commands::Vti → @run_instance(&@TENANT_INSTANCE, args,
+    context, namespace), @Commands::Vsvc → @run_instance(&@SERVICE_INSTANCE, args, context,
+    namespace), @Commands::Vsi → @run_instance(&@SYSTEM_INSTANCE, args, context, namespace);
+    @Commands::Completion → @completion::@emit_script(args.shell) then a literal @Ok(()).
+  Pass the two globals as @Option<&@str> through @as_deref, verbatim — no defaulting,
+    trimming, validating or env-fallback of `context`/`namespace` anywhere in this file;
+    ./actions.sdd owns defaulting and ./transport.sdd owns context resolution.
+
+Must not:
+  Dodge the Result-as-exit posture: no @std::process::@exit (not even an immediate `exit(0)`
+    after @emit_script), no abort, no @std::process::@abort — the only exits are the returned
+    @Result, the ones clap takes inside @Cli::@parse, and panics.
+  Replay or forward argv on the completion lane: after `__complete` matched, @Cli::@parse is
+    never reached and the scanned words are not re-fed to anything but @completion::@run.
+
+Exposes:
+  @main — written `#[tokio::@main] async fn @main() -> @anyhow::Result<@()>`, compiled to the
+    sync entry of the `kubectl-vynil` bin target (../Cargo.toml `[[bin]]`) — the same string is
+    the installed file name this kubectl plugin ships under, and ./completion.sdd's scripts
+    attach to that bare token. A bin is not importable: the whole surface is the
+    pin-intercept-dispatch sequence and the exit matrix in Returns.
+
+Accepts:
+  Process argv only: argv[0] discarded, argv[1] tested only against `__complete`, and the
+    completion tail any @String words. Every other shape — flags, kinds, verbs, positionals,
+    `--`, empty values — is @Cli::@parse's acceptance, frozen in ./cli.sdd; unknown arguments
+    simply take that lane and exit `2`.
+  No stdin, no config file, no flags read outside clap; the file contains no @std::@env::@var
+    at all. Its only env influence is indirect on the one @Err lane: `RUST_BACKTRACE` and
+    `RUST_LIB_BACKTRACE` decide the backtrace section of anyhow's @Debug print.
+  Preconditions it trusts unchecked: callees present as working, the bin invoked with a usable
+    argv, and — for the shipped contract — a kubeconfig or in-cluster identity reachable by the
+    callees whenever a cluster lane runs.
+
+Returns:
+  OS exit codes are the only values leaving the process, via the returned @Result, clap's own
+    in-@parse exits, and panics:
+  `0` — every @Ok(()): a runner's success verdict unchanged from ./actions.rs, the
+    completion-intercept return whatever @run wrote, and the `completion bash|zsh` script lane.
+  `1` — @Err(@anyhow::@Error): std prints one @eprintln record `Error: ` + the error's @Debug,
+    which anyhow renders as the top @Display text first (typically ./actions.rs' `ID: text`
+    @bail/@Context message), then `\n\nCaused by:` with its cause(s) when a @Context wrap
+    exists (unnumbered line for a single cause, `    N:` numbering for several), then a
+    `Stack backtrace:` section only when `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` captured one.
+  `0` stdout / `2` stderr — the usage surface and the failure surface clap decides inside
+    @Cli::@parse, texts owned by ./cli.sdd; neither ever becomes a main @Result.
+  `101` — any panic: the ones in Raises.
+  The file writes no stdout/stderr of its own: every observable byte is clap's, a callee's, or
+    the std/macro exit channels.
+
+Raises:
+  Constructs zero errors — no @bail, no @Context, no @panic! text originates here; @Err values
+    are callee lanes (./actions.sdd's ids, ./bundle.sdd's pass-throughs) returned untouched.
+  Panic lanes, all exit `101` with the panic text on stderr: the macro @expect
+    `Failed building the Runtime` when the runtime cannot build (Tasks `[?]`);
+    @std::@env::@args()'s per-word invalid-UTF-8 @panic! at whatever word the pre-clap scan
+    reaches — always argv[1] (whether or not it completes the intercept), and on a completion
+    run every later word too, while a clap-lane invocation never scans past argv[1] and clap
+    itself reads @args_os bytes happily (Tasks `[?]`); and downstream unwinds such as
+    ./actions.sdd's parked @unreachable! arm.
+  @completion::@run and @completion::@emit_script cannot fail (./completion.sdd), @Cli::@parse
+    never returns a @clap::Error, and @run_jukebox/@run_instance signal only through the
+    @Result above.
+
+Handles:
+  Intercept arms: no argv[1] at all (bare bin) or any other word → clap lane with the original
+    argv; `__complete` matched with an empty tail → @completion::@run with the empty @Vec, which
+    completion.sdd answers as the empty-prefix kind slot + `:4`.
+  Provider answers: installed-first @Ok and already-set @Err both dropped by @ok() — no branch
+    inspects either.
+  `completion` arm: the (unit) @emit_script answer is not consulted; @Ok(()) is manufactured
+    after it without touching the cluster.
+  `jukebox` globals: a parsed `-n`/`@cli.namespace` is accepted by clap for that verb and
+    dropped here — only `--vynil-namespace` reaches the wait loops (./actions.sdd).
+  Runner @Err: no catch, transform, retry or extra log — @main's tail hands it to std verbatim.
+
+Tasks:
+  [ ] Cover this bin once: no #[cfg(test)] module exists and no test spawns the binary, so all
+      six Scenarios rest on reading; a process-level harness must launch the built
+      `kubectl-vynil` and assert the exit matrix — `0` on runner-@Ok, intercept and script
+      lanes, `1` with the `Error:` first line and its id (e.g. `SCAN-ERR-04`) on an @Err lane,
+      `2` on clap rejections, `101` on the invalid-UTF-8 argv lane — and that every byte outside
+      clap/callee/std channels is absent.
+  [?] The runtime build is the macro's @expect (`Failed building the Runtime`, panic → `101`,
+      no way to attach context or take a Result lane without dropping #[tokio::@main]), while
+      /operator/src/main.sdd hand-builds its runtime with its own panic text; decide one
+      startup-failure posture for the three bins.
+  [?] @std::@env::@args() panics on non-UTF-8 words the scan reaches (argv[1] on every lane,
+      the whole completion tail) while clap's own @args_os path accepts any bytes — one
+      untranslated word turns a normal invocation into exit `101`; decide later whether the
+      scan moves to @std::@env::@args_os with lossy/byte passthrough to @completion::@run.
+  [?] The exact-argv[1] position is load-bearing and undocumented as a product contract
+      (flag-first completion requests die in clap); ./cli.sdd already hosts the replacing-hidden-
+      clap-subcommand `[?]` — decide both sides together.
+  [?] Silent drop of a parsed `-n` on jukebox commands (global flag accepted, argument
+      discarded at the dispatch arm): freeze as intended cluster-scoped behaviour or forward
+      something for future use.
+
+Done when:
+  Every Scenario maps to a green process-level test or a decided `[?]`, the startup-failure and
+    argv-hardening decisions are recorded, and `cargo test -p kubectl-vynil`,
+    `cargo clippy --all-targets -- -D warnings`, `cargo +nightly fmt --check` and
+    `specdd lint` are green.
+
+Scenario: __complete at argv[1] skips clap entirely
+  Given `kubectl-vynil __complete vti ''` — the token exactly at argv[1], tail words `vti` and
+    the empty word
+  When @main runs
+  Then @completion::@run receives the two tail words verbatim, stdout is the
+    candidate-lines-plus-`:4` wire, and the exit is `0` even with an unreadable kubeconfig or a
+    down cluster — @Cli::@parse was never reached, so no clap text and no exit `2` can appear
+  No mapped test exists.
+
+Scenario: __complete anywhere else dies in clap
+  Given `kubectl-vynil -n ns __complete vti ''` — a floating global in front of the token
+  When @main runs
+  Then the argv[1] word is `-n`, the comparison fails, the scan is dropped without replay, and
+    clap rejects the later `__complete` as an unknown subcommand — exit `2` with ./cli.sdd's
+    tip form, not a completion answer
+  No mapped test exists.
+
+Scenario: bare or unknown argv takes the clap lane
+  Given argv with only the bin name (argv[1] @None ≠ @Some(`"__complete"`)), then `toto` as
+    argv[1]
+  When @Cli::@parse runs
+  Then the bare bin prints the root help to stderr and exits `2`, and `toto` exits `2` with
+    `unrecognized subcommand 'toto'` — ./cli.sdd's texts; @main adds no byte and its arms never
+    run
+  No mapped test exists.
+
+Scenario: a runner Err exits 1 with the diagnosed chain
+  Given `box home scan` whose wait loop bails with `SCAN-ERR-04`
+  When @main hands that @Err to std
+  Then stderr is one record `Error: ` whose first line is the @bail text
+    (`SCAN-ERR-04: timed out waiting for job scan-home to be (re)created`), a `Caused by:`
+    section only when a @Context wrap exists, a backtrace section only under
+    `RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` set to `1`, and the exit status is `1`
+  No mapped test exists.
+
+Scenario: the completion verb answers script and zero
+  Given `kubectl-vynil completion bash`, then `completion zsh`
+  When the @Commands::Completion arm runs
+  Then @completion::@emit_script prints the whole embedded loader (clap already restricted the
+    shell to @CompletionShell::Bash/@CompletionShell::Zsh), the arm fabricates @Ok(()), and the
+    process exits `0` with no cluster traffic of any kind
+  No mapped test exists.
+
+Scenario: kind words route to their kind row with globals verbatim
+  Given `vsi -n kydah-core reloader agentlog`, and in a parallel run `jukebox home scan`
+  When the match arms bind
+  Then @run_instance receives &@SYSTEM_INSTANCE, borrowed args, `context` @None and `namespace`
+    @Some of the verbatim `kydah-core` — no default happened here — while @run_jukebox receives
+    (args, @None) and the parsed namespace is dropped at the arm
+  No mapped test exists.
+
+Example:
+  intercept consumption: argv `kubectl-vynil __complete vti ''` → @completion::@run gets `vti`
+    and `""` in order; argv[0] was consumed, never inspected and never forwarded
+  single-cause exit-`1` shape: `Error: SCAN-ERR-04: timed out waiting for job scan-home to be
+    (re)created` — one line, an @bail carries no cause; a @Context wrap adds
+    `\n\nCaused by:\n    <cause @Display>`
+  panic texts that can reach exit `101` through this file: `Failed building the Runtime`
+    (macro @expect) and @std::@env::@args()'s invalid-unicode @panic! — none is written,
+    only propagated, here

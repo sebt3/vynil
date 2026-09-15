@@ -1,0 +1,384 @@
+Spec: Actions
+
+Platform: Rust/Kubernetes
+
+Purpose:
+  Run the plugin's active verbs. The mutating trio (@run_jukebox_scan, @run_instance_scan,
+    @run_upgrade) talks straight to the apiserver — one force annotation on the target, then
+    polling the operator-recreated @Job while UID-tracking so a stale terminal job never counts
+    as the new one — and @run_diagnostic plus the four single-item verbs reuse the ./transport.rs
+    fetch layer, with @build_bundle archiving. This file is also the plugin's only deadline host
+    (`--timeout` is polled here and nowhere else — never on fetches, per ./transport.sdd), owner
+    of the stdout/stderr line contract, and of the exit posture handed to ./main.rs through
+    @anyhow::Result: @Ok → exit `0`, @Err → `Error:` on stderr exit `1`.
+
+Owns:
+  ./actions.rs
+
+References:
+  ./cli.sdd — every input shape: @InstanceKindInfo rows feeding the job name `type_label` and
+    the `--vynil-namespace`/`--timeout` values (scan default `90`, upgrade `300`, `0` accepted
+    — its meaning is frozen here, `[?]` below), `-w` on @UpgradeArgs only (scans always wait),
+    @InstanceVerb::as_item routing, the `__complete`-adjacent globals `-n`/`--context` staying
+    @None until this file defaults them, and direct mode parse-restricted to read verbs so
+    scan/upgrade are aggregation-only.
+  ./transport.sdd — @make_client, @get_item (total: its status-`0` `DIAG-ERR:` sentinel is the
+    lane @run_item bails on while the bundle summary misses it, shared `[?]`), @read_sa_token
+    called only from @transport_mode, @TransportMode built nowhere else, and the finding that
+    `--timeout` never reaches either fetch leg.
+  ./items.sdd — @resolve_items fixes @run_diagnostic's fetch order (catalog order, empty
+    selection legal, unknown/`""` names already dropped).
+  ./bundle.sdd — @build_bundle consumes (item, @GetResult) pairs in delivered order; the
+    `>=400`-only `error_items` filter that @run_diagnostic prints verbatim, and @run_item's
+    stricter `>=400 || == 0` posture, are the same undecided asymmetry.
+  ../common/src/jukebox.sdd — the @JukeBox the annotation rides: cluster scope, kind
+    `JukeBox`, plural `jukeboxes`, group `vynil.solidite.fr` — exactly the coordinates
+    @vynil_api_resource hardcodes for the scan lane.
+  /operator/src/jukebox.sdd — the force-scan consumer: value `true`/`""` = full rescan, else the
+    verbatim `SCAN_PACKAGE` filter; terminal `scan-{box}` @Job foreground-deleted then recreated;
+    annotation removed only after successful create — so any wait failure here still leaves a
+    live trigger and a pending annotation.
+  /operator/src/instance_common.sdd — the force-reinstall consumer keyed on presence alone (the
+    hardcoded value `"true"` is decorative), removing the annotation then
+    @delete_job_and_wait + @upsert_job of the `{type_label}--{ns}--{name}` install job in the
+    operator's own namespace.
+  ./main.rs — spec-pending caller: @run_jukebox / @run_instance dispatch only, and the @Err →
+    `Error:` stderr + exit `1` @anyhand::Result termination is its @anyhow::Result handling;
+    parse errors exit `2` (./cli.sdd) and never enter this file.
+  ./completion.rs — @vynil_api_resource's second caller (@list_names builds the same
+    @ApiResource from its own kind table).
+
+Depends on:
+  kube `3.1.0` — @Client (@default_namespace), @api::@Api (@all_with, @namespaced,
+    @namespaced_with, @get, @get_opt, @patch), @DynamicObject, @Patch::Merge over
+    @PatchParams::@default, @ListParams::@labels, @discovery::@ApiResource.
+  k8s-openapi — @batch::@v1::@Job and @core::@v1::@Pod read models (conditions, container env,
+    pod phase).
+  @tokio::time::@sleep over private @POLL_INTERVAL; @std::time::@Instant/Duration — the whole
+    wait arithmetic; @std::collections::@HashMap, @std::io::Write, @std::path::@PathBuf.
+  @anyhow — @Context/@bail for every error lane; @serde_json::@json for the annotation patch;
+    @chrono::@Utc::@now for the default bundle name.
+  @crate::cli, @crate::items::@resolve_items, @crate::transport, @crate::bundle (./cli.sdd,
+    ./items.sdd, ./transport.sdd, ./bundle.sdd).
+
+Exposes:
+  @run_jukebox — `pub async fn(&@JukeboxArgs, context: @Option<&@str>) -> @anyhow::Result<@()>`:
+    sole entry for the jukebox tree, handles the single @JukeboxVerb::Scan arm by building
+    @JukeboxScanArgsRef borrowing the parsed fields.
+  @run_instance — `pub async fn`, shape (@InstanceKindInfo, @InstanceArgs, context, namespace
+    @Option<&@str>) -> @Result<@()>: resolves the namespace, routes @as_item verbs to
+    @run_item before the @UpgradeArgs/@InstanceScanArgs/@DiagnosticArgs match, and parks the
+    remaining arms on an @unreachable! guard (Tasks).
+  @run_jukebox_scan — same @Result, takes @JukeboxScanArgsRef; called only by @run_jukebox.
+  @run_instance_scan / @run_upgrade / @run_diagnostic / @run_item — the per-verb runners, all
+    `pub` through `pub mod actions;` (./lib.rs); ./main.rs touches only the two dispatchers.
+  @JukeboxScanArgsRef — `pub @Debug` struct of borrowed `package` (@Option<&@str>),
+    `vynil_namespace` (&@str), `timeout` (@u64): a reference bundle so @run_jukebox clones
+    nothing.
+  @vynil_api_resource — `pub(crate) fn(kind: &@str, plural: &@str) -> @ApiResource` pinning
+    group `vynil.solidite.fr`, version `v1`, api_version `vynil.solidite.fr/v1` verbatim from
+    its callers (the @InstanceKindInfo pair, or the literal `"JukeBox"`/`"jukeboxes"`;
+    ./completion.rs supplies its own).
+  Private @POLL_INTERVAL (2 s), @JobOutcome (@Complete / @Failed(@String)), @set_annotation,
+    @job_uid, @wait_job_recreated, @wait_job_terminal, @job_tag, @transport_mode, @watch_pods —
+    observable only through the runners' stdout/stderr and @Result.
+
+Must:
+  Cluster mutation is exactly two annotation writes, nothing else: @set_annotation sends a
+    @Merge patch carrying a single key under @metadata.annotations (@Patch::Merge is a JSON
+    merge patch — Tasks for its doc wording), other annotations merge-patch-survive, the plugin
+    never deletes or creates a @Job/@Pod — recreation is /operator/src/jukebox.sdd's and
+    /operator/src/instance_common.sdd's, which the module doc acknowledges.
+  Trigger first, wait second, never roll back: the annotation is patched before any deadline or
+    wait exists, so every subsequent timeout/failure leaves the scan or reinstall running
+    cluster-side; the operator removes the annotation only after job creation.
+  Freshness is UID-gated: @job_uid snapshots the current `scan-{box}` / install-job UID before
+    the annotation; @wait_job_recreated accepts only a job whose UID differs from that snapshot,
+    and @None (job absent at snapshot — the first-ever install/scan) accepts whatever job first
+    exists, since no UID can match it.
+  One deadline serves every phase of a run: @Instant::@now + `--timeout` seconds via
+    @checked_add (failure after the annotation already landed — Tasks), shared by the recreate
+    wait, the terminal wait and the @watch_pods loop; each loop compares @Instant::@now to that
+    deadline after its API observation and before the 2 s @sleep, so `--timeout` `0` is exactly
+    one observation per loop (fresh-job races aside).
+  Terminal reading is narrow in @wait_job_terminal: a condition with `status` exactly `"True"`
+    and `type_` `"Complete"` → success; `"Failed"` → failure carrying the condition `message` or
+    the literal `"no message"`; every other condition type or status is ignored, and a job whose
+    `status` is absent or which stops answering @get_opt just stays non-terminal until the
+    deadline — the polls are by name, not UID, after the recreate gate.
+  Scan annotation value is `filter.unwrap_or("true")`: full scans write the literal `"true"`,
+    partial ones the `cat[/pkg]` text verbatim — no validation, no trimming, no `""`→`"true"`
+    normalization (`scan ''` yields the empty value the operator also reads as full), and the
+    operator owns the filter grammar (/operator/src/jukebox.sdd).
+  @run_instance_scan reads `.spec.jukebox`, `.spec.category`, `.spec.package` off the fetched
+    @DynamicObject in exactly that fail order (`SCAN-ERR-08`/`-09`/`-10`), @as_str only —
+    non-string JSON fails the same missing-key error — and composes the filter
+    `{category}/{package}`, the category-only form being jukebox-verb-only.
+  Names must line up by convention: scan job `scan-{box}`, install job
+    `{type_label}--{namespace}--{name}` (instance namespace inside the name), both looked up in
+    `--vynil-namespace` — the namespace is assumed to be where the operator places jobs, never
+    probed (Tasks).
+  @run_upgrade prints `Installing version {TAG}` before any waiting verdict, TAG the first
+    container's `TAG` env `.value` on the freshly recreated job — @None (`TAG` absent, a
+    `valueFrom` reference, no containers) renders the literal `<unknown>`.
+  Non-watch upgrade's only success proof is the recreated job's `Complete` condition; -w swaps
+    it entirely for @watch_pods and never consults job conditions or pods in the other mode.
+  @watch_pods lists @Pod in `--vynil-namespace` with selector
+    `type={type_label},namespace={namespace},instance={name}` every 2 s, prints
+    `{name}\t{phase}` (unnamed pods take the empty name, missing status the `"Unknown"` phase)
+    only when a pod-name-keyed @HashMap sees a changed phase — the first pass prints every
+    pod — and returns @Ok once at least one pod was ever seen (map non-empty) and none of the
+    currently listed pods sits outside `Succeeded`/`Failed`; reaching the deadline instead
+    prints `UPG-ERR-09: watch timed out (pods may still be progressing)` to stderr and still
+    returns @Ok.
+  @transport_mode dispatches on `--server-url` presence alone: @Some → @TransportMode::Direct
+    storing the verbatim URL, the verbatim `--token` or the @read_sa_token fallback (failure =
+    `DIAG-ERR-01` — direct-only, out-of-cluster users without `--token` die here), `insecure`
+    copied; @None → @TransportMode::@Aggregation carrying `--context` and nothing else, so
+    `--token`/`--insecure` are accepted by clap and silently ignored, and the label
+    `"direct"`/`"aggregation"` returned with the mode reaches only the bundle manifest.
+  @run_diagnostic fetches sequentially in @resolve_items order, eprintln-ing
+    `collecting: {item}` before each infallible @get_item and collecting every lane
+    failure-free; `-o` text is the output path verbatim (empty string included), else the
+    default `{instance name}-diag-{ts}.tar.gz` with `ts` this file's own
+    `@Utc::@now` `%Y%m%dT%H%M%SZ` stamp (the bundle's internal stamps make three —
+    ./bundle.sdd); the summary prints through @BundleSummary fields and joins `error_items`
+    with `", "`, so transport-failed `0`-lane items stay invisible here while @run_item fails on
+    them (shared posture `[?]`).
+  @run_item commits the answer to stdout before judging it: any reported redaction pair first
+    eprints `redactions: {d} distinct values, {o} occurrences`, then @write_all of the raw body
+    (no newline, no truncation), and only then treats `status >= 400 || status == 0` as a
+    `DIAG-ERR-03` bail — a failed item therefore exits `1` with its body already on stdout,
+    while `1..399` exits `0`.
+  Namespace defaulting is `-n` verbatim (empty string included, validated nowhere) or the
+    @default_namespace of a client built just for that lookup — kubeconfig current context, or
+    the SA namespace in-cluster — and every runner/loop then builds its own clients via
+    @make_client: defaulting + per-action + per-fetch aggregation churn all coexist here.
+  Stream posture is fixed: progress chatter (`annotating …`, `waiting for …`, `collecting: …`,
+    `building bundle: …`, watch-timeout, redactions) on stderr; artifacts and verdicts
+    (`Installing version`, `scan complete: job {ns}/{job} succeeded`,
+    `upgrade complete: job {job_name} succeeded` — namespace omitted on this one, unlike the
+    scan line —, pod phase lines, bundle summary, item body) on stdout; @Err from any runner is
+    ./main.rs's anyhow exit `1` and nothing in this file calls @std::process::@exit.
+
+Must not:
+  Deadline a fetch: the transport calls (@get_item legs, @make_client) run undeadlined —
+    `--timeout` exists only in the poll/loop signatures above, extending neither
+    ./transport.sdd's or ./completion.rs's own timeout story.
+  Wait on the annotation's removal: neither `vynil.solidite.fr/force-scan` nor
+    `vynil.solidite.fr/force-reinstall` removal is polled; a wait outcome says nothing about the
+    annotation's fate.
+
+Accepts:
+  Runner arguments as ./cli.sdd parsed them: instance/box names and `-n` any @String verbatim
+    (`/` and spaces included — kube-side URI failures become these loops' read errors),
+    `--vynil-namespace` verbatim, `--timeout` any @u64 seconds incl. `0` and overflow-prone
+    maxima, `-w`/`--insecure` as parsed bools, `package`/`--items`/`-o`/`server_url`/`token`
+    verbatim optionals, `context` @None or the verbatim global, and `item` any &str —
+    @run_item never checks it against @ALL_ITEMS (server `404` lane, ./transport.sdd).
+  @vynil_api_resource accepts any kind/plural pair without validation.
+
+Returns:
+  @Ok(()) for: a scan job reaching `Complete`; an upgrade job reaching `Complete` (no -w) or any
+    @watch_pods return including its deadline lane; a diagnostic whose bundle was written (zero
+    items collected included — the archive ships, the summary prints `Items collected: 0` and
+    skips the errors line); an item answer with status `1..399`.
+  On-disk/process effects of @Ok: the trigger annotation was written (operator will consume it),
+    stdout carries the success lines / bundle bytes / item body per the channel split.
+
+Raises:
+  Every failure is an @anyhow::Err with a `ID: text` context or @bail at the call site,
+    exiting `1` via ./main.rs: `SCAN-ERR-01`/`UPG-ERR-02`/`INST-ERR-01` for @make_client,
+    `SCAN-ERR-02`/`UPG-ERR-03` over `failed to query existing job`, `SCAN-ERR-03`/`UPG-ERR-04`
+    over `failed to annotate {name} with {key}={value}`, `SCAN-ERR-04`/`UPG-ERR-05`
+    `timed out waiting for job {name} to be (re)created`, `SCAN-ERR-05`/`UPG-ERR-06`
+    `timed out waiting for job {name} to finish`, `SCAN-ERR-06`/`UPG-ERR-07`
+    `{scan,install} job {name} failed: {msg}`, `SCAN-ERR-07` `failed to read instance`,
+    `SCAN-ERR-08`/`-09`/`-10` `instance spec has no .spec.{jukebox,category,package}`,
+    `SCAN-ERR-09`/`UPG-ERR-09` `timeout overflow` (both ids doubled — Tasks), `UPG-ERR-08`
+    `failed to list pods`, `DIAG-ERR-01` no-token-and-no-SA-token, `DIAG-ERR-02`
+    `failed to write item to stdout`, `DIAG-ERR-03` `item '{item}' returned status {status}`.
+  Poll-loop read failures inside @wait_job_recreated/@wait_job_terminal carry only the
+    context-free `failed to query job` (no id — Tasks).
+  @build_bundle's errors (./bundle.sdd: IO/serde/tar, and @item_path's unreachable panic)
+    travel @run_diagnostic's `?` untouched, unwrapped by any actions.rs id.
+  Panic lane: the @unreachable!("item verbs handled above") arm in @run_instance aborts if
+    @as_item and @InstanceVerb ever drift (Tasks).
+
+Handles:
+  Recreate-gate lanes: absent job at snapshot (@None) → first job seen wins; same-UID job →
+    keep polling (a force trigger the operator has not acted on yet is indistinguishable from a
+    slow reaction until the deadline); job vanishing mid-@wait_job_recreated → treated as
+    not-yet-recreated, polls continue.
+  `Complete`/`Failed` at `status` `"False"`, `Suspended`/`FailureTarget`-style conditions and
+    condition-less statuses → non-terminal, wait continues.
+  @watch_pods empty-selector-match loops the whole deadline then ends @Ok; a pod disappearing
+    from later listings stops counting as pending (surviving terminal pods finish the watch,
+    an all-gone pass with history also returns @Ok); phase regression under a reused name
+    re-prints as a change.
+  Upgrade TAG reading from a template whose `TAG` env uses @valueFrom → `<unknown>`, no error.
+  Direct mode with `--server-url=` (empty @Some) → every fetch answers the `0` sentinel, so
+    @run_item prints `DIAG-ERR: …` then bails `DIAG-ERR-03 … status 0` while `diagnostic`
+    bundles it silently — the asymmetry in one command pair.
+  @run_diagnostic's unmatched `--items` → zero `collecting:` lines, still a shipped bundle plus
+    summary; `-o ""` → path handed to @build_bundle verbatim (writer's @File::create verdict).
+
+Tasks:
+  [ ] Cover the scan lane end to end: trigger annotation value/ordering, UID freshness gate,
+      `Complete`/`Failed`/`no message` lanes, stderr progress lines, stdout success line — zero
+      tests exist in this file (no `#[cfg(test)]` module) and every scenario
+      below is unmapped.
+  [ ] Cover partial-scan filter verbatim passthrough (`dev/code-server`, category-only, `""`,
+      the `true` collision) and @run_instance_scan's `.spec` extraction order incl. the
+      non-string-value error lane (`SCAN-ERR-07..10`).
+  [ ] Cover timeout semantics: `--timeout` `0` single-observation → `SCAN-ERR-04`/`UPG-ERR-05`,
+      shared-deadline exhaustion across recreate+terminal, overflow bail after the annotation
+      — none exercised; needs an apiserver fake or injected-clock seams (./transport.sdd notes
+      the empty dev-dependencies).
+  [ ] Cover upgrade non-watch: job name formula, `Installing version {TAG}`/`<unknown>`,
+      `UPG-ERR-07` with the condition message, the namespace-omitted success line.
+  [ ] Cover @watch_pods: change-only tab-separated phase lines, first-pass full print,
+      all-`Failed` exit `@Ok`, pod-vanished-as-terminal, empty-list-to-deadline @Ok with the
+      stderr note, and the never-inspected job conditions posture.
+  [ ] Cover @transport_mode legs: `--token` verbatim, @read_sa_token fallback and
+      `DIAG-ERR-01`, aggregation ignoring token/insecure, context-only-in-aggregation.
+  [ ] Cover @run_diagnostic collection: catalog-order fetches, default `{name}-diag-{ts}` name,
+      the four-line summary shape, error-line join, zero-item bundle, and pass-through of
+      @build_bundle errors.
+  [ ] Cover @run_item: body-before-verdict (stdout already written on the `DIAG-ERR-03`/`0`
+      lanes), `1..399` @Ok, redactions stderr line, `DIAG-ERR-02`.
+  [ ] Cover @run_instance: `-n` verbatim vs @default_namespace fallback (extra client build),
+      @as_item routing before the verb match.
+  [?] `--timeout` `0` + one shared deadline across all phases + no deadline on fetches: the
+      whole timeout contract is emergent from the loop shape — freeze it here (and settle the
+      ./cli.sdd `[?]` that delegated `0` to this file; ./transport.sdd denies reads were ever
+      covered).
+  [?] Error-id hygiene vs the root rule: `SCAN-ERR-09` is both `timeout overflow` and
+      `no .spec.category`, `UPG-ERR-09` serves an @Err id and a stderr notice at once, and
+      `failed to query job`/`failed to annotate {name} …` carry no id at all — renumber or
+      exempt.
+  [?] @watch_pods can never report failure: all-`Failed` pods, vanished pods and the deadline
+      all exit `0`, and job conditions are not consulted in -w mode — decide whether upgrade
+      `-w` owes a non-zero exit on a failed install.
+  [?] The deadline (and its overflow @Err) is computed after the trigger annotation is already
+    written: a huge `--timeout` fails with the scan already running — move the check earlier or
+      accept.
+  [?] @run_item's `status == 0` bail vs the bundle/diagnostic silence on the same lane: pick
+      the canonical posture once (./transport.sdd and ./bundle.sdd `[?]`s).
+  [?] @set_annotation's doc says strategic merge patch; the code is @Patch::Merge (JSON merge
+      patch) — fix the comment, since CRDs cannot take strategic merge anyway.
+  [?] @unreachable! in @run_instance panics on future @InstanceVerb drift instead of a compile
+      error: make the match exhaustive and drop @as_item's double role, or keep the runtime
+      guard.
+
+Done when:
+  Every Scenario maps to passing tests, each `[?]` above is a recorded decision, and
+    `cargo test -p kubectl-vynil`, clippy and fmt stay green.
+
+Scenario: a full scan annotates then polls a fresh job
+  Given box `home` with no prior job, `--vynil-namespace vynil-system --timeout 90`
+  When @run_jukebox_scan annotates `vynil.solidite.fr/force-scan` to the literal `true` and the
+    operator later creates `vynil-system/scan-home`
+  Then stderr carries `annotating jukebox home with force-scan=true` and
+    `waiting for scan job vynil-system/scan-home ...`, the wait accepts the job because the
+    snapshot UID is @None, and a `Complete`/`True` condition yields exit `0` with stdout
+    `scan complete: job vynil-system/scan-home succeeded`
+  No mapped test exists.
+
+Scenario: scan filters and failure message lane
+  Given `box home scan dev/code-server` and, in another run, a scan job answering a
+    `Failed`/`True` condition
+  When each resolves
+  Then the annotation value is the verbatim `dev/code-server` (empty or `true` positionals send
+    those texts, never `true`-normalization), and the failed job exits `1` with
+    `SCAN-ERR-06: scan job scan-home failed: BackoffLimitExceeded` — or `no message` when the
+    condition message is @None
+  No mapped test exists.
+
+Scenario: instance scan composes its filter from the spec triple
+  Given a `vsi -n kydah-core reloader scan` whose instance `.spec` reads
+    `jukebox: kydah-core`, `category: core`, `package: reloader`
+  When @run_instance_scan runs
+  Then the filter is `core/reloader` against box `kydah-core`, and a spec missing `jukebox`
+    (or holding a non-string one) fails `SCAN-ERR-08` before the category/package checks
+    (`SCAN-ERR-09`/`-10`) fire
+  No mapped test exists.
+
+Scenario: a same-UID job is stale
+  Given a terminal `scan-home` job captured pre-annotation, deadline not reached
+  When @wait_job_recreated keeps seeing the same UID
+  Then it keeps polling every 2 s, and with `--timeout 0` the first such observation is already
+    past the deadline → `SCAN-ERR-04: timed out waiting for job scan-home to be (re)created`,
+    exit `1`, trigger annotation left in place
+  No mapped test exists.
+
+Scenario: upgrade announces the version then judges the job
+  Given `vti -n app web upgrade` (no -w) and an operator that recreates
+    `vynil-system/tenant--app--web` at container env `TAG=v1.2.3`
+  When @run_upgrade runs
+  Then stdout prints `Installing version v1.2.3` before the verdict, and the new job's
+    `Complete` prints `upgrade complete: job tenant--app--web succeeded` (namespace omitted);
+    a `Failed` condition instead bails `UPG-ERR-07`, and a missing/`valueFrom` `TAG` prints
+    `Installing version <unknown>`
+  No mapped test exists.
+
+Scenario: watch mode reports phases, not failures
+  Given `upgrade -w` and pods matching `type=tenant,namespace=app,instance=web` transitioning
+    `Pending` → `Running` → `Failed`
+  When @watch_pods polls
+  Then each change prints one `{name}\t{phase}` line (first pass prints all listed pods), the
+    run returns @Ok exit `0` once every listed pod is `Succeeded`/`Failed` — a fully `Failed`
+    set included — a pod vanishing from later listings stops counting as pending, and an
+    empty-selector match after the deadline prints
+    `UPG-ERR-09: watch timed out (pods may still be progressing)` then exits `0` anyway
+  No mapped test exists.
+
+Scenario: diagnostic collects in catalog order and summarizes
+  Given `vsi reloader diagnostic` with `-o /tmp/b.tgz` absent and items resolving to all nine
+  When @run_diagnostic runs
+  Then stderr shows `collecting: clusterinfo` … one per item in @ALL_ITEMS order then
+    `building bundle: {name}-diag-{ts}.tar.gz` (default name with this file's own stamp), and
+    stdout the summary block `Bundle written to:` / `Items collected: 9` /
+    `Redactions: {d} distinct values, {o} occurrences` / `Items with errors: state, agentlog`
+    only when the summary's `>=400` list is non-empty — an item that answered the `0` sentinel
+    is absent from that line
+  No mapped test exists.
+
+Scenario: a single item prints its body before failing
+  Given item `agentlog` answering `500`, and a variant answering the `0` `DIAG-ERR:` sentinel,
+    and a `200` carrying a redaction header
+  When @run_item runs each
+  Then stdout receives the raw body bytes verbatim in all three, stderr carries the redactions
+    line only for the header case, failures exit `1` with
+    `DIAG-ERR-03: item 'agentlog' returned status {500|0}` written after the body is already
+    out, statuses `1..399` exit `0`, and a closed stdout fails `DIAG-ERR-02` instead
+  No mapped test exists.
+
+Scenario: direct mode without a token falls back to the SA file
+  Given `--server-url https://diag.internal --token ""` vs no `--token` at all vs no
+    `--server-url`
+  When @transport_mode runs each
+  Then the first goes @TransportMode::@Direct with the empty token stored verbatim, the second
+    tries @read_sa_token and its unreadable path yields `DIAG-ERR-01` before any fetch or
+    `collecting:` line, and the third selects aggregation+label `"aggregation"`, discarding any
+    `--token`/`--insecure` silently — and `--server-url=` (empty @Some) still selects direct
+  No mapped test exists.
+
+Scenario: namespace defaulting and item routing come from the dispatchers
+  Given `vsi reloader agentlog` with and without `-n`
+  When @run_instance resolves the namespace
+  Then `-n` is used verbatim (empty included), its absence builds a throwaway client for
+    @default_namespace (kicking `INST-ERR-01` when no cluster is reachable) and only then
+    @as_item routes to @run_item — whose aggregation fetches rebuild the client per item
+    regardless
+  No mapped test exists.
+
+Example:
+  job names: box `home` → `scan-home`; instance `web` in `app` under @TENANT_INSTANCE →
+    `tenant--app--web`, both looked up inside `--vynil-namespace`
+  watch line shape: `{pod name}\t{phase}`; bundle default name `reloader-diag-20260628T140512Z.tar.gz`
+  error text shapes: `SCAN-ERR-06: scan job scan-home failed: …`,
+    `UPG-ERR-05: timed out waiting for job tenant--app--web to be (re)created`,
+    `DIAG-ERR-03: item 'agentlog' returned status 0`
+  annotation values: full `true`, partial `core/reloader` (instance), `dev/code-server` or
+    bare `dev` (jukebox positional, verbatim)
