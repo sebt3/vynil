@@ -1,0 +1,288 @@
+Spec: ServiceBackupCmd
+
+Purpose:
+  Back the `agent service backup` sub-command: build the Rhai engine over the
+    package, config, service and lib resolver directories, inject the parsed CLI
+    flags as the script variable `args`, then hand the whole backup work to the
+    Rhai module `backup`. This file reads and touches nothing else: no
+    @ServiceInstance fetch, no @set_service, no `instance` binding, no `context`
+    module call, no `status` write, no cluster call and no backup artifact at
+    all — a pure synchronous handoff. Diff-verified twin of
+    ./../tenant/backup.rs (the copies differ only at the kind segment
+    `{script_dir}/service` over `{script_dir}/tenant`) and the same file's body
+    as ./restore.rs apart from the snippet module name and two doc-comment
+    words. The flag block is ./install.sdd's ten-flag shape, diff-verified
+    verbatim including `-t`/`--template-dir`, `--agent-image` and `--tag`, even
+    though this body has no use for seven of them.
+
+References:
+  ./install.sdd, ./delete.sdd — the fetch-CR-plus-`context`-script shape this
+    lane deliberately drops; their open flag-contract tasks mirror here.
+  ./../tenant/backup.rs — the cross-kind twin, diff-verified identical except
+    the kind segment; no spec yet.
+  ./restore.rs — identical-body sibling with the `restore` module instead of
+    `backup`; spec pending (./mod.sdd already cites ./restore.sdd).
+
+Depends on:
+  /common/src/rhaihandler.sdd — @Script::new resolver semantics and live
+    registration set, @Script::eval error lane, @Script::set_dynamic (the
+    Deref'd core writer over the persistent @rhai::Scope), @Dynamic discard.
+  /common/src/lib.sdd — @common::Error variants, @common::Result and the
+    @common::DEFAULT_AGENT_IMAGE default of `agent_image`.
+  @clap @Args, @serde, @serde_json — flag parsing (flags, envs, defaults below)
+    and the derives behind the `args` JSON.
+  /agent/scripts/service/backup.rhai — the runtime handoff target the snippet
+    imports as `backup` under the default `--script-dir`; owned instead by
+    /agent/agent.sdd. The backup destination and run context are assembled
+    script-side by its transitive `backup_context` import from process env
+    variables, never from a CLI destination flag.
+  ./mod.rs — the only caller: @context::init_k8s call (an inert no-op per
+    /common/src/context.sdd), then this arm's `unwrap_or_else` error lane
+    (tracing text and @process::exit(4), frozen by ./mod.sdd).
+
+Exposes:
+  @Parameters — clap @Args struct, also deriving @Debug, @Serialize and
+    @Deserialize; mounted by @service::Commands::Backup in ./mod.rs; all ten
+    fields private to this module, reached only by the derive code and by @run.
+  @run — @pub fn @run(@args: @&@Parameters) -> @common::Result<@()> — a plain
+    non-async function (unlike the awaited install and delete twins per
+    ./mod.sdd); the sole caller is @service::run (backup dispatch arm).
+
+Accepts:
+  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, value name
+    `NAMESPACE`, @String, required (no `default_value`); forwarded only — never
+    read by this file (contrast ./install.sdd where it keys the CR fetch).
+  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, value name
+    `INSTANCE`, @String, required; likewise forwarded but never read — the name
+    of an @ServiceInstance is never looked up here.
+  @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env
+    `VYNIL_NAMESPACE`, value name `VYNIL_NAMESPACE`, @String, required; never
+    read beyond serialization into `args`.
+  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`,
+    value name `PACKAGE_DIRECTORY`, @std::path::PathBuf, clap default
+    `/tmp/package`; read only to interpolate the first search directory.
+  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, value
+    name `SCRIPT_DIRECTORY`, @std::path::PathBuf, clap default
+    `./agent/scripts`; read only to interpolate the `service` and `lib` search
+    directories.
+  @Parameters.template_dir — `-t` / `--template-dir`, env `TEMPLATE_DIRECTORY`,
+    value name `TEMPLATE_DIRECTORY`, @std::path::PathBuf, clap default
+    `./agent/templates`; present install-shape flag, read by nothing here or by
+    the snippet as evaluated.
+  @Parameters.agent_image — long-only `--agent-image`, env `AGENT_IMAGE`, value
+    name `AGENT_IMAGE`, @String, clap default @common::DEFAULT_AGENT_IMAGE, i.e.
+    `docker.io/sebt3/vynil-agent:0.7.7`; the other borrowed install-shape flag
+    with no reader in this lane.
+  @Parameters.tag — long-only `--tag`, env `TAG`, value name `TAG`, @String,
+    required; carried by the install flag shape, never parsed or used here.
+  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, value name
+    `CONFIG_DIR`, @std::path::PathBuf, clap default `.`; read to interpolate the
+    second search directory.
+  @Parameters.controller_values — long-only `--controller-values`, env
+    `CONTROLLER_VALUES`, value name `CONTROLLER_VALUES`, @String, clap default
+    the two-character string `{}`.
+  Runtime posture: invoked as a normal call from inside @service::run's async
+    task, so the whole script run executes on — and blocks — one tokio worker
+    thread; no runtime preconditions attach to this file (it touches no
+    @context state), in contrast to ./install.sdd whose @set_service demands a
+    multi-thread runtime.
+
+Returns:
+  @Ok(@()) once the fixed eval snippet completes without a Rhai error — the
+    @Dynamic value the snippet returns is discarded by `let _ =`, never
+    inspected, so @Ok means only "the script ran to end".
+
+Raises:
+  @common::Error::SerializationError (Display `SerializationError: <serde
+    text>`) from the explicit @map_err when @serde_json::to_value(@Parameters)
+    fails on the derives; the only fallible step before the eval.
+  @common::Error::Core (wrapping @vynil_core::Error::RhaiError, Display
+    `Rhai script error: <rhai text>`) from the `?` on @Script::eval — a parse
+    error in the fixed snippet, a failed `backup` import in every search
+    directory, or any parse error / thrown error inside the `backup` module and
+    whatever it imports or import_runs.
+  Never @common::Error::KubeError, never the @panic! `cannot create the
+    Kubernetes client: {e}` of /common/src/context.sdd from Rust: this file
+    makes no cluster call, so no kube failure can originate here (contrast
+    ./install.sdd, where a missing CR is the first fallible step). Such panics
+    can still arrive only through registered functions a script itself calls
+    during the eval; a Rust panic there is not a catchable script error and
+    unwinds through this synchronous frame into the untouched-to-panics posture
+    frozen by ./mod.sdd.
+
+Handles:
+  @Err lane owned by the caller — @service::run logs `Backup of a package
+    failed with:` followed by the error Display through @tracing::error and
+    calls @process::exit(4); this file logs nothing and never exits.
+  Process context never set — no @set_* runs in this lane, so the
+    @VynilContext stays @VynilContext::None throughout and the script-visible
+    `vynil_owner()` answers its empty map (per /common/src/rhaihandler.sdd);
+    the backup context scripts use comes from their own env-variable assembly,
+    not from this process.
+  Missing or gone @ServiceInstance — invisible here by construction: with no
+    fetch, the instance's existence cannot fail this lane; any behavior
+    tolerance to a missing instance is script-side (contrast ./delete.sdd's
+    hard exit-3 failure).
+  Absent resolver directories — the four search paths are never existence-
+    checked at construction; the failure only lands later as the
+    @common::Error::Core import error if no search dir holds `backup.rhai`.
+  Thrown script failures — a stage's `throw` (the shipped module throws on a
+    non-zero custom-script return code) arrives as the same @Err(@Core) with
+    the thrown text behind the `Rhai script error: ` prefix and rides the
+    exit-4 lane.
+  Backup artifacts — none in the Rust lane: snapshots, restic repositories,
+    secrets and maintenance toggles are all Rhai stage work; this file
+    produces no artifact and writes nothing to disk or cluster.
+
+Must:
+  Execute these steps in this order, with nothing between them: build the
+    interpreter, serialize and inject `args`, evaluate the snippet, return
+    @Ok — there is no fetch, publish or `instance`-inject step and none may be
+    inserted; only @Parameters.package_dir, @Parameters.config_dir and
+    @Parameters.script_dir are read by this file at all.
+  Build the interpreter with @Script::new on exactly four resolver directories
+    in this order: `{package_dir}/scripts`, `{config_dir}` (the directory
+    itself), `{script_dir}/service`, `{script_dir}/lib` — plain string
+    interpolation of @std::path::Display, so a path argument ending in `/`
+    doubles the separator; earlier entries win an `import`; the `service` kind
+    segment is hard-coded.
+  @Script::new brings the full live-cluster registration set — the same one
+    ./install.sdd and ./delete.sdd get (@service_rhai_register and the other
+    two kinds, http, s3, the jukebox and the k8s registrars), so the scripts
+    could self-fetch cluster state through registered bridges even though the
+    Rust lane never does.
+  Serialize @Parameters with @serde_json::to_value and inject it through
+    @Script::set_dynamic as the script variable named `args`; the JSON object
+    carries the ten declared snake_case keys `namespace`, `instance`,
+    `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`,
+    `agent_image`, `tag`, `config_dir`, `controller_values` — install's exact
+    key set — with `controller_values` as a JSON string (its default renders
+    `"{}"`, still a string, not an object), `agent_image` as a string and the
+    @PathBufs as path text.
+  Evaluate the fixed two-statement snippet, nothing configurable in it:
+    `import("backup") as backup; backup::run(args);` — the only module name
+    the Rust lane names is `backup` (no `context` module, no `instance`
+    argument); the trailing `;` makes the result @rhai::Dynamic::UNIT,
+    discarded by `let _ =` while a failed evaluation still propagates through
+    `?`.
+  Keep @run non-async: @service::run calls it without awaiting (frozen
+    discipline in ./mod.sdd), and the synchronous call blocks its tokio worker
+    for the full duration of the script run.
+  Emit no log and no stdout/stderr.
+
+Must not:
+  Copy the install/delete fetch shape: no @ServiceInstance::get call, no
+    @set_service, no `instance` or `context` binding here — a Rust-side read
+    would fabricate a KubeError (and a panic lane) the backup Job does not have
+    and would move script-side context assembly into this handoff.
+  Read `template_dir`, `agent_image`, `tag` or `controller_values` to steer
+    this lane, or gate on their contents: they are invisible to this file by
+    shape and reach the scripts only through `args`.
+
+Tasks:
+  [ ] Cover all six Scenarios with tests; no test invokes this @run —
+      /agent/tests/rhai_lib.rs and /agent/tests/rhai_backup_redis.rs exercise
+      backup-stage Rhai modules on mock engines, bypassing this Rust lane
+      (same posture as ./install.sdd's open coverage task).
+  [?] Sync-vs-async freeze: install/delete are awaited, backup/restore are
+      synchronous (./mod.sdd). Sync is runtime-safe here only because the Rust
+      lane touches no @context state and fetches nothing from k8s — the process
+      context is not set, the scripts build their own from env — and the cost
+      is one blocked tokio worker for the whole restic run. Decide whether the
+      sync handoff is the permanent intended shape (and whether it should then
+      grow a runtime precondition comment or an @spawn) rather than leftover
+      code awaiting an `.await`.
+  [?] No destination flag exists: nothing in the ten flags names a backup
+      target, and the shipped `backup` module assembles its restic repository
+      from the `BASE_REPO_URL` and `SUB_PATH` process environment inside
+      `backup_context`. So `agent service backup` only does meaningful work in
+      an environment already shaped like a dispatched backup Job. Confirm the
+      CLI contract intends destination-by-environment, or add the flag.
+  [?] `namespace` and `instance` are required by clap yet read by no code here
+      (install/delete at least fetch with them), and `vynil_namespace`, `tag`,
+      `template_dir` and `agent_image` are likewise carried unread; the flag
+      block is install's verbatim. Confirm every flag's requiredness belongs to
+      the script-side `args` contract or relax this lane's surface (mirrors the
+      open tasks in ./install.sdd and ./delete.sdd).
+  [?] `controller_values` reaches scripts as a JSON string even when it holds
+      `{}`, so every consumer must decode it — same open point as
+      ./install.sdd; settle once across the twin lanes.
+  [?] The eval @Dynamic is discarded (`let _ =` on a `;`-ended snippet), yet
+      the shipped module `return`s the custom `backup.sh` return code in its
+      custom-script branch; the Rust lane can therefore never see a non-zero
+      script rc as failure unless the module throws first. Confirm
+      "snippet finished" is the intended success signal.
+  [?] Kind asymmetry: backup lanes exist only for service (this file) and
+      tenant (./../tenant/backup.rs); `./../system/` has no backup module, and
+      the backup/restore pair is system's whole gap — while /agent/agent.sdd's
+      Purpose claims those operations for the three instance kinds. Confirm
+      system has no backup by design (and correct the crate wording) or that a
+      lane is missing.
+  [?] @Deserialize on @Parameters has no deserialization site in the workspace
+      (the Rust lane only serializes it toward scripts). Same open point as
+      ./install.sdd; decide whether the derive stays.
+
+Done when:
+  The six Scenarios hold under tests pinning the four-dir resolver order, the
+    ten-key `args` JSON with `template_dir`/`agent_image`/`tag` present at
+    their defaults and `controller_values` as a string, the never-touches-the-
+    cluster posture, and the error-to-exit(4) lane.
+
+Scenario: full run hands off without touching the cluster
+  Given all required flags supplied (by flag or env) and `backup.rhai`
+    resolvable under `{script_dir}/service`
+  When @run is called synchronously from @service::run
+  Then @Script::new received the four search dirs `[package]/scripts`,
+    `[config]`, `[script]/service`, `[script]/lib` in that order
+  And only `args` is bound — no `instance` variable was injected and
+    @set_service never ran, so @VynilContext stays @VynilContext::None
+  Then the `backup` module's `run` executes with that args map and @run
+    returns @Ok(()) whatever the discarded @Dynamic was
+  And no @kube call and no file mutation originated from this file
+
+Scenario: install-shape flags reach scripts at their defaults
+  Given a command line that sets `--namespace`, `--instance`,
+    `--vynil-namespace` and `--tag` but omits every defaulted flag
+  When @run serializes @Parameters into `args`
+  Then the object holds exactly the ten keys `namespace`, `instance`,
+    `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`,
+    `agent_image`, `tag`, `config_dir`, `controller_values`
+  And `package_dir` is `/tmp/package`, `script_dir` is `./agent/scripts`,
+    `template_dir` is `./agent/templates`, `agent_image` is
+    `docker.io/sebt3/vynil-agent:0.7.7`, `config_dir` is `.` and
+    `controller_values` is the JSON string `"{}"`
+
+Scenario: missing instance CR is invisible to this lane
+  Given no @ServiceInstance exists at the given namespace/name, the cluster is
+    unreachable, and yet `backup.rhai` plus what it imports resolve and
+    complete
+  When @run is called
+  Then @run returns @Ok(()) — @common::Error::KubeError cannot arise because no
+    lookup is performed
+  And the exit-4 lane is never entered
+
+Scenario: backup module missing fails the eval
+  Given valid flags but no `backup.rhai` resolvable in any of the four
+    resolver directories
+  When @run evaluates the snippet
+  Then @Script::eval returns @Err(@common::Error::Core Display-prefixed
+    `Rhai script error:`) and @run propagates it unchanged
+  And @service::run logs `Backup of a package failed with:` carrying that text
+    at @tracing::error level and exits the process 4
+
+Scenario: thrown stage failure rides the exit-4 lane
+  Given `backup.rhai` resolves and one stage throws inside the module (the
+    shipped module throws on a non-zero custom-script rc)
+  When @run evaluates the snippet
+  Then the returned @Err(@Core) Display is `Rhai script error: ` followed by
+    the thrown text
+  And the exit-4 lane logs it and exits 4, with the process context still
+    @VynilContext::None
+
+Scenario: missing required flag never reaches Rust logic
+  Given `--instance` omitted and `INSTANCE` unset in the environment — same
+    lane for `--namespace` / `NAMESPACE`, `--vynil-namespace` /
+    `VYNIL_NAMESPACE` and `--tag` / `TAG`
+  When the binary parses @Parameters
+  Then clap exits with its usage error before @run starts — no interpreter is
+    built, and the exit-4 backup lane is never entered

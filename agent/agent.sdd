@@ -12,17 +12,17 @@ Purpose:
   CRD generation, and box/template/run utilities.
 
 Structure:
-  ./src/main.rs: Binary entrypoint and clap `@Commands` dispatch
-  ./src/lib.rs: Library root re-exporting the test harness
-  ./src/package/: Package lifecycle subcommands, lint, and OCI packaging
-  ./src/{system,service,tenant}/: Per-kind instance operations
-  ./src/linting/: Static lint of package structure, Handlebars, and Rhai
-  ./src/testing/: `agent package test` engine and Rhai regression harness
-  ./src/boxes/: box and file-scan operations
-  ./src/crdgen.rs: CRD manifest generation
-  ./src/run.rs: `agent run` script runner
-  ./src/template/: `agent template` render helper
-  ./src/version.rs: version subcommand
+  ./src/main.rs: Binary entrypoint and clap `@Commands` dispatch (./src/main.sdd)
+  ./src/lib.rs: Library-target shim (`client`) — lint attributes + `pub mod testing;` only
+  ./src/package/: Package lifecycle subcommands, lint, and OCI packaging (./src/package/*.sdd)
+  ./src/{system,service,tenant}/: Per-kind instance operations (*/mod.sdd + leaf *.sdd)
+  ./src/linting/: Static lint of package structure, Handlebars, and Rhai (./src/linting/*.sdd)
+  ./src/testing/: `agent package test` engine and Rhai regression harness (./src/testing/*.sdd)
+  ./src/boxes/: box and file-scan operations (./src/boxes/*.sdd)
+  ./src/crdgen.rs: CRD manifest generation (./src/crdgen.sdd)
+  ./src/run.rs: `agent run` script runner (./src/run.sdd)
+  ./src/template/: `agent template` render helper (./src/template/*.sdd)
+  ./src/version.rs: version subcommand (./src/version.sdd)
   ./templates/: Job/package Handlebars templates packaged into the image
   ./scripts/: Rhai scripts packaged into the image
   ./tests/: Rust integration and Rhai regression tests
@@ -38,6 +38,22 @@ Owns:
   ./providers.tf
   ./templates/**
   ./scripts/**
+
+References:
+  ./src/main.sdd, ./src/run.sdd, ./src/crdgen.sdd, ./src/version.sdd,
+    ./src/system/{mod,install,delete}.sdd, ./src/service/{mod,install,delete,backup,restore,reconfigure}.sdd,
+    ./src/tenant/{mod,install,delete,backup,restore,reconfigure}.sdd,
+    ./src/template/{mod,tenant,service,system}.sdd, ./src/boxes/{mod,scan,file_scan}.sdd,
+    ./src/package/{mod,build,lint,update,validate,unpack,test}.sdd,
+    ./src/testing/{handler,result,vyniltest,vyniltestset}.sdd, ./src/linting/{mod,config,hbs_checker,rhai_checker}.sdd
+    — the file-level contracts; this directory spec stays coarse and defers all file behavior
+    to them. Two shims carry no file spec per `.specdd/bootstrap.project.md`: `./src/lib.rs`
+    (4 lines: the shared `/linting.sdd` attribute pair + `pub mod testing;`; its `[lib]`
+    target is named `client` in ./Cargo.toml — the path the binary and integration tests use
+    to reach the harness) and `./src/testing/mod.rs` (private mods + four `pub use`
+    re-exports only). Service/tenant `reconfigure.rs` are OUT OF THE BUILD GRAPH (`//mod
+    reconfigure;`) and their specs freeze them as dormant; the tenant copy additionally does
+    not compile (bare-`{}` @PathBuf formats, E0277).
 
 Must:
   Build the standalone workspace through `./parent.toml` so the image builds without the other
@@ -59,6 +75,9 @@ Done when:
     `cargo test -p agent` is green.
 
 Tasks:
-  [ ] #0 Spec the `./src/package/` and `./src/linting/` submodules.
-  [ ] #1 Spec the instance-operation submodules and `./src/testing/` harness.
+  [x] #0 Spec the `./src/package/` and `./src/linting/` submodules.
+  [x] #1 Spec the instance-operation submodules and `./src/testing/` harness.
   [ ] #2 Spec the packaged `./scripts/` Rhai library under its own spec.
+  [ ] #3 Reconcile `/docs/cli.md` with the exit-code ladders and flag help frozen across the
+      new specs (docs claim 0/1/2 only; ladders now span 1–5; `template_crds` empty-document
+      and `High-availibity` typo also await a doc/decision pass).

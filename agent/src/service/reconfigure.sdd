@@ -1,0 +1,221 @@
+Spec: ServiceReconfigureCmd
+
+Purpose:
+  Out of the build graph — this file is dead: ./mod.rs keeps `//mod reconfigure;`, the
+    @Commands::Reconfigure variant and the exit-6 arm all commented (frozen in ./mod.sdd),
+    so nothing here ever compiles, cargo never tests it, and it is unreachable from clap.
+    Everything below is therefore the PROPOSAL frozen verbatim from the source, labelled
+    as such, not live behaviour.
+  If reconnected, back `agent service reconfigure`: resolve one @ServiceInstance by
+    namespace and name, publish it as the process-wide owner context and as the Rhai
+    variable `instance`, inject the parsed CLI flags as `args`, then hand off in order to
+    the Rhai modules `context` and `reconfigure`. This file runs no reconfigure stage
+    itself and writes no `status` — engine prep and handoff only.
+  Diff-verified shape ancestor is ./install.rs: identical except the two instance-flag
+    doc words (`install` → `reconfigure`), the `args` injection error channel
+    (`@unwrap()` here, @map_err + `?` there) and the snippet's last import; the ten-flag
+    block is verbatim identical. Cross-kind twin ./../tenant/reconfigure.rs differs only
+    at the kind segment, owner setter and instance type — plus a formatting divergence
+    recorded as a Task cross-ref.
+
+Structure:
+  ./reconfigure.rs: dead source, compiled only if ./mod.rs is uncommented per ./mod.sdd
+
+References:
+  ./install.sdd — shape ancestor; the flag, JSON-key and error-lane contracts mirror it
+    verbatim except where `Purpose` names the diffs.
+  ./mod.sdd — owns the freeze: the commented @Commands::Reconfigure variant and the exit-6
+    error lane `Reconfiguring of a package failed with: {e:}` that would drive this file.
+  ../tenant/reconfigure.rs — cross-kind twin (read-only comparison; its `{}` path
+    interpolation without `@Path::display` never compiles, see Tasks).
+  /agent/src/linting/rhai_checker.rs — package entry-point pattern `reconfigure.rhai`;
+    /docs/packages/lifecycle.md documents the reconfigure operation — the only live users
+    of the name besides the commented lines in ./mod.rs.
+
+Depends on:
+  /common/src/rhaihandler.sdd — @Script::new resolver-directory semantics and registration
+    set, @Script::set_dynamic, @Script::ctx, @Script::eval error lane.
+  /common/src/instanceservice.sdd — @ServiceInstance and the @ServiceInstance::get lookup
+    awaited here (attached by @impl_instance_common!).
+  /common/src/context.sdd — @set_service store semantics and runtime preconditions.
+  /common/src/lib.sdd — @common::Result, @common::Error variants, @common::DEFAULT_AGENT_IMAGE
+    as the `agent_image` clap default.
+  @clap @Args, @serde, @serde_json — flag parsing and the derives behind the `args` JSON.
+  ./mod.rs — the sole caller, commented: the awaited call and exit-6 `unwrap_or_else` lane.
+  /agent/scripts/service/context.rhai — resolvable handoff script under the default
+    `--script-dir`; no shipped `reconfigure.rhai` counterpart exists (see Handles).
+
+Exposes:
+  @Parameters — clap @Args struct deriving @Debug, @Serialize, @Deserialize; would mount on
+    the commented @Commands::Reconfigure in ./mod.rs, so no live mount today; all ten fields
+    module-private, reached only by the derives and @run.
+  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()>; the commented
+    mod arm awaits this exact signature — async/await already agree, no mismatch to fix on
+    revival.
+
+Accepts:
+  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, value name `NAMESPACE`,
+    @String, required.
+  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, value name `INSTANCE`,
+    @String, required; names the CR to fetch, never validated here.
+  @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env `VYNIL_NAMESPACE`, value
+    name `VYNIL_NAMESPACE`, @String, required; reaches scripts only through `args`.
+  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, value name
+    `PACKAGE_DIRECTORY`, @std::path::PathBuf, clap default `/tmp/package`.
+  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, value name
+    `SCRIPT_DIRECTORY`, @std::path::PathBuf, clap default `./agent/scripts`.
+  @Parameters.template_dir — `-t` / `--template-dir`, env `TEMPLATE_DIRECTORY`, value name
+    `TEMPLATE_DIRECTORY`, @std::path::PathBuf, clap default `./agent/templates`; read by
+    nothing in this Rust lane.
+  @Parameters.agent_image — long-only `--agent-image`, env `AGENT_IMAGE`, value name
+    `AGENT_IMAGE`, @String, clap default @common::DEFAULT_AGENT_IMAGE, i.e.
+    `docker.io/sebt3/vynil-agent:0.7.7`.
+  @Parameters.tag — long-only `--tag`, env `TAG`, value name `TAG`, @String, required,
+    forwarded verbatim in `args`, never parsed or validated as a version here.
+  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, value name `CONFIG_DIR`,
+    @std::path::PathBuf, clap default `.`.
+  @Parameters.controller_values — long-only `--controller-values`, env `CONTROLLER_VALUES`,
+    value name `CONTROLLER_VALUES`, @String, clap default the two-character string `{}`.
+  Implicit runtime preconditions frozen as in ./install.sdd: a live tokio multi-thread
+    runtime for @context::set_service, and @context::init_k8s already called by @service::run
+    (inert either way).
+
+Returns:
+  @Ok(@()) once the fixed snippet completes without a Rhai error — the snippet's @Dynamic
+    is discarded by `let _ =` and never inspected.
+
+Raises:
+  Frozen-if-recompiled error surface; nothing raises today because the file never runs.
+  @common::Error::KubeError from the `?` on the awaited @ServiceInstance::get — missing
+    @ServiceInstance (no default-to-absent), wrong namespace, Forbidden — the first fallible
+    step, nothing published when it fails.
+  @common::Error::Core (wrapping the Rhai error, Display `Rhai script error: <rhai text>`)
+    from the `?` on @Script::eval: snippet parse error, missing `context` or `reconfigure`
+    import, or a thrown error inside either module.
+  @std::panic! from @serde_json::to_value(args) followed by `@unwrap()` — a serialization
+    failure aborts by panic instead of yielding @common::Error::SerializationError the way
+    ./install.rs does; unreachable in practice through the derives. The workspace denies
+    product-code @unwrap, invisible to the harness only while this file stays out of the
+    build graph (see Tasks and /linting.sdd).
+  The context-owned @panic! `cannot create the Kubernetes client: {e}` surfacing through
+    @ServiceInstance::get → @get_client_async with no resolvable cluster configuration.
+  @set_service panics on a current-thread or absent runtime (contract in
+    /common/src/context.sdd), not catchable by the `?` lanes.
+
+Handles:
+  Every @Err lane belongs to the commented mod arm — frozen @tracing::error line
+    `Reconfiguring of a package failed with:` then @process::exit(6) per ./mod.sdd; this
+    file logs nothing and never exits.
+  No shipped `reconfigure.rhai` anywhere in /agent/scripts — default revival therefore dies
+    at the second import unless the mounted package supplies `scripts/reconfigure.rhai`,
+    the first search directory; `context.rhai` resolves from `{script_dir}/service`.
+  Eval failure after @set_service already ran — the process keeps the
+    @VynilContext::ServiceInstance variant for the remaining process lifetime (it ends in
+    the exit-6).
+  Rerun over a configured instance — no `status` branch here: both modules replay; any
+    idempotence is script-side.
+  Flags with no local reader (`vynil_namespace`, `tag`, `template_dir`, `agent_image`,
+    `controller_values`) — their only observable use is the `args` JSON the scripts consume.
+
+Must:
+  Execute in this order with nothing between: build the interpreter, fetch the CR, publish
+    context, inject `instance`, serialize and inject `args`, evaluate the snippet, return
+    @Ok — the @run skeleton of ./install.rs verbatim except the two diffs named in `Purpose`.
+  Build the interpreter with @Script::new on exactly four resolver directories in this
+    order: `{package_dir}/scripts`, `{config_dir}` (the bare directory), `{script_dir}/service`,
+    `{script_dir}/lib` — plain interpolation of @std::path::Display via `@Path::display`,
+    so a trailing `/` in a flag doubles the separator; earlier entries win an `import`.
+  Fetch the CR with @ServiceInstance::get on clones of @Parameters.namespace and
+    @Parameters.instance — one namespaced named read, never a list or create; an absent
+    instance is an @Err, not a bootstrap path.
+  Publish the fetched CR twice from the value and one clone: @set_service stores the clone
+    as the process owner context and @rhai::Scope::set_value on @Script::ctx moves the
+    original into the script variable named `instance`.
+  Inject `args` as @Script::set_dynamic over @serde_json::to_value(args) — the object then
+    carries exactly the ten snake_case keys `namespace`, `instance`, `vynil_namespace`,
+    `package_dir`, `script_dir`, `template_dir`, `agent_image`, `tag`, `config_dir`,
+    `controller_values` — @PathBuf values as path text, `agent_image` as a string,
+    `controller_values` as a JSON string (its default renders `"{}"`, still a string).
+  Evaluate the fixed four-statement snippet, nothing configurable in it, `context` first
+    and `reconfigure` last:
+      `import("context") as ctx;` `let context = ctx::run(instance, args);`
+      `import("reconfigure") as reconfigure;` `reconfigure::run(instance, context);`
+    — the map `ctx::run` returns becomes the second argument of `reconfigure::run`.
+  Mutate nothing on the cluster itself: every write happens inside the Rhai modules through
+    the registered @ServiceInstance bridge; no @ConditionsType names a reconfigure stage,
+    and this lane reads the CR only.
+  Emit no log and no stdout/stderr.
+
+Must not:
+  Branch on `status`, `tag` or `controller_values` in Rust: what reconfigure skips or
+    replays is a script-side decision this lane never pre-empts.
+  Render templates or apply manifests from Rust — `template_dir` steers no Rust code here,
+    only the scripts through `args`.
+
+Tasks:
+  [ ] Decide revive vs delete: resurrect as a commented triplet in ./mod.rs
+      (`//mod reconfigure;`, the @Commands::Reconfigure variant, the exit-6 arm) or delete
+      this file; the decision is shared with the matching task in ./mod.sdd and must close
+      in lockstep there.
+  [ ] Untested: no test invokes @run — the file is never compiled, so none could; if
+      revived, first cover every Scenario under the project TTD rule.
+  [?] Twin formatting divergence: ../tenant/reconfigure.rs interpolates the @PathBuf fields
+      with bare `{}` where this file calls `@Path::display` — @PathBuf does not implement
+      @std::fmt::Display, so reconnected the tenant twin fails to compile while this copy
+      would, and the tenant mod is commented out too (../tenant/mod.rs). Decide which copy
+      is canonical before reviving either (read-only comparison recorded, nothing changed).
+  [?] @unwrap vs @map_err: serialization failure panics here where ./install.rs returns
+      @common::Error::SerializationError; reconnected, the deny on product-code @unwrap in
+      /linting.sdd turns this line into a hard clippy failure. Decide to normalize onto the
+      install lane (or keep the panic, contradicting the workspace rule).
+  [?] No shipped `reconfigure.rhai`: /agent/scripts carries `context.rhai` but no reconfigure
+      script for any kind, so revival is inert-with-an-import-error until either packages
+      supply `scripts/reconfigure.rhai` (their entry-point pattern per
+      /agent/src/linting/rhai_checker.rs) or the agent ships one. Decide the supplier before
+      the flag contract goes live.
+  [?] Required-but-unread flags (`vynil_namespace`, `tag`) and the deserialization-less
+      @Deserialize derive match ./install.rs exactly; if this file revives it inherits the
+      open `[?]` set in ./install.sdd unchanged — resolve once there instead of duplicating.
+
+Done when:
+  The revive-or-delete decision is on record here and in ./mod.sdd; if revived, every
+    Scenario has a passing test, clippy and fmt are green (which requires the @unwrap and
+    twin-formatting divergences decided), and the shared flag questions closed.
+
+Scenario: full run hands off in order with a package-supplied script
+  Given all required flags supplied, an existing namespaced @ServiceInstance, and
+    `reconfigure.rhai` shipped by the mounted package under its `scripts` directory (the
+    only default location it can resolve from)
+  When @run is awaited
+  Then @Script::new received the four search dirs `[package]/scripts`, `[config]`,
+    `[script]/service`, `[script]/lib` in that order
+  And before the eval @set_service published the service variant and `instance` and `args`
+    are bound
+  Then `ctx::run(instance, args)` executes before `reconfigure::run(instance, context)`,
+    and the map it returns is exactly the second argument `reconfigure::run` receives
+  And @run returns @Ok(()) whatever the discarded @Dynamic was
+
+Scenario: args JSON equals the install ten keys at defaults
+  Given a command line setting only the required flags
+  When @run serializes @Parameters into `args`
+  Then the object holds exactly the ten keys `namespace`, `instance`, `vynil_namespace`,
+    `package_dir`, `script_dir`, `template_dir`, `agent_image`, `tag`, `config_dir`,
+    `controller_values`
+  And `controller_values` is the JSON string `"{}"`, `template_dir` is `./agent/templates`
+    and `agent_image` is `docker.io/sebt3/vynil-agent:0.7.7`
+
+Scenario: missing CR fails before any handoff
+  Given no @ServiceInstance at that namespace/name — or its read is Forbidden
+  When @run is awaited
+  Then the `?` on @ServiceInstance::get returns @Err(@common::Error::KubeError)
+  And @set_service never ran, neither injection happened and the snippet never evaluated,
+    so the exit-6 lane would log `Reconfiguring of a package failed with:` carrying the
+    KubeError text
+
+Scenario: default script tree cannot satisfy the reconfigure import
+  Given a valid @ServiceInstance, default `--script-dir` and a package directory holding no
+    `reconfigure.rhai`
+  When @run evaluates the snippet
+  Then the `context` import succeeds and `reconfigure` import fails, @Script::eval returns
+    @Err(@common::Error::Core Display-prefixed `Rhai script error:`)
+  And the process context already holds the service variant when the exit-6 log fires

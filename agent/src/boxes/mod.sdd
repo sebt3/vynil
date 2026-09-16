@@ -1,0 +1,65 @@
+Spec: BoxesMod
+
+Platform: Rust
+
+Purpose:
+  Sub-command dispatcher for `agent box …`: owns the private `scan` (cluster JukeBox
+    scan) and `file_scan` (offline directory scan) modules behind one clap group and
+    one async entry that initializes the Kubernetes client before dispatch.
+
+Owns:
+  ./mod.rs
+
+Exposes:
+  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
+    ./../main.rs (`Box` dispatch arm; spec pending ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, exactly two variants with help strings
+    verbatim: @Scan(scan::Parameters) doc `Update a jukebox`,
+    @FileScan(file_scan::Parameters) doc `Scan standalone vers fichiers (sans K8s)`.
+  @run — async, takes `&Parameters`, returns `()`.
+
+Accepts:
+  A parsed @Commands tree; flag contracts live in ./scan.sdd and ./file_scan.sdd.
+
+Returns:
+  `()` — success falls off the end; both @Err lanes end in @std::process::exit(1).
+
+Handles:
+  Leaf @Err: Scan `Scanning JukeBox failed with: {e:}` → @process::exit(1);
+    FileScan `File scan failed with: {e:}` → @process::exit(1). Display-only format,
+    same exit code for both arms — the only dispatcher in this crate with an
+    undifferentiated ladder.
+  Panics — unwound to main's tokio runtime.
+
+Must:
+  Keep `mod file_scan;` and `mod scan;` private.
+  Call @common::context::init_k8s() once before the match — on both arms, including
+    @FileScan whose lane (./file_scan.sdd) never uses the kube client.
+  Await @scan::run and @file_scan::run (both leaves are async per their specs).
+
+Depends on:
+  ./scan.sdd, ./file_scan.sdd — leaf contracts.
+  ../common/src/context.sdd — @init_k8s semantics (documented no-op for the offline
+    lane).
+  ./../main.rs — caller (`boxes::run(args).await`); spec pending ./../main.sdd.
+
+Tasks:
+  [ ] Decide later whether FileScan sharing exit 1 with Scan is acceptable or the
+      offline lane deserves its own code (service/tenant lanes use 4/5).
+  [ ] Decide whether @init_k8s should stay unconditional on the offline @FileScan arm
+      (frozen quirk; harmless while @init_k8s tolerates no kubeconfig being unused).
+  [ ] Cover the dispatcher with tests; no `#[cfg(test)]` module exists here.
+
+Done when:
+  Dispatch table, init ordering, and the shared exit-1 lane hold under tests.
+
+Scenario: offline scan still pays cluster init
+  Given `BoxesMod` @Commands::FileScan with valid flags
+  When @run is awaited
+  Then @common::context::init_k8s runs before @file_scan::run even though the leaf
+    makes no cluster call (./file_scan.sdd)
+
+Scenario: jukebox scan failure exits 1
+  Given @Commands::Scan whose leaf returns @Err (e.g. jukebox 404 per ./scan.sdd)
+  When @run reaches the @unwrap_or_else arm
+  Then the frozen scan log line prints and @process::exit(1) is reached

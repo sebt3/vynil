@@ -1,0 +1,363 @@
+# File spec for ./handler.rs — the test-engine core: load lane, templating/merge lane,
+# mocked Rhai run lane. The CLI verdict/artifact lane is ./../package/test.sdd; result
+# rendering is ./result.sdd; document schemas are ./vyniltest.sdd and ./vyniltestset.sdd.
+
+Spec: TestHandler
+
+Platform: Rust
+
+Purpose:
+  The engine behind `agent package test`: load @VynilTest and @VynilTestSet documents of
+    apiVersion `vinyl.solidite.fr/v1beta1` from `<package_dir>/tests` plus optional
+    TestSet-only extra directories into name-keyed @BTreeMap collections, then run loaded
+    tests entirely offline — merge referenced testSets with variable scoping, render every
+    Handlebars template in mocks and asserts, inject a virtual instance mock so scripts can
+    resolve the tested instance, execute the package's `value_script` then the
+    `context`/`install` Rhai lane inside the mocked interpreter from @Script::new_mock
+    (kubernetes-mock and http-mock only, never a cluster), score @VynilTest::run_asserts
+    against the objects the mock layer recorded in the caller's created-object sink, and
+    append one @TestResult row per test to @TestHandler::results — folding every internal
+    failure into a failed assert instead of an @Err.
+
+Owns:
+  ./handler.rs
+
+References:
+  ./../package/test.sdd — the only caller: builds @TestHandler::new at most once, calls
+    @list_tests / @run_all_tests / @run_test, reads `.results`, and owns the print, junit
+    and template-dump lanes; it already froze the `{file}: duplicate TestSet '{name}'` and
+    apiVersion-gate shapes this spec restates as owned here.
+  ./vyniltestset.sdd — pending freeze of the loaded schema; its forward claims about
+    @TestHandler::validate_refs (defined here, no current caller) and the
+    `duplicate TestSet '{name}'` abort are confirmed by this file.
+  ./result.sdd — the accumulator this file alone feeds: one @add per @run_test call with an
+    @Instant::elapsed @std::time::Duration, never two adds for one call.
+  ./vyniltest.sdd — pending; @appslug, @VynilTestInstance and @VynilTest::run_asserts are
+    used here exactly as this file defines.
+  /common/src/vynilpackage.sdd — @read_package_yaml and the @VynilPackageSource /
+    @VynilPackageType fields (@metadata.usage, @metadata.category, @metadata.name,
+    @value_script) consulted per run.
+
+Depends on:
+  ./mod.rs — `pub mod handler` plus `pub use handler::TestHandler`, crate-visible as
+    `client::testing::TestHandler` through /agent/src/lib.rs.
+  ./result.rs — @TestResultCollector (field @results, @TestResultCollector::new, @add).
+  ./vyniltest.rs — @VynilTest, @VynilTestSetRef, @VynilTestInstance, @appslug,
+    @VynilTest::run_asserts.
+  ./vyniltestset.rs — @VynilTestSet, @VynilAssert, @VynilAssertSelector, @VynilAssertResult,
+    @VynilTestSetMocks.
+  /common/src/vynilpackage.sdd — @read_package_yaml, @VynilPackageSource, @VynilPackageType.
+  /common/src/handlebarshandler.sdd — @HandleBars::new and the @HandleBars::render used by
+    every templating helper; its render errors arrive as @Error::Core.
+  /common/src/rhaihandler.sdd — @Script::new_mock engine (resolver path, @http_mocks,
+    @k8s_mocks, @created_objects sink wiring), @Script::eval, @Script::set_dynamic, and the
+    re-exported @Dynamic, @Map and @to_dynamic.
+  /common/src/lib.sdd — @common::Error / @common::Result and @DEFAULT_AGENT_IMAGE read into
+    the rhai `args`.
+  `serde_yaml` — @serde_yaml::Deserializer::from_str multi-document reader; `serde`/
+    `serde_json` — @serde_json::Value/@Map round-trips and @serde_json::from_value parse.
+
+Must:
+  # load lane — @TestHandler::new and the scanners
+  Gate the scanner by the private @API_VERSION constant, value `vinyl.solidite.fr/v1beta1`
+    — the `vinyl` misspelling is load-bearing: documents whose apiVersion spells `vynil`
+    are silently skipped — and require @kind to be a string on the same document or the
+    document is skipped after a full YAML deserialize (@Error::Core-wrapped syntax errors
+    still abort the whole load).
+  Scan directories non-recursively: @std::fs::read_dir with no sort and no recursion,
+    non-files skipped, and only exact lowercase extensions `yml` and `yaml` accepted — both
+    spellings load, `.YML`/`.Yaml`/no-extension files never do.
+  Freeze the two-pass order: @scan_yaml_dir deserializes every document of the directory
+    into @serde_json::Value before any loader parses a type, so a YAML syntax failure in
+    any scanned file preempts every schema error and every duplicate-name check regardless
+    of file order, while among the survivors the first failure in @std::fs::read_dir order
+    wins — error attribution and which of two conflicting files the message names are
+    filesystem-order dependent.
+  Parse each surviving document through @serde_json::from_value: `Test` into @VynilTest and
+    `TestSet` into @VynilTestSet keyed by their @metadata.name in the @tests / @test_sets
+    @BTreeMaps; a parse failure @Errs @Error::YamlError reading `{file}: {e}` with the full
+    file path, and a name already keyed @Errs @Error::YamlError reading
+    `{file}: duplicate Test '{name}'` or `{file}: duplicate TestSet '{name}'` — @load_testsets_from_dir
+    applies the identical TestSet abort and silently skips `Test` documents.
+  Load in fixed sequence: @read_package_yaml(`<package_dir>/package.yaml`) first (its
+    @Error::Stdio / @Error::YamlError propagate), then every @testset_dirs entry in argument
+    vector order through @load_testsets_from_dir (a missing or unreadable extra directory
+    @Errs @Error::Stdio from @read_dir — unlike `<package_dir>/tests`, nothing here
+    pre-checks it), then `<package_dir>/tests` through @load_tests_from_dir; extra-testset
+    and suite documents share one flat @test_sets map, so a cross-directory name collision
+    aborts construction.
+  Keep results deterministic where the map is concerned and accept non-determinism at the
+    error boundary: @list_tests yields ascending key order because @tests is a @BTreeMap,
+    while `mocks.kubernetes` order follows the per-call scan order (own test mocks first,
+    each referenced testSet's mocks in @testSets array order, virtual instance last).
+  # templating / merge lane — @TestHandler::get_templated_test and helpers
+  Resolve a test in this order: base context = {`package`: full serialized @VynilPackageSource,
+    `instance`: serialized @VynilTestInstance plus an injected `appslug` string from
+    @appslug(@package.metadata.name, @test.instance.name)}; template the test's own mock and
+    assert lists; then, for each @testSets ref in array order, look @test_sets up and merge
+    its mocks/asserts into the same output vectors with a context extended by `var`.
+  Build the `var` object in @build_var_context sorted by variable name: for every testSet
+    @variables declaration the ref override wins — an explicit `null` override also beats
+    the default — else @default, else `null`; then append ref-supplied variables the
+    testSet never declared, in their @BTreeMap order.
+  Inject a top-level `context` key equal to the caller context inside every
+    @collect_templated pass, so templates may reach `{{context.package…}}` as a self-copy;
+    the test's own mocks and asserts template over the base context only — `var` is not in
+    scope for them, while both are in scope for each referenced testSet's content.
+  Template by JSON shape in @template_json: every @String leaf renders through
+    @HandleBars::render (errors surface as @Error::Core), and object keys are rendered too,
+    with values re-emitted as a fresh @serde_json::Map — key order therefore comes out
+    reordered by @serde_json::Map ordering and rendered key collisions silently overwrite;
+    numbers, booleans and nulls pass through untouched.
+  Round-trip @Dynamic content through JSON in @template_dynamic (@Dynamic → text →
+    @serde_json::Value → template → text → @Dynamic), each @serde_json step mapped to
+    @Error::SerializationError; @template_rhai_map reuses it and @Errs
+    @Error::Other("expected map after templating") when the result will not cast back to
+    @Map.
+  Template exactly these fields per fixture: @HttpMockItem.path and `.return_obj` map
+    (`.method` is cloned verbatim); a @VynilAssert's @selector.kind/.name/.namespace and
+    @value only — @name, @description and @matcher never render.
+  Append the virtual instance mock last unless the test already provides it:
+    @instance_already_mocked matches an existing @Dynamic by exact `kind` string equal to
+    the usage-derived kind (`ServiceInstance`/`SystemInstance`/`TenantInstance`) plus
+    `metadata.name` and `metadata.namespace` equal to the instance (non-map or non-string
+    fields count as no-match), and @virtual_instance_dynamic otherwise builds and JSON
+    round-trips `{apiVersion: "vynil.solidite.fr/v1", kind, metadata:{name, namespace},
+    spec:{category, package, options?}, status:{}}` — note the virtual object carries the
+    correct `vynil` apiVersion `vynil.solidite.fr/v1`, unlike the scan gate.
+  Because that injection is unconditional-or-already-matched, a successful
+    @get_templated_test always returns @mocks `Some` with @kubernetes `Some` of at least one
+    object; its empty-list @None branches are unreachable (Tasks). The returned test keeps
+    @apiVersion/@kind/@metadata/@instance verbatim, sets @testSets to @None (references are
+    consumed) and @asserts to @None only when the merged list is empty.
+  # run lane — @TestHandler::run_test / @run_all_tests / @run_test_inner
+  Keep @run_all_tests and @run_test infallible outward: each returns `()`, times the run
+    with @std::time::Instant (now at entry, elapsed after @run_test_inner), and either
+    @add the produced @Vec<@VynilAssertResult> or, on any @Err from @run_test_inner, @add
+    exactly one synthetic row `name: "execution"`, `description: Some("Test execution")`,
+    `passed: false`, `message: format!("{e}")` — the error path replaces the
+    partially-built assert vector, it never appends to it.
+  Give @run_all_tests its own fresh @Arc<Mutex<Vec<Dynamic>>> sink per test name in
+    @list_tests order, dropped when the test ends — in the all lane nothing can collect the
+    created objects afterward; the single-test lane receives the caller's sink instead
+    (./../package/test.sdd template dump).
+  Build @run_test_inner's interpreter from @Script::new_mock with resolver path
+    [`{package_dir}/scripts`, `{config_dir}`, `{script_dir}/{type_dir}`, `{script_dir}/lib`]
+    where `type_dir` is the @VynilPackageType lowercased `tenant`/`system`/`service`, and
+    pass the @http_mocks and @kubernetes mock lists plus a clone of the created-object sink.
+  Run @package.value_script first when present: on success push the passing row
+    `name: "value_script"`, `description: Some("Value script execution")`,
+    `message: "value script executed successfully"`, and serialize the script result with
+    its normal serialization errors swallowed: a @to_dynamic failure degrades silently to
+    the default @Dynamic and a further serialize failure degrades to the string `"{}"`, this
+    string going under args key `controller_values`; on script failure push the
+    failing `value_script` row with the error Display and @return it immediately as
+    @Ok(vec![that row]) — the install lane never runs and no `execution` row appears. A
+    package without @value_script contributes no `value_script` row and a literal `"{}"`.
+  Publish the rhai global `args` via @Script::set_dynamic with keys `namespace`
+    (instance namespace), `instance` (instance name), `vynil_namespace` hardcoded
+    `"vynil-system"`, `package_dir`, `script_dir`, `template_dir`, `config_dir`
+    (path displays), `agent_image` = @DEFAULT_AGENT_IMAGE, `tag` hardcoded `"0.1.0"`, and
+    the `controller_values` string.
+  Execute one frozen install snippet whose @Err aborts the run as @Error lane input to the
+    `execution` row: import `context`, call `{fun_name}(args.namespace, args.instance)` —
+    `fun_name` is @get_tenant_instance / @get_system_instance / @get_service_instance by
+    package usage — then `ctx::run(instance, args)`, then import `install` and call
+    `install::run(instance, context)`; the snippet's returned @Dynamic is discarded.
+  Score the run only after the install snippet: lock the sink recovering poison via
+    @PoisonError::into_inner and extend the collected asserts with
+    @VynilTest::run_asserts over the sink's recorded objects — so a final vector is the
+    optional passing `value_script` row followed by assert-definition order, and asserts
+    always see every object the scripts created.
+  Recover, never panic: the file holds no panicking @unwrap/@expect — the recovery sites
+    are the instance-JSON `as_object().unwrap_or_default()` (unreachable for a struct),
+    `@to_dynamic(...).unwrap_or_default()` plus `unwrap_or_else(|_| "{}")` on the
+    controller-values leg, and the poison-recovering sink lock.
+  # dead surfaces and hooks
+  Keep the verdict/artifact surface out of this file: it prints nothing, logs nothing,
+    writes no file, and never renders junit — @TestHandler::results is read by
+    ./../package/test.sdd, which performs the junit and template-dump writes over @to_junit
+    and the caller's sink.
+
+Must not:
+  Touch a live cluster: the only @Script built here comes from @Script::new_mock, and no
+    kube client or `common::context` initialization may be introduced into the run lane —
+    mocking is the file's whole point.
+  Print, log or write files from this file — surfacing output belongs to the CLI leaf, and
+    mixing an early print here would break ./../package/test.sdd's frozen
+    print-then-artifacts-then-verdict order.
+
+Exposes:
+  @TestHandler — `#[derive(@Clone, @Debug)]`; the only `pub` field is @results:
+    @TestResultCollector (publicly readable, and @run_all_tests/@run_test are its only
+    writers here); the seven other fields are private; re-exported by ./mod.rs as
+    `client::testing::TestHandler`.
+  @TestHandler::new(@package_dir, @script_dir, @config_dir, @template_dir,
+    @testset_dirs: @Option<Vec<@PathBuf>>) -> @common::Result<@Self> — the load lane.
+  @TestHandler::get_test(@name) and @TestHandler::get_test_set(@name) -> @Option, `#[must_use]`
+    lookups with no caller anywhere in the workspace (Tasks).
+  @TestHandler::list_tests -> @Vec<@String> — `#[must_use]`, ascending names.
+  @TestHandler::get_templated_test(@name) -> @common::Result<@VynilTest> — @&self, pure;
+    `pub` but its only live caller is @run_test_inner.
+  @TestHandler::validate_refs -> @common::Result<@()> — walks @tests in ascending order,
+    first unresolved ref @Errs `Test '{test_name}' references unknown TestSet '{name}'`;
+    no caller exists (Tasks).
+  @TestHandler::run_all_tests() and @TestHandler::run_test(@name,
+    @created_objects: &@Arc<@Mutex<Vec<@Dynamic>>>) — @&mut self, return `()`; the only
+    externally invoked methods (@./../package/test.rs).
+
+Accepts:
+  Four unvalidated @PathBuf roots plus an optional ordered list of extra TestSet-only
+    directories; a `package.yaml` under @package_dir parseable by @read_package_yaml; a
+    `<package_dir>/tests` directory (existence is the caller's gate, @read_dir turns its
+    absence into @Error::Stdio here).
+  @run_test name: an exact key of the loaded @tests map — no pattern or case folding; an
+    unknown name flows on and dies as the `execution` row.
+  A caller-provided created-object sink: @run_test never replaces it, only clones the @Arc
+    into @Script::new_mock and locks it for assert scoring, joining the CLI's dump view.
+
+Returns:
+  Construction: a handler with empty @results and populated @tests/@test_sets maps.
+  @get_templated_test: a fully resolved @VynilTest (rendered mocks/asserts, merged refs,
+    virtual instance appended, @testSets @None).
+  Runs: only side effects on @results (one @add per call, duration measured around
+    @run_test_inner); @run_test_inner itself yields @Vec<@VynilAssertResult> with the
+    `value_script` short-circuit and assert-order rules above.
+
+Raises:
+  @Error::Stdio — missing/unreadable scan directory, unreadable or non-UTF-8 `.yml`/`.yaml`
+    file, or the @read_package_yaml open leg.
+  @Error::YamlError — the three scanner/loader templates: `{file}: {e}` for YAML-syntax
+    (scan) and schema (parse) failures, `{file}: duplicate Test '{name}'`, and
+    `{file}: duplicate TestSet '{name}'` (one template shared by both loaders).
+  @Error::Other — resolve-lane misses: `Test '{name}' not found`,
+    `TestSet '{name}' not found`, and dead-surface `Test '{test_name}' references unknown
+    TestSet '{name}'`, plus @Error::Other("expected map after templating").
+  @Error::SerializationError — any @serde_json round-trip in @template_dynamic,
+    @virtual_instance_dynamic or @get_templated_test's context serialization;
+    @Error::Core — @HandleBars::render failures on any templated string.
+  Never from @run_test/@run_all_tests themselves: every @run_test_inner failure above
+    arrives as the one failed `execution` row instead.
+
+Handles:
+  Documents with missing or non-`vinyl` apiVersion, missing/non-string @kind, empty
+    multi-document slots (YAML @null), non-file entries and other extensions — all skipped
+    silently during scan; `Test`-kind documents in extra testset directories likewise pass
+    @load_testsets_from_dir unmatched.
+  Unknown @test_name at run time: @run_test_inner @Errs `Test '{name}' not found` and the
+    summary shows exactly one failed `execution` assert (./../package/test.sdd exit-3 pair).
+  A user mock that already describes the tested instance (same kind/name/namespace exact
+    match) suppresses the virtual injection instead of duplicating it; a same-name mock in
+    another namespace does not.
+  value_script failure: the run reports the single failing `value_script` row via @Ok and
+    skips the install snippet entirely, leaving the sink holding whatever the value script
+    produced before failing.
+  Poisoned created-object mutex anywhere it is locked here: recovered through
+    @PoisonError::into_inner, objects still scored.
+
+Tasks:
+  [ ] Cover this file with tests — the file has no #[cfg(test)] module and the only agent-side
+      tests today sit in ./result.rs; map each scenario to a same-named test:
+      scan-apiVersion-gate-skips-correct-spelling, duplicate-names-abort-load-later-file-named,
+      list-tests-uses-BTreeMap-ascending-order, var-context-precedence-null-override-and-undeclared,
+      test-own-mocks-do-not-see-var, virtual-instance-exact-triple-dedup-and-append-last,
+      value-script-failure-shortcircuits-without-install-and-without-asserts,
+      install-failure-replaces-collected-asserts-with-one-execution-row,
+      controller-values-is-a-json-string, template-dump-sink-poison-recovered.
+  [?] @TestHandler::validate_refs has no caller anywhere (./../package/test.sdd already flags
+      the consequence), and @get_test/@get_test_set plus external use of
+      @get_templated_test have none either. Decide whether to wire the pre-check at load,
+      drop the dead accessors, or freeze them as intentional crate surface.
+  [?] The empty-list @None branches of @get_templated_test's returned mocks are unreachable
+      because the virtual-instance injection always leaves @kubernetes non-empty. Decide to
+      simplify the branches or make injection conditional so emptiness can actually occur.
+  [?] @build_test_instance computes an instance JSON that @run_test_inner assigns to
+      `_instance_json` and drops — its body duplicates the virtual mock minus apiVersion/kind.
+      Decide to delete it or wire it into the rhai call lane.
+  [?] The install-lane @Err path discards asserts collected before the failure (a passing
+      `value_script` row included), so a crash hides whether the value script succeeded.
+      Decide whether partial asserts should survive into the `execution` fold.
+  [?] @tag is frozen to `"0.1.0"` and @vynil_namespace to `"vynil-system"` in
+      @build_test_args while @DEFAULT_AGENT_IMAGE pins `0.7.7` — decide whether these come
+      from configuration/version rather than literals.
+  [?] @API_VERSION keeps the `vinyl.solidite.fr/v1beta1` misspelling (correctly spelled
+      documents load as zero tests) and @template_json gives no signal when rendered object
+      keys collide. Decide whether to keep the gate spelling and whether key collisions
+      should error.
+  [?] @scan_yaml_dir has no sort, so which file a duplicate or syntax error names — and which
+      of several bad files is reported — depends on filesystem read order. Decide whether to
+      sort entries for byte-stable error messages.
+
+Done when:
+  Each scenario maps to a passing test, the `[?]` items above are decided, and
+    `cargo test -p agent`, clippy, `cargo +nightly fmt --check` and `specdd lint` are green.
+
+Scenario: scan gate keeps only the misspelled apiVersion
+  Given a `.yml` file with documents under apiVersion `vinyl.solidite.fr/v1beta1` and another
+    with the correctly spelled `vynil.solidite.fr/v1beta1`
+  When @load_tests_from_dir scans the directory
+  Then only the `vinyl` documents are yielded and the `vynil` ones are skipped silently,
+    empty document slots and `Test`-kind docs in an extra testset dir likewise ignored
+
+Scenario: duplicate names abort construction naming the second file
+  Given `<package_dir>/tests` holding two files whose Tests share @metadata.name
+  When @TestHandler::new runs
+  Then it @Errs @Error::YamlError `{file}: duplicate Test '{name}'` and nothing runs;
+    the same abort comes from either loader for TestSets across the extra directory and the
+    suite directory sharing one map
+  Test @duplicate-names-abort-load-later-file-named (file attribution follows read order, not
+    declaration)
+
+Scenario: resolved test merges refs with scoped variables
+  Given a Test with own mocks, and @testSets refs whose testSets declare `variables` defaults
+  When @get_templated_test resolves it
+  Then k8s output is the test's own mocks first then each ref's in array order, ref overrides
+    beat @default and an explicit `null` override still wins, undeclared ref variables are
+    appended, and every pass additionally sees `context` mirroring its own input context
+  But templates in the test's own mocks cannot reference `var`
+  Test @var-context-precedence-null-override-and-undeclared, @test-own-mocks-do-not-see-var
+
+Scenario: virtual instance joins last unless already mocked
+  Given a suite whose references resolve
+  When @get_templated_test finishes
+  Then a `vynil.solidite.fr/v1` mock of the usage kind with the instance's metadata is the
+    final k8s mock, and Given an exact kind/name/namespace mock already present — none is
+    appended, while the same name in another namespace still triggers the append
+  Test @virtual-instance-exact-triple-dedup-and-append-last
+
+Scenario: value_script failure short-circuits the install lane
+  Given a package whose @value_script throws
+  When @run_test runs the test
+  Then the recorded row list is exactly one failing `value_script` row carrying the Rhai
+    error Display, no install script executes and no `execution` row appears
+  Test @value-script-failure-shortcircuits-without-install-and-without-asserts
+
+Scenario: install-stage errors fold into one execution row
+  Given a package whose install snippet fails at `install::run`
+  When @run_test runs the test
+  Then @results gets a single failed `execution` row, `message` being the Display of the
+    @Err — the passing `value_script` row collected earlier is dropped — and @run_test still
+    returns `()`
+  Test @install-failure-replaces-collected-asserts-with-one-execution-row
+
+Scenario: run_all isolates sinks per test
+  Given a suite of two tests
+  When @run_all_tests runs it
+  Then each test executes against its own fresh created-object sink and the recorded objects
+    are discarded, so no all-lane view of created objects exists, while insertion order into
+    @results matches @list_tests order
+
+Scenario: controller_values stays a JSON string
+  Given a package with a @value_script returning a map
+  When @run_test_inner builds rhai `args`
+  Then `args.controller_values` is the serialized JSON string of the script output (a
+    round-trip fallback renders `"{}"`) — an argument a reimplementer could mistake for an
+    embedded object
+  Test @controller-values-is-a-json-string
+
+Scenario: assert scoring reuses the poisoned-lock-safe sink view
+  Given a suite where one test's scripts panicked while holding the sink lock
+  When the next test's assert phase locks the same @Arc
+  Then @PoisonError::into_inner recovers the data and @VynilTest::run_asserts scores against
+    the recovered objects, never aborting the process
+  Test @template-dump-sink-poison-recovered

@@ -1,0 +1,76 @@
+Spec: SystemMod
+
+Platform: Rust
+
+Purpose:
+  Sub-command dispatcher for `agent system …`: owns the private `install` and `delete`
+    modules, exposes one clap group and one async entry that ensures the Kubernetes
+    client is initialized before handing typed arguments to the leaf handlers.
+
+Owns:
+  ./mod.rs
+
+Exposes:
+  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
+    ./../main.rs (the `System` dispatch arm; spec pending ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, with exactly two variants and their help
+    strings verbatim: @Install(install::Parameters) doc `Install an instance`,
+    @Delete(delete::Parameters) doc `Delete an instance`.
+  @run — async, takes `&Parameters`, returns `()`.
+
+Accepts:
+  A fully parsed @Commands tree; no env vars or defaults at this level — every flag
+    contract lives in ./install.sdd and ./delete.sdd.
+
+Returns:
+  `()` — both outcome lanes terminate: success falls off the end, failure calls
+    @std::process::exit and never returns.
+
+Handles:
+  Leaf @Err — log via @tracing::error! `Installing a package failed with: {e:}` then
+    @process::exit(1) for @Install; `Deleting a package failed with: {e:}` then
+    @process::exit(3) for @Delete. The `{e:}` Display-only formatting is the frozen
+    log shape (no debug `{e:?}`).
+  A panic inside a leaf — unwinds to main's tokio runtime; this level neither catches
+    nor converts.
+
+Must:
+  Re-export nothing: `mod delete;` and `mod install;` stay private so the only public
+    surface of this module is @Parameters/@Commands/@run.
+  Call @common::context::init_k8s() once, before the match, on every invocation — the
+    leaves assume a live client and do (per ./install.sdd, ./delete.sdd) initialize
+    nothing.
+  Dispatch by exact variant to @install::run / @delete::run passing the inner
+    @Parameters reference unchanged.
+  Map failure exit codes asymmetrically and keep them frozen: @Install error dies 1,
+    @Delete error dies 3; success never calls exit.
+
+Depends on:
+  ./install.sdd, ./delete.sdd — the leaf contracts and their flag shapes.
+  ../common/src/context.sdd — @init_k8s semantics and double-init posture.
+  ./../main.rs — the caller (`system::run(args).await`); spec pending ./../main.sdd.
+
+Tasks:
+  [ ] Decide later whether the 1-vs-3 exit-code split between install and delete is a
+      meaningful operator contract (the kubectl-vynil plugin never reads child exit
+      codes) or drift; main's own lanes use 1/2 for other groups.
+  [ ] Decide whether @common::context::init_k8s() being invoked per-subcommand here
+      while ./../main.rs also calls @wire_core_k8s is intended layering; confirm the
+      init is idempotent for a process that reaches this @run only once today.
+  [ ] Cover the module with tests: no `#[cfg(test)]` module exists; dispatch table,
+      `init_k8s` ordering, and the two exit lanes are unverified except through leaf
+      script tests that bypass this dispatcher.
+
+Done when:
+  Dispatch, init ordering, and the exit-code lanes hold under tests.
+
+Scenario: install arm delegates after cluster init
+  Given `SystemMod` with @Commands::Install carrying valid leaf flags
+  When @run is awaited
+  Then @common::context::init_k8s runs before @install::run is entered
+  And a leaf @Ok(()) ends @run normally with no exit call
+
+Scenario: delete failure exits 3
+  Given @Commands::Delete whose leaf returns @Err
+  When @run reaches the @unwrap_or_else arm
+  Then @tracing::error logs the frozen delete text and @process::exit(3) is reached
