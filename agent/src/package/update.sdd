@@ -1,0 +1,267 @@
+# File spec for ./update.rs. The shipped Rhai lane is a packaged asset owned by
+# /agent/agent.sdd (spec pending); its behaviour is frozen here only as far as this
+# Rust surface mounts and reports it.
+
+Spec: PackageUpdate
+
+Platform: Rust
+
+Purpose:
+  The `agent package update` leaf: run the shipped Rhai `update` module against the source
+    tree's package.yaml so image tags and `metadata.app_version` are refreshed from the
+    images' OCI registries. The Rust side only assembles the Rhai engine, injects
+    @Parameters as the script variable `args`, evaluates `import("update")` plus
+    `update::run(args)`, and hands any script failure back as @common::Result::Err for the
+    caller's exit-2 trap; the scan, comparison, and manifest rewrite live in the script lane.
+
+Owns:
+  ./update.rs
+
+References:
+  ./mod.sdd — caller and exit lane: every @Err from @run prints
+    `Updating the package failed with: {e:}` via @tracing::error! then
+    @std::process::exit(2); this file logs nothing and never exits.
+  /agent/scripts/packages/update.rhai — the module today's `update` import resolves to
+    (packaged asset, own spec pending); the scan and write discipline frozen below reads
+    through it.
+  /agent/scripts/lib/package_yaml.rhai — the `package_yaml` module whose `validate` the
+    tag-only write lane runs over the manifest before writing.
+  ./validate.sdd — sibling leaf with the same engine-mount shape; calibration reference,
+    it has no config-dir resolver entry and no write lane.
+  /common/src/yamlhandler.sdd — @YamlDoc contract behind `yaml_decode_ordered` /
+    `yaml_encode_ordered`: it owns the re-emission, key-collapse and date mangling the
+    rewrite below rides on; cross-referenced, not restated.
+  /docs/cli.md — the one-line command description (registry queried tags, `update_post`
+    hook advertised).
+
+Must:
+  Build the engine as @common::rhaihandler::Script::new over resolver dirs appended in
+    exactly this order: `<source>/scripts` (via @PathBuf::to_string_lossy),
+    `<config-dir>` itself as one resolver entry (via @Display), `<script-dir>/packages`,
+    `<script-dir>/lib` — never existence-checked; first resolver dir holding an `update`
+    module wins, so the default `.` config dir makes the process's working directory the
+    second shadow place for the shipped module, after `<source>/scripts`.
+  Inject @Parameters as the script global `args` through the Deref'd
+    @vynil_core::engine::Script::set_dynamic: a JSON map of the three private fields under
+    key names `source`, `script_dir`, `config_dir` (path text), visible to this @Script's
+    later evaluations; the shipped module reads only `args.source` and builds the manifest
+    path by `+`-joined concatenation.
+  Evaluate exactly one snippet — `import("update") as update;` then `update::run(args);` —
+    discard the resulting @rhai::Dynamic with `let _ =`, and return @Ok; the verdict
+    channel is script error versus completion, never an inspected return value.
+  Leave zero Rust-side output: no @println, no @tracing write; the only user-visible texts
+    are the caller's trap line and the script lane's own `log_info` / `log_warn` lines.
+  Run the shipped module's sequence as authored: optional `update_pre` hook via
+    `import_run` first; then @file_read + `yaml_decode_ordered` of
+    `<source>/package.yaml`; read `metadata.app_version` only when `metadata` is a map;
+    then for every key of an `images` map log `Scanning <registry>/<repository>`, open a
+    real unauthenticated `new_registry(registry, "", "")`, `list_tags(repository)`, keep
+    only semver-parsable tags, sort them descending and take the newest; then decide writes;
+    then the optional `update_post` hook last.
+  Write the manifest only through the two frozen passes and at most once per run: the
+    tag-only pass — some image tag was replaced, no app_version-wide candidate was found —
+    assigns `yaml = pck::validate(yaml)` then `file_write(<source>/package.yaml,
+    yaml_encode_ordered(yaml))`; the candidate pass — untagged images plus `app_version`
+    and the common candidate outranks the parsed @app_version — assigns
+    `metadata.app_version` and writes directly, and on an unparseable `app_version` falls
+    back to tag-only validation-plus-write only when `changed`. Every other combination
+    leaves the file byte-untouched; a clean second run therefore writes nothing (frozen
+    idempotence posture, no lock, no backup, no temp file — the write is an in-place,
+    whole-document @YamlDoc re-emission whose reshaping risk /common/src/yamlhandler.sdd
+    owns).
+  Skip silently where the module skips: `images` absent or not a map never scans;
+    an untouchable `app_version` read is simply `()`; an image whose newest semver list is
+    empty continues; a non-semver current tag string logs a @log_warn (error text or
+    `json_encode` of it) and keeps the old value with no error; an untagged image
+    participates in the app_version-wide scan only when `app_version` exists, and two
+    untagged images with different newest candidates `throw` the frozen
+    `Tag found for <registry>/<repository> (<new>) doesn't match the tag found for other
+    images (<found>)` text; a missing `update_pre` / `update_post` module is the core
+    `import_run` shim's debug-log skip, so hooks are optional with no shipped copy today.
+  Keep `pck::validate` exactly the tag-only pass's gate (module frozen by
+    /agent/scripts/lib/package_yaml.rhai): warns then injects `apiVersion`
+    `vinyl.solidite.fr/v1beta1` / `kind` `Package` defaults, throws on missing or
+    non-string `metadata` members, options-should-be-a-map plus `properties_improve` type
+    fixes, and `requirements` `[]` defaulting — errors from it fail the run like any script throw.
+
+Must not:
+  Initialize a cluster context (@common::context::init_k8s) or read any cluster API —
+    @Script::new installs k8s names, but this lane's outside contact is the core real-OCI
+    registry bindings only; it matches ./mod.sdd's no-init-at-dispatch posture.
+  Refresh dependencies, requirements, or manifest sections beyond image `tag` entries and
+    `metadata.app_version` — the shipped lane's frozen write set; `pck::validate` option
+    improvements and missing-key defaults ride the tag-only write as a side effect.
+
+Depends on:
+  @common::rhaihandler::Script (/common/src/rhaihandler.sdd) — @Script::new engine
+    assembly (core generic set plus real OCI registry bindings) and @Script::eval's error
+    conversion; the Deref'd core `set_dynamic` leg carries core's own unwraps.
+  @common::Result and @common::Error::SerializationError (/common/src/lib.sdd) — the return
+    lane and the sole explicit error mapping.
+  @serde_json, @clap::Args, @serde::Serialize, @serde::Deserialize, @std::path::PathBuf —
+    flag glue and the args-map injection.
+  ./mod.sdd — the only caller of @run.
+  /agent/scripts/packages/update.rhai and /agent/scripts/lib/package_yaml.rhai — packaged
+    assets (/agent/agent.sdd) mounting the frozen lane; @common::rhaihandler::Script::new
+    resolves them through the resolver dirs, not a Rust link.
+
+Exposes:
+  @Parameters — `#[derive(@clap::Args, @Debug, @serde::Serialize, @serde::Deserialize)]`
+    struct, all three fields private, so the `args` JSON map is the script's only view;
+    `@Debug` serves @Commands in ./mod.sdd.
+    Field `source` — doc help `Source directory`, short `-o`, long `--source`, env
+      `SOURCE`, value name `SOURCE`, default `/src`.
+    Field `script_dir` — doc help `Agent script directory`, short `-s`, long
+      `--script-dir`, env `SCRIPT_DIRECTORY`, value name `SCRIPT_DIRECTORY`, default
+      `./agent/scripts` — same flag and default as the sibling leaves.
+    Field `config_dir` — doc help `Configuration directory`, short `-c`, long
+      `--config-dir`, env `CONFIG_DIR`, value name `CONFIG_DIR`, default `.` — the extra
+      flag with no sibling counterpart; `.` is passed verbatim as a resolver dir.
+  @run — `pub fn @run(@args: &@Parameters) -> @common::Result<@()>`; sync like every
+    package leaf (./mod.sdd).
+
+Accepts:
+  A clap-parsed @Parameters by reference; paths taken as given, relative or absolute, with
+    no existence or type validation — an absent script tree or manifest fails later as a
+    script error, never as an input error here.
+  Non-UTF-8 path components degrade lossily into both the resolver strings and the
+    `args` text (`source` via @PathBuf::to_string_lossy, the other two via @Display); a
+    trailing separator on `--source` yields a doubled slash in the resolver and manifest paths.
+
+Returns:
+  @Ok with the module's unit value discarded — silent success; any `log_info` lines are
+    the script's; whether the process then exits 0 is ./../main.rs's lane (spec pending).
+
+Raises:
+  @common::Error::SerializationError — explicit @map_err on the @serde_json::to_value of
+    @Parameters; three pathname strings through clap never drive that leg in practice (Tasks).
+  @common::Error::Core wrapping the core Rhai error from @Script::eval, display prefixed
+    `Rhai script error: ` (conversion frozen by /common/src/rhaihandler.sdd), covering: the
+    `update` import unresolvable in all four resolver dirs or failing to parse; the
+    `file_read` stdio failure for a missing or unreadable `<source>/package.yaml`; the
+    `YamlError: `-prefixed decode failure; any registry `new_registry` / `list_tags`
+    failure — real network contact, unauthenticated, per-image with no retry and no
+    per-image catch; the tag-mismatch throw; a failing `update_pre` / `update_post`
+    module; `pck::validate` throws on the tag-only pass.
+  A @set_dynamic panic channel exists through the Deref'd core method's internal unwraps
+    (rhaihandler.sdd), unreachable from this file because only an already-built JSON value
+    is injected.
+
+Handles:
+  Registry or hook failure aborts before any manifest write (writes happen only after the
+    whole image scan), except `update_post`, which runs after the write and can therefore
+    fail on an already-updated package — the command is not atomic across the two.
+  An unparseable `app_version` — the candidate pass cannot compare; the catch writes the
+    validated tag changes anyway only when `changed` is set, and writes nothing otherwise.
+  All Rust-side failure branches converge: no logging, no partial output, nothing to clean
+    up — this file mutates no state.
+
+Tasks:
+  [ ] Cover @run and the shipped lane with tests for the scenarios below — no
+      #[cfg(test)] module exists in this file and no integration test drives
+      `agent package update`.
+  [?] Chained-write propagation: /common/src/yamlhandler.sdd freezes @idx_get as a clone
+      (`doc["a"]["b"] = v` never writes through), yet the shipped module bumps versions with
+      exactly that shape (`yaml["images"][k]["tag"] = …`, `yaml["metadata"]["app_version"] =
+      …`) before re-encoding — if the handler spec is right, update rewrites manifests
+      without ever persisting the new version. One of the two is wrong; settle with a test
+      and decide which spec moves.
+  [?] Candidate arm drops tag work: when an app_version-wide candidate exists but is not
+      newer than `app_version`, no pass writes at all, so string-tag updates collected in
+      the same loop are silently discarded. Decide whether that arm must reach the tag-only
+      write path (suspected lane bug, kept open).
+  [?] Validate gate asymmetric: the `app_version` bump pass writes the manifest without
+      `pck::validate`, the tag-only pass always runs it. Decide one gate for both writes.
+  [?] `pck::validate` injects the misspelled default `vinyl.solidite.fr/v1beta1`
+      (`vinyl` for `vynil`, `v1beta1` beside the group's `vynil.solidite.fr/v1`) into any
+      manifest missing `apiVersion` on the tag-only pass. Decide whether that string ships
+      from /agent/scripts/lib/package_yaml.rhai.
+  [?] Docs advertise `update_post` template regeneration (/docs/cli.md) but no
+      `update_pre` / `update_post` module ships anywhere in the workspace; today they can
+      only be found in a shadow tree (source `/scripts`, cwd via default `.`, config dir).
+      Decide whether the hook ships and where.
+  [?] A version bump rewrites date-bearing, comment-bearing or YAML-1.1-bool manifests
+      through the in-place @YamlDoc re-emission whose hazards
+      /common/src/yamlhandler.sdd still decides; confirm this lane's exposure is accepted
+      or wait for that queue.
+  [?] `config_dir` default `.` makes the process working directory a module resolver:
+      any `update.rhai` there shadows the scan entirely. Decide whether `.` is a safe default.
+  [?] @common::Error::SerializationError is mapped but unreachable for clap-built args
+      (same finding as ./validate.sdd), and @Parameters derives @serde::Deserialize that
+      nothing consumes. Decide whether the defensive leg and the derive stay.
+
+Done when:
+  The scenarios below carry mapped tests (or the chained-write decision moves them), the
+    write-discipline decisions above are recorded, and `cargo test -p agent` with clippy
+    and fmt stay green.
+
+Scenario: tag rewrite pass fires once
+  Given a fully authored package.yaml whose image has a newer semver-parsable registry tag
+    and `images` is a map
+  When @run completes the scan
+  Then `changed` is set, `pck::validate` runs over the document, and `file_write` lands
+    exactly once on `<source>/package.yaml`
+  And whether the re-emitted tag differs from the input rests on the chained-write decision
+  No mapped test exists.
+
+Scenario: clean manifest is left byte-identical
+  Given every tag and `app_version` already at the newest registry semver
+  When @run executes
+  Then neither write pass fires — no normalization rewrite of an unchanged manifest — and
+    the hook calls still run
+  No mapped test exists.
+
+Scenario: untagged uniform images are the app_version bump path
+  Given images with no string `tag` values, a uniform newest-semver candidate newer than
+    `metadata.app_version`
+  When @run finishes the scan
+  Then the candidate pass writes directly with no `pck::validate` gate
+  No mapped test exists.
+
+Scenario: divergent untagged candidates throw
+  Given two untagged images whose newest semver tags differ, with `app_version` present
+  When the scan reaches the second image
+  Then @run returns @Err whose display carries `Tag found for ` and
+    `doesn't match the tag found for other images` over the two texts
+  And ./mod.sdd logs `Updating the package failed with: {e:}` and exits with code 2
+  And the manifest file is not written at all
+  No mapped test exists.
+
+Scenario: unparseable current tag warns and retires
+  Given `tag: latest` on one image — a string that semver refuses — beside another image
+    whose tag does advance
+  When the loop reaches `latest`
+  Then `log_warn` receives the failure text, the old text stays in the document, and the
+    run reports success — a permanently unversioned tag never errors and never converges
+  No mapped test exists.
+
+Scenario: missing manifest or dead registry is not an input error
+  Given a source directory holding no package.yaml
+  When @run executes
+  Then the failure is the `file_read` stdio error converted through @Script::eval to the
+    exit-2 trap, with no dedicated missing-manifest case
+  And with an unreachable registry the core registry error aborts the whole run before any
+    manifest write — one bad registry blocks every other image's bump
+  No mapped test exists.
+
+Scenario: update_post failure lands after the manifest write
+  Given a shadowing `update_post` whose body throws, over a manifest due one tag bump
+  When @run executes
+  Then the manifest is already rewritten when @Err surfaces and the exit-2 trap fires —
+    updated files plus non-zero status in one run
+  No mapped test exists.
+
+Scenario: shadow module replaces the whole lane
+  Given `<source>/scripts/update.rhai` (or, at the default `.` config dir, an `update.rhai`
+    in the working directory) whose `run(args)` writes nothing
+  When @run executes over any manifest
+  Then the shadow resolves ahead of the shipped module with no warning, and `package_yaml`,
+    `update_pre`, `update_post` are likewise shadownamed by the same resolver order
+  No mapped test exists.
+
+Example:
+  defaults inject `args` = `{"source":"/src","script_dir":"./agent/scripts","config_dir":"."}`
+    and resolver dirs `/src/scripts`, `.`, `./agent/scripts/packages`, `./agent/scripts/lib`
+  bump pair: registry `docker.io`, repository `library/mysql`, tags `8.0.35` in the
+    manifest versus newest `8.0.40` listed — `changed` set over the tag `8.0.40.to_string()`
+  scan line as printed per image: `Scanning docker.io/library/mysql`

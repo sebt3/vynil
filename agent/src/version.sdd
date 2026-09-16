@@ -1,0 +1,46 @@
+Spec: VersionCmd
+
+Platform: Rust
+
+Purpose:
+  Back the `agent version` sub-command: a clap leaf that prints the single workspace
+    version constant and exits. Its only job is to keep the release version observable
+    from the agent binary.
+
+Exposes:
+  @Parameters — clap `Args` derive, empty field list; `Debug`. Consumed by
+    ./main.sdd under the `Version` subcommand.
+  @run — takes `&Parameters` by reference, ignores it entirely, prints
+    `common::vynilpackage::VERSION` followed by a newline to stdout via `println!`,
+    returns `()` with no failure path.
+
+Accepts:
+  `&Parameters` — structurally required for dispatch symmetry with the sibling
+    sub-commands; value never read.
+
+Returns:
+  `()`. No @Result, no exit call, no error channel: the command always succeeds.
+
+Must:
+  Print exactly the @common::vynilpackage::VERSION string frozen in
+    ../common/src/vynilpackage.sdd, nothing else, no prefix or suffix beyond the
+    newline @println! appends.
+  Take the value from the shared @common constant rather than a local `env!` crate
+    version, so agent and every other binary report one identical version string.
+
+Depends on:
+  ../common/src/vynilpackage.sdd — the VERSION constant.
+  ./main.sdd — the only caller, synchronous arm of the dispatch table.
+
+Scenario: version prints the shared constant
+  Given `VersionCmd` with any empty @Parameters
+  When @run is invoked
+  Then stdout holds the @common::vynilpackage::VERSION line and nothing else
+  And the call returns without touching stdout/stderr configuration or the process exit code
+
+Tasks:
+  [ ] Decide later whether `version` should also print per-crate versions or a git
+      commit; the sub-command flag surface is deliberately empty today.
+
+Done when:
+  The command keeps printing the shared VERSION constant byte-for-byte.

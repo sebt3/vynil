@@ -1,0 +1,73 @@
+Spec: ServiceMod
+
+Platform: Rust
+
+Purpose:
+  Sub-command dispatcher for `agent service …`: owns the private `backup`, `delete`,
+    `install`, `restore` modules (and the commented-out `reconfigure`), exposes one clap
+    group and one async entry that initializes the Kubernetes client before dispatch.
+
+Owns:
+  ./mod.rs
+
+Exposes:
+  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
+    ./../main.rs (the `Service` dispatch arm; spec pending ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, exactly four live variants:
+    @Install(install::Parameters), @Delete(delete::Parameters),
+    @Backup(backup::Parameters), @Restore(restore::Parameters).
+  @run — async, takes `&Parameters`, returns `()`.
+
+Accepts:
+  A parsed @Commands tree; all flag contracts live in the leaf specs.
+
+Returns:
+  `()` — @Ok lanes fall off the end; every @Err lane ends in @std::process::exit.
+
+Handles:
+  Leaf @Err per arm, each a @tracing::error! Display-only line then a frozen exit
+    code: Install `Installing a package failed with: {e:}` → 1;
+    Delete `Deleting a package failed with: {e:}` → 3;
+    Backup `Backup of a package failed with: {e:}` → 4;
+    Restore `Restore of a package failed with: {e:}` → 5.
+  Panics inside leaves — unwind to main's runtime untouched.
+
+Must:
+  Keep `mod backup; mod delete; mod install; mod restore;` private and
+    `//mod reconfigure;` commented out so ./reconfigure.rs stays out of the build
+    graph (see ./reconfigure.sdd).
+  Keep the commented-out @Reconfigure variant and its exit-6 arm commented in lockstep
+    with that mod declaration — uncommenting one without the other does not build.
+  Call @common::context::init_k8s() once before the match on every invocation.
+  Await @install::run and @delete::run but call @backup::run and @restore::run
+    synchronously (their leaves are non-async per ./backup.sdd, ./restore.sdd).
+  Carry the frozen code quirk: @Backup and @Restore documents are plain `//` comments,
+    not `///` doc comments, so clap lists them without help text.
+
+Depends on:
+  ./install.sdd, ./delete.sdd, ./backup.sdd, ./restore.sdd, ./reconfigure.sdd (dead
+    sibling) — leaf contracts.
+  ../common/src/context.sdd — @init_k8s.
+  ./../main.rs — caller (`service::run(args).await`); spec pending ./../main.sdd.
+
+Tasks:
+  [ ] Decide later whether the commented-out Reconfigure lane (exit 6) is resurrected
+      or ./reconfigure.rs is deleted.
+  [ ] Decide whether Backup/Restore variants should get real `///` help strings.
+  [ ] Decide the 1/3/4/5 exit-code ladder's fate as an operator contract.
+  [ ] Cover this dispatcher with tests; no `#[cfg(test)]` module exists here.
+
+Done when:
+  Dispatch, init ordering, per-arm exit codes, and the reconfigure freeze hold under
+    tests.
+
+Scenario: backup error exits 4 without awaiting
+  Given `ServiceMod` @Commands::Backup whose synchronous leaf returns @Err
+  When @run reaches the Backup arm
+  Then the frozen backup log line is emitted and @process::exit(4) is reached
+
+Scenario: restore of a gone instance
+  Given @Commands::Restore whose leaf fetches a missing instance CR (lane frozen in
+    ./restore.sdd)
+  When the leaf returns @Err
+  Then exit 5 follows the frozen restore log line

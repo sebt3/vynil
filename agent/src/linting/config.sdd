@@ -1,0 +1,323 @@
+# File spec for ./config.rs — the `.vynil-lint.yaml` schema/loader and the level-resolution
+# core of the linting subsystem. The @LintLevel/collector model sits in ./mod.rs (./mod.sdd
+# pending); its call-site wiring at the checkers is frozen there, only enumerated here.
+
+Spec: LintConfig
+
+Platform: Rust
+
+Purpose:
+  Own the lint configuration contract: locate and parse the single optional
+    `.vynil-lint.yaml` file of a package with a never-fails fallback-to-defaults posture,
+    resolve the effective @LintLevel of one rule for one file through the
+    inline-disable / global-disable / global-override / first-matching-file-glob ladder,
+    and turn `vynil-lint-disable` / `vynil-lint-enable` comment directives in any file
+    text into a 1-based line → rule-id suppression map.
+
+References:
+  ./mod.sdd — pending: source of @LintLevel (@Info/@Warn/@Error, derived @Deserialize) and
+    the collector this file's answers feed; ./mod.rs `pub use` re-exports @LintConfig and
+    @parse_inline_disables as the module-visible surface.
+  ./../package/lint.sdd — the only driver: calls @LintConfig::load twice, twice with
+    @args.package_dir, first result dropped (`_config`) — its double-load `[?]` stands; the
+    truth of `-c`/`--config-dir` is frozen in Must below (answer: no).
+  ./hbs_checker.rs, ./rhai_checker.rs — the only @resolve_level / @parse_inline_disables
+    consumers (specs pending); the built-in default-level table enumerated in Example is
+    read verbatim from their call sites, never restated as their contract.
+  /docs/tooling/lint.md — user documentation of this exact schema (it is wrong there, see
+    Tasks); /common/src/tools.sdd — approved calibration reference for style and detail.
+
+Depends on:
+  @crate::linting::LintLevel — the level type in both directions (config values in,
+    resolved levels out); consumed via its derive, NOT via its @FromStr (see Must).
+  @serde (derive) + @serde_yaml `0.9` — file schema and the whole-file-or-nothing decode.
+  @wildmatch `2.6.1` — @WildMatch::new/matches for file-glob patterns.
+  @tracing — @tracing::warn! is the only reporting channel the invalid paths have.
+  @std — @std::fs::read_to_string, @Path::join, @Path::exists, @Path::to_string_lossy,
+    @HashMap, @HashSet. No other collaborator; no env, no @std::env::current_dir.
+
+Exposes:
+  @LintConfig — `pub struct` with `pub` fields @disable (@Vec<@String>), @override_
+    (@HashMap<@String, @LintLevel>), @files (@Vec<@FileRule>); derives @Deserialize,
+    @Serialize, @Default, @Clone, @Debug (Serialize/Clone have no in-crate use sites, Tasks).
+  @FileRule — `pub struct` with `pub` fields @glob (@String, required), @disable, @override_
+    (both defaulted); derives @Deserialize, @Serialize, @Clone, @Debug — no @Default.
+  @LintConfig::load — `#[must_use] pub fn load(@package_dir: &@Path) -> @Self`; never fails.
+  @LintConfig::resolve_level — `pub fn resolve_level(&@self, rule: &@str, file: &@Path,
+    default_level: @LintLevel, inline_disabled: &@HashSet<@String>) -> @Option<@LintLevel>`.
+  @parse_inline_disables — `pub fn parse_inline_disables(@source: &@str)
+    -> @HashMap<@usize, @HashSet<@String>>`; the crate-visible entry (via ./mod.rs re-export).
+  File-private machinery (not surface, frozen below): @extract_block_disable,
+    @extract_block_enable, @parse_rules.
+
+Accepts:
+  @load: any `&@Path` — existence is not a precondition (@Path::join appends the literal
+    filename regardless); the driver always passes the package directory.
+  @resolve_level: @rule — an opaque rule id, matched ONLY by exact string equality against
+    config entries; @file — matched by @to_string_lossy exactly as the caller spells it
+    (package-lint checkers pass package-root-relative paths, so `glob` values behave as
+    package-root-relative patterns, never as absolute ones); @default_level — the caller's
+    built-in level; @inline_disabled — the per-line set for the finding's own line, the
+    caller having looked it up in the @parse_inline_disables map (an empty set = no inline lane).
+  @parse_inline_disables: plain text of any file; syntax families are recognized by marker
+    text, never by file type.
+
+Returns:
+  @load: either the fully parsed file or a fully-@defaulted @Self — all-or-nothing, there
+    is no per-field merge (the built-in defaults are just empty collections).
+  @resolve_level: @None = the finding must be silenced; @Some(level) = effective level,
+    which may be HIGHER than @default_level when an override raises it.
+  @parse_inline_disables: keys are 1-based source lines; a key exists only when that line
+    carries ≥1 rule — the map never holds an empty set.
+
+Raises:
+  Nothing. This file never touches @common::Error and has no @Err lane: @load is
+    `#[must_use]`-total, and the missing-file-is-not-an-error posture ./../package/lint.sdd
+    assumes is structurally guaranteed (the signature cannot report failure).
+  No panic path: all fallible std results are totalized (`@unwrap_or` fallbacks, no
+    @unwrap/@expect/@panic! in non-test code); @tracing::warn! is the entire error channel.
+
+Handles:
+  Config file absent (including a dangling symlink, @Path::exists being false) — silent
+    defaults, not even a log line.
+  Config file present but zero-content/whitespace-only — serde_yaml 0.9 accepts it and every
+    field @serde(default)s: defaults load as a VALID empty config (no warning), distinct
+    from `~` / a sequence document, which are type errors and take the warn lane (Example).
+  Config unreadable (permissions, directory in its place) — @tracing::warn! + all defaults.
+  Config invalid in any way (bad YAML, wrong type, lowercase level, missing `glob`, multiple
+    documents, duplicate keys, tab indentation) — @tracing::warn! + all defaults; one bad
+    byte anywhere discards every otherwise-valid setting the file carried.
+  Rule id never named in the file — @Some(@default_level) unchanged; ids are never
+    validated, so a typo entry is inert forever, silently (Tasks).
+  @files entry that matches @file but names neither @disable nor @override_ for the rule —
+    the global/base level stands and the loop still stops.
+
+Must:
+  # File identity (frozen literal — settles the ./../package/lint.sdd `-c` question: NO)
+  The only config identity is `{package_dir}/.vynil-lint.yaml`: one filename, exact case,
+    joined onto the caller's single directory argument. There is no upward search from cwd,
+    no cwd fallback, no home fallback, no `.yml` or alternative names, no env var path, and
+    @load has no parameter through which `-c`/`--config-dir` could arrive — the driver's two
+    calls both pass @args.package_dir, and config_dir flows only into the RhaiChecker import
+    resolver. /docs/tooling/lint.md labels `-c` "Additional Rhai scripts" (true); only
+    lint.rs's clap help text lies about it.
+  # Layer model
+  The file never merges into hidden state: @load re-reads the disk from scratch on every
+    call (the driver's double call means two independent reads), and precedence
+    (file value vs built-in default) is computed exclusively per (rule, file) inside
+    @resolve_level, not at load time.
+  @resolve_level check order, frozen: (1) @inline_disabled contains the rule → @None;
+    (2) global @disable contains it → @None; (3) base = global @override_ value, else
+    @default_level; (4) first entry of @files whose @glob @WildMatch-matches
+    @file.to_string_lossy(), in file order, `break`ing unconditionally at the first match:
+    its @disable contains the rule → @None (beats global @override_ AND global @disable-less
+    defaults), else its @override_ replaces base, and every later glob is never consulted —
+    first match wins full stop, a later more-specific glob can never apply.
+  @disable beats @override_ within the same layer (global, and per file rule) because the
+    disable test runs before the override is consulted.
+  Rule ids are opaque strings compared by exact equality; case, typos and unknown ids are
+    nobody's business — no warn, no error, entry just never matches anything (Tasks `[?]`).
+  Glob matching is @wildmatch semantics over the raw string: probed on `2.6.1` — `*`
+    crosses `/`, so `**` adds nothing; `?` matches one char; a plain pattern matches exactly.
+    A @WildMatch is recompiled inside every @resolve_level loop iteration (no cache) —
+    re-implementations must keep the semantics, not necessarily the per-call compile cost.
+  # Schema posture (serde_yaml 0.9 + these derive attrs only, all probed empirically)
+  Keys are exact, case-sensitive and no-renamed: the map key is the literal field name
+    `override_` WITH the trailing underscore — `override:` is an unknown field, silently
+    ignored, leaving overrides inert while the file still "loads". Unknown keys at root or
+    inside a file rule are tolerated; `disable` must be a list, `files` a list of mappings.
+  @FileRule requires a `glob` key (no @serde(default), no @Default derive): its absence is
+    a whole-file decode error → warn lane → empty defaults.
+  Level values deserialize through @LintLevel's derive: exactly `Info`, `Warn` or `Error`;
+    lowercase/uppercase variants are unknown-variant whole-file errors even though
+    @LintLevel::@FromStr accepts any case (from_str is never consulted here).
+  Whole-file rejections (each → warn + full defaults): top-level `~` or sequence, multiple
+    YAML documents, duplicate keys, tab-indented YAML, any type mismatch. A UTF-8 BOM is
+    accepted. An empty/whitespace-only document is NOT a rejection (Handles).
+  # Directive parser (@parse_inline_disables, per line, marker-prefixed)
+  Line numbers are 1-based (@saturating_add(1) over enumerate); the map aggregates three
+    comment families — Rhai `//`, Handlebars `{{!--`, YAML `#` — against the SAME keyword
+    spellings `vynil-lint-disable` / `vynil-lint-enable`, recognized in any text regardless
+    of the file's language; no awareness of strings, real comments, or escape.
+  Block mode: a line whose TRIMMED text @strip_prefix-es one of the three disable (or
+    enable) markers adds (or removes) @parse_rules(rest) to/from the running active-block
+    set, then `continue`s — the directive line itself is never a map key through its own
+    directive, inline scanning never runs on it, and other active blocks do not propagate
+    onto directive lines either.
+  Active blocks propagate — as a set copy — onto every non-directive line until re-enabled,
+    with no code/comment awareness (they cover comment and string lines too); enabling an
+    unmatched rule is a no-op; a rule disabled twice stays disabled once.
+  Inline mode (only on non-directive lines) scans the RAW line by @str::find, so a marker
+    inside a string literal counts; family precedence Rhai → HBS → YAML, each `continue`-ing
+    past the rest on a non-empty rule hit: a line carrying two families yields the earlier
+    family's rules only and never reaches the later ones. The rules text is the slice at a
+    fixed byte offset right after the marker (`pos+21`/`pos+24`/`pos+20` — always a char
+    boundary because the markers are ASCII); an empty rule result falls through to the next
+    family rather than recording anything.
+  @parse_rules tokenization: split on `,`; each segment contributes ONLY its first
+    whitespace token, after `trim_end_matches` of `--}}` then `*/` (HBS/block closers); an
+    empty token skips that segment, and the first token WITHOUT a `/` aborts the entire list
+    (free-text reason swallow) — so directive rule ids must always be category-qualified
+    (`rhai/…`, `hbs/…`, …); a bare name can never be disabled through a comment.
+  Marker matching is a bare prefix with no word-boundary check: `vynil-lint-disabled …`
+    parses as a directive with the garbage token `d…`-style residue and adds nothing while
+    still consuming the line; `vynil-lint-enabled rhai/foo` therefore removes nothing —
+    it aborts on token `d` (Tasks).
+
+Example:
+  Frozen schema (the ONLY accepted spellings; root and per-file):
+    disable: [rule-id, …]                 # list of exact rule id strings, `[]` by default
+    override_: {rule-id: Info|Warn|Error} # HashMap, EXACT-CASE level names, literal `_` key
+    files:                                # list of @FileRule, `[]` by default
+      - glob: "pattern"                   # REQUIRED key, wildmatch against caller's path text
+        disable: [rule-id, …]             # only on the FIRST matching glob
+        override_: {rule-id: Level}       # same layering, see Must (4)
+  A working instance of this schema:
+    disable: [rhai/empty-catch]
+    override_:
+      hbs/unknown-helper: Warn
+    files:
+      - glob: "handlebars/partials/**"
+        override_:
+          hbs/unknown-partial: Warn
+  Built-in default levels as wired through @resolve_level config-aware (`22` rules; the
+    inline column shows what the checker actually passes — `new()` = an empty set the
+    directive lane cannot fill, `&0` = a map lookup @parse_inline_disables can never key,
+    both meaning inline directives are inert there; decisions belong to the checker specs):
+    @Error: `hbs/syntax` (new), `rhai/syntax` (new), `rhai/unresolved-import` (new),
+      `hbs/unknown-helper` (&0), `hbs/unknown-value` (&0), `hbs/unknown-partial` (&0),
+      `hbs/unknown-image` (&0), `hbs/unknown-resource` (&0), `hbs/context-prefix` (&0),
+      `rhai/undefined-variable` (per-line), `hbs/unused-option|unused-option-field|
+      unused-image|unused-resource` (scanned-file sets)
+    @Warn: `hbs/unknown-root-variable` (&0), `hbs/wrong-package-type` (&0),
+      `hbs/unused-helper` (new, virtual `handlebars/helpers/{helper}.rhai` file),
+      `hbs/unused-partial` (new, virtual `handlebars/partials/{partial}.hbs`),
+      `rhai/unused-script` (new), `rhai/unused-function` (new),
+      `rhai/unused-parameter` (per-file set), `rhai/k8s-resource-plural` (per-line)
+  `7` more rhai rules never reach @resolve_level, so `.vynil-lint.yaml` cannot reconfigure
+    them (hardcoded @Warn): `rhai/shadowed-variable`, `rhai/dead-code`,
+    `rhai/wrong-api-mode`, `rhai/wrong-package-type`, `rhai/unused-variable`,
+    `rhai/empty-catch`; hardcoded @Error: `rhai/context-hook-no-return`. The `package/*`
+    family (./../package/lint.sdd) likewise never consults this config at all.
+
+Tasks:
+  [ ] Cover untested frozen edges: file-rule @disable → @None branch (only the file
+      @override_ branch has a test); the @warn!+defaults lanes (invalid YAML, lowercase
+      level name, multi-document, missing `glob`); empty/whitespace file loading as valid
+      defaults vs `~` rejecting; `override:` (no underscore) silently inert; first-glob-
+      wins-then-break across two matching globs; two-family marker line taking the earlier
+      family only; swallowed directive prefix (`vynil-lint-enabled`, `vynil-lint-disabled`);
+      active-block propagation onto a comment-only line.
+  [ ] Decide and record whether `resolve_level`'s doc-comment priority list should be
+      rewritten to the executed order (it lists inline last-but-highest — currently the
+      reader must map "ascending" by themselves).
+  [?] The user-facing key is the literal `override_` (serde leaks the Rust field spelling);
+      serde `rename` to `override` would fix it but changes the accepted schema — pick one
+      and align /docs/tooling/lint.md, whose snippet is 100 % inert TODAY: its `override:`
+      spelling is ignored AND its lowercase `error`/`warn` level names reject the entire
+      file to defaults, so even its valid `disable:` list never applies.
+  [?] No rule-id validation anywhere: an unknown id in @disable/@override_/file entries is
+      silently inert forever — decide whether a typo should warn (requires coupling config
+      to the checker rule table, which no shared list currently exists to consult).
+  [?] Directive keyword matching has no word-boundary check, so `vynil-lint-enabled foo`
+      and other prefix-plus-junk lines are consumed as inert directives that also cancel
+      inline processing of the line. Decide whether to require a non-word char boundary.
+  [?] Level-value case posture: derive is exact-case while @LintLevel::@FromStr is
+      case-insensitive — pick one policy for the config file.
+  [?] Dead-looking derives: @Serialize and @Clone on @LintConfig/@FileRule have no
+      in-crate use sites found (checkers borrow `&@LintConfig`). Confirm, or drop them per
+      the don't-widen-surface rule.
+  [?] Cross-seam (fix owned by the pending checker specs, recorded here): because
+      @resolve_level trusts its @inline_disabled argument, the checker call-sites passing
+      `&@HashSet::new()` or `.get(&0)` (a key the 1-based @parse_inline_disables map never
+      emits) make inline directives inert for `hbs/syntax`, `rhai/syntax`, both `unused-
+      helper/unused-partial` finalize rules, `rhai/unresolved-import`, and every
+      `self.inline_disables.get(&0)` site — the frozen config.rs contract is not wrong;
+      the wiring is.
+  [?] `wildmatch` recompiles every @FileRule per @resolve_level call; decide if a
+      per-config precompiled-glob cache is worth it before rule counts grow.
+
+Done when:
+  Every Task coverage edge has a mapped passing test, the `[?]` decisions above are
+    recorded, /docs/tooling/lint.md matches the frozen schema, and `cargo test -p agent
+    --bins`, clippy and `cargo +nightly fmt --check` stay green.
+
+Scenario: load falls back to defaults without ever failing
+  Given `load` at a directory with no `.vynil-lint.yaml` (or a dangling symlink there)
+  When @load runs
+  Then a fully-@defaulted @LintConfig returns with zero log output — the driver can never
+    distinguish "no config" from "zero-config config"
+  And an empty or whitespace-only file ALSO returns defaulted config but as a SUCCESSFUL
+    load, no @warn! (probed: serde_yaml 0.9 + field-level @serde(default))
+  And the same holds whether called once or as the driver's double load — @load is pure
+    disk-read per call
+  Mapped test: `load_returns_default_when_file_absent`. The invalid/unreadable → @warn!
+    + defaults lanes have none (Tasks).
+
+Scenario: global disable and global override resolve one rule
+  Given rule `hbs/unknown-helper`: (a) listed in config @disable, (b) in @override_ → @Warn
+    while @default_level is @Error, (c) neither
+  When @resolve_level runs with a non-matching @file and empty inline set
+  Then (a) @None even though no file-rule exists, (b) @Some(@Warn) — an override may raise
+    OR lower the built-in level, (c) @Some(@Error) = @default_level passthrough
+  And Given the id in @disable but never written as a real rule — nothing anywhere complains
+  Mapped tests: `global_disable_suppresses_finding`, `global_override_changes_level`.
+    Global disable simultaneously present with override yielding @None is implied by check
+    order but not asserted.
+
+Scenario: first matching file glob takes the decision and stops the list
+  Given @override_ `hbs/unknown-partial` → @Error plus @files entry glob
+    `handlebars/partials/**` overriding it → @Warn
+  When @resolve_level runs on `handlebars/partials/foo.hbs`
+  Then @Some(@Warn) — the glob layer replaces the base
+  But on `systems/bar.hbs` (no glob matches) → @Some(@Error), the global override standing
+  And Given a SECOND, more specific glob entry after a matching one: it is never consulted
+  And a matching file rule whose @disable names the rule → @None, outranking a global
+    @override_ on the same rule (branch untested, Tasks)
+  Mapped test: `file_glob_override_takes_priority_over_global` (both assertions); the
+    break-semantics on two matching globs and the file @disable lane have none.
+
+Scenario: inline suppression set wins over everything
+  Given @inline_disabled contains `test/rule`, regardless of a global @override_/@disable
+  When @resolve_level runs
+  Then @None — the inline argument is checked before any config field
+  And the caller feeds per-finding-line sets from the @parse_inline_disables map; config.rs
+    itself never consults the map shape beyond membership
+  Mapped test: `inline_disable_returns_none` (config-side check via @default config only).
+
+Scenario: inline directive comments disable rules on their own line
+  Given the three marker families on a code line — Rhai `code; // vynil-lint-disable
+    rhai/unused-variable`, HBS `{{foo}}{{!-- vynil-lint-disable hbs/unknown-helper --}}`,
+    YAML `key: value # vynil-lint-disable hbs/unused-option`
+  When @parse_inline_disables runs
+  Then line 1 maps to exactly that rule id in each case (offset math `21`/`24`/`20` lands
+    right after each marker, so trailing closers like `--}}` are trimmed off the token)
+  And Given a trailing prose reason (`... ici c'est paris`, `... reason here`, multiple
+    comma-separated rules followed by junk, or junk containing a comma) — every
+    slash-qualified id up to the first bare token is collected, the bare token and
+    everything after it are dropped and a segment list is aborted
+  And a line with inline code before the marker IS inline mode: block mode needs the marker
+    at the line's trimmed start
+  Mapped tests: `parse_rhai_inline_disable`, `parse_hbs_inline_disable`,
+    `parse_yaml_inline_disable`, `inline_disable_with_trailing_comment`,
+    `inline_disable_multi_rules_with_trailing_comment`,
+    `inline_disable_comment_with_comma_stops_at_non_rule`,
+    `hbs_inline_disable_with_trailing_comment`.
+
+Scenario: block directives span lines until re-enabled
+  Given `// vynil-lint-disable rhai/empty-catch` alone, some code lines, then
+    `// vynil-lint-enable rhai/empty-catch` — same shape in HBS `{{!-- … --}}` and YAML
+    `# …` families
+  When @parse_inline_disables runs
+  Then only the covered code lines carry keys; the disable and enable directive lines
+    themselves are NEVER map keys, and nothing after the enable is disabled
+  And Given two block rules (`rhai/foo, rhai/bar`): enabling `rhai/foo` leaves `rhai/bar`
+    active on later lines
+  And Given a code line that ALSO carries an inline directive inside an active block: its
+    set is the union of block- and inline-parsed rules on that one line
+  And Given nested/multiple active blocks whose disable line sits inside another block: the
+    directive line itself receives no propagation (it `continue`s before the copy step)
+  Mapped tests: `parse_rhai_block_disable`, `parse_hbs_block_disable`,
+    `parse_yaml_block_disable`, `block_disable_multiple_rules`,
+    `block_and_inline_combine_on_same_line`. The propagation-onto-directive-line and
+    swallowed-prefix (`vynil-lint-enabled`) edges have none (Tasks).

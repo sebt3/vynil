@@ -1,0 +1,69 @@
+Spec: TenantMod
+
+Platform: Rust
+
+Purpose:
+  Sub-command dispatcher for `agent tenant …`: owns the private `backup`, `delete`,
+    `install`, `restore` modules (and the commented-out `reconfigure`), exposes one clap
+    group and one async entry initializing the Kubernetes client before dispatch. The
+    file is byte-identical to ./../service/mod.rs (diff-verified; frozen in
+    ./../service/mod.sdd) — type differences live only in the leaves.
+
+Owns:
+  ./mod.rs
+
+Exposes:
+  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
+    ./../main.rs (`Tenant` dispatch arm; spec pending ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, four live variants:
+    @Install(install::Parameters), @Delete(delete::Parameters),
+    @Backup(backup::Parameters), @Restore(restore::Parameters).
+  @run — async, takes `&Parameters`, returns `()`.
+
+Accepts:
+  A parsed @Commands tree; every flag contract lives in the leaf specs.
+
+Returns:
+  `()` — success falls off the end, each @Err lane ends in @std::process::exit.
+
+Handles:
+  Leaf @Err per arm: Install `Installing a package failed with: {e:}` → exit 1;
+    Delete `Deleting a package failed with: {e:}` → exit 3;
+    Backup `Backup of a package failed with: {e:}` → exit 4;
+    Restore `Restore of a package failed with: {e:}` → exit 5.
+  Panics inside leaves — unwound to main's runtime.
+
+Must:
+  Keep `mod backup; mod delete; mod install; mod restore;` private and
+    `//mod reconfigure;` commented (./reconfigure.sdd is out of the build graph).
+  Keep the commented @Reconfigure variant and exit-6 arm commented in lockstep.
+  Call @common::context::init_k8s() once before the match.
+  Await @install::run/@delete::run; call @backup::run/@restore::run synchronously.
+  Carry the same `//`-comment help quirk on @Backup/@Restore as the service twin.
+
+Depends on:
+  ./install.sdd, ./delete.sdd, ./backup.sdd, ./restore.sdd, ./reconfigure.sdd (dead
+    sibling) — tenant leaf contracts.
+  ./../service/mod.sdd — the byte-identical twin; keep both in lockstep on any change.
+  ../common/src/context.sdd — @init_k8s.
+  ./../main.rs — caller; spec pending ./../main.sdd.
+
+Tasks:
+  [ ] Decide later whether the byte-identical service/tenant dispatcher pair should be
+      one generic module or stay hand-copied.
+  [ ] Decide the fate of the commented Reconfigure lane (shared with service).
+  [ ] Cover this dispatcher with tests; none exist.
+
+Done when:
+  Dispatch, init ordering, exit ladder, and the twin-frozen identity hold under tests.
+
+Scenario: tenant delete failure exits 3
+  Given `TenantMod` @Commands::Delete whose leaf returns @Err
+  When @run reaches the Delete arm
+  Then the frozen delete log line prints and @process::exit(3) is reached
+
+Scenario: install runs after cluster init
+  Given @Commands::Install with valid leaf flags
+  When @run is awaited
+  Then @common::context::init_k8s precedes @install::run (./install.sdd) and @Ok ends
+    @run with no exit call

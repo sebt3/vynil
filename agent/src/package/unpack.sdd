@@ -1,0 +1,243 @@
+# File spec for ./unpack.rs. The inverse push lane is cross-referenced only
+# (./build.sdd pending); dispatcher, log lines and the exit ladder are ./mod.sdd's.
+
+Spec: PackageUnpack
+
+Platform: Rust
+
+Purpose:
+  The `agent package unpack` leaf — the image-to-directory lane: pull a Vynil package
+    image from an OCI registry by registry/image/tag and extract its gzip layers into an
+    existing local destination directory. The Rust side assembles registry credentials from
+    literal flags or one pair decoded from a mounted `.dockerconfigjson`, then hands the
+    network pull and tar extraction to @Registry::pull_image.
+
+Owns:
+  ./unpack.rs
+
+References:
+  ./mod.sdd — caller and exit lane: any @Err from @run prints
+    `Unpacking OCI image to directory failed with: {e:}` (Display) via @tracing::error!
+    then @std::process::exit(4); the frozen inverted `Unpack a directory into a package`
+    help text there documents this leaf.
+  ./build.sdd — inverse lane (directory-to-image pack/push), sibling spec pending —
+    cross-reference only.
+  /common/src/lib.sdd — the @common::Error / @common::Result contract:
+    @Error::MissingDestination, @Error::Stdio, @Error::SerializationError templates and
+    @Error::Core's transparent wrap of `vynil-core` errors.
+
+Must:
+  Freeze the seven-parameter clap surface exactly: `-d`/`--destination`/env
+    `PACKAGE_DIRECTORY` default `/tmp/package` (doc `Destination directory`, @PathBuf);
+    `-r`/`--registry`/env `REGISTRY` default `oci.solidite.fr` (doc `Registry`);
+    `-i`/`--image`/env `IMAGE` required with no default (doc `Image`);
+    `-t`/`--tag`/env `TAG` default `1.0.0` (doc `Tag`);
+    `-u`/`--username`/env `USERNAME` default `""` (doc `Username`);
+    `-p`/`--password`/env `PASSWORD` default `""` (doc `Password`);
+    `--pull-secret-path` (no short)/env `PULL_SECRET_PATH` default `""` (doc
+    `pull-secret mount-path`, Rust field @pull_path). Value names equal the uppercase env
+    names; resolution order is flag over env over default.
+  Gate the whole pull on @std::path::Path::is_dir of @destination — the directory is
+    never created — otherwise @tracing::error! the Debug-quoted `<path> is not a directory`
+    (first of two logs on that lane) and return @Error::MissingDestination.
+  Branch the auth lane on @pull_path emptiness: empty passes @username/@password flags
+    verbatim to @Registry::new; non-empty joins the literal `/.dockerconfigjson` file name
+    into the read path, @std::fs::read_to_string mapped as @Error::Stdio and
+    @serde_json::from_str into a loose @serde_json::Value mapped as
+    @Error::SerializationError, then walks @get `auths` → `auth` under the literal
+    @registry string with @Option::unwrap_or_default carrying every miss to `""`, decodes
+    via @common::rhaihandler::base64_decode, and splits the @String on `':': @user is the
+    first field via @Vec::first and @pass the raw second field via @Vec::get(1), both
+    @unwrap_or_default to `""`. Credentials coming through this lane discard the
+    username/password flags.
+  Keep credential promotion inside the pinned @Registry::new (`vynil-core` `0.7.7`): @user
+    or @pass empty — either half, independently — selects @oci_client::secrets::RegistryAuth::Anonymous,
+    a fully populated pair selects @oci_client::secrets::RegistryAuth::Basic.
+  Freeze pull addressing in the pinned @Registry::pull_image: @oci_client::Reference::with_tag
+    over (registry, image, tag) — tag-selected addressing only, no digest lane — accepting
+    the `IMAGE_LAYER_GZIP_MEDIA_TYPE` and `IMAGE_DOCKER_LAYER_GZIP_MEDIA_TYPE` layer types.
+  Freeze the extraction posture from that lane: each layer stream runs through
+    @flate2::read::GzDecoder into @tar::Archive::unpack onto the destination — existing
+    content merges with silent overwrite, entries containing a `..` component are skipped
+    with no error and no extraction (zip-slip guard, tar `0.4.46` default, never opted into
+    from here), leading `/`, root and `.` components are dropped, and symlink or hard-link
+    targets resolving outside the destination abort the unpack as an @Error::Core-wrapped
+    stdio error; stored modes, ownerships and xattrs are not restored, mtimes are.
+  Freeze the transport as the collaborator's: @oci_client::Client::new over
+    @oci_client::client::ClientConfig::default() — scheme `https` by
+    `ClientProtocol::Https` default, certificate and hostname verification on; nothing
+    here can select plain HTTP or accept invalid certificates.
+  Stay fully synchronous: @run returns only after the last layer is unpacked; it builds no
+    runtime — the async leg is the core @tokio::task::block_in_place wrapping
+    @tokio::runtime::Handle::block_on inside @Registry::pull_image, and the process tokio
+    context is ./../main.rs's default-flavor @tokio::main (its spec pending).
+  Keep the success lane silent: no progress lines, no summary, no completion print from
+    this file — the only output it emits is the destination-guard error log.
+
+Must not:
+  mkdir or otherwise provision a missing destination — a wrong path takes the
+    @Error::MissingDestination exit-4 lane.
+  Resolve pull secrets from the cluster (the @vynil_core::oci::resolve_registry_auth or
+    @kube legs) or call @common::context::init_k8s — this pull's only secret sources are
+    the mounted file at @pull_path and the literal flags.
+
+Depends on:
+  @common::ocihandler::Registry — crate-root re-export (per /common/src/lib.sdd) of the
+    `vynil-core` `0.7.7` `@vynil_core::oci::Registry` (`/common/Cargo.toml`):
+    @Registry::new and @Registry::pull_image with the behaviours frozen above; beneath
+    that lane sit `oci-client` `0.15.0`, `flate2` and `tar` `0.4.46` (`/Cargo.lock`).
+  @common::rhaihandler::base64_decode — re-export of
+    @vynil_core::engine::base64_decode: standard-alphabet decode to UTF-8 @String, the
+    error leg mapping to core `UTF8` and arriving here as @Error::Core; the pinned core
+    unwraps decode failures (Tasks).
+  @common::Error, @common::Result — /common/src/lib.sdd.
+  @clap::Args derive, @serde_json, @std::fs::read_to_string, @std::path::@Path and
+    @PathBuf, @tracing::error!.
+  ./mod.sdd — the only caller of @run (sync match arm, no await).
+
+Exposes:
+  @Parameters — `#[derive(@clap::Args, @Debug)]` with all seven fields private
+    (@destination, @registry, @image, @tag, @username, @password, @pull_path), so they
+    reach outside this module only through the clap CLI surface (Must) and via
+    @Commands::Unpack in ./mod.rs; the @Debug serve @Commands in ./mod.rs.
+  @run — `pub fn @run(args: &@Parameters) -> @common::Result<@()>`; synchronous, awaited
+    by nobody.
+
+Accepts:
+  A clap-parsed @Parameters by reference; @registry is used unvalidated twice — the pull
+    reference host and the exact `auths` key — @image is the repository path without a
+    registry prefix, @tag any string; no syntax check on image, tag, credentials or paths
+    before pulling.
+  Environment fallback while the flags are absent, including the unsuffixed generic shell
+    names `USERNAME`/`PASSWORD` (Tasks).
+  @pull_path as the directory holding `.dockerconfigjson`; any non-empty value, however
+    wrong, switches to the secret lane.
+
+Returns:
+  Silent @Ok(()) once every pulled layer has unpacked into the destination.
+  @Err — handed to ./mod.sdd's exit-4 trap; the destination guard logs itself first, so
+    that one case produces two log lines.
+
+Raises:
+  @Error::MissingDestination(@std::path::PathBuf) — destination not a directory, whether
+    absent or present as a non-directory; its frozen display `Missing destination
+    directory for {0}` says missing either way.
+  @Error::Stdio(@std::io::Error) — `.dockerconfigjson` missing or unreadable on the
+    secret lane.
+  @Error::SerializationError(@serde_json::Error) — secret body is not valid JSON.
+  @Error::Core over core `UTF8` — the decoded auth bytes are not UTF-8.
+  @Error::Core over core `OCIDistrib` — registry transport, auth rejection or
+    manifest/media-type mismatch (a non-gzip layer set rejects the pull).
+  @Error::Core over core `Stdio` — gzip decode or tar entry-write failure, including the
+    outside-destination link rejection in Must.
+  Panic, never @Err — a malformed non-empty base64 auth aborts inside the pinned core
+    @base64_decode unwrap and unwinds to main (Tasks).
+
+Handles:
+  Destination present but not a directory — same guard lane as the absent case, no
+    dedicated branch or distinct message.
+  Every secret-lookup miss (no `auths`, no registry key, no `auth`, non-string auth) —
+    silent `""` through @Option::unwrap_or_default → blank pair → @Anonymous, no warning.
+  Credentials whose decoded blob carries no `:` — @pass misses index 1 → `""` →
+    @Anonymous despite a populated @user; a password containing `:` authenticates with its
+    second field only (Tasks).
+  One-sided credentials from either source (user without pass or vice versa) —
+    disjunctive emptiness test → @Anonymous.
+  Multi-layer images — layers unpack sequentially in pull order, a later layer overwrites
+    files a former layer wrote to the same paths.
+  Flags and secret lane both configured — secret lane wins; both configured wrong — the
+    secret lane's @Err still wins.
+
+Tasks:
+  [ ] Cover @run with tests for the scenarios below: no #[cfg(test)] module exists in this
+      file and no integration test drives `agent package unpack`.
+  [?] The `:`-split via @Vec::first/@Vec::get(1) truncates a password containing colons
+      (`user:pa:ss` authenticates pass `pa`), while core's secret lanes split with
+      `splitn(2, ':')` — two policies for one `.dockerconfigjson` form. Choose the
+      canonical split and align one side.
+  [?] Malformed non-empty base64 auth panics in the pinned core @base64_decode `unwrap`,
+      so a corrupted mounted secret aborts with a panic instead of @Err and exit 4. Decide
+      whether core errors or this leaf pre-validates.
+  [?] @Registry::pull_image bridges sync-over-async with @block_in_place +
+      @tokio::runtime::Handle::block_on. FACT VERIFIED (workspace `tokio` features =
+      `macros` + `rt-multi-thread`, bare `#[tokio::main]`): ./../main.rs runs a
+      MULTI-thread runtime, so @block_in_place does not panic here — it parks a worker
+      for the pull's duration. The panic pattern `[?]` recorded in
+      /common/src/vynilpackage.sdd only bites binaries whose final runtime lacks
+      rt-multi-thread. Decide with ./../main.sdd whether worker-stealing during pulls
+      is acceptable and probe that unpack actually reaches the network.
+  [?] The zip-slip guard is owned by nobody here: silent skipping is `tar` `0.4.46`'s
+      default @Archive::unpack behaviour reached through the pinned core; if core ever
+      switched to raw @tar::Entry::unpack, escape writes would resume unnoticed. Decide
+      whether the safety posture gets pinned in core's contract.
+  [?] Env names `USERNAME`/`PASSWORD` are unsuffixed shell/Pod environment names — an
+      environment that happens to export both silently arms Basic auth. Decide whether to
+      rename (e.g. `REGISTRY_USERNAME`) or freeze them for Job-image compatibility.
+  [?] The OCI transport backend is not pinned here: `oci-client` `0.15.0` defaults to its
+      `native-tls` feature while `common` enables @reqwest `rustls-tls`
+      (`/common/Cargo.toml`), and ./../main.rs installs the rustls ring provider citing
+      kube only — which TLS stack serves registry pulls falls out of feature unification.
+      Pin the intent deliberately.
+  [?] Tag-only addressing freezes tag mutability: no `@sha256:` digest lane and no
+      layer-versus-manifest digest recheck after download. Decide whether integrity matters
+      for unpack or tags stay trusted.
+  [?] The commented-out @Layer struct (fields `digest`, `mediaType`, `size`) at the head of
+      the file is dead code naming a manifest shape this file never parses. Remove it or
+      restore its purpose.
+
+Done when:
+  Every scenario below carries a mapped passing test, the decisions above are recorded, and
+    `cargo test -p agent` with clippy and `cargo +nightly fmt --check` stay green.
+
+Scenario: destination guard fires before any network
+  Given `--destination /nope` absent, or present as a regular file
+  When @run runs
+  Then @tracing::error! logs `"/nope" is not a directory` (Debug-quoted path) and @Err
+    @Error::MissingDestination("/nope") follows
+  And ./mod.sdd's trap adds `Unpacking OCI image to directory failed with: Missing
+    destination directory for /nope` then @std::process::exit(4)
+  And no registry contact happens
+  No mapped test exists.
+
+Scenario: minimal required flag pulls anonymously on defaults
+  Given only `-i my-app` (or env `IMAGE=my-app`) over an existing `/tmp/package`
+  When @run runs
+  Then the pull reference is registry `oci.solidite.fr`, repository `my-app`, tag `1.0.0`
+    with @RegistryAuth::Anonymous (both credential defaults empty)
+  And layers merge into `/tmp/package` and @Ok returns silently
+  No mapped test exists.
+
+Scenario: mounted secret authenticates the configured registry and discards flags
+  Given `--pull-secret-path /sec` with `/sec/.dockerconfigjson` holding
+    `auths[oci.solidite.fr].auth` = base64 of `user:pass`
+  When @run runs
+  Then the pull authenticates @RegistryAuth::Basic("user", "pass") no matter what
+    `--username`/`--password` carry
+  No mapped test exists.
+
+Scenario: secret lane all-or-nothing, registry-miss degrades to anonymous
+  Given `--pull-secret-path` set with `.dockerconfigjson` missing — @Error::Stdio — or
+    holding non-JSON — @Error::SerializationError — both to the exit-4 trap
+  But Given the file valid while `auths` lacks the registry key
+  Then @run proceeds with anonymous credentials, no warning logged
+  No mapped test exists.
+
+Scenario: escaping and absolute layers are sanitized silently
+  Given a layer carrying entries `../escape`, `/etc/evil` and `./ok/file`
+  When the pinned @tar::Archive::unpack leg writes into the destination
+  Then `../escape` is neither extracted nor an error, `/etc/evil` lands as
+    `<destination>/etc/evil`, and content appears only under `ok/file`
+  No mapped test exists.
+
+Scenario: dirty destination merges by overwrite, never refuses
+  Given a destination already holding files colliding with layer paths
+  When layers unpack
+  Then colliding paths are overwritten (later layers win over earlier ones), unrelated
+    resident files stay untouched, and no emptiness or collision check ran first
+  No mapped test exists.
+
+Example:
+  defaults: reference `oci.solidite.fr/<image>:1.0.0` pulled anonymously into
+    `/tmp/package`
+  secret lane JSON read: `{"auths":{"<registry>":{"auth":"<base64 user:pass>"}}}` from
+    `{pull_path}/.dockerconfigjson`, unknown keys ignored
