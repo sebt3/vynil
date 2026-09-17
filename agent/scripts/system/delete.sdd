@@ -1,226 +1,250 @@
 Spec: SystemDeleteScript
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Orchestrate the teardown of one @SystemInstance: run the package's three teardown categories in
-    the reverse of the install build-up through @import_run — `delete_pre` hook, `systems`, tofu
-    destroy, `crds`, then the `delete_post` hook — and return. This file applies no deletes itself
-    and writes nothing: the per-category cluster walks ride the `instance.status` lists install
-    recorded, inside the stage modules it dispatches, and zero `status` write, zero
-    `set_status_*` call, zero finalizer or CR removal exists here or in the shipped delete stages.
-    A clean return only carries the delete Job out of Rust happy-path so the operator releases the
-    `systeminstances.vynil.solidite.fr` finalizer (/operator/src/instance_common.sdd
-    @run_with_finalizer, @InstanceKind::finalizer_name). Twin notes, real diffs: ./../service/delete.rhai
-    is the same skeleton with the single `systems` bucket replaced by five manifest buckets plus a
-    `delete_backup` sweep riding the `vitals` gate — two diff hunks separate the files, one before
-    the tofu lane and one between tofu and `crds`; ./../tenant/delete.rhai is that file minus
-    `crds` and shares nothing further with this shape. This is the only delete lane with no backup
-    sweep and the only pure mirror: install here runs `crds → tofu → systems` (./install.rhai),
-    delete exactly `systems → tofu → crds` — no tofu position deviation like the service lane.
+  Orchestration du teardown d'un @SystemInstance : lancer les trois catégories de teardown du
+    package dans l'ordre inverse du build-up d'install via @import_run — hook `delete_pre`,
+    `systems`, destroy tofu, `crds`, puis hook `delete_post` — et revenir. Ce fichier
+    n'applique aucune suppression et n'écrit rien : les walks cluster par catégorie roulent sur
+    les listes `instance.status` enregistrées par install, dans les stage modules qu'il
+    dispatche, et zéro écriture de `status`, zéro appel `set_status_*`, zéro retrait de finalizer
+    ou de CR n'existe ici ni dans les delete stages livrés. Un retour propre ne fait que sortir
+    le delete Job du happy-path Rust pour que l'opérateur libère le finalizer
+    `systeminstances.vynil.solidite.fr` (/operator/src/instance_common.sdd
+    @run_with_finalizer, @InstanceKind::finalizer_name). Notes de gémellité, diffs réels :
+    ./../service/delete.rhai est le même squelette avec le bucket unique `systems` remplacé par
+    cinq buckets manifest plus un sweep `delete_backup` qui chevauche le gate `vitals` — deux
+    hunks de diff séparent les fichiers, un avant la lane tofu et un entre tofu et `crds` ;
+    ./../tenant/delete.rhai est ce fichier sans `crds` et ne partage rien de plus avec cette
+    forme. C'est la seule delete lane sans sweep de backup et le seul miroir pur : install lance
+    ici `crds → tofu → systems` (./install.rhai), delete exactement `systems → tofu → crds` —
+    aucune déviation de position du tofu comme dans la lane service.
 
 Exposes:
-  @run(@instance, @context) — the module's sole @fn and entry point (`delete.rhai` matches
-    @ENTRY_POINT_PATTERNS, `run` is in @ENTRY_POINT_FUNCTIONS, /agent/src/linting/rhai_checker.sdd);
-    invoked as `delete::run(instance, context)` by the fixed snippet of the Rust lane
-    /agent/src/system/delete.sdd, whose trailing `;` plus `let _ =` discards the returned value.
+  @run(@instance, @context) — seul @fn du module et point d'entrée (`delete.rhai` matche les
+    @ENTRY_POINT_PATTERNS, `run` est dans @ENTRY_POINT_FUNCTIONS, /agent/src/linting/rhai_checker.sdd) ;
+    invoqué en `delete::run(instance, context)` par le snippet figé de la lane Rust
+    /agent/src/system/delete.sdd, dont le `;` final plus `let _ =` discarde la valeur retournée.
 
 Accepts:
-  @instance — the injected real @SystemInstance @Dynamic, fetched from the API by the Rust lane
-    (whose already-gone-CR hard failure lands before this module is imported). Never read and
-    never re-bound here: zero property reads, zero @get_system_instance refresh — install's three
-    refreshes have no delete counterpart — only relayed as the first argument to all five
-    @import_run calls, so every stage sees the one pre-script `status` snapshot.
-  @context — map ./context.rhai's @run lane (./context.sdd) built for this lane. Only key read
-    here: `package_dir` — unguarded interpolated property access in all three gate paths (two
-    @is_dir, one @has_tofu_files); every other key is consumed by the stage modules, whole maps
-    relayed.
+  @instance — le vrai @SystemInstance @Dynamic injecté, récupéré depuis l'API par la lane Rust
+    (dont le hard failure CR-déjà-partie tombe avant l'import de ce module). Jamais lu ni jamais
+    re-bindé ici : zéro lecture de propriété, zéro refresh @get_system_instance — les trois
+    refresh d'install n'ont pas d'équivalent côté delete — seulement relayé comme premier
+    argument des cinq appels @import_run, donc chaque stage voit l'unique snapshot `status`
+    d'avant-script.
+  @context — la carte construite pour cette lane par la lane @run de ./context.rhai
+    (./context.sdd). Seule clé lue ici : `package_dir` — accès de propriété interpolé sans garde
+    dans les trois chemins de gate (deux @is_dir, un @has_tofu_files) ; toute autre clé est
+    consommée par les stage modules, cartes complètes relayées.
 
 Returns:
-  No value channel of its own: the implicit value is the trailing `import_run("delete_post", ...)`
-    result — the skip `()` on a stock image, the hook ships nowhere — and the caller discards it.
-    No observable artifact of its own (no `status` patch, no event, no finalizer touch, no CR
-    deletion); observability is the stage-deleted cluster objects and the exit-0/exit-3 outcome
-    the clean-return-or-raise produces.
+  Pas de canal de valeur propre : la valeur implicite est le résultat du
+    `import_run("delete_post", ...)` de fin — le `()` de skip sur une image stock, le hook
+    n'est livré nulle part — et l'appelant le discarde. Aucun artefact observable propre (pas de
+    patch `status`, pas d'event, pas de touch de finalizer, pas de suppression de CR) ;
+    l'observabilité, ce sont les objets cluster supprimés par les stages et le résultat
+    exit-0/exit-3 produit par le retour-propre-ou-levée.
 
 Raises:
-  Zero @throw statement in this file: failure is always a propagated engine raise landing in the
-    Rust @process::exit(3) lane.
-  - Stage/hook module throw: @import_run swallows only the absent-module and absent-`run` markers
-    (@log_debug `No ${name} module, skipping.` / `No ${name}::run function, skipping.`, shared
-    skip idiom frozen by ./../service/delete.sdd); anything else re-throws and aborts mid-file,
-    skipping all later lanes — and no `set_status_*` marker exists on any delete stage (Tasks).
-  - @has_tofu_files raise: the tofu gate runs its predicate over an unreadable existing
-    `${package_dir}/tofu` past the module-internal @is_dir guard (rules in ./../lib/tofu_gen.sdd).
-  - Import-time raise: the top-level `import "tofu_gen" as tfg` pulls `tofu` transitively; an
-    unresolvable module in any resolver dir fails the load before @run, packages without `.tf`
-    included (import behavior in Must).
-  - Property-on-`()` raise after the tofu lane: that lane's guard-free `context = import_run(...)`
-    assign lets a shadowed `delete_tofu` without a map-returning `run` leave `context` the `()`
-    or a non-map, so the very next gate `${context.package_dir}/crds` raises in interpolation —
-    a between-lanes error with a misleading origin (Tasks).
+  Zéro @throw dans ce fichier : l'échec est toujours une levée d'engine propagée qui atterrit
+    dans la lane Rust @process::exit(3).
+  - Throw de module stage/hook : @import_run n'avale que les marqueurs module-absent et
+    `run`-absent (@log_debug `No ${name} module, skipping.` / `No ${name}::run function, skipping.`,
+    idiom de skip partagé gelé par ./../service/delete.sdd) ; tout le reste est re-thrown et
+    aborte en cours de fichier, sautant toutes les lanes suivantes — et aucun marqueur
+    `set_status_*` n'existe sur aucun delete stage (Tasks).
+  - Levée @has_tofu_files : le gate tofu évalue son prédicat sur un `${package_dir}/tofu`
+    existant mais illisible, passé la garde @is_dir interne au module (règles dans
+    ./../lib/tofu_gen.sdd).
+  - Levée à l'import : le `import "tofu_gen" as tfg` de top-level tire `tofu` transitivement ; un
+    module non résolvable dans les resolver dirs fait échouer le chargement avant @run, packages
+    sans `.tf` compris (comportement d'import dans Must).
+  - Levée de propriété sur `()` après la lane tofu : l'assign `context = import_run(...)` sans
+    garde de cette lane laisse, pour un `delete_tofu` shadowé dont le `run` ne retourne pas de
+    carte, `context` à `()` ou à une non-carte, si bien que le gate suivant
+    `${context.package_dir}/crds` lève en interpolation — erreur inter-lanes à l'origine
+    trompeuse (Tasks).
 
 Handles:
-  - Category directory absent: the @is_dir gate (`@has_tofu_files` for tofu) skips the whole lane
-    — including teardown of its status-recorded entries (status-versus-dir orphan point, Tasks).
-    A missing lane module does not raise; it takes the @import_run skip path.
-  - Category dir present but nothing installed (`status` `()` — an imported, never-installed CR):
-    `delete_systems`/`delete_crds` guard the set-ness of `instance.status` and their category key
-    and degrade to hook-noop lanes returning the context; the tofu lane carries no status guard —
-    ./delete_tofu.rhai regenerates and destroys over never-installed state, skipping only the
-    tfstate restore when @SystemInstance::get_tfstate reads empty (Tasks).
-  - `delete_pre`/`delete_post` ship nowhere under ./agent/scripts — on a stock image both take the
-    @import_run skip path, return `()` and the @type_of guard sees no map (the hooks exist only as
-    package-side scripts under `{package_dir}/scripts`).
-  - Context threading: @type_of == `map` merge at `delete_pre`, `delete_systems`, `delete_crds`
-    only; `context = import_run("delete_tofu", ...)` is the single guard-free assign; the
-    `delete_post` return is discarded. Gate paths are rebuilt from the CURRENT `context`, skipped
-    lanes are never revisited and a non-map return is dropped unlogged.
+  - Répertoire de catégorie absent : le gate @is_dir (`@has_tofu_files` pour tofu) saute la
+    lane entière — y compris le teardown de ses entrées enregistrées dans le status (point
+    d'orphelin status-versus-dir, Tasks). Un module de lane manquant ne lève pas ; il prend la
+    voie de skip @import_run.
+  - Dir de catégorie présente mais rien d'installé (`status` à `()` — CR importé, jamais
+    installé) : `delete_systems`/`delete_crds` gardent le set-ness de `instance.status` et de
+    leur clé de catégorie et se dégradent en lanes hook-noop qui retournent le contexte ; la
+    lane tofu ne porte aucune garde de status — ./delete_tofu.rhai régénère et détruit sur un
+    état jamais installé, ne sautant que le restore du tfstate quand
+    @SystemInstance::get_tfstate lit vide (Tasks).
+  - `delete_pre`/`delete_post` ne sont livrés nulle part sous ./agent/scripts — sur une image
+    stock, les deux prennent la voie de skip @import_run, retournent `()` et la garde @type_of
+    ne voit pas de carte (les hooks n'existent que comme scripts côté package sous
+    `{package_dir}/scripts`).
+  - Threading du contexte : fusion @type_of == `map` seulement à `delete_pre`, `delete_systems`,
+    `delete_crds` ; `context = import_run("delete_tofu", ...)` est le seul assign sans garde ;
+    le retour de `delete_post` est discardé. Les chemins de gate sont reconstruits depuis le
+    `context` COURANT, les lanes sautées ne sont jamais revisitées et un retour non-carte est
+    jeté sans log.
 
 Must:
-  Run exactly these lanes, once each, in this order: `import_run("delete_pre", instance, context)`
-    with map merge; `is_dir(`${context.package_dir}/systems`)` gate → `delete_systems` with
-    merge; `tfg::has_tofu_files(`${context.package_dir}/tofu`)` gate →
-    `context = import_run("delete_tofu", instance, context)`, the single guard-free assign;
-    `is_dir(`${context.package_dir}/crds`)` gate → `delete_crds` with merge;
-    `import_run("delete_post", instance, context)` with no merge and no read of the result — then
-    return, nothing after the hook. That order is the exact reverse of ./install.rhai's
-    `crds → tofu → systems`: systems first, the whole `crds` group last, tofu the pure mirror.
-  Relay @instance unchanged and unread to every lane: no cluster call and no @get_system_instance
-    refresh exists at this level (install refreshed because its buckets wrote `status`; the delete
-    stages write none), so all five lanes see the one Rust-fetched @SystemInstance.
-  Emit no log at this level: install's three @log_info lines have no delete counterpart; every
-    observable line comes from the stage modules.
-  Load ./../lib/tofu_gen.rhai (transitively ./../lib/tofu.rhai) at import time via the single
-    top-level import — with the @fn it is the module's only import-time surface.
-  Resolve every stage/hook module against the Rust lane's four resolver directories, package
-    `scripts` first — the unguarded tofu assign makes a shadowed `delete_tofu` without a
-    map-returning `run` a hard raise here (Raises).
-  Finish by silence: no `status`/condition/finalizer/CR mutation here or in the shipped stages
-    (zero `set_status` occurrences in this directory's `delete_*.rhai`) — success is the clean
-    return, completion is the controller releasing `systeminstances.vynil.solidite.fr` after the
-    exit-0 Job, failure the raise-to-exit(3) the operator retries with the finalizer held.
+  Lancer exactement ces lanes, une fois chacune, dans cet ordre :
+    `import_run("delete_pre", instance, context)` avec fusion de carte ; gate
+    `is_dir(`${context.package_dir}/systems`)` → `delete_systems` avec fusion ; gate
+    `tfg::has_tofu_files(`${context.package_dir}/tofu`)` →
+    `context = import_run("delete_tofu", instance, context)`, le seul assign sans garde ; gate
+    `is_dir(`${context.package_dir}/crds`)` → `delete_crds` avec fusion ;
+    `import_run("delete_post", instance, context)` sans fusion ni lecture du résultat — puis
+    retour, rien après le hook. Cet ordre est l'inverse exact de `crds → tofu → systems` de
+    ./install.rhai : systems d'abord, tout le groupe `crds` en dernier, tofu en miroir pur.
+  Relayer @instance inchangé et non lu à chaque lane : aucun appel cluster et aucun refresh
+    @get_system_instance n'existe à ce niveau (install refreshait parce que ses buckets
+    écrivaient `status` ; les delete stages n'en écrivent aucun), donc les cinq lanes voient
+    l'unique @SystemInstance récupéré par Rust.
+  N'émettre aucun log à ce niveau : les trois lignes @log_info d'install n'ont pas d'équivalent
+    côté delete ; toute ligne observable vient des stage modules.
+  Charger ./../lib/tofu_gen.rhai (transitivement ./../lib/tofu.rhai) à l'import via l'unique
+    import de top-level — avec le @fn, c'est la seule surface d'import-time du module.
+  Résoudre chaque module stage/hook contre les quatre resolver directories de la lane Rust,
+    `scripts` du package d'abord — l'assign tofu sans garde fait d'un `delete_tofu` shadowé
+    dont le `run` ne retourne pas de carte une levée dure ici (Raises).
+  Finir par le silence : aucune mutation de `status`/condition/finalizer/CR ici ni dans les
+    stages livrés (zéro occurrence `set_status` dans les `delete_*.rhai` de ce répertoire) — le
+    succès est le retour propre, l'achèvement est le contrôleur qui libère
+    `systeminstances.vynil.solidite.fr` après le Job exit-0, l'échec la levée-vers-exit(3) que
+    l'opérateur relance avec le finalizer retenu.
 
 Must not:
-  Delete from, destroy in or wait inside this file: the `status.systems` two-pass get-delete-wait
-    walks, the tfstate restore plus init/destroy and the CRD children-guard all live in the stages
-    — importing ./../lib/wait.rhai or calling @delete then @wait_deleted here would duplicate
-    lane contracts.
-  Gate a rerun skip or a completion on CR state: no read of `status`, conditions or finalizers
-    exists here — replays are total, the skip decisions are the three category-directory
-    predicates only, and the Rust lane deliberately replays both modules over half-deleted
-    instances.
+  Supprimer, détruire ou attendre dans ce fichier : les walks get-delete-wait en deux passes de
+    `status.systems`, le restore du tfstate plus init/destroy et la garde children des CRD
+    vivent tous dans les stages — importer ./../lib/wait.rhai ou appeler @delete puis
+    @wait_deleted ici dupliquerait les contrats de lanes.
+  Garder un skip de rerun ou un achèvement sur l'état du CR : aucune lecture de `status`,
+    conditions ou finalizers n'existe ici — les rejouages sont totaux, les décisions de skip
+    sont les trois seuls prédicats de répertoires de catégorie, et la lane Rust rejoue
+    délibérément les deux modules sur des instances à moitié supprimées.
 
 Depends on:
-  ./../lib/tofu_gen.rhai — the only import; @has_tofu_files answers the `tofu` gate
+  ./../lib/tofu_gen.rhai — seul import ; @has_tofu_files répond au gate `tofu`
     (./../lib/tofu_gen.sdd).
-  The three shipped stage modules of this directory, all unspecified: ./delete_systems.rhai —
-    two-pass teardown ordering the tail list (Service, Deployment, ServiceAccount, ClusterRole,
-    ClusterRoleBinding, Role, RoleBinding, Secret, ConfigMap, PersistentVolume,
-    PersistentVolumeClaim, Namespace) last and everything else first, each pass an
-    api-existence, NotFound-tolerant get-delete walk then a 300 s wait of the deleted objects,
-    wrapped by `delete_systems_pre`/`_post`; ./delete_tofu.rhai — byte-identical to
-    ./../service/delete_tofu.rhai: restore @SystemInstance::get_tfstate, `tfg::gen_files`, the
-    ./../lib/tofu.rhai init+destroy lane; ./delete_crds.rhai — byte-identical to
-    ./../service/delete_crds.rhai: delete recorded CRDs, warn-skip kinds that still list
-    children. Roles quoted only; their contracts are theirs.
-  vynil-core 0.7.7 engine API — the 3-arg @import_run global shim injected by @Script @add_common
-    (the skip-vs-rethrow boundary quoted in Raises), @is_dir, @type_of; mounted by the
-    constructor of /common/src/rhaihandler.sdd.
-  ./context.rhai (./context.sdd) + ./../lib/build_context.rhai — producer of every `context` key;
-    key contract owned by ./../lib/build_context.sdd, kind slot ./context_system.rhai
-    (./context_system.sdd).
+  Les trois stage modules livrés de ce répertoire, tous non spécifiés : ./delete_systems.rhai —
+    teardown en deux passes ordonnant la liste de queue (Service, Deployment, ServiceAccount,
+    ClusterRole, ClusterRoleBinding, Role, RoleBinding, Secret, ConfigMap, PersistentVolume,
+    PersistentVolumeClaim, Namespace) en dernier et tout le reste d'abord, chaque passe un walk
+    get-delete tolérant l'api-existence et NotFound puis une attente de 300 s des objets
+    supprimés, enserré par `delete_systems_pre`/`_post` ; ./delete_tofu.rhai — identique octet
+    pour octet à ./../service/delete_tofu.rhai : restore @SystemInstance::get_tfstate,
+    `tfg::gen_files`, la lane init+destroy de ./../lib/tofu.rhai ; ./delete_crds.rhai — identique
+    octet pour octet à ./../service/delete_crds.rhai : supprime les CRD enregistrés, skip avec
+    warn les kinds qui listent encore des children. Rôles seulement cités ; leurs contrats leur
+    appartiennent.
+  API d'engine vynil-core 0.7.7 — le shim global @import_run à 3 args injecté par
+    @Script @add_common (la frontière skip-vs-rethrow citée dans Raises), @is_dir, @type_of ;
+    monté par le constructeur de /common/src/rhaihandler.sdd.
+  ./context.rhai (./context.sdd) + ./../lib/build_context.rhai — producteur de chaque clé de
+    `context` ; contrat de clés détenu par ./../lib/build_context.sdd, slot de kind
+    ./context_system.rhai (./context_system.sdd).
 
 References:
-  /agent/src/system/delete.sdd — the caller: snippet, `instance`/`args` injection, resolver dirs,
-    the already-gone-CR hard failure landing before this module runs, and the exit-3 error lane
-    all raises here land in.
-  ./../service/delete.sdd — calibration sibling freezing the shared hook/merge idiom, the
-    skip-marker quotes and the unguarded-tofu open point.
-  ./../tenant/delete.rhai (./../tenant/delete.sdd) — service minus `crds`; the three delete lanes
-    share the skeleton and differ in bucket sets only.
-  /operator/src/instance_common.sdd — the other half of finalization: @run_with_finalizer removes
-    the kind finalizer only after the delete Job answers clean; a raise here holds it.
-  ./install.rhai (./install.sdd) — the install twin whose bucket order this file mirrors exactly.
-  ./../lib/wait.sdd — owner of the @wait_deleted posture the stages reuse untouched here.
-  /agent/tests/rhai_lifecycle.rs — harness with zero system-lane cases (Tasks).
+  /agent/src/system/delete.sdd — l'appelant : snippet, injection de `instance`/`args`, resolver
+    dirs, le hard failure CR-déjà-partie qui tombe avant l'exécution de ce module, et la lane
+    d'erreur exit-3 où atterrissent toutes les levées d'ici.
+  ./../service/delete.sdd — frangin d'étalonnage qui gèle l'idiom hook/fusion partagé, les
+    citations des marqueurs de skip et le point ouvert du tofu sans garde.
+  ./../tenant/delete.rhai (./../tenant/delete.sdd) — service sans `crds` ; les trois delete
+    lanes partagent le squelette et ne diffèrent que par les ensembles de buckets.
+  /operator/src/instance_common.sdd — l'autre moitié de la finalisation : @run_with_finalizer
+    retire le finalizer du kind seulement après que le delete Job répond proprement ; une levée
+    d'ici le retient.
+  ./install.rhai (./install.sdd) — le jumeau d'install dont l'ordre de buckets est exactement
+    miroité par ce fichier.
+  ./../lib/wait.sdd — détenteur de la posture @wait_deleted que les stages réutilisent sans y
+    toucher ici.
+  /agent/tests/rhai_lifecycle.rs — harness sans aucun cas de lane system (Tasks).
 
 Scenario: full three-category order with directories present
-  Given a package dir holding `systems`, `crds` and user `.tf` sources, on a live engine with the
-    three shipped stages resolvable
-  When @run executes
-  Then the modules are imported in exactly pre → systems → tofu → crds → post order, the two
-    is_dir buckets merging only a map return and tofu assigning its return unguarded
-  And @instance is passed through unchanged — no refresh here, every stage reads the pre-script
-    @SystemInstance snapshot
-  No mapped test: the harness carries no system delete case.
+  Given un répertoire de package contenant `systems`, `crds` et des sources `.tf` utilisateur,
+    sur un engine live où les trois stages livrés sont résolvables
+  When @run s'exécute
+  Then les modules sont importés dans l'ordre exactement pre → systems → tofu → crds → post, les
+    deux buckets is_dir ne fusionnant qu'un retour de carte et tofu assignant son retour sans
+    garde
+  And @instance est passé tel quel — pas de refresh ici, chaque stage lit le snapshot
+    @SystemInstance d'avant-script
+  Aucun test mappé : le harness ne porte aucun cas de delete system.
 
 Scenario: stock image and empty package skip clean
-  Given a stock image (the `delete_pre`/`delete_post` pair ships nowhere) on a package dir with
-    no `systems`, no `crds` and no user `.tf` file
-  When @run executes
-  Then both hooks and all three gates take the @import_run/@is_dir/@has_tofu_files skip paths
-    with debug logs only, and @run returns the hook-skip value error-free
-  No mapped test.
+  Given une image stock (la paire `delete_pre`/`delete_post` n'est livrée nulle part) sur un
+    répertoire de package sans `systems`, sans `crds` et sans fichier `.tf` utilisateur
+  When @run s'exécute
+  Then les deux hooks et les trois gates prennent les voies de skip
+    @import_run/@is_dir/@has_tofu_files avec uniquement des debug logs, et @run retourne la
+    valeur de hook-skip sans erreur
+  Aucun test mappé.
 
 Scenario: never-installed instance runs lanes without deleting
-  Given a package whose `systems` and `crds` dirs are present but a CR whose `status` is empty
-    (imported, never installed)
-  When @run reaches a taken gate and its stage module runs
-  Then the systems/crds set-ness guards short-circuit their delete loops — hooks-only no-op
-    lanes, context returned, nothing deleted, no raise
-  But the tofu lane still resolves — it carries no status guard — skipping only the tfstate
-    restore because the state reads empty (Tasks)
-  No mapped test.
+  Given un package dont les dirs `systems` et `crds` sont présents mais un CR dont le `status`
+    est vide (importé, jamais installé)
+  When @run atteint un gate emprunté et que son stage module s'exécute
+  Then les gardes de set-ness systems/crds court-circuitent leurs boucles de suppression — lanes
+    no-op de hooks seulement, contexte retourné, rien de supprimé, pas de levée
+  But la lane tofu se résout quand même — elle ne porte aucune garde de status — ne sautant que
+    le restore du tfstate parce que l'état se lit vide (Tasks)
+  Aucun test mappé.
 
 Scenario: tofu context clobber kills the next gate
-  Given a package shadowing `delete_tofu` with a module whose `run` is missing or returns a
-    non-map, and a true tofu gate
-  When @run reaches the tofu exit
-  Then `context` becomes `()` (or the non-map) — the assignment carries no @type_of guard — and
-    the `${context.package_dir}/crds` gate interpolation raises, aborting the delete with an
-    error originating between lanes, not inside any stage
-  The shipped ./delete_tofu.rhai always returns the context map; recorded behavior, see Tasks,
-    no mapped test.
+  Given un package qui shadowe `delete_tofu` avec un module dont le `run` est absent ou retourne
+    une non-carte, et un gate tofu vrai
+  When @run atteint la sortie de tofu
+  Then `context` devient `()` (ou la non-carte) — l'assignation ne porte aucune garde
+    @type_of — et l'interpolation du gate `${context.package_dir}/crds` lève, abortant la delete
+    sur une erreur d'origine inter-lanes, pas dans un stage
+  Le ./delete_tofu.rhai livré retourne toujours la carte context ; comportement consigné, voir
+    Tasks, aucun test mappé.
 
 Scenario: stage throw aborts with no delete-side marker
-  Given a stage that fails — a @wait_deleted timeout in ./delete_systems.rhai, a destroy raise
-    from ./delete_tofu.rhai, or any non-skip error re-thrown by a stage
-  When the throw crosses @import_run
-  Then it is not one of the two skip markers, so it re-throws: no later category, no
-    `delete_post`, and no `set_status_*` failure write exists anywhere on this lane to record it
-    — the Rust lane fails to @process::exit(3) and the controller keeps the
-    `systeminstances.vynil.solidite.fr` finalizer for a retried Job
-  No mapped test.
+  Given un stage qui échoue — un timeout @wait_deleted dans ./delete_systems.rhai, une levée de
+    destroy depuis ./delete_tofu.rhai, ou toute erreur non-skip re-thrown par un stage
+  When la levée traverse @import_run
+  Then ce n'est pas l'un des deux marqueurs de skip, donc elle est re-thrown : pas de catégorie
+    suivante, pas de `delete_post`, et aucune écriture d'échec `set_status_*` n'existe nulle
+    part sur cette lane pour la consigner — la lane Rust échoue en @process::exit(3) et le
+    contrôleur garde le finalizer `systeminstances.vynil.solidite.fr` pour un Job relancé
+  Aucun test mappé.
 
 Tasks:
-  [ ] Map the Scenarios to /agent/tests/rhai_lifecycle.rs: no system-lane test exists (its
-      resolver dirs ship `scripts/service` and `scripts/lib` only); add a `scripts/system` entry,
-      a fixture package with `systems`/`crds`/`.tf` and mock stage modules to pin the five-call
-      order, the three gate predicates, the merge posture and the throw-abort on the mock engine.
-  [ ] Author the three pending stage specs quoted under `Depends on`; their quoted roles
-      (two-pass kind ordering, 300 s waits, tfstate restore, children-guard skip) must be verified
-      there, not restated.
-  [?] Bucket skipping is directory-based, status-blind: `status.systems`/`status.crds` entries
-      whose directory is absent at delete time are never deleted, yet the run returns clean and
-      the controller releases the finalizer — recorded resources orphan silently. Decide whether
-      a non-empty status bucket must force its lane regardless of the directory.
-  [?] Unguarded tofu return (Scenario "tofu context clobber"): a package-shaped `delete_tofu`
-      turns the whole delete into a property-on-`()` raise at the `crds` gate with a misleading
-      origin. ./../service/delete.sdd holds the identical open point on the same line; decide one
-      guarded pattern for both kinds' lanes together.
-  [?] The tofu lane runs with no status guard: an imported-but-never-installed instance with user
-      `.tf` sources still gets gen_files + init + destroy (only the tfstate restore is
-      state-conditional). Confirm destroying empty state is intended, or gate the lane on a
-      stored `status.tfstate`.
-  [?] `delete_post` return is discarded while `delete_pre` merges — nothing runs after the post
-      hook, so that merge feeds no consumer; the service twin carries the same asymmetry. Decide
-      whether the hook pair should share one merge posture.
-  [?] A stage raise leaves the delete lane with no CR-visible trace (no failure condition, no
-      event): only the held finalizer and the Job's exit 3 drive the retry while `status` keeps
-      telling the install-time story. Confirm the markerless delete posture is intended.
+  [ ] Mapper les Scenarios vers /agent/tests/rhai_lifecycle.rs : aucun test de lane system
+      n'existe (ses resolver dirs ne livrent que `scripts/service` et `scripts/lib`) ; ajouter
+      une entrée `scripts/system`, un package fixture avec `systems`/`crds`/`.tf` et des stage
+      modules mock pour épingler l'ordre des cinq appels, les trois prédicats de gate, la
+      posture de fusion et l'abort-sur-levée sur le mock engine.
+  [ ] Rédiger les trois specs de stages en attente citées sous `Depends on` ; leurs rôles cités
+      (ordonnancement de kinds en deux passes, waits de 300 s, restore du tfstate, skip de la
+      garde children) doivent être vérifiés là-bas, pas redits.
+  [?] Le skip de bucket est fondé sur les répertoires, aveugle au status : les entrées
+      `status.systems`/`status.crds` dont le répertoire est absent au moment du delete ne sont
+      jamais supprimées, pourtant le run revient propre et le contrôleur libère le finalizer —
+      les ressources enregistrées restent orphelines en silence. Décider si un bucket de status
+      non vide doit imposer sa lane quel que soit le répertoire.
+  [?] Retour tofu sans garde (Scenario "tofu context clobber") : un `delete_tofu` de forme
+      package change toute la delete en levée de propriété sur `()` au gate `crds` avec une
+      origine trompeuse. ./../service/delete.sdd tient le point ouvert identique sur la même
+      ligne ; décider d'un motif gardé unique pour les lanes des deux kinds ensemble.
+  [?] La lane tofu tourne sans garde de status : une instance importée-mais-jamais-installée
+      avec des sources `.tf` utilisateur reçoit quand même gen_files + init + destroy (seul le
+      restore du tfstate est conditionné par l'état). Confirmer que détruire un état vide est
+      voulu, ou gated la lane sur un `status.tfstate` stocké.
+  [?] Le retour de `delete_post` est discardé alors que `delete_pre` fusionne — rien ne
+      s'exécute après le hook post, donc cette fusion ne nourrit aucun consommateur ; le jumeau
+      service porte la même asymétrie. Décider si la paire de hooks doit partager une seule
+      posture de fusion.
+  [?] Une levée de stage laisse la lane de delete sans trace visible sur le CR (pas de
+      condition d'échec, pas d'event) : seuls le finalizer retenu et le exit 3 du Job pilotent
+      le retry pendant que `status` continue de raconter l'histoire de l'install. Confirmer que
+      la posture de delete sans marqueur est voulue.
 
 Done when:
-  Every Scenario carries a passing mapped test or a recorded decision, the five-call order and
-    gate texts above still match the source, the three stage specs exist, and `specdd lint` is
-    green on this file.
+  Chaque Scenario porte un test mappé vert ou une décision consignée, l'ordre des cinq appels et
+    les textes de gates ci-dessus collent toujours à la source, les trois specs de stages
+    existent, et `specdd lint` est vert sur ce fichier.

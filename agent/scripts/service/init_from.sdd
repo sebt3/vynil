@@ -1,229 +1,254 @@
 Spec: ServiceInitFromScript
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Seed a `ServiceInstance`'s freshly created vitals from an existing restic backup during the
-    very first install: render the packaged `init_job.yaml` template into a per-instance init
-    Job (a restore Pod running `agent service restore` inside the instance namespace, plus its
-    ServiceAccount, RoleBinding and optional scripts ConfigMap), apply the documents, and block
-    until the Job finishes — all inside the `init_from::run(instance, context)` call made by
-    ./install.rhai's first-install gate (`status.vitals` set + `status.tag` unset +
-    `spec.initFrom` set). The file itself touches no restic and reads none of the three routing
-    fields (source path, snapshot, Secret): @bctx::run(instance, context, `true`) copies them
-    verbatim into the rendered pod env (`RESTIC_SNAPSHOT`, `SUB_PATH`, `envs_from` Secret), and
-    the resolved restore semantics — latest-vs-id snapshot use, engine re-seeds, maintenance
-    pair — live in the dispatched Pod's ./restore.sdd lane, not here. Byte-identical twin of
-    ./../tenant/init_from.rhai; unlike ./backup.sdd and ./restore.sdd (Pod-side, CR-blind,
-    exit-4/5 throw-only), this is the CR-side stage: it owns @set_status_init_failed and
-    re-throws into the install lane's exit-1.
+  Amorce les vitals fraîchement créés d'une `ServiceInstance` depuis un backup restic existant
+    lors de la toute première install : rendre le template packagé `init_job.yaml` en un Job
+    d'init par instance (un Pod de restore exécutant `agent service restore` dans le namespace
+    de l'instance, plus son ServiceAccount, son RoleBinding et le ConfigMap optionnel de
+    scripts), appliquer les documents, et bloquer jusqu'à la fin du Job — le tout dans l'appel
+    `init_from::run(instance, context)` fait par le gate de première install de ./install.rhai
+    (`status.vitals` posée + `status.tag` non posée + `spec.initFrom` posée). Le fichier
+    lui-même ne touche aucun restic et ne lit aucun des trois champs de routage (chemin source,
+    snapshot, Secret) : @bctx::run(instance, context, `true`) les recopie verbatim dans l'env du
+    pod rendu (`RESTIC_SNAPSHOT`, `SUB_PATH`, Secret `envs_from`), et la sémantique résolue du
+    restore — usage du snapshot latest-vs-id, re-seeds du moteur, paire de maintenance — vit
+    dans la lane ./restore.sdd du Pod dispatché, pas ici. Jumeau byte-identique de
+    ./../tenant/init_from.rhai ; contrairement à ./backup.sdd et ./restore.sdd (côté Pod,
+    CR-blind, throw-only exit-4/5), c'est ici le stage côté CR : il possède
+    @set_status_init_failed et relance la levée dans l'exit-1 de la lane install.
 
 Exposes:
-  @run(@instance, @context) — the module's sole @fn and entry point (`init_from.rhai` + `run`
-    match the entry-point patterns of /agent/src/linting/rhai_checker.sdd); reached ONLY through
-    @import_run("init_from", instance, context) from ./install.rhai — no Rust lane names the
-    module, and the caller discards the return value whole (./install.sdd). A package
-    `scripts/init_from.rhai` shadowing the name replaces this whole lane on that install.
+  @run(@instance, @context) — le seul @fn du module et son point d'entrée (`init_from.rhai` +
+    `run` matchent les patterns de point d'entrée de /agent/src/linting/rhai_checker.sdd) ;
+    atteint UNIQUEMENT via @import_run("init_from", instance, context) depuis ./install.rhai —
+    aucune lane Rust ne nomme le module, et l'appelant jette la valeur de retour entière
+    (./install.sdd). Un `scripts/init_from.rhai` de package qui shadowe le nom remplace toute
+    cette lane sur cette install.
 
 Accepts:
-  @instance — the injected @ServiceInstance @Dynamic. Direct reads in this file:
-    `.metadata.namespace` (Job probe and the apply-namespace argument) and the
-    @set_status_init_failed method on failure. Everything else flows through collaborators on
-    the same object: @bctx::run requires `.status.vitals` (array, unguarded), `.status.scalables`
-    (guarded) and — via @use_init_from `true` — `spec.initFrom.secretName` / `.subPath` /
-    `.snapshot` each `!= ()`-nullable; `initFrom.version` is read by nobody on this path.
-  @context — the install-lane map (same object ./install.rhai threads to every bucket). Direct
-    reads: `template_dir` (unguarded property-on-`()` if non-map — the Rust lane always injects
-    it via ./context.rhai) and `package_dir` (the `${context.package_dir}/pods` gate). The whole
-    map is also @bctx::run's data source and the Handlebars render data, so the shipped template
-    reads `instance.appslug`, `instance.namespace`, `instance["package"].type`,
+  @instance — le @Dynamic @ServiceInstance injecté. Lectures directes dans ce fichier :
+    `.metadata.namespace` (sonde du Job et argument namespace d'apply) et la méthode
+    @set_status_init_failed en cas d'échec. Tout le reste transite par les collaborateurs sur
+    le même objet : @bctx::run exige `.status.vitals` (tableau, non gardé), `.status.scalables`
+    (gardé) et — via @use_init_from `true` — `spec.initFrom.secretName` / `.subPath` /
+    `.snapshot`, chacun nullable (`!= ()`) ; `initFrom.version` n'est lu par personne sur ce
+    chemin.
+  @context — la carte de la lane install (même objet que ./install.rhai file à chaque bucket).
+    Lectures directes : `template_dir` (property-sur-`()` non gardée si non-map — la lane Rust
+    l'injecte toujours via ./context.rhai) et `package_dir` (le gate
+    `${context.package_dir}/pods`). La carte entière est aussi la source de données de
+    @bctx::run et les données de rendu Handlebars, donc le template packagé y lit
+    `instance.appslug`, `instance.namespace`, `instance["package"].type`,
     `cluster.vynil_namespace`, `agent_image`, `volumes`/`mounts`/`envs`/`envs_from`/`files`/
-    `has_files`/`service_account` from it — that key contract is owned by
-    ./../lib/build_context.sdd + ./context_service.rhai (pending) and ./../lib/backup_context.sdd
-    respectively. Note the map's `instance` key (built view) is NOT the injected CR: templates
-    read the key, @bctx::run's CR scans read the argument.
-  Hooks — three optional @import_run module names: `init_from_pre`, `init_from_prepare`,
-    `init_from_post`, each called with the same (instance, context) pair. None ships in any
-    engine directory (./, ./../tenant, ./../lib) — package `scripts/` slots only.
+    `has_files`/`service_account` — ce contrat de clés est possédé par
+    ./../lib/build_context.sdd + ./context_service.rhai (pending) et ./../lib/backup_context.sdd
+    respectivement. Noter que la clé `instance` de la carte (vue construite) N'EST PAS le CR
+    injecté : les templates lisent la clé, les scans CR de @bctx::run lisent l'argument.
+  Hooks — trois noms de modules @import_run optionnels : `init_from_pre`, `init_from_prepare`,
+    `init_from_post`, chacun appelé avec la même paire (instance, context). Aucun n'est fourni
+    dans un répertoire du moteur (./, ./../tenant, ./../lib) — emplacements réservés aux
+    `scripts/` de package uniquement.
 
 Returns:
-  The `context` map exactly as held after the try/catch, plus an `init_from_post` merge on a map
-    return — a value ./install.rhai discards; the lane communicates only by side effects. The
-    observable outcomes: the rendered documents applied through @dir::install_obj (shipped
-    template yields ServiceAccount `{appslug}-backup`, RoleBinding `{appslug}-backup`, Job
-    `{appslug}-init-restore` and — only when `has_files` — ConfigMap `{appslug}-backups-scripts`,
-    all without their own `metadata.namespace` so all in `instance.metadata.namespace`), the
-    full-filesystem restore landing inside the awaited Pod, and the `InitFrom` failure
-    condition on error.
+  La carte `context` exactement telle que tenue après le try/catch, plus une fusion
+    `init_from_post` sur un retour de type map — une valeur que ./install.rhai jette ; la lane
+    ne communique que par effets de bord. Les résultats observables : les documents rendus
+    appliqués via @dir::install_obj (le template packagé produit le ServiceAccount
+    `{appslug}-backup`, le RoleBinding `{appslug}-backup`, le Job `{appslug}-init-restore`
+    et — seulement quand `has_files` — le ConfigMap `{appslug}-backups-scripts`, aucun avec son
+    propre `metadata.namespace` donc tous dans `instance.metadata.namespace`), le restore
+    système de fichiers complet qui atterrit dans le Pod attendu, et la condition d'échec
+    `InitFrom` en cas d'erreur.
 
 Raises:
-  Zero error-fabricating @throw statement: the file's one throw is the bare `throw;` re-throw
-    after the failure marker. @import_run swallows only the two skip markers
-    (`No ${name} module, skipping.` and `No ${name}::run function, skipping.`), and only
-    those — everything else propagates.
-  Inside the @try (marker path): a raw raise from @bctx::run (dead/absent `status.vitals`,
-    missing `instance` context key, the Cluster-branch Secrets @list_meta read — see its spec's
-    Raises), from either @register_partial_dir call on a broken template, from
-    @render_from and @yaml_decode_multi, the engine error of a non-map document reaching
-    @dir::install_obj's `kind` dot, its `kind: ${obj.kind} is unknown from the apiServer.`
-    throw, or a @wait::all timeout — becomes @set_status_init_failed(reason) (verbatim string;
-    non-string through @json_encode) then `throw;`: the install lane continues to no later
-    bucket and exits 1 (./install.sdd), with the condition `InitFrom`/`Warning` `InitFromFail`
-    written (/common/src/instance_macros.sdd).
-  Outside the @try: @set_status_init_failed's own KubeError replaces the original error; a
-    raise inside the `init_from_pre` hook kills the lane with no marker at all; a raise inside
-    the `init_from_post` hook (the only statement after the try) likewise leaves no marker even
-    though apply+wait already succeeded (Tasks).
-  The Job-probe inner @try/@catch warn-and-continue: any @k8s_resource, @exist or @list error is
-    @log_warn'd (string verbatim, else @json_encode text) and the Job then rides the
-    no-dedup apply path; @json_encode of an unserializable payload would re-raise out of that
-    catch into the marker path (same open point as ./../lib/backup_context.sdd).
+  Zéro instruction @throw fabriquant d'erreur : le seul throw du fichier est le re-throw nu
+    `throw;` après le marqueur d'échec. @import_run n'avale que les deux marqueurs de skip
+    (`No ${name} module, skipping.` et `No ${name}::run function, skipping.`), et rien
+    d'autre — tout le reste se propage.
+  Dans le @try (chemin du marqueur) : une levée brute de @bctx::run (`status.vitals` morte/
+    absente, clé `instance` manquante dans le context, la lecture @list_meta des Secrets de la
+    branche Cluster — voir la section Raises de sa spec), de l'un ou l'autre appel
+    @register_partial_dir sur un template cassé, de @render_from et @yaml_decode_multi,
+    l'erreur moteur d'un document non-map atteignant le point `kind` de @dir::install_obj, son
+    throw `kind: ${obj.kind} is unknown from the apiServer.`, ou un timeout de @wait::all —
+    devient @set_status_init_failed(reason) (chaîne verbatim ; non-chaîne via @json_encode)
+    puis `throw;` : la lane install ne continue vers aucun bucket ultérieur et sort en 1
+    (./install.sdd), avec la condition `InitFrom`/`Warning` `InitFromFail` écrite
+    (/common/src/instance_macros.sdd).
+  Hors du @try : le KubeError propre de @set_status_init_failed remplace l'erreur d'origine ;
+    une levée dans le hook `init_from_pre` tue la lane sans aucun marqueur ; une levée dans le
+    hook `init_from_post` (la seule instruction après le try) ne laisse pas plus de marqueur
+    alors que apply+wait ont déjà réussi (Tasks).
+  Le @try/@catch interne de la sonde du Job est un warn-and-continue : toute erreur de
+    @k8s_resource, @exist ou @list est @log_warn'ée (chaîne verbatim, sinon texte @json_encode)
+    et le Job emprunte alors le chemin d'apply sans dédup ; un @json_encode d'une charge non
+    sérialisable relèverait hors de ce catch vers le chemin du marqueur (même point ouvert que
+    ./../lib/backup_context.sdd).
 
 Handles:
-  Stock image: all three hook names take the debug-log @import_run skip, the @type_of guard
-    sees no map, and the lane runs on the unchanged `context`. A hook returning a non-map
-    leaves the previous `context` in force (same merge discipline as ./install.sdd's buckets).
-  Idempotent-Job gate: a rendered document whose `kind` is `"Job"` is applied only when no Job
-    of that name currently exists in `instance.metadata.namespace` — probe
-    `k8s_resource("Job", ns).@exist()` (true once the built-in kind resolved at construction,
-    practically always; false silently skips the dedup), then `@list().items` filtered on
-    `metadata.name`. A skipped Job is applied nowhere, waited on nowhere, and never logged.
-  Documents of every other kind ride no probe: @dir::install_obj always re-applies them.
-  Partial precedence: `template_dir` ships first, then `${package_dir}/pods` (only under
-    @is_dir) registers second, so a package `pods/restore.yaml.hbs` / `pods/init_job.yaml.hbs`
-    silently overwrites the shipped same-name partial.
-  Failure text shape: the marker reason is the caught engine error's own text — no wrapper,
-    no file/line prefix added at this level.
+  Image stock : les trois noms de hooks prennent tous le skip avec log debug de @import_run, la
+    garde @type_of ne voit aucune map, et la lane tourne sur le `context` inchangé. Un hook
+    retournant une non-map laisse le `context` précédent en vigueur (même discipline de fusion
+    que les buckets de ./install.sdd).
+  Gate Idempotent-Job : un document rendu dont le `kind` est `"Job"` n'est appliqué que quand
+    aucun Job de ce nom n'existe actuellement dans `instance.metadata.namespace` — sonde
+    `k8s_resource("Job", ns).@exist()` (vrai une fois le kind builtin résolu à la construction,
+    pratiquement toujours ; faux saute silencieusement la dédup), puis `@list().items` filtré
+    sur `metadata.name`. Un Job sauté n'est appliqué nulle part, attendu nulle part, et jamais
+    loggé.
+  Les documents de tout autre kind n'ont aucune sonde : @dir::install_obj les réapplique
+    toujours.
+  Précédence des partiels : `template_dir` est enregistré d'abord, puis `${package_dir}/pods`
+    (seulement sous @is_dir) en second, donc un `pods/restore.yaml.hbs` /
+    `pods/init_job.yaml.hbs` de package écrase silencieusement le partiel packagé de même nom.
+  Forme du texte d'échec : la raison du marqueur est le texte propre de l'erreur moteur
+    attrapée — aucun wrapper, aucun préfixe fichier/ligne ajouté à ce niveau.
 
 Must:
-  Execute exactly: @import_run("init_from_pre") → map-merge guard → @try { @import_run
-    ("init_from_prepare") + map-merge → @new_hbs + @register_partial_dir(`context.template_dir`)
-    → conditional @register_partial_dir(`${context.package_dir}/pods`) → @yaml_decode_multi of
-    @render_from(`"{{> init_job.yaml }}"`, @bctx::run(instance, context, `true`)) → per-document
-    Job dedup gate → @dir::install_obj(obj, true, instance.metadata.namespace, false) for
-    every applied document → @wait::all(applied_objs, `20*60`) } → on raise:
-    @set_status_init_failed + `throw;` → @import_run("init_from_post") + map-merge → return
-    `context`; nothing else, in no other order.
-  Call @bctx::run with @use_init_from `true` — the ONLY site in the service tree that appends
-    env `RESTIC_SNAPSHOT` (= `instance.spec.initFrom.snapshot`, possibly `()`-valued per
-    ./../lib/backup_context.sdd) and the site that swaps `envs_from` to `initFrom.secretName`
-    (default `backup-settings`), redirects `SUB_PATH` to `initFrom.subPath` (default
-    `${namespace}/${appslug}` — so by default the instance restores its own backup path, and a
-    different source instance is addressed purely through `subPath`), and withholds the
-    per-Secret `/secrets/` mounts (secret values ride the initFrom Secret instead): this file
-    passes all three fields through untouched.
-  Keep the apply posture of `./../lib/install_from_dir.sdd`: single-object @install_obj per
-    document in decoded-document order, `allow_cluster` `true` (no shipped init document is
-    cluster-scoped; the flag is inert today), `force_ns` `false` (documents carry no
-    `metadata.namespace`, so one namespace applies: `instance.metadata.namespace`), and NO
-    bucket-ordering pass — the rendered stream needs no first/middle/last ordering.
-  Await every applied object once, after the whole loop, through one @wait::all(applied_objs,
-    `20*60`) call: ConfigMap/ServiceAccount/RoleBinding hit no lane's kind filter, the init Job
-    gets `wait_done` 1200 s (contract in ./../lib/wait.sdd) — the whole restore must fit that
-    budget or the lane fails via Raises.
-  Write the failure marker with the two switched arms as written (string reason verbatim /
-    other error `json_encode`d) and re-throw: success is never marked here — no
-    `set_status_*` success call, condition or tag; the install close in ./install.sdd stamps
-    `Ready`/`tag` later.
-  Emit no @log_info, @log_debug or @log_error line at this level: the only logs are the two
-    @log_warn shapes of the Job-probe catch (plus anything the imported collaborators log).
-  Keep the import-time surface at the three top-level imports — `"backup_context"` as `bctx`,
-    `"install_from_dir"` as `dir`, `"wait"` as `wait`, all side-effect-free per their specs —
-    so module load touches no env, filesystem or cluster; a resolver miss is an eval error in
-    the install lane before @run starts.
-  Resolve every hook name against the four resolver directories frozen by the install Rust lane
-    ({package_dir}/scripts first), so packages can ship the three hooks or shadow the whole lane.
+  Exécuter exactement : @import_run("init_from_pre") → garde de fusion map → @try {
+    @import_run("init_from_prepare") + fusion map → @new_hbs +
+    @register_partial_dir(`context.template_dir`) → @register_partial_dir
+    (`${context.package_dir}/pods`) conditionnel → @yaml_decode_multi de
+    @render_from(`"{{> init_job.yaml }}"`, @bctx::run(instance, context, `true`)) → gate de
+    dédup Job par document → @dir::install_obj(obj, true, instance.metadata.namespace, false)
+    pour chaque document appliqué → @wait::all(applied_objs, `20*60`) } → sur levée :
+    @set_status_init_failed + `throw;` → @import_run("init_from_post") + fusion map → retour
+    de `context` ; rien d'autre, dans aucun autre ordre.
+  Appeler @bctx::run avec @use_init_from `true` — le SEUL site de l'arbre service qui ajoute
+    l'env `RESTIC_SNAPSHOT` (= `instance.spec.initFrom.snapshot`, possiblement de valeur `()`
+    selon ./../lib/backup_context.sdd) et le site qui permute `envs_from` vers
+    `initFrom.secretName` (défaut `backup-settings`), redirige `SUB_PATH` vers
+    `initFrom.subPath` (défaut `${namespace}/${appslug}` — donc par défaut l'instance restaure
+    son propre chemin de backup, et une instance source différente s'adresse purement via
+    `subPath`), et retient les mounts `/secrets/` par Secret (les valeurs des secrets
+    chevauchent le Secret initFrom à la place) : ce fichier passe les trois champs sans y
+    toucher.
+  Garder la posture d'apply de `./../lib/install_from_dir.sdd` : un @install_obj mono-objet par
+    document dans l'ordre des documents décodés, `allow_cluster` `true` (aucun document d'init
+    packagé n'est cluster-scoped ; le flag est inerte aujourd'hui), `force_ns` `false` (les
+    documents ne portent pas de `metadata.namespace`, donc un seul namespace s'applique :
+    `instance.metadata.namespace`), et AUCUN pass de tri de buckets — le flux rendu n'a besoin
+    d'aucun ordre premier/milieu/dernier.
+  Attendre chaque objet appliqué une fois, après toute la boucle, via un seul appel
+    @wait::all(applied_objs, `20*60`) : ConfigMap/ServiceAccount/RoleBinding ne touchent le
+    filtre de kind d'aucune lane, le Job d'init reçoit `wait_done` 1200 s (contrat dans
+    ./../lib/wait.sdd) — le restore entier doit tenir dans ce budget sinon la lane échoue via
+    Raises.
+  Écrire le marqueur d'échec avec les deux bras switchés tels qu'écrits (raison chaîne
+    verbatim / autre erreur `json_encode`ée) et relancer : le succès n'est jamais marqué ici —
+    aucun appel de succès `set_status_*`, condition ni tag ; la clôture d'install de
+    ./install.sdd pose `Ready`/`tag` plus tard.
+  N'émettre aucune ligne @log_info, @log_debug ou @log_error à ce niveau : les seuls logs sont
+    les deux formes de @log_warn du catch de la sonde du Job (plus ce que loggent les
+    collaborateurs importés).
+  Garder la surface d'import au chargement limitée aux trois imports de premier niveau —
+    `"backup_context"` comme `bctx`, `"install_from_dir"` comme `dir`, `"wait"` comme `wait`,
+    tous sans effet de bord selon leurs specs — donc le chargement du module ne touche aucun
+    env, système de fichiers ni cluster ; un raté de résolveur est une erreur d'éval dans la
+    lane install avant le démarrage de @run.
+  Résoudre chaque nom de hook contre les quatre répertoires de résolution gelés par la lane
+    Rust d'install ({package_dir}/scripts en premier), pour que les packages puissent fournir
+    les trois hooks ou shadower toute la lane.
 
 Must not:
-  Open or close a maintenance/scale window: no `maintenance_start`/`maintenance_stop`
-    @import_run here (unlike ./backup.rhai and ./restore.sdd) — during the first install the
-    scalables are not applied yet, and any workload quiescing is the restore Pod's own pair (a
-    no-op TODO pair regardless, ./maintenance_start.rhai +
-    ./maintenance_stop.rhai, specs pending).
-  Read `spec.initFrom` (or `.status.vitals`) directly — the three routing fields reach the pod
-    spec only via @bctx::run, so a second reader would fork the source-selection contract that
-    ./../lib/backup_context.sdd owns.
-  Wait on, re-apply or mark anything for the deduped existing Job — `to_apply` `false` means
-    the object leaves no trace (Tasks records the decision open).
+  Ouvrir ou fermer une fenêtre de maintenance/scale : aucun @import_run
+    `maintenance_start`/`maintenance_stop` ici (contrairement à ./backup.rhai et
+    ./restore.sdd) — pendant la première install les scalables ne sont pas encore appliqués,
+    et toute mise au repos des workloads est la paire propre du Pod de restore (une paire TODO
+    no-op de toute façon, ./maintenance_start.rhai + ./maintenance_stop.rhai, specs pending).
+  Lire `spec.initFrom` (ou `.status.vitals`) directement — les trois champs de routage
+    n'atteignent le spec du pod que via @bctx::run, donc un second lecteur forkerait le contrat
+    de sélection de source que ./../lib/backup_context.sdd possède.
+  Attendre, réappliquer ou marquer quoi que ce soit pour le Job existant dédupé — `to_apply`
+    `false` signifie que l'objet ne laisse aucune trace (Tasks garde la décision ouverte).
 
 Depends on:
-  ./../lib/backup_context.rhai — @run(..., `true`) half of the env/context contract (spec
-    ./../lib/backup_context.sdd, which freezes this file as its @use_init_from `true` caller).
-  ./../lib/install_from_dir.rhai — @install_obj single-object apply + applied-entry shape
-    (./../lib/install_from_dir.sdd; the applied list here feeds no @remove/diff, only @wait).
-  ./../lib/wait.rhai — @wait::all two-arg with the shared `20*60` budget (./../lib/wait.sdd).
-  /agent/templates/init_job.yaml.hbs (+ nested /agent/templates/restore.yaml.hbs pod
-    template) resolved through `context.template_dir` — the rendered shape itself is
-    template-owned, not frozen here.
-  vynil-core 0.7.7 engine API — @import_run shim, @new_hbs, @register_partial_dir, @render_from
-    (partial-name = filename minus `.hbs`, silent same-name overwrite;
-    /common/src/handlebarshandler.sdd), @is_dir, @yaml_decode_multi, @k8s_resource(kind, ns) +
-    @exist, @list, @log_warn, @json_encode, @type_of.
-  /common/src/instanceservice.sdd + /common/src/instance_macros.sdd — the
-    @set_status_init_failed bridge and the `InitFrom`/`InitFromFail` condition it patches;
-    /common/src/rhaihandler.sdd — the @Script constructor mounting all of the above.
+  ./../lib/backup_context.rhai — la moitié @run(..., `true`) du contrat env/context (spec
+    ./../lib/backup_context.sdd, qui gèle ce fichier comme son appelant @use_init_from `true`).
+  ./../lib/install_from_dir.rhai — apply mono-objet @install_obj + forme d'entrée appliquée
+    (./../lib/install_from_dir.sdd ; la liste appliquée d'ici n'alimente aucun @remove/diff,
+    seulement @wait).
+  ./../lib/wait.rhai — @wait::all à deux arguments avec le budget partagé `20*60`
+    (./../lib/wait.sdd).
+  /agent/templates/init_job.yaml.hbs (+ le template de pod imbriqué
+    /agent/templates/restore.yaml.hbs) résolu via `context.template_dir` — la forme rendue
+    elle-même est propriété du template, pas gelée ici.
+  API moteur vynil-core 0.7.7 — shim @import_run, @new_hbs, @register_partial_dir,
+    @render_from (nom de partiel = nom de fichier moins `.hbs`, écrasement silencieux de même
+    nom ; /common/src/handlebarshandler.sdd), @is_dir, @yaml_decode_multi,
+    @k8s_resource(kind, ns) + @exist, @list, @log_warn, @json_encode, @type_of.
+  /common/src/instanceservice.sdd + /common/src/instance_macros.sdd — le pont
+    @set_status_init_failed et la condition `InitFrom`/`InitFromFail` qu'il patche ;
+    /common/src/rhaihandler.sdd — le constructeur @Script qui monte tout ce qui précède.
 
 References:
-  ./install.rhai + ./install.sdd — the sole caller: gate condition, (instance, context)
-    injection and the returned-context discard frozen there; /agent/src/service/install.sdd —
-    exit-1 lane every raise here lands in.
-  ./../tenant/init_from.rhai — diff-verified byte-identical twin (unspecified).
-  ./restore.sdd + ./backup.sdd — Pod-side siblings: ./restore.sdd is the lane the rendered
-    Job dispatches and consumes the env of; both contrast CR-side marker posture with their
-    CR-blind throw-only failure surfaces.
-  /agent/tests/rhai_lifecycle.rs — nearest lane test file (Tasks).
+  ./install.rhai + ./install.sdd — le seul appelant : condition du gate, injection
+    (instance, context) et rejet du context retourné, gelés là ;
+    /agent/src/service/install.sdd — la lane exit-1 où atterrissent toutes les levées d'ici.
+  ./../tenant/init_from.rhai — jumeau byte-identique vérifié par diff (non specifié).
+  ./restore.sdd + ./backup.sdd — fratrie côté Pod : ./restore.sdd est la lane que le Job rendu
+    dispatche et dont il consomme l'env ; tous deux opposent la posture CR-side à marqueur à
+    leurs surfaces d'échec throw-only CR-blind.
+  /agent/tests/rhai_lifecycle.rs — fichier de test de lane le plus proche (Tasks).
 
 Scenario: first install applies and awaits the init job
-  Given the install gate true, a context whose `instance.appslug` is `shop`, no `pods/` dir and
-    no existing `{appslug}-init-restore` Job
-  When @run executes
-  Then the rendered ServiceAccount, RoleBinding and Job (no ConfigMap when `has_files` is false)
-    apply through @dir::install_obj into `instance.metadata.namespace`, then @wait::all blocks
-    on the Job's completion up to `20*60` seconds, and @run returns `context` — which the
-    install gate discards
-  No mapped test.
+  Given le gate d'install vrai, un context dont `instance.appslug` vaut `shop`, pas de
+    répertoire `pods/` et pas de Job `{appslug}-init-restore` existant
+  When @run s'exécute
+  Then le ServiceAccount, le RoleBinding et le Job rendus (pas de ConfigMap quand `has_files`
+    est false) s'appliquent via @dir::install_obj dans `instance.metadata.namespace`, puis
+    @wait::all bloque sur la fin du Job jusqu'à `20*60` secondes, et @run retourne `context` —
+    que le gate d'install jette
+  Aucun test mappé.
 
 Scenario: restore source rides through untouched
   Given `spec.initFrom` = secretName `peer-creds`, subPath `other-ns/peer`, snapshot `abcd1234`
-  When @run renders
-  Then the Job pod template carries `envFrom` secret `peer-creds`, `SUB_PATH` `other-ns/peer`
-    and `RESTIC_SNAPSHOT` `abcd1234`, and the Pod later runs `agent service restore` against
-    them — this file never inspects, validates or defaults any of the three
-  And with all three absent the defaults apply (Secret `backup-settings`, own-namespace path,
-    snapshot `()` per ./../lib/backup_context.sdd)
+  When @run rend
+  Then le template du pod du Job porte le secret `envFrom` `peer-creds`, `SUB_PATH`
+    `other-ns/peer` et `RESTIC_SNAPSHOT` `abcd1234`, et le Pod exécute plus tard
+    `agent service restore` contre eux — ce fichier n'inspecte, ne valide ni ne defaulte aucun
+    des trois
+  And les trois absents, les défauts s'appliquent (Secret `backup-settings`, chemin du propre
+    namespace, snapshot `()` selon ./../lib/backup_context.sdd)
 
 Scenario: existing init job is skipped and never awaited
-  Given a `shop-init-restore` Job still present in the namespace from a failed earlier attempt
-  When the rendered Job document reaches the dedup gate
-  Then @list finds the name, `to_apply` is `false`, the Job is neither applied nor waited, and
-    nothing is logged or marked; the ServiceAccount/RoleBinding still re-apply
-  But given the probe itself raises
-  Then the error is @log_warn'd and the Job is applied anyway
+  Given un Job `shop-init-restore` encore présent dans le namespace d'une tentative antérieure
+    échouée
+  When le document Job rendu atteint le gate de dédup
+  Then @list trouve le nom, `to_apply` vaut `false`, le Job n'est ni appliqué ni attendu, et
+    rien n'est loggé ni marqué ; le ServiceAccount/RoleBinding se réappliquent quand même
+  But given la sonde elle-même lève
+  Then l'erreur est @log_warn'ée et le Job est appliqué quand même
 
 Tasks:
-  [ ] Map the Scenarios to /agent/tests/rhai_lifecycle.rs (or a dedicated rhai_ file): today no
-      test names this module; the mock engine would need vitals context, template fixtures and
-      a mock Job list to pin the three scenarios.
-  [?] A deduped existing Job is skipped silently and never awaited: a still-Running or failed
-      previous init Job lets the install sail past init_from and stamp Ready with the restore
-      possibly incomplete or dead. Decide whether to wait the existing job, fail, or at least
-      log the skip.
-  [?] The `20*60` @wait::all budget is hardcoded and shared by all four wait lanes: on a big
-      volume the Elapsed raise writes the init-failed marker while the Job (backoffLimit 3) may
-      still succeed afterwards. Decide on a configurable budget or a non-fatal wait.
-  [?] `init_from_post` runs outside the try: its hook raise leaves the CR unmarked although the
-      restore already finished. Decide whether to wrap it like the body or accept
-      hook-author responsibility.
-  [?] `init_from_pre`/`init_from_prepare`/`init_from_post` ship in no engine directory —
-      package-side hook slots, same posture as ./install.sdd's unshipped hooks; confirm
-      intentional.
-  [?] The Job-probe @exist guard is dead defense for the built-in `"Job"` kind (exist == kind
-      resolved at construction ≈ always true); simplify to list-only or document why the
-      no-dedup fallback must exist.
-  [?] `initFrom.version` is consumed on no part of this path (restore Pod re-uses the requested
-      package as installed) — confirm the field's operator-side-only semantics.
+  [ ] Mapper les Scenarios vers /agent/tests/rhai_lifecycle.rs (ou un fichier rhai_ dédié) :
+      aujourd'hui aucun test ne nomme ce module ; le mock engine aurait besoin d'un context
+      vitals, de fixtures de templates et d'une liste de Jobs mockée pour épingler les trois
+      scenarios.
+  [?] Un Job existant dédupé est sauté silencieusement et jamais attendu : un Job d'init
+      précédent encore Running ou en échec laisse l'install passer outre init_from et poser
+      Ready avec un restore possiblement incomplet ou mort. Décider s'il faut attendre le job
+      existant, échouer, ou au moins logger le skip.
+  [?] Le budget `20*60` de @wait::all est codé en dur et partagé par les quatre lanes wait :
+      sur un gros volume, la levée Elapsed écrit le marqueur init-failed alors que le Job
+      (backoffLimit 3) peut encore réussir ensuite. Décider d'un budget configurable ou d'un
+      wait non fatal.
+  [?] `init_from_post` tourne hors du try : la levée de son hook laisse le CR sans marqueur
+      alors que le restore est déjà fini. Décider s'il faut l'encercler comme le corps ou
+      accepter la responsabilité de l'auteur du hook.
+  [?] `init_from_pre`/`init_from_prepare`/`init_from_post` ne sont fournis dans aucun
+      répertoire du moteur — emplacements de hooks côté package, même posture que les hooks
+      non fournis de ./install.sdd ; confirmer l'intentionnel.
+  [?] La garde @exist de la sonde du Job est une défense morte pour le kind builtin `"Job"`
+      (exist == kind résolu à la construction ≈ toujours vrai) ; simplifier en list-only ou
+      documenter pourquoi le fallback sans dédup doit exister.
+  [?] `initFrom.version` n'est consommé nulle part sur ce chemin (le Pod de restore réutilise
+      le package demandé tel qu'installé) — confirmer la sémantique réservée au côté opérateur
+      du champ.
 
 Done when:
-  Every Scenario carries a passing mock-engine test or a recorded decision, the render→apply→
-    wait order and the single marker call still match the source, and `specdd lint` is green on
-    this file.
+  Chaque Scenario porte un test mock-engine passant ou une décision enregistrée, l'ordre
+    render→apply→wait et le seul appel de marqueur matchent encore la source, et `specdd lint`
+    est vert sur ce fichier.
