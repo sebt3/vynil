@@ -77,7 +77,10 @@ Done when:
 Tasks:
   [x] #0 Spec the `./src/package/` and `./src/linting/` submodules.
   [x] #1 Spec the instance-operation submodules and `./src/testing/` harness.
-  [ ] #2 Spec the packaged `./scripts/` Rhai library under its own spec.
+  [x] #2 Spec the packaged `./scripts/` Rhai library under its own spec. Ledger
+      `./scripts/scripts.sdd` accounts for all 120 `.rhai` files (66 same-basename specs,
+      families, byte-identical twins with pointers); the five `./templates/*.hbs` ship with
+      their same-basename specs. `specdd lint agent` green (122 specs, 0 errors 0 warnings).
   [ ] #3 Reconcile `/docs/cli.md` with the exit-code ladders and flag help frozen across the
       new specs (docs claim 0/1/2 only; ladders now span 1–5; `template_crds` empty-document
       and `High-availibity` typo also await a doc/decision pass).

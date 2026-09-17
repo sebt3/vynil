@@ -1,0 +1,218 @@
+Spec: GabaritBackupManuel
+
+Platform: Handlebars (moteur hbs du crate `agent` via @new_hbs sur @vynil_core 0.7.7 — crate registry `vynil-core`, common/Cargo.toml ligne 10 —, handlebars 6.4.2 résolu Cargo.lock, mode strict + @no_escape hérités de @handlebars_misc_helpers::new_hbs, partials via @register_partial_dir)
+
+Purpose:
+  Rendre le `Job` de backup à la demande d'une instance avec sa chaîne RBAC : `ConfigMap`
+    optionnel des scripts package, `ServiceAccount`, `RoleBinding` vers le ClusterRole
+    `backups`, et `Job` `batch/v1` dont le pod est délégué au partial ./backup.yaml.hbs —
+    variante non cronifiée de ./cronbackup.yaml.hbs (aucun `schedule`, exécution unique).
+  Le fichier est dormant dans le dépôt : aucun lane actif ne le rend ; la seule expression
+    `{{> manualbackup.yaml }}` engagée est celle du bloc de backup-final COMMENTÉ de
+    ./../scripts/tenant/delete_vitals.rhai (lignes 8-18).
+
+Owns:
+  ./manualbackup.yaml.hbs
+
+Exposes:
+  Le partial enregistré sous le nom `manualbackup.yaml` (nom de fichier moins le suffixe `.hbs`
+    selon @register_partial_dir) — jamais enregistré en pratique car son unique expression de
+    rendu est commentée.
+  Sa face observable est le texte rendu : 3 ou 4 documents dans un ordre figé (Must), découplé
+    de tout décodage — le présent fichier ne ré-inspecte jamais sa propre sortie.
+
+Accepts:
+  La carte de contexte passée comme data @render_from (round-trip @rhai::Map → JSON), même
+    forme que les hôtes jumeaux. Surface exactement consommée par CE fichier :
+  `has_files` — booléen qui gate le document `ConfigMap` via `{{#if has_files}}` (ligne 1).
+  `files` — tableau d'entrées `{name, content}` consommé par `{{#each files}}` (lignes 8-10) :
+    `name` en clé brute de `data:`, `content` passé par @json_to_str.
+  `instance.appslug` — cinq occurrences (lignes 6, 16, 21, 28, 34) : noms du ConfigMap (suffixe
+    `-backups-scripts`), du ServiceAccount (`-backup`), du RoleBinding (`-backup`), du sujet et
+    du Job (`-backups`, pluriel).
+  `instance.namespace` — namespace du sujet ServiceAccount du RoleBinding (ligne 29).
+  `cluster.vynil_namespace` — préfixe du `roleRef.name`, rendu `{cluster.vynil_namespace}:backups`
+    (ligne 25).
+  `instance.selector` — lu INDIRECTEMENT par @selector_from_ctx(`this`) avec le hash
+    `comp="backup"` pour les labels du `metadata` du Job (ligne 35).
+  Clés relayées sans changement de contexte à ./backup.yaml.hbs (`{{> backup.yaml}}` ne passant
+    pas d'argument de contexte) : `agent_image`, `instance.package.type`, `envs`, `envs_from`,
+    `volumes`, `mounts`, `service_account`, `backup_affinity`, plus `instance.selector` relu
+    deux fois — surface et leurs producteurs hors @backup_context (`agent_image` posé par
+    ./../scripts/tenant/context.rhai, `instance.package.type` par ./../scripts/lib/build_context.rhai)
+    détaillés par ./backup.yaml.hbs.sdd, non re-décrite ici.
+
+Returns:
+  Un unique texte YAML multi-documents (séparateurs `---` en ligne propre), sans
+    `metadata.namespace` hormis le `subject.namespace` du RoleBinding. Ordre : [1] ConfigMap
+    `"{appslug}-backups-scripts"` seulement sous `has_files` ; [2] ServiceAccount
+    `{appslug}-backup` ; [3] RoleBinding `{appslug}-backup` en `rbac.authorization.k8s.io/v1`,
+    roleRef ClusterRole `{cluster.vynil_namespace}:backups`, sujet unique = le ServiceAccount
+    créé dans `{instance.namespace}` ; [4] Job `'{appslug}-backups'` en `batch/v1` portant
+    `metadata.labels` = @json_to_str de @selector_from_ctx(`this`, `comp="backup"`), les 8
+    annotations `ignore-check.kube-linter.io/*` des lignes 37-44 verbatim, et
+    `spec.template` = le pod rendu par ./backup.yaml.hbs.
+  Écarts gelés vs l'hôte planifié ./cronbackup.yaml.hbs : `Job` et non `CronJob` — aucun
+    `schedule`, `concurrencyPolicy`, `failedJobsHistoryLimit`, `successfulJobsHistoryLimit`,
+    `suspend` (grep cron sur ce fichier = zéro) ; pas d'enveloppe `jobTemplate` ni de
+    `creationTimestamp: null`, labels posés directement sur le `metadata` du Job ; et UNE
+    annotation de moins — `ignore-check.kube-linter.io/env-var-secret` (./cronbackup.yaml.hbs
+    ligne 39) est absente ici (Tasks).
+
+Raises:
+  Le fichier ne lève rien lui-même. Seuls des échecs @render_from remontent : le pod partial
+    ./backup.yaml.hbs dont le block @to_json ne parse pas son rendu interne (gelé
+    ./backup.yaml.hbs.sdd Raises) ; une clé consommée JAMAIS mintée sous mode strict (la portée
+    exacte `{{#if}}`/interpolation est l'objet de l'[?] de formulation des specs sœurs — Tasks) ;
+    le paramètre hash `comp` de @selector_from_ctx typé string. Toutes inatteignables
+    aujourd'hui, l'unique voie appelante étant commentée.
+
+Handles:
+  `has_files` faux → 3 documents : le gate `{{#if}}` emporte le ConfigMap et son séparateur `---`
+    de tête ; le texte démarre alors au `---` du ServiceAccount.
+  `content` présent à `()`/null → @json_to_str rend la chaîne vide (helpers JSON vendus
+    @vynil_core dans `hbs_json.rs`), ligne `data:` à scalaire droit vide.
+  `instance.selector` absent → @selector_from_ctx retombe sur `{}` (@unwrap_or_default du
+    helper Rust) : labels du Job réduits à `app.kubernetes.io/component: backup` sans lever.
+  `instance.appslug` ou `cluster.vynil_namespace` présente à `()`/null → substitution vide,
+    noms dégradés `-backup`, `-backups`, `:backups` sans signal (même posture que la famille).
+  Échappement HTML désactivé par @no_escape : les valeurs interpolées tombent brutes dans le
+    YAML, guillemets des scalaires @json_to_str compris.
+  Masquage par package : `${package_dir}/pods/manualbackup.yaml.hbs` livré par un package et
+    enregistré en second REMPLACE silencieusement ce fichier — posture d'enregistrement des
+    specs appelantes, citée comme limite de portée.
+
+Must:
+  Produire la chaîne exacte [ConfigMap sous `has_files`] → ServiceAccount → RoleBinding → Job,
+    aux `apiVersion` respectives `v1`, `v1`, `rbac.authorization.k8s.io/v1`, `batch/v1`, dans
+    cet ordre de documents.
+  Garder la cascade de citation des noms telle qu'écrite : double quote pour le ConfigMap,
+    single quote pour le Job, nus pour ServiceAccount et RoleBinding ; cascade de noms
+    singulier `-backup` (SA, RB, sujet) / pluriel `-backups` (Job) identique à l'hôte jumeau.
+  Rendre le RoleBinding lié à un ClusterRole EXTERNE jamais créé ici : `{cluster.vynil_namespace}:backups`
+    posé par /box/vynil/systems/rbac.yaml.hbs (ligne 155) ; un seul `subject`, ServiceAccount,
+    avec son `namespace: {instance.namespace}` explicite — SEULE injection de namespace du
+    rendu, le routage appartenant aux lanes applicatives.
+  Conserver les 8 annotations verbatim (préfixe `ignore-check.kube-linter.io/`) :
+    `env-value-from`, `no-liveness-probe`, `no-readiness-probe`, `no-read-only-root-fs`,
+    `non-isolated-pod`, `priority-class-name`, `read-secret-from-env-var`, `run-as-non-root`,
+    avec les valeurs des sondes formulées « Job containers » — distinctes du jumeau cron.
+  Figer `metadata.labels` du Job = @json_to_str de @selector_from_ctx(`this`, `comp="backup"`) :
+    le label `app.kubernetes.io/component=backup` est la clé de scan des lanes de nettoyage
+    ./../scripts/tenant/delete_backup.rhai (ligne 43) et ./../scripts/service/delete_backup.rhai.
+  Déléguer le pod sur la ligne `template: {{> backup.yaml}}` (46) sans changement de contexte :
+    ./backup.yaml.hbs réémet un JSON pretty multi-lignes ; les lignes de continuation calées en
+    colonne 0 sous une clé parente indentée de 2 ne se décodent que par la tolérance de flux
+    serde_yaml 0.9.34 gelée en Tasks de ./cronbackup.yaml.hbs.sdd — même mécanique, même
+    verrouillage lockstep de la famille.
+
+Must not:
+  Introduire une notion de cron (`schedule`, limites d'historique, `suspend`) : le Job
+    one-shot est la seule raison d'être distinctive vs ./cronbackup.yaml.hbs ; dupliquer son
+    contrat ici fourchrait la lane backup.
+  Porter un `metadata.namespace` sur un document hors le `subject` du RoleBinding : le ns
+    d'apply est réécrit par les lanes (@install_allowed_obj), l'ajouter ferait une seconde
+    source de vérité.
+
+Depends on:
+  ./backup.yaml.hbs — partial du pod `spec.template`, seule délégation du document Job ; ses
+    clés de contexte s'ajoutent à la surface Accepts (contrat ./backup.yaml.hbs.sdd).
+  ./../scripts/lib/backup_context.sdd — producteur unique de la surface dynamique complète
+    (`has_files`, `files`, et les six clés pod que relaie le partial) ; sans cette carte le
+    fichier ne peut pas rendre complètement.
+  ./../scripts/lib/build_context.sdd — fournisseur des vues `instance` (`appslug` via la
+    fonction `appslug`, `namespace`, `selector`) et `cluster` (`vynil_namespace` minté depuis
+    `args.vynil_namespace`).
+  /common/src/handlebarshandler.sdd — enregistrement de @selector_from_ctx, factory @new_hbs,
+    mode strict et @no_escape hérités ; @json_to_str et @to_json vendus par @vynil_core dans
+    `hbs_json.rs`.
+  /box/vynil/systems/rbac.yaml.hbs — ClusterRole cible `{namespace}:backups` (ligne 155), lié
+    sans être créé ; un `cluster.vynil_namespace` divergent laisse le RBAC inerte.
+
+References:
+  ./../scripts/tenant/delete_vitals.rhai lignes 8-18 (rendu @render_from à la ligne 14) et son
+    contrat ./../scripts/tenant/delete_vitals.sdd — SEUL site d'appel connu du dépôt, entièrement
+    commenté, encadré de deux TODO ; zéro Rust (`agent/src/`, `operator/src/`) ni test ne nomme
+    `manualbackup` (grep dépôt).
+  ./cronbackup.yaml.hbs et ./cronbackup.yaml.hbs.sdd — hôte planifié au même contexte et à la
+    même cascade ; les écarts sont listés en Returns uniquement, sans re-détailler l'inventaire
+    familial.
+  ./backup.yaml.hbs.sdd — contrat du partial délégué, y compris son Scenario « lane étrangère
+    au backup » et son [?] de formulation strict-mode sur clé absente.
+  ./../scripts/tenant/delete_backup.rhai et ./../scripts/service/delete_backup.rhai — voie de
+    nettoyage qui retrouve ces objets par noms fixes et par le label `component=backup`.
+  /agent/Dockerfile.sdd — packaging de ce dossier en `/usr/lib/vynil/templates`, publié comme
+    `template_dir` et monté par @register_partial_dir.
+
+Tasks:
+  [?] Annotation `ignore-check.kube-linter.io/env-var-secret` absente du Job manuel (le jumeau
+      cron la porte ligne 39) : si le site d'appel est réveillé, le pod issu du même partial
+      (envs nommés *secret*) serait linté sans cette exemption. Ajouter ou assumer, décider
+      plus tard.
+  [?] Site d'appel dormant : la décision raviver/retirer appartient aux Tasks de
+      ./../scripts/tenant/delete_vitals.sdd. Vérification du terrain : ./../scripts/tenant/context.rhai
+      minte bien `template_dir` et `agent_image` dans la voie run (lignes 29-30, `args` du
+      binaire delete), contrairement au libellé « `template_dir` absent des lanes tenant
+      runtime » de cette spec sœur ; en revanche l'alias de module `dir` utilisé par le bloc
+      (`dir::install_allowed_obj`) n'y est jamais importé. Corriger ce libellé au moment de la
+      décision.
+  [?] Rendu réveillé : le Job manuel porte le nom exact `{appslug}-backups` du CronJob vivant
+      (noms cross-kind tolérés par K8s) et recrée SA/RoleBinding/ConfigMap sous les mêmes noms
+      que la voie planifiée ; de plus le bloc commenté installe via @install_allowed_obj sur
+      `context.tenant.namespaces`, donc la chaîne RBAC dans chaque namespace du tenant. Décider
+      la séparation d'objets ou de namespace, décider plus tard.
+  [?] Portée exacte de la lookup strictement absente sous mode strict dans @{{#if}}/@{{#each}}
+      (`has_files` jamais minté dans la voie morte) : le mode strict est certifié à la source
+      (@handlebars_misc_helpers 0.17.0 src/lib.rs:41), la FAMILLE est harmonisée dessus
+      (clé absente = levée, @() présent = vide) — mais aucune position précise n'est assertie
+      dans les tests tant que la voie dormante n'est pas réveillée.
+  [x] Orthographe de la crate dans la famille : la graphie fautive « wynil-core » était
+      répandue dans ./cronbackup.yaml.hbs.sdd, ./backup.yaml.hbs.sdd, ./init_job.yaml.hbs.sdd
+      et les specs de scripts ; la crate réelle est `vynil-core` 0.7.7 (common/Cargo.toml
+      ligne 10, entrée registry de Cargo.lock). Corrigée en masse par pass sed sur le corpus.
+  [ ] Tests : zéro test ni code vivant ne référence `manualbackup.yaml` (grep dépôt = le bloc
+      commenté + les specs) ; les Scenario ci-dessous ne deviennent testables que si le site
+      d'appel est réveillé, et relèvent alors du même test de rendu familial que les trois
+      hôtes (TTD).
+
+Done when:
+  Le site d'appel a une décision écrite (ravivé avec setup @backup_context, ou retiré avec ce
+    fichier), chaque Scenario porte un test de rendu vert ou est explicitement retiré avec le
+    site, chaque [?] est clos, et `specdd lint` passe sur ce fichier.
+
+Scenario: Rendu complet avec les scripts du package
+  Given une carte @backup_context complète avec `has_files` vrai, `files` contenant
+    `{name: "backup.sh", content: "#!/bin/sh…"}`, `instance.appslug` `acme`,
+    `instance.namespace` `tenant-a` et `cluster.vynil_namespace` `vynil-system`
+  When @render_from rend `{{> manualbackup.yaml }}` puis @yaml_decode_multi décode le texte
+  Then 4 documents dans l'ordre : ConfigMap `acme-backups-scripts` dont la clé `backup.sh`
+    décode identique au contenu d'origine, ServiceAccount `acme-backup`, RoleBinding
+    `acme-backup` au sujet dans `tenant-a` lié au ClusterRole `vynil-system:backups`, Job
+    `acme-backups`
+  And `metadata.labels` du Job = `instance.selector` plus `app.kubernetes.io/component: backup`
+  And `spec.template` reçoit le pod JSON pretty de ./backup.yaml.hbs, ouvrant son `{` sur la
+    ligne `template:` elle-même
+
+Scenario: Sans scripts, le ConfigMap disparaît
+  Given `has_files` faux et `files` vide (couplage posé par @backup_context)
+  When @render_from rend le partial
+  Then 3 documents seulement subsistent, le gate `{{#if}}` emportant le `---` de tête du
+    ConfigMap, et aucun document ne mentionne `backups-scripts`
+
+Scenario: Selector absent, seul le label de composant survit
+  Given une vue `instance` sans la clé `selector`
+  When le rendu du Job passe @selector_from_ctx avec le hash `comp="backup"`
+  Then les labels décodent la carte unique `{app.kubernetes.io/component: "backup"}` sans
+    aucune levée (@unwrap_or_default du helper), et @yaml_decode_multi décode les documents
+    normalement
+
+Scenario: Voie morte réveillée, le rendu avorte avant tout install
+  Given comme data la carte de la voie run du tenant, telle que l'utiliserait le bloc commenté de
+    ./../scripts/tenant/delete_vitals.rhai — mintée par ./../scripts/lib/build_context.rhai et
+    ./../scripts/tenant/context.rhai, donc sans `has_files`, `files` ni les six clés pod de
+    @backup_context (le bloc n'appelle jamais @backup_context::run)
+  When @render_from tente `{{> manualbackup.yaml }}`
+  Then le rendu avorte sur une clé absente avant @yaml_decode_multi, au plus tôt sur le gate
+    propre du fichier, au plus tard sur la première clé relayée à ./backup.yaml.hbs (posture
+    gelée par ./backup.yaml.hbs.sdd)
+  And ni @install_allowed_obj ni l'apply du Job ne sont atteints — zéro objet posé

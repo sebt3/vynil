@@ -1,0 +1,131 @@
+Spec: ServiceRestoreMysqlScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Dernière jambe du ladder d'engines (ordre gelé secret → postgresql → mysql par
+    ./restore.sdd) : ré-injecter dans chaque serveur cible le dump SQL `/backup/mysql_<nom>`
+    déversé au backup, via le client `mysql` en lecture shell, avec le gate wildcard
+    `dbname != "*"`, le choix `_cleaned` par @is_file et une garde rc fatale par target.
+    Contraste avec ./restore_postgresql.rhai, sa jambe soeur : le mot de passe voyage en
+    argv (`--password=`) et non en env. Identique à l'octet près à
+    ./../tenant/restore_mysql.rhai (diff vérifié, aucun delta) : jumeau sans spec.
+
+Owns:
+  ./restore_mysql.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("restore_mysql", context) de
+    ./restore.sdd, seulement quand `${package_dir}/scripts/restore_mysql.sh` est absent ;
+    un module éponyme package le remplace. Aucun @import au chargement.
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification). SEULE `context.mysql_list` (env `MYSQL_LIST`) est lue en Rhai, avec
+    l'env `${mysql}_dbname` relue par @get_env pour le gate wildcard.
+  Les env process `${<mysql>_host}`, `${<mysql>_username}`, `${<mysql>_password}`,
+    `${<mysql>_dbname}` (posées par @run de ./../lib/backup_context.rhai, dont les valeurs
+    viennent de secretKeyRef) ne passent PAS par Rhai : la commande les embarque en variables
+    shell `${...}` que le `sh -c` de @shell_run déploie depuis l'environnement du Pod.
+  Les dumps `/backup/mysql_${mysql}.sql` — producers ./backup_prepare_mysql.rhai
+    (`mysqldump --skip-ssl ... --no-create-db --add-drop-table`) — redéposés sous `/backup`
+    par l'étage @import_run("restore_run").
+
+Returns:
+  Unité — aucun `return` ; ./restore.sdd jette la valeur d'@import_run. Canal de succès :
+    boucle terminée + hook post atteint.
+
+Raises:
+  Un @throw par target, texte verbatim `mysql restoration failed for ${mysql}` — à la
+    différence de ./restore_run.rhai, le rc n'apparaît JAMAIS dans le texte. Garde unique
+    `if rc != 0` : @shell_run n'est pas @shell_output (celui-là jetterait sur rc et stderr)
+    et ne jette jamais sur un rc, donc ce throw est le seul gestionnaire de codes.
+  @shell_run ne lève que si le `sh -c` ne peut être lancé ; la redirection `< file` est
+    faite par sh : dump absent → rc non nul de sh → même texte, muet sur le rc.
+  Ces levées traversent @import_run (deux skip-markers seulement avalés) → exit-5 Rust
+    (/agent/src/service/restore.sdd).
+  Absences sans throw propre : `${mysql}_dbname` absente = `""` ≠ `"*"` → le flag
+    `--one-database ""` part et le rc de mysql décide ; host/user/password absents → sh
+    déploie vide, l'erreur de connexion remonte par le rc.
+
+Handles:
+  `mysql_list` vide → boucle no-op silencieuse : aucun log, aucun shell, aucun throw ; les
+    hooks pre/post skip-markés restent les seuls gestes.
+  Slots @import_run("restore_mysql_pre", context) / @import_run("restore_mysql_post",
+    context) — non livrés dans ./, ./../tenant, ./../lib → skip-markers debug.
+  Wildcard : `dbname == "*"` = restore multi-bases sans sélection, la carte des bases
+    venant uniquement des statements USE du dump.
+  Variante `_cleaned` : `is_file` vrai → le dump nettoyé écrase le chemin du dump brut ;
+    fausse → dump brut. Une seule des deux fichiers est lue.
+  Gate amont `restore_mysql.sh` : le script package remplace la jambe entière, rc et throw
+    déménagent dans ./restore.sdd.
+
+Must:
+  Dérouler par target, dans cet ordre : @log_info(`Starting MySQL restore for ${mysql}`) →
+    lecture env du `dbname` → choix du fichier dump → @shell_run de l'import → garde
+    `rc != 0` → throw ; rien d'autre entre les targets, pas de log de fin.
+  Invoquer verbatim, avec les `${...}` déployés par sh depuis l'env du Pod :
+    `mysql --skip-ssl --host="${<mysql>_host}" --user="${<mysql>_username}" --password="${<mysql>_password}" < /backup/mysql_<mysql>.sql`
+    — et ` --one-database "${<mysql>_dbname}"` inséré après `--password` quand le gate
+    Rhai `dbname != "*"` passe ; `--skip-ssl` constant, aucun flag TLS optionnel (les flags
+    TLS de restic, `restic_args`, ne se propagent pas ici).
+  Préférer `/backup/mysql_${mysql}_cleaned.sql` au dump brut dès qu'il existe (@is_file).
+  Traiter tout rc non nul comme fatal pour la target courante : la boucle s'arrête au
+    premier échec, les targets suivantes ne sont pas jouées, aucune liste de codes tolérés.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur de `mysql_list` et des quatre env par base.
+  ./backup_prepare_mysql.rhai — producteur du format de dump consommé (USE statements,
+    drop-table inclus).
+  ./restore.sdd — appelant, ordre du ladder, sémantique exit-5 du throw.
+  ./restore_run.rhai — l'étage qui redépose les dumps sous `/backup`.
+  API moteur vynil-core 0.7.7 — @import_run, @shell_run (`src/shell.rs` : sortie héritée,
+    rc `code().unwrap_or(0)`), @get_env, @is_file, @log_info (registrars
+    /common/src/rhaihandler.sdd).
+
+References:
+  ./../tenant/restore_mysql.rhai — jumeau byte-identique (diff vérifié), sans spec à ce jour.
+  ./restore_postgresql.rhai — soeur de structure (spec ./restore_postgresql.sdd) : mêmes
+    gates wildcard et `_cleaned`, delta uniquement sur l'outillage et le transport du secret.
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine résolvant scripts/service :
+      /agent/tests/rhai_backup_redis.rs est le mock TENANT et ne nomme que `restore_redis` —
+      cette jambe service n'est testée nulle part.
+  [?] `--password=` déployé par sh entre dans l'argv du process mysql (lisible dans
+      `/proc`) : basculer sur `MYSQL_PWD` comme le homologue pg est PGPASSWORD ?
+  [?] Aucun producteur livré ne crée `mysql_${mysql}_cleaned.sql` (grep du dépôt) : la
+      branche @is_file n'est jouée que par des dumps déposés par des scripts package —
+      contract à geler (documenter le nom comme slot package) ou branche à supprimer ?
+  [?] Restaure à chaud : le ladder tourne sans scale-down (fenêtre maintenance fictive,
+      ./maintenance_windows.sdd, décision portée par ./restore.sdd) — le `--add-drop-table`
+      des dumps s'applique pendant que l'application écrit en base.
+
+Done when:
+  Les Scenario tiennent sur un mock résolvant scripts/service, les trois [?] sont tranchés,
+    et le verbatim de la commande reste égal au fichier comme au jumeau tenant.
+
+Scenario: base nommée, wildcard éteint
+  Given `mysql_list` = `["app"]`, env `app_dbname` = `"appdb"`, @is_file faux sur le
+    `_cleaned`, @shell_run répondant `0`
+  When @run(context) s'exécute
+  Then la commande porte `--one-database "${app_dbname}"` avant la redirection, un seul log
+    `Starting MySQL restore for app`, et l'unité est rendue après le hook post
+
+Scenario: wildcard *
+  Given `mysql_list` = `["app"]` et env `app_dbname` = `"*"`
+  When @run s'exécute
+  Then aucun `--one-database` n'apparaît, le dump multi-bases est pipé tel quel, et la
+    sélection des bases vient des statements USE du fichier — pas de ce script
+
+Scenario: rc non nul, texte sans rc
+  Given @shell_run rendant `1` sur le premier target
+  When @run s'exécute
+  Then la chaîne levée est exactement `mysql restoration failed for app` — sans le rc — et
+    les targets suivantes de la liste ne sont pas tentées
+
+Scenario: variante cleaned
+  Given `/backup/mysql_app_cleaned.sql` existant à côté du dump brut
+  When @run s'exécute
+  Then la redirection `< ` cible le chemin `_cleaned`, et seul l'un des deux fichiers est lu

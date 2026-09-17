@@ -1,0 +1,290 @@
+Spec: TenantContextScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  The tenant-kind context orchestrator: structural twin of ./../service/context.rhai
+    (./../service/context.sdd) one level above @build_context, turning the assembled
+    map into the tenant contract the install/delete/template lanes consume. Same
+    skeleton as the twin — delegate, overlay `template_dir`/`agent_image`, guarded
+    hook slots — with four deltas: it mints `tenant` (not `namespace`) with
+    maintenance hour `"1"`; the kind slot is `context_tenant` (not
+    `context_service`); the live lane does cluster reads of its own (the tenant
+    identity getters plus one per-namespace @TenantInstance list for the published
+    services) inline right after the mint; and the offline lane has no
+    `context_after` slot (the twin calls it on both).
+
+Exposes:
+  @run(@instance, @args) — live lane, the entry point the agent tenant `install`
+    and `delete` snippets call via `ctx::run(instance, args)`
+    (/agent/src/tenant/install.sdd, /agent/src/tenant/delete.sdd; also the
+    @ENTRY_POINT_FUNCTIONS lint name `run` of /agent/src/linting/rhai_checker.sdd);
+    delegates to `build::run`, hooks through the three-arg @import_run.
+  @template(@instance, @args) — offline twin for `agent template tenant`:
+    delegates to `build::template`, hooks through @import_template, one slot
+    shorter (no `context_after`).
+  No other @fn exists — importing this module (alias convention `as ctx`, also
+    under the package-shadow name `context`) exposes exactly these two.
+
+Accepts:
+  @instance — NOT forwarded blind here (twin delta): typed @TenantInstance @Dynamic
+    fetched by @TenantInstance::get before the eval (/agent/src/tenant/install.sdd,
+    /agent/src/tenant/delete.sdd), the synthesized `#{metadata: {name, namespace}}`
+    map of /agent/src/template/tenant.sdd, or the mock-sink value of
+    @get_tenant_instance under `agent package test` (/agent/src/testing/handler.sdd).
+    The `template` lane reads `metadata.namespace` inside the mint; the `run` lane
+    calls the registered `get_tenant_name` and `get_tenant_namespaces` bridges
+    (/common/src/instancetenant.sdd).
+  @args — plain map: the caller's serialized @Parameters (install lane ten
+    snake_case keys, delete lane nine — NO `tag`, so `instance.requested` lands as
+    `()` upstream). Keys THIS file reads, ungated: `template_dir` (serialized
+    @PathBuf text) and `agent_image` (@common::DEFAULT_AGENT_IMAGE-backed default);
+    a missing key lands `()`. Everything else is consumed downstream through the
+    delegation and the hooks (read contract ./../lib/build_context.sdd and
+    ./context_tenant.sdd).
+
+Returns:
+  The context map (last expression; the calling snippet passes it to
+    `install::run`/`delete::run`/`template::run`, the Rust lane discards the
+    snippet @Dynamic). Both lanes, insertion order of top-level keys:
+    1. the delegate's seven (`cluster`, `controller`, `instance`, `values`,
+        `defaults`, `package_dir`, `config_dir` — key contract owned there),
+    2. `template_dir` then `agent_image` — verbatim copies of the args values,
+    3. whatever the `context_pre` replacement leaves (whole-map replacement can
+        rewrite or erase every key above),
+    4. `tenant` — run lane: a map with `name` from `get_tenant_name()`,
+        `namespaces` from `get_tenant_namespaces()`, a gathered `services`
+        array and the maintenance pair `maintenance_start_hour: "1"` plus
+        `maintenance_start_minut: "0"`; template lane: the placeholder block
+        with `name: "client"`, `namespaces` `["client-system", instance.metadata.namespace]`
+        (literal previews), the same maintenance pair and NO `services` key
+        at all (frozen upstream by /agent/src/template/tenant.sdd);
+        overwrites anything `context_pre` wrote under `tenant`,
+    5. whatever the shipped `context_tenant` slot leaves — its aliasing of
+        `namespace` onto the same map and the added `use_backup`/`ha`/`name`
+        and annotation-derived keys are owned by ./context_tenant.sdd,
+    6. `extra` — always written to the `context_extra` result, no guard; the stock
+        image (no such module ships) stores `()`.
+  run lane only, last: whatever `context_post` then `context_after` replacements
+    leave. template lane: `context_post` is the last slot — `context_after` is
+    never resolved offline (twin asymmetry, Tasks).
+  Later stage modules of the same run add keys (e.g. ./install_tofu.rhai's
+    `tofu`); that is their contract.
+
+Raises:
+  Zero @throw in this file; its only @try is per-namespace inside the live gather.
+    - Delegation errors land whole (package.yaml read, agent.yaml YAML, unguarded
+      cluster reads per ./../lib/build_context.sdd Raises).
+    - `instance.get_tenant_name()` is unguarded: its Rhai bridge propagates the
+      failure (@rhai::EvalAltResult per /common/src/instancetenant.sdd Raises) and
+      aborts the live lane before the `tenant` key exists.
+    - `instance.get_tenant_namespaces()` swallows cluster failures upstream into the
+      plain string `""` (frozen in /common/src/instancetenant.sdd Tasks):
+      `tenant.namespaces` then stores a string, the gather loop iterates zero
+      times, `services` stays `[]` and no log line is emitted here.
+    - Gather failures (the per-namespace `TenantInstance` list, the property walks,
+      the `service` flatten): caught per namespace — @log_warn of the string as-is
+      or @json_encode of anything else — that namespace stops, the next keeps
+      going, entries already pushed in `tenant.services` stay.
+    - Hook errors: @import_run/@import_template swallow ONLY absent-module /
+      absent-function (skip with @log_debug, semantics owned by vynil-core
+      @add_common); anything a hook throws for real propagates and aborts the lane.
+
+Handles:
+  Stock image hook posture: only `context_tenant` ships (this directory);
+    `context_pre`/`context_extra`/`context_post`/`context_after` skip on every lane
+    to `()`, so the guards keep the running context and only `extra` changes (to
+    `()`).
+  Non-map hook return (including the skip `()`) silently keeps the previous
+    context — guard `type_of(ctx) == "map"`, whole-value replacement, no merge.
+  @import_template fallback: a hook module without `template` but with `run` is
+    invoked at `run(instance, context)` offline — a run-only package hook executes
+    its cluster reads during `agent template`.
+  Gather shape guard: a @TenantInstance whose `status` is not a map or whose
+    `status.services` is not an array is skipped silently (its records contribute
+    nothing, no log).
+  Gather entries are the serialized @crate::Published records — the `service` field
+    serializes as `null` when absent (no skip), so the `"service" in s` guard passes
+    and `s += s.service` sees a non-map (Tasks).
+  Package shadow resolution: resolver order `{package_dir}/scripts`,
+    `{config_dir}`, `{script_dir}/tenant`, `{script_dir}/lib` — a package
+    `context.rhai` replaces this orchestrator, `context_tenant.rhai` the kind
+    slot, `build_context.rhai` the delegate.
+
+Must:
+  Keep the module body at one plain `import "build_context" as build` plus the two
+    `fn` declarations — nothing runs at import; both entry names match
+    @ENTRY_POINT_FUNCTIONS.
+  Run each lane in this order, every guarded slot exactly once: delegate, then
+    `context["template_dir"]`/`context["agent_image"]` copies, then slot
+    `context_pre`, then [live only] `get_tenant_name()` and
+    `get_tenant_namespaces()` on the instance, then mint `tenant`, then [live
+    only] the services gather, then slot `context_tenant`, then write `extra`
+    from slot `context_extra`, then slot `context_post`, then [live only] slot
+    `context_after`, then return `context`.
+  Gather services between the mint and the `context_tenant` slot: for each
+    namespace of the list, one @k8s_resource @list of kind `TenantInstance`
+    scoped to that namespace (not a cluster sweep), and push one entry per
+    `status.services` member, each enriched with an `instance` map
+    `#{name, namespace}` of the
+    owner @TenantInstance and a `package` map carrying `category` from
+    `spec.category` and `name` from `spec["package"]`, and its `service`
+    payload flattened into the entry
+    (`s += s.service` then @remove) when the `service` key is there, in
+    namespace-list then status order. No filter and no dedup: the calling
+    instance's own published services are included and the record's `tenant` tag
+    key SURVIVES on the entry (unlike @build_context's filtered `cluster.services`);
+    the same service can therefore appear under both keys of the map.
+  Replace on the guarded slots through `type_of(ctx) == "map"`, whole map, no key
+    merge; store the `context_extra` result into `extra` unguarded (any value,
+    including `()`, becomes the stored value).
+  Mint `tenant` AFTER `context_pre` and BEFORE `context_tenant`: the kind slot
+    must see the minted map (it reads and extends it), and `context_pre` has no
+    way to seed `tenant` — its map under that key is overwritten.
+  Mint the maintenance pair as the strings `maintenance_start_hour: "1"` and
+    `maintenance_start_minut: "0"` on both lanes (service twin uses hour `"0"`,
+    Tasks); the `minut` misspelling is load-bearing —
+    ./../lib/backup_context.rhai builds the cron `schedule` from
+    `namespace.maintenance_start_minut`/`maintenance_start_hour`.
+  Preserve the key spellings `template_dir`, `agent_image`, `tenant`, `services`,
+    `namespaces`, `extra` and the maintenance pair verbatim — the downstream
+    indexers are ./schedule_backup.rhai, ./init_from.rhai, ./delete_vitals.rhai
+    and ./restore_secret.rhai (@register_partial_dir of `context.template_dir` as
+    the hbs partial root), ./../lib/backup_context.rhai (Job env value
+    `context.agent_image`, `namespace.ha` replica count, the cron pair),
+    ./../lib/tofu_gen.rhai (renders `extra` into the `vynil_extra` local),
+    ./install.rhai (`context.namespace.use_backup`) and ./schedule_backup.rhai
+    (`context.tenant.namespaces` install-allowlist check).
+
+Must not:
+  Serve the backup/restore lanes: the tenant `backup`/`restore` commands import
+    ./backup.rhai / ./restore.rhai, which build their own map via
+    ./../lib/backup_context.rhai @from_args and never import `context` — same
+    directory, adjacent names, wrong contract.
+  Validate or interpret `template_dir`/`agent_image` before storing them.
+
+Depends on:
+  ./../lib/build_context.rhai — the whole delegation (frozen there; only the seam —
+    call once, per lane, first — is this file's contract).
+  ./context_tenant.rhai — the shipped `context_tenant` slot; slot placement only
+    here, internals in ./context_tenant.sdd.
+  /common/src/instancetenant.sdd — the registered `get_tenant_name` /
+    `get_tenant_namespaces` bridges this file calls on @instance (including the
+    raise-vs-`""` asymmetry frozen in its Tasks).
+  vynil-core 0.7.7 script surface (@Script `add_common` behind
+    /common/src/rhaihandler.sdd): three-arg @import_run/@import_template,
+    @type_of, @k8s_resource(...).@list, @json_encode, @log_warn, plain module
+    `import` name resolution.
+  Counterpart contracts, call edges flow the other way (they import this module):
+    /agent/src/tenant/install.sdd and /agent/src/tenant/delete.sdd (live
+    `ctx::run`), /agent/src/template/tenant.sdd (offline `ctx::template`),
+    /agent/src/testing/handler.sdd (mock-engine lane of `agent package test`).
+
+References:
+  ./context_tenant.sdd — co-authored this pass; the `namespace` alias and
+    annotation overlay in Returns.
+  ./../service/context.sdd — the calibration twin. Its twin paragraph in
+    References claims the twins mint no `template_dir`/`agent_image`: FALSE — this
+    file copies both on both lanes; its "call `context_after` only on the live
+    lane" claim about the tenant twin is true.
+  /agent/src/template/tenant.sdd — offline lane freezing this file's outcome from
+    its side (placeholder tenant block, stop at `context_post`).
+  /agent/src/linting/rhai_checker.sdd — the `run`/`template` entry-name lint.
+
+Scenario: live lane mints tenant identity and gathers published services
+  Given a mock engine where `get_tenant_name` answers `acme`,
+    `get_tenant_namespaces` answers `["team-a", "team-b"]`, `team-a` holds two
+    @TenantInstances — one with a two-record `status.services` (both records
+    carrying a `service` payload), one with no status at all — and `team-b` holds
+    one record
+  When @run(@instance, @args) executes
+  Then `tenant.name` is `acme`, `tenant.namespaces` the two-element list,
+    `tenant.maintenance_start_hour` the string `1`, and `tenant.services` holds
+    the three records in namespace then status order, each with the owner
+    `instance` and `package` submaps attached and the fqdn/port payload flattened,
+    the statusless instance skipped silently
+  No mapped test
+
+Scenario: one namespace failing does not stop the gather
+  Given the `TenantInstance` @list of the second namespace raises
+  When the loop continues
+  Then @log_warn carries the error text, that namespace contributes no entries,
+    the remaining namespaces still iterate and entries pushed earlier stay in
+    `tenant.services`
+  No mapped test
+
+Scenario: swallowed namespace getter lands a string
+  Given `get_tenant_namespaces` returns the plain string `""` because the upstream
+    bridge swallowed a cluster failure
+  When @run continues
+  Then `tenant.namespaces` is that string, the gather loop iterates zero times,
+    `services` stays `[]` and this file logs nothing; while a failing
+    `get_tenant_name` instead aborts the whole lane before `tenant` exists
+  No mapped test
+
+Scenario: a hook returning a map replaces everything
+  Given a package `context_pre` hook whose `run` returns `#{only: 1}`
+  When the first guarded slot takes it
+  Then the context is `#{only: 1}`, and this file still writes `tenant` and
+    `extra` onto it — later readers of erased delegate keys get `()` downstream,
+    and the shipped `context_tenant` slot aborts the lane on the interpreter error
+    for its erased `cluster`/`tenant` reads
+  No mapped test
+
+Scenario: offline lane mints the placeholder and stops at context_post
+  Given the /agent/src/template/tenant.sdd synthesized instance with namespace
+    `team-a`
+  When @template(@instance, @args) executes
+  Then `tenant` lands literally as name `client` with namespaces
+    `["client-system", "team-a"]`, maintenance `1`/`0`, no `services` key; the guardless `context_post`
+    is the last import and a package `context_after` hook is never resolved
+    offline; the return is the map after `extra`
+  No mapped test
+
+Scenario: extra stores the raw slot result
+  Given a package `context_extra` module returning `#{tools: []}` — or no such
+    module
+  When the slot writes `context["extra"]`
+  Then the stored value is the raw return (or `()`) with no guard, and the tofu
+    lane renders it as the `vynil_extra` local
+  No mapped test
+
+Tasks:
+  [ ] Map the scenarios with tests: no tenant Rhai lane test exists —
+      /agent/tests/rhai_lifecycle.rs only builds service engines
+      (`scripts/service` + `scripts/lib`); add a tenant resolver builder (plus a
+      fixture packages dir so hook shadowing is testable) before the TTD green
+      gate.
+  [ ] Verify `agent package test` actually drives @run for a tenant fixture (the
+      mock instance must back the registered `get_tenant_name` /
+      `get_tenant_namespaces` names per /agent/src/testing/handler.sdd) and fold
+      the result into the coverage task above.
+  [?] Maintenance hour `"1"` vs the service twin's `"0"`: a deliberate offset
+      maintenance window or copy drift — decide/confirm. The pair is read by
+      nobody in this directory's ./maintenance_start.rhai /
+      ./maintenance_stop.rhai stubs, only via ./../lib/backup_context.rhai.
+  [?] Placeholder previews: template-lane `client`/`client-system` misdescribe a
+      real tenant; decision already open in
+      /agent/src/template/tenant.sdd — mirror the outcome here.
+  [?] Whole-gather unfiltered: own services included, `tenant` tag kept, and
+      duplicates vs @build_context's separately-filtered `cluster.services`
+      possible — confirm intent or mirror that filter.
+  [?] Null payload flatten: @Published serializes `service: null`
+      unconditionally, so `"service" in s` is always true and `s += s.service`
+      on a payloadless record likely raises into the per-namespace
+      catch, silently losing that namespace's later entries — pin the engine
+      behavior with a test, then decide whether to guard the payload type.
+  [?] `context_after` missing from the template lane (live-only slot): same
+      asymmetry flagged in /agent/src/template/tenant.sdd — decide whether
+      "after" must also fire offline or document why not.
+  [?] `extra` unguarded and whole-map replacement semantics: same open twin
+      decisions as ./../service/context.sdd Tasks.
+  [?] The twin paragraph of ./../service/context.sdd misstates this file
+      (claims no `template_dir`/`agent_image` mint here) — correct it under that
+      spec's authority in a later pass.
+
+Done when:
+  Every Scenario has a mapped mock-engine test or decided Task, the twin-diff and
+    key spellings cross-check against ./../service/context.sdd,
+    ./../lib/build_context.sdd and ./context_tenant.sdd, and `specdd lint` is
+    green.

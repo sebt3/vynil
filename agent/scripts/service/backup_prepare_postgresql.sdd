@@ -1,0 +1,177 @@
+Spec: ServiceBackupPreparePostgresqlScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Dumper chaque cible du `context.pg_list` dans SON fichier unique `/backup/postgresql_<pg>.sql` —
+    `pg_dump` pour la base nommée, `pg_dumpall` + purge `sed` en place quand `dbname` vaut l'exact
+    `"*"`, les deux dumps `--clean` — étage prepare de la lane appelé par
+    @import_run("backup_prepare_postgresql", context) de ./backup.sdd dans la ladder fixée
+    secret → postgresql → mysql, entre la fenêtre maintenance (no-op) et la gate
+    `backup_before.sh`. Un seul @throw, fatal dès que l'outil de dump ne rend pas `0`, dans les
+    deux modes. Le `backup_prepare_postgresql.sh` du package le remplace en bloc côté appelant :
+    gate d'existence de fichier uniquement, jamais sur le contenu des listes. Fichier identique à
+    l'octet près à ./../tenant/backup_prepare_postgresql.rhai (diff vérifié, jumeau sans spec) :
+    cette spec est la source des deux copies, lockstep obligatoire.
+
+Owns:
+  ./backup_prepare_postgresql.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("backup_prepare_postgresql", context) ;
+    remplaçable sans toucher l'appelant par un module éponyme sous `${package_dir}/scripts`
+    (première priorité du résolveur, gelée ./backup.sdd et /agent/src/service/backup.sdd).
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification) : seule `context.pg_list` y est lue (`PG_LIST` décodé là-bas).
+  Les paramètres de cible hors carte : @get_env du quatuor `${pg}_dbname`, `${pg}_host`,
+    `${pg}_username`, `${pg}_password` — motifs littéraux, les clés réelles sont formées par
+    concaténation Rhai (`"${" + pg + "_dbname}"`) et développées par le `sh` de la commande, pas
+    par Rhai. Producteur et décodage secret→env de ces quatre noms par cible :
+    ./../lib/backup_context.sdd — cité sans re-spécifier.
+  `dbname` choisit le mode : la valeur exacte `"*"` → dump d'instance complète ; toute autre
+    valeur, `""` d'absence compris → dump d'une base nommée.
+
+Returns:
+  Unité — aucun `return` ; rend la valeur du dernier @import_run("backup_prepare_postgresql_post",
+    context) (`()` sur image stock, branche du skip-marker debug), fondue par ./backup.sdd qui ne
+    merge aucun résultat d'étage. Canal unique 0-ou-@throw : dump(s) paru(s) = hook post atteint.
+
+Raises:
+  Le @throw du fichier, texte verbatim `pg_dump failed for ${pg}` (nom de cible interpolé), le MÊME
+    en base nommée et en mode `pg_dumpall` — le mot `pg_dump` n'est jamais adapté. Gardé par
+    `if rc != 0` sur le seul @shell_run de dump, rien d'autre. Il traverse @import_run (qui
+    n'avale que ses deux skip-markers) et tue la lane : exit-4 côté Rust (./backup.sdd,
+    /agent/src/service/backup.sdd).
+  Levées engine non gardées : @shell_run ne lève que si le `sh -c` ne peut être lancé, mais rend
+    `0` à un process tué par signal (vynil-core 0.7.7 `src/shell.rs`) ; `context` non-map lève au
+    premier `context.` ; @get_env ne lève jamais (`""` si absent).
+
+Handles:
+  Deux destins par rc de dump, comparaison exclusive à `0` : `0` → cible suivante ; tout autre rc →
+    @throw. Pas de retry, aucun tri, aucune sortie lue.
+  Absence de `dbname` : @get_env rend `""`, `""` n'est pas `"*"`, la commande part avec un `-d ""`,
+    pg_dump échoue, son rc verse le @throw au message unique ci-dessus — l'absence d'env n'a ni
+    branche ni message propres.
+  `pg_list` vide (`PG_LIST` absent) : le module est quand même import_run — ./backup.sdd ne route
+    que sur l'existence des `.sh`, jamais sur les listes — la boucle `for` itère zero, aucun shell
+    ne tourne, les deux hooks sautent en markers debug, l'unité sort sans erreur.
+  Slots @import_run("backup_prepare_postgresql_pre", context) / @import_run("backup_prepare_postgresql_post",
+    context) — non livrés dans ./, ./../tenant, ./../lib → skip-markers debug ; un hook qui lève
+    remonte (seuls les deux markers sont avalés).
+  Pas de gate `.sh` propre ici : ./backup.sdd teste `backup_prepare_postgresql.sh` AVANT ce module
+    et l'exécute à sa place s'il existe (@throw `<script-path> FAILED returning <rc>` sur rc non
+    nul, export `RESTIC_REPOSITORY` en préfixe) — ce fichier n'est alors jamais import_run ;
+    `backup_prepare.sh` court-circuiterait même les trois engines. Il reste l'ombre de module
+    éponyme en tête du résolveur (gate remplacé par le module custom).
+
+Must:
+  Dérouler exactement : hook pre → boucle, par cible dans l'ordre de la liste :
+    @log_info(`Dumping postgresql target: ${pg}`) → un @shell_run de dump → garde `rc != 0` →
+    @throw → (mode `"*"` uniquement) @shell_run de purge → cible suivante → hook post. Ces
+    @log_info sont les seules lignes de log de l'étage.
+  Invoquer verbatim le dump, cible rendue par l'option `-f` de l'outil (exemples cible `shop` ;
+    `*` et `template*` sont des littéraux d'option pg_dumpall, pas des globs de ce spec) :
+      mode `"*"` : `export PGPASSWORD="${shop_password}";pg_dumpall -h "${shop_host}" -U "${shop_username}" --exclude-database=postgres "--exclude-database=template*" --exclude-database=streaming_replica --clean -f /backup/postgresql_shop.sql`
+      sinon : `export PGPASSWORD="${shop_password}";pg_dump -h "${shop_host}" -d "${shop_dbname}" -U "${shop_username}" --clean -f /backup/postgresql_shop.sql`
+  En mode `"*"` seulement, après rc de dump réussi, purger le fichier en place par le @shell_run
+    verbatim `sed -i -E '/^(CREATE|ALTER|DROP) ROLE (streaming_replica|postgres)/d' /backup/postgresql_shop.sql`
+    — retour de ce second @shell_run jeté sans garde : un dump NON purgé est toléré ; gelé, non corrigé.
+  Écrire exactement `/backup/postgresql_<pg>.sql` par cible, sans variante : le suffixe
+    `_cleaned.sql` que lit ./restore_postgresql.rhai n'est produit par aucun code du dépôt.
+  Laisser stdout/stderr des deux commandes hérités vers le log du Job (@shell_run) : l'étage ne
+    vérifie ni taille, ni contenu, ni existence du fichier après dump ni après purge.
+  Ne rien toucher d'autre : aucun kube call, aucun scale du workload source, aucune écriture de
+    status — la fenêtre maintenance qui encadre la ladder ne scale rien (./maintenance_windows.sdd)
+    et ce module non plus : les dumps partent sur cluster vivant.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur de `pg_list` et du quatuor d'envs par cible.
+  ./backup.sdd — appelant, gate `.sh` de remplacement, sémantique exit-4 du @throw.
+  ./maintenance_windows.sdd — fenêtre figée no-op autour de la ladder.
+  vynil-core 0.7.7 engine API — @import_run (shim 2 args), @shell_run, @get_env, @log_info
+    (registrars /common/src/rhaihandler.sdd).
+
+References:
+  ./../tenant/backup_prepare_postgresql.rhai — jumeau byte-identique (diff vérifié), sans spec à
+    ce jour, import_runs de la lane ./../tenant/backup.sdd.
+  ./backup_prepare_mysql.sdd — frère de ladder, même forme sans purge.
+  ./restore_postgresql.rhai — consommateur aval de `/backup/postgresql_${pg}.sql` (et de la
+    variante `_cleaned.sql`, orpheline de producteur).
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine résolvant scripts/service :
+      /agent/tests/rhai_backup_redis.rs est le mock TENANT (scripts/lib + scripts/tenant) et ne
+      nomme que `backup_prepare_redis`/`restore_redis` — coverage nulle pour cet étage, son jumeau
+      tenant et son frère mysql de même ladder.
+  [?] Dump cohérent vs cluster vivant : la fenêtre maintenance est un stub de scale jamais écrit
+      (./maintenance_windows.sdd) et ce module ne scale lui-même aucun STS source — pg_dump tourne
+      live. Trancher : scale réellement avant dump, ou figer la cohérence self-consistent de
+      pg_dump comme suffisante.
+  [?] `--exclude-database=template*` : le motif passe NON échappé au `sh` ; selon le CWD, un glob
+      `template*` de fichiers locaux s'y substituerait. Figer la posture d'échappement.
+  [?] `--exclude-database=streaming_replica` et la purge des RÔLES `postgres`/`streaming_replica`
+      sont nommément CNPG ; le module ne teste nulle part le backend. Confirmer l'hypothèse
+      d'implémentation et non une liste paramétrable.
+  [?] Mot du @throw figé `pg_dump failed`, y compris en mode `pg_dumpall`, avec la purge sed sans
+      garde : message unique volontaire ou différencier échec dump vs purge ?
+  [?] Mot de passe via `export PGPASSWORD="${...}"` dans la string `sh -c`, et non comme variable
+      d'environnement propre du processus fils. La cmdline du `sh` expose-t-elle le secret en clair
+      (donc dans la table des processus) ? Trancher la posture password-dans-cmdline.
+  [?] Le suffixe `_cleaned.sql` est lu par ./restore_postgresql.rhai mais produit par personne : la
+      purge sed DEVAIT-ELLE écrire `/backup/postgresql_<pg>_cleaned.sql` ? Le gel actuel corrige le
+      `.sql` principal en place.
+  [?] Process de dump tué par signal : @shell_run rend `0` (cartographie signal→`0` du registrar,
+      `src/shell.rs`) et `-f` a déjà écrit un fichier partiel : un pg_dump OOM-killed en plein dump
+      est compté réussi et son SQL tronqué part au snapshot backup_run sans autre preuve que ce `0`.
+      Trancher si le rc suffit.
+  [?] `context` non-map ou `pg_list` absent → levée engine au premier accès (non @throw) : fige-t-on
+      la garantie @from_args (toujours en amont, ./../lib/backup_context.sdd) ou garde-t-on une
+      branche explicite ici ?
+
+Done when:
+  Les Scenario tiennent sur un mock service (résolveur avec scripts/service), les deux copies
+    restent verrouillées à l'octet, les [?] sont tranchés, `specdd lint` vert sur ce fichier.
+
+Scenario: dump en base nommée
+  Given `pg_list` = `["shop"]` et @get_env de `shop_dbname` = `"orders"`, @shell_run rendant `0`
+  When @run(context) s'exécute
+  Then la commande `pg_dump` verbatim de `Must` tourne, AUCUNE purge sed, le seul log est
+    `Dumping postgresql target: shop`, @import_run("backup_prepare_postgresql_post", context)
+    ensuite s'exécute, et l'unité est rendue
+
+Scenario: dump en mode instance complète
+  Given `shop_dbname` = `"*"`, @shell_run rendant `0`
+  When @run(context) s'exécute
+  Then la commande `pg_dumpall` verbatim avec ses trois exclusions tourne sur
+    `/backup/postgresql_shop.sql`, immédiatement suivie de la purge sed verbatim en place, le rc de
+    cette purge étant laxement ignoré
+
+Scenario: échec de dump, message unique et fatal
+  Given pg_dump (resp. pg_dumpall) rendant tout rc non nul
+  When @run(context) s'exécute sur `shop`
+  Then la chaîne levée est verbatim `pg_dump failed for shop` y compris en mode `pg_dumpall`, le
+    hook post n'est jamais appelé, aucune purge ne tourne, @import_run ne filtre pas : la lane Rust
+    sort en exit-4 (./backup.sdd)
+
+Scenario: cible sans dbname, la branche nommée quand même
+  Given @get_env de `shop_dbname` renvoie `""` (non `"*"`)
+  When @run(context) s'exécute
+  Then la commande nommée part avec `-d ""`, l'échec versé par pg_dump déclenche le @throw habituel
+    : l'absence d'env n'a ni branche propre ni message distinct
+
+Scenario: liste vide, l'étage quand même traversé
+  Given `pg_list` = `[]` (env `PG_LIST` absent — ./backup.sdd route sur l'existence des fichiers,
+    jamais sur les listes)
+  When @run(context) s'exécute
+  Then zero @get_env de cible, zero @shell_run, les deux hooks sautent en markers debug et l'unité
+    est rendue sans erreur : RIEN n'est écrit sous `/backup` par cet étage
+
+Scenario: process de dump tué, faux succès
+  Given un pg_dump tué par signal (rc rendu `0` par @shell_run) avec son fichier `-f` déjà partiel
+    écrit
+  When @run(context) s'exécute
+  Then l'étage atteint le hook post et rend l'unité : backup_run snapshottera le SQL tronqué
+    comme si le dump avait réussi

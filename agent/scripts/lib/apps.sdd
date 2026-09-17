@@ -1,0 +1,175 @@
+Spec: LibApps
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Build primed, authenticated @RestClient handles for three packaged in-cluster apps
+    (Authentik, SonarQube, Gitea) so driving scripts get on-cluster credentials resolved from the
+    apps' own Secrets instead of arguments. Each getter is a pure factory: assemble base URL +
+    auth headers, fire no request; all apps share one discovery idiom — read Secret via the raw
+    k8s lane, @base64_decode the value, prime the client. There is no app-slug, metadata or label
+    helper here: the module is client factories plus one thin Gitea passthrough.
+
+Exposes:
+  @get_authentik(ns, name) — token comes from Secret `<name>` in @ns via data key
+    `AUTHENTIK_BOOTSTRAP_TOKEN`; the host comes from Ingress `<name>` at `spec.rules[0].host`;
+    the client is @new_http_client of `https://<host>/api/v3` primed with
+    @RestClient.add_header_json then @RestClient.add_header_bearer on the decoded token. Secret
+    `<name>-cert` optionally supplies `ca.crt`: only when that key is present its decoded PEM is
+    pinned via @RestClient.set_server_ca. Returns the configured @RestClient.
+  @get_authentik(ns) — the 2-arg form with name `"authentik"` (unsuffixed: token Secret and
+    Ingress carry the release name itself).
+  @get_sonar(ns, name) — Secret `<name>-sonar` supplies `ADMIN_PASSWORD`; the client is
+    `http://<name>-sonar.<ns>.svc/api` primed with @RestClient.add_header_json and
+    @RestClient.add_header_basic over literal user `"admin"` and the decoded password.
+  @get_sonar(ns) — the 2-arg form with name `"sonar"`, i.e. Secret `sonar-sonar` and service
+    host `sonar-sonar.<ns>.svc` (see Tasks).
+  @get_gitea(ns, name) — Secret `<name>-admin-user` supplies `username` and `password`; the
+    client is `http://<name>-http.<ns>.svc:3000/api/v1` primed with @RestClient.add_header_json
+    plus @RestClient.add_header_basic on both decoded values.
+  @get_gitea(ns) — the 2-arg form with name `"gitea"`.
+  @gitea_list_orgs(gitea) — the literal `gitea.get("orgs")`: GETs the Gitea orgs list and hands
+    back the raw response map; no unwrap, no status filter, no paging.
+
+Accepts:
+  @ns — @String namespace that owns the app Secrets and the authentik Ingress and hosts the
+    pod-network service DNS `<name>-<component>.<ns>.svc`.
+  @name — release/base name @String driving every object name through the frozen suffix table;
+    no validation, no slug transformation.
+  @gitea — any live @RestClient, conventionally from @get_gitea; nothing checks it, so another
+    app's client just means the `orgs` GET carries those headers.
+
+Returns:
+  The three getters return an un-fired @RestClient: header priming is set up, no request happens
+    at construction, and the caller's first send sees exactly the primed headers.
+  Client sends (including @gitea_list_orgs) answer the vynil-core @RestClient.get map: `code`
+    (int), `json` (parsed body, falling back to the empty map `#{}` on non-JSON), `headers`,
+    `body` (raw text).
+
+Raises:
+  Zero @throw statements and zero guards producing fallbacks: every failure is an
+    engine/interpreter error, none typed here —
+      - a Secret/Ingress lookup miss on the @k8s_resource lane surfaces from @K8sGeneric.get as a
+        rhai throw (unresolved kind = unsupported-method text, absent object = kube error text);
+      - absent payload keys raise rhai property-not-found on the unguarded chains
+        `auth.data.AUTHENTIK_BOOTSTRAP_TOKEN`, `auth.data.ADMIN_PASSWORD`,
+        `auth.data.username`, `auth.data.password`;
+      - @base64_decode throws on invalid base64 or non-UTF-8 payload and takes text only — a
+        non-text @data value is function-not-found;
+      - the Ingress chain `spec.rules[0].host` is read unguarded: missing `spec`/`rules`/`host`
+        errors and an empty `rules` array is an out-of-range index error;
+      - after construction only transport/client-build failures raise, and a PEM handed to
+        @RestClient.set_server_ca is parsed by reqwest only when the first request builds the
+        client — a bogus CA text throws at send time, not at factory time.
+  HTTP statuses are NOT raises: 401/404/5xx come back as the same map with their `code`;
+    scripts must branch on it themselves (the pattern is caller-owned — nothing here branches).
+
+Handles:
+  The only branch in the file is the `"ca.crt" in cert.data.keys()` membership probe: key present
+    pins the trust root, key absent silently keeps the default root store. The guard tests the
+    KEY, not the data object — a cert Secret without any `data` map throws at the guard leg
+    before the branch (see Tasks).
+  Arity ladders: rhai has no default arguments, so each `(ns)` form is a separate @fn delegating
+    the app's frozen default name into its `(ns, name)` form.
+  Multi-rule Ingresses: only `rules[0]` is ever read; extra rules/hosts are ignored.
+  Secret `type` is never inspected: any Secret answering with the expected data keys is accepted.
+
+Must:
+  Be import-pure: the file is fn declarations only, so resolving the module executes nothing and
+    touches no cluster; every effect happens in an explicit call.
+  Read objects through the raw lane @k8s_resource with kind literals `"Secret"` and `"Ingress"`
+    plus @K8sGeneric.get, and decode @data payloads through @base64_decode verbatim — credentials
+    never enter argv, file writes or logs.
+  Freeze the per-app discovery contract exactly (full table under `Example`): authentik reads the
+    unsuffixed Secret + cert Secret `<name>-cert` + Ingress `<name>` and serves
+    `https://<first-rule-host>/api/v3`; sonar reads Secret `<name>-sonar` and serves
+    `http://<name>-sonar.<ns>.svc/api` as basic user `"admin"`; gitea reads Secret
+    `<name>-admin-user` and serves `http://<name>-http.<ns>.svc:3000/api/v1`.
+  Keep the scheme split: authentik is reached over https at its published Ingress host with an
+    optional pinned CA; sonar and gitea are reached over plain http on pod-network service DNS,
+    with no Ingress lookup and no CA lane on that side.
+  Prime every client with @RestClient.add_header_json then exactly one auth header —
+    @RestClient.add_header_bearer for authentik, @RestClient.add_header_basic for sonar and
+    gitea — before returning it; no client leaves unfired-and-unauthenticated.
+  Return the built @RestClient as-is: never call it, never cache Secrets or clients, one fresh
+    client per call.
+
+Depends on:
+  vynil-core 0.7.7 registered APIs, by registrar: `k8s` @k8sgeneric_rhai_register
+    (@k8s_resource constructors, @K8sGeneric.get — k8s.rs), `http` @http_rhai_register
+    (@new_http_client, the five @RestClient mutators used here, the @RestClient.get response map —
+    http.rs), and the engine @base64_decode helper (engine.rs).
+  ./../../../common/src/rhaihandler.sdd — the engine assembly those names arrive on and its
+    per-engine surface freeze: the k8sgeneric/http registrars exist on @Script::new, the mock
+    engine replaces both k8s and http name-for-name (so these getters are mock-fixture-able),
+    and @Script::new_file_scan never carries the k8s names.
+  ./gen_package.sdd — calibration reference and the precedent freezing the
+    zero-runtime-importer posture for this tree's lib modules.
+  Importer convention FROZEN-ABSENT: no script in the repository imports this module — grepping
+    ./../../scripts, ./../../tests and the repo root finds only the commented sample block in the
+    developer scratch file ./../../../scripts/test.rhai — that block does freeze the intended
+    call surface: `import "apps" as apps`, `apps::get_authentik("media-auth")`,
+    `apps::gitea_list_orgs(gitea)`, and the caller-side `code == 200` / `.json` navigation.
+  The cluster-side convention (not owned here): the named Secrets, their data keys and
+    base64-encoded payloads are produced by the apps' own charts/boxes; this module only reads
+    them.
+
+Tasks:
+  [?] No live importer exists anywhere in-repo (grep-confirmed): keep this as a maintained
+      tier-2 toolkit surface (the ./gen_package.sdd freeze posture, with
+      ./../../../scripts/test.rhai's commented block as sole usage evidence), or treat the
+      module as retired scratch flow and remove it? The decision conditions everything below.
+  [?] @get_sonar(ns)'s default name `"sonar"` doubles the component suffix — Secret
+      `sonar-sonar`, service host `sonar-sonar.<ns>.svc` — where the authentik/gitea defaults
+      read plainly. Decide whether the default is a real `<release>-sonar` naming convention or
+      should carry no suffix leg.
+  [?] The optional-CA lane still requires the cert Secret's `data` map to exist (the guard reads
+      `.keys()` before branching): decide whether "CA optional" must also tolerate a missing or
+      data-less `<name>-cert` Secret, or the Secret's presence is contractual.
+  [?] @gitea_list_orgs is a one-line passthrough with no production or test caller: decide
+      whether it stays verbatim, is deleted, or earns a `.json`-unwrapping variant.
+  [ ] Add mock-engine coverage: no file under ./../../tests loads apps.rhai (rhai_lib.rs
+      exercises other libs; no test in the tree reaches it through mock k8s/http) — pin the
+      per-app URL/credential/CA legs with @Script::new_mock fixtures.
+
+Done when:
+  The importer keep-or-retire decision is recorded, the four scenarios are pinned by mock k8s +
+    http fixture tests, and the module either stands green with tests or is removed.
+
+Scenario: import and construction stay effect-free
+  Given a script running `import "apps" as apps;` then `apps::get_gitea("ci")` on a mock engine
+    holding a Secret `gitea-admin-user` in ns `ci`
+  When the factory returns
+  Then a @RestClient primed with JSON headers and the decoded basic pair is returned un-fired
+  And the only cluster read was that one Secret lookup and no HTTP request was sent
+
+Scenario: authentik client with and without the cert key
+  Given ns `ns` holds Secret `ak` with `AUTHENTIK_BOOTSTRAP_TOKEN`, Ingress `ak` with
+    `spec.rules[0].host` = `auth.example`, and Secret `ak-cert`
+  When @get_authentik("ns", "ak") runs and `ak-cert` data contains `ca.crt`
+  Then the client targets `https://auth.example/api/v3` with the bearer token and the pinned CA
+  But when `ak-cert` data exists without the `ca.crt` key, the same client is returned with only
+    the default trust store
+
+Scenario: sonar default builds the doubled names
+  Given ns `ci` has Secret `sonar-sonar` with a base64 `ADMIN_PASSWORD`
+  When @get_sonar("ci") runs
+  Then the client base URL is `http://sonar-sonar.ci.svc/api` and the basic pair is `admin` plus
+    the decoded password
+
+Scenario: http error statuses pass through as data
+  Given a client from @get_gitea() whose API answers the `orgs` GET with status 401
+  When @gitea_list_orgs(gitea) runs
+  Then the answer is the response map with `code` `401`, never a throw
+  And only a transport-level failure (or the first-send PEM/client-build error) raises
+
+Example:
+  frozen name/key/URL table: authentik Secret `<name>` (key `AUTHENTIK_BOOTSTRAP_TOKEN`), cert
+    Secret `<name>-cert` (key `ca.crt`, optional), Ingress `<name>` →
+    `https://<rules[0].host>/api/v3`; sonar Secret `<name>-sonar` (key `ADMIN_PASSWORD`, user
+    `admin`) → `http://<name>-sonar.<ns>.svc/api`; gitea Secret `<name>-admin-user` (keys
+    `username`, `password`) → `http://<name>-http.<ns>.svc:3000/api/v1`; path `orgs` for
+    @gitea_list_orgs.
+  intended call surface, verbatim from ./../../../scripts/test.rhai's commented block:
+    `import "apps" as apps;` + `apps::get_gitea("media-ci")` + `apps::gitea_list_orgs(gitea)` +
+    `if (git_orgs.code == 200)` then iterate `git_orgs.json`.

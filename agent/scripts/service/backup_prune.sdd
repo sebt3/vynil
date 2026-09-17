@@ -1,0 +1,122 @@
+Spec: ServiceBackupPruneScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Appliquer la rétention au dépôt : `restic forget` avec quatre flags keep-* pris des clés
+    `max_*` puis `--prune`. Livré dans ./ mais NON CÂBLÉ : ./backup.sdd gèle que son seul
+    call-site est le commentaire `//import_run("backup_prune", context);` entre check et
+    `backup_post` — code mort tel que branché, même posture côté tenant. Consummer UNIQUE
+    des RESTIC_MAX_* de la lane (defaults `"7"`/`"5"`/`"12"`/`"4"` gelés dans
+    ./../lib/backup_context.sdd). Fichier identique à l'octet près à
+    ./../tenant/backup_prune.rhai (diff vérifié, jumeau sans spec) : lockstep obligatoire.
+
+Owns:
+  ./backup_prune.rhai
+
+Exposes:
+  @run(context) — seul @fn, aujourd'hui ATTEIGNABLE PAR PERSONNE dans les deux lanes (les
+    deux call-sites service et tenant sont commentés) ; le module ne redevient vivant que
+    si ./backup.sdd ravive sa ligne, ou par appel direct depuis un script paquet qui
+    l'importe sous le nom `backup_prune`.
+
+Accepts:
+  @context — la carte de @ctx::from_args (./../lib/backup_context.sdd, cité). SIX clés lues :
+    `context.s3_url` (export inline), `context.restic_args` (flags APRÈS le sous-ordre
+    `forget`), et les quatre retention `context.max_dayly` / `max_weekly` / `max_monthly` /
+    `max_yearly` — strings d'env, interpolés tels quels entre guillemets doubles.
+
+Returns:
+  Unité — aucun `return` ; et personne ne la jette faute d'appelant. Si la ligne revit dans
+    ./backup.sdd, le canal redevient 0-ou-throw comme les autres étages.
+
+Raises:
+  Le @throw du fichier, texte verbatim `restic prune FAILED returning ${rc}` (rc interpolé),
+    gardé par `if rc != 0` — le texte dit `prune` alors que la commande invoquée est
+    `restic forget … --prune` (cf. Tasks). Non filtré par @import_run, il tuerait la lane en
+    exit-4 (./backup.sdd) si l'étage était branché.
+  Levées engine non gardées, comme les tiers ./backup_run.sdd : @shell_run ne lève que sur
+    spawn impossible et rend `0` à un process tué par signal (vynil-core 0.7.7
+    `src/shell.rs`) ; `context` non-map lève au premier `context.`.
+  Absences sans throw : une carte sans les clés `max_*` fait tourner
+    `--keep-daily "()"` littéral ; c'est alors le rc de restic — pas le module — qui décide,
+    typiquement un rc non nul capturé par le @throw du fichier.
+
+Handles:
+  Deux destins : rc `0` → hook post, unité ; rc non nul → throw, hook post jamais appelé.
+    `forget --prune` est destructif et unconditional : snapshots hors rétention supprimés et
+    données compactées dans la même commande, sans dry-run.
+  Oubli SANS filtre : aucun `--tag` n'est passé à `forget`, alors que ./backup_run.rhai
+    taggue chaque snapshot — la rétention compte donc tous les snapshots du dépôt ; sur un
+    dépôt cheminé par instance (`s3:${base_path}/${sub_path}`, ./../lib/backup_context.sdd)
+    les deux postures ne divergent que sur dépôt partagé.
+  Slots @import_run("backup_prune_pre", context) / @import_run("backup_prune_post",
+    context) — non livrés nulle part dans ./, ./../tenant, ./../lib → skip-markers debug.
+  Aucun gate `.sh` : ./backup.sdd ne lui en donne aucun et ne l'appelle pas ; `backup.sh`
+    remplace la lane entière sans jamais passer ici.
+
+Must:
+  Dérouler exactement, si on l'appelle : hook pre → @log_info("Pruning restic backup") →
+    commande → garde `rc != 0` → hook post.
+  Invoquer verbatim :
+    `export RESTIC_REPOSITORY="${context.s3_url}";restic forget ${context.restic_args} --keep-daily "${context.max_dayly}" --keep-weekly "${context.max_weekly}" --keep-monthly "${context.max_monthly}" --keep-yearly "${context.max_yearly}" --prune`
+    — quatre keep-* entre guillemets doubles dans cet ordre, `--prune` final codé en dur,
+    aucun autre flag en dur que ces cinq-là.
+  Ne lire la sortie de restic en aucune façon (stdout/stderr hérités vers le log du Job via
+    @shell_run) : le module ne vérifie ni quels snapshots sont partants ni ce que le prune a
+    libéré.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur des six clés lues, dont le quartet `max_*` dont
+    il est le SEUL consommateur de la lane.
+  ./backup.sdd — gel du branchement (call commenté) et de la sortie exit-4 hypothétique.
+  API moteur vynil-core 0.7.7 — @import_run (version 2 args), @shell_run, @log_info
+    (registrars /common/src/rhaihandler.sdd).
+
+References:
+  ./backup_run.sdd — le poseur de tags que ce forget ne filtre pas.
+  ./../tenant/backup_prune.rhai — jumeau byte-identique, également non câblé, sans spec.
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine (appel direct du module) :
+      /agent/tests/rhai_backup_redis.rs ne le nomme jamais — et de fait le module est
+      inatteignable en lane tant que le call-site commenté ne revit pas.
+  [?] Raviver `import_run("backup_prune", context)` à la position livrée (après
+      ./backup_check.rhai) ou supprimer fichier + decode des RESTIC_MAX_* — décision
+      commune avec ./backup.sdd, à prendre en lockstep sur les deux kinds.
+  [?] Texte levé `restic prune FAILED` alors que la commande est `restic forget` : aligner
+      le texte ou le geler tel quel ?
+  [?] `forget` sans `--tag` ni `--group-by` : rétention temporelle non filtrée sur tous les
+      snapshots du dépôt — trancher le filtrage au moment de raviver l'appel.
+
+Done when:
+  La décision vivre-ou-mourir est prise pour les deux kinds ; si vivant : Scenario testés
+    sur mock, texte du @throw et filtrage des tags tranchés, copies verrouillées.
+
+Scenario: la lane ne l'appelle jamais
+  Given une lane ./backup.sdd telle que branchée (call commentée)
+  When un backup complet s'exécute avec les RESTIC_MAX_* posés
+  Then `restic forget` ne tourne pas : la rétention est décodée par @ctx::from_args mais
+    reste sans exécuteur, ce module returning rien parce que personne ne l'appelle
+
+Scenario: forget rc nul, appel direct
+  Given un @shell_run répondant `0` et une carte avec les quatre `max_*` remplis
+  When @run(context) est appelé directement
+  Then la commande verbatim de `Must` tourne, `backup_prune_post` est import_run après, et
+    l'unité est rendue
+
+Scenario: rc non nul sous forget
+  Given @shell_run renvoyant `3` sur le forget
+  When @run s'exécute
+  Then la chaîne levée est exactement `restic prune FAILED returning 3` — le mot `prune`
+    nommant ici `forget --prune` — et `backup_prune_post` n'est jamais appelé, laissant le
+    dépôt dans l'état où restic l'a quitté
+
+Scenario: carte sans les clés max_*
+  Given une carte sans `max_dayly`/`max_weekly`/`max_monthly`/`max_yearly` (mais bien une
+    carte)
+  When @run s'exécute
+  Then aucun raise d'absence depuis ce fichier : les flags portent le `()` littéral de
+    l'interpolation et c'est le rc de restic sur la commande, quoi qu'il soit, qui décide du
+    succès ou du @throw

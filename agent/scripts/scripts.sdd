@@ -1,0 +1,96 @@
+Spec: ScriptsAgent
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Registre directeur des 120 scripts Rhai embarqués de ./ — contrat de couverture
+    intégrale, invariants transverses du moteur, et dette de référencement externe.
+    Chaque script a UNE spec autoritaire : même-basename, ou nommément Owns d'une spec
+    familiale, ou jumeau byte-identique pointé. Aucune zone d'ombre.
+
+Owns:
+  ./ (arborescence des scripts ; aucun .rhai n'est Owned par une spec hors ./)
+
+Structure:
+  ./lib/ — 16 utilitaires importés par tous les lanes (16 specs même-basename).
+  ./packages/ + ./boxes/ — outillage paquet/auteur : scan, build, validate, sandbox
+    (6 specs ; `packages/test.rhai` = code mort gelé, `boxes/scan.rhai` = mismatch
+    credential gelé).
+  ./service/ — lane Instance/Service : orchestrateurs + buckets d'objets.
+  ./tenant/ — lane TenantInstance : miroir service sans crds, avec secrets de backup.
+  ./system/ — lane SystemInstance : tofu + crds + systems.
+  Aucun test n'habite l'arborescence ./ : les tests Rhai vivent côté Rust
+    @agent/tests/ (@rhai_lifecycle.rs service-only, @rhai_backup_redis.rs legs tenant
+    redis/mongo).
+
+References:
+  66 fichiers ont une spec même-basename (dont @./tenant/delete_vitals.rhai, seul membre
+    familial tenant qui diverge réellement du squelette service : +bloc mort backup-final,
+    +import wait dormant).
+  Les 54 restants sont nommés là où leur comportement est gelé :
+    Membres des familles service (Owns listés) : ./service/install_stages.sdd,
+      ./service/delete_stages.sdd, ./service/template_stages.sdd,
+      ./service/tofu_stages.sdd, ./service/maintenance_windows.sdd,
+      ./tenant/maintenance_windows.sdd, ./system/system_stages.sdd
+      (install_systems/delete_systems/template_systems).
+    Stages system hors famille : ./system/install_crds.rhai et ./system/delete_crds.rhai
+      sont byte-identiques aux stages service et couverts par ./service/install_crds.sdd
+      et ./service/delete_crds.sdd (déclaration faite dans ./system/system_stages.sdd).
+    Jumeaux tenant byte-identiques de stages service : backup_check/init/prune/run
+      (specs service même-nom), backup_prepare_{mysql,postgresql} (specs service
+      même-nom), backup_prepare_secret (Owned par ./service/restore_secret.sdd),
+      restore_{run,secret,mysql,postgresql} (specs ./service/restore_*.sdd),
+      install/delete/template_{befores,others,posts,scalables} hors vitals (mêmes specs
+      familiales service, delta consigné — pour install : ligne gate
+      @install_allowed_obj vs @install), delete_tofu et install_tofu
+      (./service/tofu_stages.sdd) — install_tofu tenant est le jumeau SAIN ; le delta
+      gelé `ctx =` sans @let (levée Rhai prouvée) est du côté service.
+    Legs propres au tenant : ./tenant/backup_prepare_mongodb.rhai et
+      ./tenant/backup_prepare_redis.rhai + leurs restore, specs tenant même-nom.
+
+Must:
+  Maintenir l'invariant de couverture : tout nouveau @.rhai sous ./ reçoit une spec
+    même-basename, ou est ajouté à l'Owns d'une spec familiale, ou est déclaré jumeau
+    avec pointeur — vérifiable par la boucle find+test de cette spec.
+  Geler que tous les scripts importent la surface moteur (@import/@import_run/@log_*/
+    @k8s_resource/@json_encode/…) fournie par le registre vynil-core, et AUCUN symbole
+    de ./lib/ sans @import explicite (l'absence d'import in-repo de @gen_package/@apps/
+    @resolv_service/@storage_class_selector dans les lanes = appel réservé aux paquets
+    tiers qui les fournissent).
+  Geler la posture import-time : les 120 scripts sont sans effet de bord à l'import
+    (tout l'effet est derrière @run) — vérifié par les specs mêmes-basename ; un script
+    avec effet à l'import est un changement de contrat.
+  Consigner l'orthographe : @import_run saute silencieusement un hook `_pre`/`_post`
+    absent ; une faute de frappe dans un nom de hook est donc SILENCIEUSE — aucun
+    contrôle de nom n'existe nulle part.
+
+Depends on:
+  ../agent.sdd — parent du crate ; tâche #2 de ce parent = cette spec + ses enfants.
+  vynil-core (crate externe, hors dépôt) — fournisseur non specé ici de la surface
+    moteur et de la sémantique @import_run/@YamlDoc write-back.
+
+Tasks:
+  [ ] Unifier les références externes : les specs ./ citent la crate moteur sous trois
+      formes (chemin relatif hors dépôt ~/projets/vynil/vynil-core, nom de crate, URL du
+      registre) — choisir une forme et corriger en masse. (L'orthographe fautive
+      « wynil-core » est déjà corrigée en `vynil-core` par pass sed sur tout le corpus.)
+  [ ] Zéro les mentions « pending spec » devenues fausses dans les specs tier-1 anglaises
+      (une cinquantaine de lignes, grep `pending` — certaines sont légitimes : phase K8s,
+      décisions ouvertes) — absorbé par la campagne de traduction FR : chaque passe de
+      réécriture d'une spec tier-1 corrige ses pointeurs d'abord.
+  [ ] Tenu à jour des References de couverture à chaque script ajouté/retiré/renommé (l'invariant de
+      Must est mécanique : la boucle de recensement ne doit jamais retrouver d'orphelin).
+  [ ] Décider le sort de `./agent/scripts/packages/test.rhai` (code mort, gelé dans sa
+      spec même-nom) et du scan boxes (mismatch credentials).
+
+Done when:
+  La boucle find+test de la section References ne trouve aucun orphelin, les deux références
+    externes sont unifiées, et `specdd lint ./` reste 0 erreur 0 avertissement.
+
+Scenario: recensement mécanique de la couverture
+  Etant donné @ScriptsAgent et l'arborescence ./
+  Quand on itère sur chaque @.rhai et qu'on exige soit un @.sdd même-basename, soit une
+    mention nominale dans l'Owns ou le corps d'un @.sdd du même répertoire ou d'une spec
+    familiale listée en References
+  Alors aucun des 120 fichiers ne ressort orphelin
+  Et ce résultat est reproduisible par une simple boucle shell, sans lecture subjective

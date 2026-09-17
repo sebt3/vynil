@@ -1,0 +1,96 @@
+Spec: SuppressionVitalsTenant
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Stage de suppression du bucket `vitals` du kind tenant — le seul membre de la famille
+    delete_* dont le jumeau diverge : le squelette familial gelé dans
+    ./../service/delete_stages.sdd plus un bloc MORT de backup-final manuel rendu par
+    Handlebars (54 lignes vs 43 service).
+
+Owns:
+  ./delete_vitals.rhai
+
+Exposes:
+  @run(instance, context) — appelé par `import_run("delete_vitals")` depuis ./delete.sdd,
+    sous le gate `status != () && status.vitals != ()` côté orchestrateur ET re-gardé en
+    interne (double lecture du même statut).
+
+Accepts:
+  @instance — @TenantInstance ; @context — carte de contexte tenant ; seuls accès lus :
+    @instance.status.vitals (inventaire des objets posés par ./install_vitals.rhai) et
+    les champs d'entrée `namespace`/`api_version`/`apiVersion`/`kind`/`name`.
+
+Returns:
+  La carte @context (fondu par ./delete.sdd sous sa garde `type_of == "map"`), inchangée
+    sauf fusion des hooks pre/post.
+
+Raises:
+  Zéro @throw. Levées propagées : construction @k8s_resource sur entrée sans `kind`
+    (fonction-introuvable), hooks `delete_vitals_pre`/`_post` dont le `run` lève, et
+    l'expectation de `wait_deleted(60*5)` si la suppression dépasse 5 min (le `wait`
+    est ici réellement importé et… voir Must — non, il ne sert toujours pas).
+
+Handles:
+  @NotFound avalé SILANCIEUSEMENT au get/delete (chaîne `contains("NotFound")` sur
+    @Err-string) ; `api.exist()` faux = objet silencieusement ignoré, run finit propre ;
+    aucune écriture de statut ni marqueur (la famille delete n'en pose jamais — gelé
+    côté ./../service/delete_stages.sdd).
+
+Must:
+  Reproduire le squelette familial : hook `_pre` + fusion `map` → parcours de
+    `instance.status.vitals` comme INVENTAIRE → namespace = entrée sinon instance →
+    `k8s_resource` sur `api_version`/`apiVersion`/`kind` → `exist()` → `get_obj` →
+    `delete()` → pile `deleted` → seconde boucle `@log_info` + `wait_deleted(300)` →
+    hook `_post` + fusion → retour `context` (tout gelé en détail dans
+    ./../service/delete_stages.sdd — ne re-décris pas, cite).
+  Garder le bloc COMMENTÉ lignes 8-18 tel quel : rendu `{{> manualbackup.yaml }}` (via
+    @new_hbs/@register_partial_dir/@render_from) puis `dir::install_allowed_obj` sur
+    `context.tenant.namespaces` — deux références à des symboles NON IMPORTÉS (`dir`)
+    prouvant que le bloc ne pourrait pas tourner tel quel ; deux TODO encadrent le bloc
+    (« trigger a backup before cleaning », « wait for the backup-job »), gel comme
+    backup-final-avant-teardown jamais posé.
+  Conserver l'@import `"wait" as wait` de la ligne 1 JAMAIS APPELÉ (le wait réellement
+    utilisé est la méthode d'objet @wait_deleted) — même import dormant que les jumeaux
+    service/`delete_vitals`, déjà consigné en [?] dans ./../lib/wait.sdd et
+    ./../service/delete_stages.sdd.
+  Relire `status.vitals` SANS lire `context.namespace.use_backup` : le gate réel du
+    backup-final commenté dépendait de cette clé — le stage, lui, supprime TOUJOURS.
+
+Depends on:
+  ./../service/delete_stages.sdd — le contrat de squelette (dont les deltas : bloc mort,
+    use_backup commenté, namespaces du bloc rendu install_allowed).
+  ./delete.sdd — orchestrateur : position du stage sous le gate `vitals` (qui déclenche
+    ./delete_backup.rhai AVANT ce stage), fusion/discarde du retour.
+  ./install_vitals.rhai — producteur de l'inventaire `status.vitals` (avec carry-forward
+    des non-supprimés, gelé ./../service/install_vitals.sdd).
+  ./context.sdd — fournisseur de la clé `namespace.use_backup` que seul le bloc mort
+    consulterait, et minteur de `template_dir` (l.29-30).
+  ./../../templates/manualbackup.yaml.hbs.sdd — le gabarit que le bloc mort rendrait (voie
+    dormante des deux côtés).
+
+Tasks:
+  [ ] Trancher le backup-final-avant-teardown (décision déjà portée ouverte par
+      ./../service/delete_stages.sdd [?] et ./delete.sdd) : si ravivé, corriger D'ABORD les
+      symboles non importés (`dir::install_allowed_obj` n'a aucun @import `dir` dans le
+      fichier — seul vrai trou, `template_dir` étant bien minti par ./context.rhai l.29-30),
+      mouliner @new_hbs/@render_from comme les lanes schedule_backup, et décider l'attente du
+      Job ; sinon retirer bloc + TODO.
+  [ ] Retirer l'import `wait` dormant (lockstep avec la décision wait.sdd).
+  [ ] Tests : aucun test ne nomme ce stage (`rhai_backup_redis.rs` = legs redis/mongo,
+      `rhai_lifecycle.rs` = service) — scenario unique non mappé.
+
+Done when:
+  Le bloc mort a une décision (ravivé avec imports, ou retiré) et le stage est testé
+    sur mock k8s avec inventaire `status.vitals` hétérogène (api_version/apiVersion/
+    sans-kind, NotFound, exist-faux).
+
+Scenario: entrées périmées et disparues cohabitent
+  Etant donné `SuppressionVitalsTenant` avec `instance.status.vitals` mélangeant un Deployment
+    encore posé, un Secret déjà supprimé (NotFound) et une entrée dont le kind n'existe
+    plus (`exist()` faux)
+  Quand @run s'exécute
+  Alors les trois voies produisent respectivement : delete + wait_deleted 300 s, silence
+    avalé, silence ignoré
+  Et @run retourne le contexte sans aucun marqueur d'échec — l'orchestrateur ./delete.sdd
+    libérera le finalizer comme si tout avait été nettoyé

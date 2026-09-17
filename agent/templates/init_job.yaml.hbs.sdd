@@ -1,0 +1,187 @@
+Spec: GabaritInitJob
+
+Platform: Handlebars (moteur vynil-core 0.7.7 / hbs du crate `agent` via @new_hbs, partials via @register_partial_dir)
+
+Purpose:
+  Rendre le faisceau de documents `init-restore` qui amorce le premier install d'une instance
+    depuis un backup restic existant : le `ServiceAccount` `{appslug}-backup` lié par un
+    `RoleBinding` au ClusterRole `backups`, le `ConfigMap` optionnel des scripts package,
+    et le `Job` ponctuel `{appslug}-init-restore` dont le pod lance la commande `restore` du
+    client `agent` (service ou tenant) contre le snapshot. C'est le partial `init_job.yaml`,
+    consommé uniquement par les deux lanes `init_from` (service et tenant), côté CR de la
+    lane backup/restore.
+
+Owns:
+  ./init_job.yaml.hbs
+
+Exposes:
+  Le partial enregistré sous le nom `init_job.yaml` (nom de fichier moins `.hbs` selon
+    @register_partial_dir), seule surface d'appel : rendu par @render_from(`"{{> init_job.yaml }}"`)
+    depuis les deux @run des lanes `init_from`. Le rendu expose un flux de 3 ou 4 documents dans
+    un ordre figé (voir Must), décodés en liste ordonnée par @yaml_decode_multi côté consommateur.
+
+Accepts:
+  La carte de rendu retournée par @bctx::run(@instance, @context, `true`) — la même carte que
+    celle du lane, mutée et repassée comme data Handlebars. Clues lues directement ici :
+    `has_files` (booléen), `files` (liste d'entrées `name` + `content`), `instance.appslug`,
+    `instance.namespace`, `instance.selector` (via @selector_from_ctx(`this`)), et
+    `cluster.vynil_namespace`.
+  La racine `instance` est la VUE construite par /agent/scripts/lib/build_context.sdd
+    (`appslug`, `selector`, `selector_from_ctx` lit `instance.selector`), pas le CR injecté —
+    distinction gelée par /agent/scripts/service/init_from.sdd — ne re-décris pas, cite.
+  Clues amenées à travers le partial `restore.yaml` (relayées par l'appel `{{> restore.yaml}}`
+    sans changement de contexte) : `agent_image`, `envs`, `envs_from`, `volumes`, `mounts`,
+    `service_account`, `instance.package.type`, et `instance.selector` relu une seconde fois.
+  Aucun accès env, cluster ou fichier : rendu purement fonction de la carte passée.
+
+Returns:
+  Une chaîne YAML multi-documents (`---` séparateurs) dans l'ordre de Must ; le gabarit
+    n'inspecte jamais son propre rendu — le décodage et l'application sont côté consommateur.
+
+Raises:
+  Zéro garde dans le gabarit : aucune erreur fabriquée. Les seuls échecs possibles sont côté
+    moteur — @render_from qui lève si le partial `restore.yaml` manque au registre ou si un
+    helper explose — et se propagent dans la voie marker des lanes `init_from`
+    (gelé /agent/scripts/service/init_from.sdd Raises). Le moteur est en MODE STRICT
+    (@handlebars_misc_helpers 0.17.0 src/lib.rs:41 @set_strict_mode : une clé JAMAIS MINTÉE
+    de la carte de rendu est une levée @RenderError, pas un vide) ; seule une clé PRÉSENTE
+    porteuse de @() sérialisé en `null` par @bctx::run rend vide sans lever.
+
+Handles:
+  `has_files` truthy → les 3 ou 4 documents selon le flag : le bloc `ConfigMap` vit entièrement
+    dans le `{{#if has_files}}`, séparateur `---` initial inclus ; falsy/absent → le flux
+    démarre au `ServiceAccount`.
+  `files` vide avec `has_files` `true` (impossible venant de @bctx::run qui couple les deux
+    clues, atteignable seulement par mutation de hook) : ligne `data:` sans entrée, `ConfigMap`
+    rendu sans data.
+  `instance.selector` @() (clé présente nulle, muntée par @build_context) : la lookup trouve le
+    @null et le mode strict ne bronche pas, @selector_from_ctx retombe sur `{}` et le hash
+    `comp="restore"` réinjecte seul `app.kubernetes.io/component` — labels réduits à cette
+    clé unique sur les deux niveaux. `instance.selector` jamais minté = levée stricte (Raises).
+  Clue présente à @() (`instance.appslug`, `cluster.vynil_namespace`…) : substitution rendue
+    vide en silence, les noms se dégradent en `-backup` / `-init-restore` / `:backups` ;
+    clue jamais mintée = @RenderError du mode strict (voir Raises).
+
+Must:
+  Conserver l'ordre de flux `---`-par-ligne : (1) `ConfigMap` `"<appslug>-backups-scripts"`
+    seulement sous `has_files`, (2) `ServiceAccount` `<appslug>-backup`, (3) `RoleBinding`
+    `<appslug>-backup`, (4) `Job` `'<appslug>-init-restore'`.
+  Garder les styles de citation écrits tels quels dans la sortie : nom de `ConfigMap`
+    double-quote, nom de `Job` single-quote, noms `ServiceAccount`/`RoleBinding` nus.
+  Écrire le `data` du `ConfigMap` en une ligne par entrée `files` : clé `{{name}}` brute, valeur
+    = `content` JSON-quote par @json_to_str (retours ligne échappés, scalaire sûr à la reprise
+    YAML).
+  Rendre le `RoleBinding` en `rbac.authorization.k8s.io/v1` : `roleRef` sur le `ClusterRole`
+    `{cluster.vynil_namespace}:backups` (apiGroup `rbac.authorization.k8s.io`), un seul `subject`
+    — le `ServiceAccount` créé ici, avec son `namespace: {instance.namespace}` explicite. C'est
+    la SEULE injection de namespace du rendu.
+  Figer le `spec.template` du Job sur : `backoffLimit` `3`, `parallelism` `1`, `suspend` `false`,
+    et `labels` = @json_to_str de @selector_from_ctx(`this`, `comp="restore"`) — soit le contenu
+    de `instance.selector` plus `app.kubernetes.io/component: restore`.
+  Rendre `spec.template` par le partial ./restore.yaml.hbs appelé sans changement de contexte,
+    dont le bloc @to_json(`format="yaml"`) convertit le YAML interne rendu en JSON inline : le
+    résultat est un pod à un conteneur `restore` exécutant le couple d'args `<instance.package.type>`
+    puis `restore`, `image` = `agent_image`, env/envFrom/volumes/volumeMounts = les listes bctx
+    sérialisées par @json_to_str, `serviceAccountName` = `service_account`, limites figées
+    (cpu `2000m`, mémoire `2Gi` ; requests cpu `50m`, mémoire `512Mi`), uid/gid `0`,
+    `restartPolicy` `Never`, priorité `vynil-backup`. Le détail interne du partial est figé par
+    sa future spec (Tasks).
+  Préserver les égalités inter-fichiers que le rendu suppose : le SA créé (`{appslug}-backup`)
+    est nommé comme la clue `service_account` posée par @bctx::run, et le `ConfigMap` créé
+    (`{appslug}-backups-scripts`) porte le nom du volume `backups-scripts` que @bctx::run
+    injecte dans `volumes`/`mounts` exactement quand `has_files` est vrai.
+  Cibler un ClusterRole dont la variante système `{namespace}:backups` est posée par
+    /box/vynil/systems/rbac.yaml.hbs (ligne 155) ; le gabarit ne le crée pas, il ne fait que
+    le binder.
+
+Must not:
+  Porter un `metadata.namespace` sur l'un des documents (hors le `subject.namespace` du RoleBinding
+    qu'exige la forme RBAC) : le consommateur applique tout dans `instance.metadata.namespace`
+    via @dir::install_obj(`force_ns` faux), l'ajouter ici serait une seconde source de vérité.
+
+Depends on:
+  ./restore.yaml.hbs — partial du pod `spec.template`, unique appelant de ce partial dans le
+    dépôt ; ses clues transitent par le rendu du présent fichier.
+  /agent/scripts/lib/backup_context.sdd — producteur de la carte de rendu (`use_init_from`
+    `true` : `envs`/`volumes`/`mounts`/`envs_from`/`files`/`has_files`/`service_account`,
+    l'env `RESTIC_SNAPSHOT` que le pod consommera).
+  /agent/scripts/lib/build_context.sdd — producteur de la vue `instance` (`appslug`, `selector`,
+    `labels`) que lisent le gabarit et @selector_from_ctx.
+  /agent/scripts/service/context.sdd et /agent/scripts/tenant/context.sdd — injection de
+    `agent_image` (image du pod) dans la carte.
+  /common/src/handlebarshandler.sdd — enregistreur @selector_from_ctx (helper contextuel
+    @selector, hash `comp`) et factory @new_hbs ; @json_to_str et @to_json viennent des helpers
+    vendés vynil-core (`hbs_json.rs`).
+
+References:
+  /agent/scripts/service/init_from.sdd et /agent/scripts/tenant/init_from.sdd — specs
+    consommatrices uniques : appels @render_from aux lignes 20 des deux jumeaux
+    `.rhai` (byte-identiques), enregistrement des partial dirs lignes 16-18 — un dossier
+    package `pods/` peut masquer silencieusement `init_job.yaml` ou `restore.yaml` homologues.
+  /agent/scripts/service/install.rhai et /agent/scripts/tenant/install.rhai — seuls appelants
+    du rendu : @import_run("init_from") sous le gate premier install, ligne 39 (service) et
+    ligne 30 (tenant).
+  /box/vynil/systems/rbac.yaml.hbs — ClusterRole cible `{namespace}:backups` (ligne 155).
+
+Tasks:
+  [?] L'annotation pod `mayfly.cloud.namecheap.com/expire: 120h` est un reliquat externe
+      codé en dur dans le partial, rendu sur chaque pod d'init-restore : retirer ou repositionner,
+      décider plus tard (avec la spec du partial).
+  [?] Citation inégale des quatre noms (`"` pour le ConfigMap, `'` pour le Job, nu pour
+      SA/RoleBinding) : harmoniser ou assumer, décider plus tard.
+  [?] Clé `{{name}}` brute du `ConfigMap` : un nom de script package contenant `:` ou un
+      caractère YAML casserait le flux — décider si on passe la clé par @json_to_str aussi,
+      décider plus tard.
+  [?] Dégradation silencieuse quand `instance.appslug` ou `cluster.vynil_namespace` est
+      présente à `()` : noms `-backup`, `-init-restore`, roleRef `:backups`, aucun signal —
+      décider s'il faut assert ou faire confiance aux producteurs bctx/build_context.
+      (Arbitré à la source : clé JAMAIS mintée = levée stricte, seul le @() rend vide —
+      @handlebars_misc_helpers 0.17.0 src/lib.rs:41.)
+  [x] Le partial ./restore.yaml.hbs a désormais sa spec same-basename ./restore.yaml.hbs.sdd
+      (écrite dans la foulée de celle-ci).
+  [?] L'expression @selector_from_ctx(`this`, `comp="restore"`) est rendue deux fois (labels du
+      Job puis labels du pod template), identiques aujourd'hui : duplication assumée ou à
+      factoriser, décider plus tard.
+  [?] Zéro test ne rend ce gabarit : les tests @selector_from_ctx de /agent/tests/rhai_lib.rs
+      (~ligne 2740) visent `gen_package`, pas `templates/` — combler le trou TTD par un test de
+      rendu sur contexte mock.
+
+Done when:
+  Chaque Scenario porte un test de rendu vert ou une décision écrite, les égalités de noms
+    (`{appslug}-backup` ↔ `service_account`, `{appslug}-backups-scripts` ↔ volume injecté)
+    tiennent toujours, et `specdd lint` est vert sur ce fichier.
+
+Scenario: Rendu standard sans scripts package
+  Given une carte @bctx::run(..., `true`) avec `instance.appslug` `shop`, `instance.package.type`
+    `service`, `instance.selector` peuplé, `cluster.vynil_namespace` `vynil` et `has_files` `false`
+  When @render_from appelle le partial `init_job.yaml`
+  Then le flux contient trois documents dans l'ordre : `ServiceAccount` `shop-backup`, `RoleBinding`
+    `shop-backup` bindé sur le ClusterRole `vynil:backups` avec sujet dans `instance.namespace`,
+    `Job` `'shop-init-restore'`
+  And le pod template porte les args `service`/`restore`, l'image `agent_image` et le
+    `serviceAccountName` `shop-backup`
+
+Scenario: Rendu avec les scripts du package
+  Given la même carte mais `has_files` `true` et `files` portant `restore-mysql.sh` et `backup.sh`
+  When @render_from rend le partial
+  Then le flux commence par le `ConfigMap` `"shop-backups-scripts"` dont chaque clé est le nom de
+    script brut et chaque valeur le contenu JSON-quote par @json_to_str
+  And le pod reçoit côté bctx le volume `backups-scripts` monté sous `/package/scripts`, nommé
+    d'après le même schéma `{appslug}-backups-scripts`
+
+Scenario: Selector à null
+  Given une vue `instance` où `selector` est présent à @() (sékrialisé `null` par
+    @bctx::run — la lookup trouve une valeur, le mode strict ne bronche pas)
+  When le partial est rendu
+  Then les labels du Job et du pod template se réduisent à la carte unique
+    `{app.kubernetes.io/component: restore}` — @selector_from_ctx retombe sur `{}` et seul le
+    hash `comp` alimente la carte
+
+Scenario: Sans appslug
+  Given une carte où la clue `instance.appslug` a disparu de la carte de rendu (mutation de
+    hook, le chemin normal la garantit)
+  When le partial est rendu
+  Then @render_from LÈVE en mode strict (@RenderError MissingVariable, source vérifiée :
+    @handlebars_misc_helpers 0.17.0 src/lib.rs:41) et la lane `init_from` propage l'échec
+    dans son marker — la dégradation en noms `-backup`/`-init-restore` n'existe que pour la
+    clue PRÉSENTE à @() (Handles)

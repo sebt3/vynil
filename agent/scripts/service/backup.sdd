@@ -1,0 +1,235 @@
+Spec: ServiceBackupScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Orchestrate the immediate (no schedule branch exists here) restic backup of one service
+    package inside a dispatched backup Pod: decode the Pod's own process env into the args map
+    via @ctx::from_args, then walk a fixed @import_run stage sequence — pre-hook, restic repo
+    init, maintenance-start, the three prepare engines in secret → postgresql → mysql order,
+    restic backup, maintenance-stop, repo check, post-hook — where one package script can
+    replace the whole lane and each prepare engine can be individually replaced by its own
+    package script. No CR is ever in hand: the instance is invisible at this level (frozen by
+    /agent/src/service/backup.sdd), no status/condition/tag is written here, and the failure
+    surface is exactly six @throw strings over custom-script return codes plus whatever the
+    stages re-throw. Shape-identical to ./../tenant/backup.rhai (diff-verified: the twin adds
+    two more prepare engines, mongodb and redis, and is otherwise byte-for-byte this flow).
+
+Exposes:
+  @run(@args) — the module's sole @fn and entry point (`backup.rhai` + `run` match the
+    entry-point patterns of /agent/src/linting/rhai_checker.sdd); invoked as
+    `backup::run(args)` by the Rust lane /agent/src/service/backup.sdd, whose snippet discards
+    the returned @Dynamic.
+
+Accepts:
+  @args — the ten-key CLI `args` map injected by the Rust lane. Read directly by this file:
+    `package_dir` (all six custom-script @is_file gates, spelled `${args.package_dir}`) plus,
+    through the merged map, `s3_url` and `package_dir` (shell-command interpolation).
+    @ctx::from_args mutates this SAME map in place and returns it as `context`, so the
+    `args.package_dir` / `context.package_dir` spellings name one value — the 19-key env
+    contract and `package_dir`'s untouched pass-through are owned by ./../lib/backup_context.sdd.
+  @context downstream consumers (this file never reads the lists — it only says which stage
+    runs): `restic_args` + `s3_url` (consumed by the backup_init/backup_run/backup_check
+    stages), `restic_tags` (backup_run), `secret_list` / `pg_list` / `mysql_list` (the three
+    prepare stages), `retention max_*` (backup_prune only — its call is commented out),
+    `scale_target` (maintenance_stop TODO — unwritten code), while `snapshot`, `mongo_list`,
+    `redis_list`, `deployment_list`, `statefulset_list`, `namespace`, `sub_path`, `base_path`
+    have no reader in the service lane as wired.
+  Runtime inputs — six optional package scripts under `${args.package_dir}/scripts/`:
+    `backup.sh` (replaces the whole lane), `backup_prepare.sh` (replaces the three-engine
+    prepare block), `backup_prepare_secret.sh`, `backup_prepare_postgresql.sh`,
+    `backup_prepare_mysql.sh` (per-engine replacements) and `backup_before.sh` (an optional
+    hook with NO shipped module — file-only). Each gate is pure file existence; each executed
+    script is a shell entry, not a Rhai module.
+
+Returns:
+  Custom-script path: @run hits `return rc` after `backup.sh` succeeds — `rc` there is
+    necessarily 0 (a non-zero one threw first) — and the Rust lane discards it.
+  Normal path: the implicit value is the trailing `import_run("backup_post", ...)` result (unit
+    on a stock image, since `backup_post` ships nowhere); the Rust lane discards this too
+    (@common/src/rhaihandler.sdd skip semantics).
+  The observable result is entirely side-effect: a restic repository snapshot under
+    `context.s3_url`, prepared dumps under `/backup`, and the 0-or-throw completion channel
+    the Rust exit-4 lane reads.
+
+Raises:
+  Exactly six @throw statements, all the same shape `<script-path> FAILED returning <rc>` —
+    template text `${context.package_dir}/scripts/<name> FAILED returning ${rc}` — one per
+    custom script (`backup.sh`, `backup_prepare.sh`, `backup_prepare_secret.sh`,
+    `backup_prepare_postgresql.sh`, `backup_prepare_mysql.sh`, `backup_before.sh`) on a
+    non-zero @shell_run code. Throws from `backup.sh` onward abort mid-lane; the thrown text
+    reaches the process through the Rust lane's `Rhai script error:` prefix and exit-4
+    (frozen by /agent/src/service/backup.sdd — no `backup_failed` condition, no `set_status_*`
+    marker is minted at this level or by any shipped service stage).
+  Stage re-throws propagate identically: @import_run swallows only the two skip markers
+    (`No ${name} module, skipping.` / `No ${name}::run function, skipping.`; owners
+    /common/src/rhaihandler.sdd + the vynil-core shim), so a `restic check FAILED returning
+    ${rc}` from ./backup_check.rhai or a dump throw from a prepare stage aborts the run.
+  Import-time: the module body's sole top-level statement `import "backup_context" as ctx;`
+    resolves at module load; a resolution miss is a Rust-lane eval error before @run starts.
+    @ctx::from_args itself raises for nothing env-side (./../lib/backup_context.sdd), and
+    `context.s3_url` / `context.package_dir` are unguarded reads both always present (the
+    former possibly the degraded `s3:/`, which the lane neither detects nor reports — it is
+    logged verbatim and left to fail on restic's return codes downstream).
+
+Handles:
+  Total-lane custom backup — `backup.sh` present: run it with the repo export, then
+    `import_run("backup_post")` and return — skipping every stage (init, maintenance window,
+    prepare engines, backup_run, backup_check). Absent (the stock case) falls through to the
+    full sequence; `backup_pre` still ran before this gate either way.
+  Prepare-block routing is file-existence ONLY, never list contents: `backup_prepare.sh`
+    present-and-passing bypasses all three engines; otherwise each of
+    secret/postgresql/mysql takes its own script-or-module branch independently and in the
+    fixed secret → postgresql → mysql order. Empty `secret_list`/`pg_list`/`mysql_list` do
+    NOT skip the shipped stages — each import_runs and its loop no-ops, and ./backup_init.rhai
+    still probes/inits the repository.
+  Maintenance window positions: @import_run("maintenance_start") sits right after backup_init
+    and before the prepare engines; @import_run("maintenance_stop") after backup_run and
+    before backup_check. Both shipped modules are pass-through hook calls around a scale
+    TO-DO comment (deployment_list/statefulset_list to 0 / back to `scale_target`): the
+    window currently toggles nothing on the cluster, with or without a CR — the CR is not
+    even reachable here.
+  Unshipped hook names: `backup_pre` and `backup_post` ship in no engine directory
+    (./, ./../tenant, ./../lib) — on a stock image both take the debug-log skip; they exist
+    as package `scripts/` slots. `backup_prune` ships in ./ but its ONLY call site is the
+    comment `//import_run("backup_prune", context);` between backup_check and backup_post —
+    retention envs have no executor in this lane.
+  RESTIC environment handling — this file exports ONLY `RESTIC_REPOSITORY="${context.s3_url}"`
+    (inline `export ...;` prefix before every one of the six custom scripts);
+    `RESTIC_ARGS`-style flags and host identity ride the stages and pod env: `RESTIC_HOST` is
+    written only by @backup_context::run at schedule time (./../lib/backup_context.sdd
+    `Must`), never read or exported here.
+  No cron/schedule branch — correctness here does not depend on any env choosing between
+    scheduled and immediate: scheduling lives exclusively in ./install.sdd's
+    `schedule_backup` lane; this module, reached by a dispatched backup Job, always backs up
+    now.
+
+Must:
+  Execute exactly this order with nothing else interleaved: @ctx::from_args(args) → one
+    @log_info line `Starting backup using target: ${context.s3_url}` (the only log statement
+    at this level) → @import_run("backup_pre") → `backup.sh` gate (run | fall through) →
+    @import_run("backup_init") → @import_run("maintenance_start") → `backup_prepare.sh` gate
+    (run, OR the secret → postgresql → mysql script/stage ladder) → `backup_before.sh` gate →
+    @import_run("backup_run") → @import_run("maintenance_stop") → @import_run("backup_check")
+    → @import_run("backup_post") → end.
+  Ship each custom script's command with the exact prefix
+    `export RESTIC_REPOSITORY="${context.s3_url}";` followed by
+    `${context.package_dir}/scripts/<name>`, and treat any non-zero @shell_run code as fatal
+    at its own throw site (never retried, never collected, `backup.sh` rc 0 alone returning).
+  Pass the one `context` map to every @import_run and discard every return — the
+    `context = import_run(...)` merge discipline of ./install.sdd is absent here, so stages
+    communicate through their own side effects (restic, `/backup`, shell env), never through
+    a returned map.
+  Resolve every stage name against the four resolver directories frozen by the Rust lane
+    ({package_dir}/scripts first), so a package `scripts/backup_run.rhai` (or any other stage
+    name, including an engine-stage script shadowed as a MODULE name) replaces the shipped
+    lane wholesale.
+  Keep the import-time surface at the single `import "backup_context" as ctx;` —
+    ./../lib/backup_context.rhai executes nothing on load, so module load touches no env,
+    filesystem or cluster.
+  Keep the prune call commented exactly at `//import_run("backup_prune", context);` — recorded
+    behavior: the shipped ./backup_prune.rhai (restic forget with the four keep-* retention
+    flags) is dead code as wired.
+
+Must not:
+  Write any failure/success marker — no `set_status_*` call, no condition, no tag, no
+    `instance` binding, no kube call: the Rust lane froze this side as CR-blind and any
+    status write here would fabricate an object the backup Job never owns.
+  Branch on `use_backup`, a cron expression or any env to pick scheduled-vs-immediate:
+    the only env influence on this lane is the DECODED env inside @from_args (destination,
+    tags, engine lists, retention, TLS flag), not a schedule switch.
+  Read `context.mongo_list` / `context.redis_list` / `context.snapshot` to route work —
+    they are decoded here but consumed (never) in this service lane.
+
+Depends on:
+  ./../lib/backup_context.rhai — the single import; @from_args half of the 19-key env→context
+    contract (spec ./../lib/backup_context.sdd, which freezes from_args and this file as its
+    consumer).
+  The shipped stage modules of this directory, all specs pending and each self-throwing:
+    ./backup_init.rhai (restic cat config, init on rc 10), ./maintenance_start.rhai,
+    ./backup_prepare_secret.rhai, ./backup_prepare_postgresql.rhai,
+    ./backup_prepare_mysql.rhai, ./backup_run.rhai (restic backup /backup with
+    --tag ${context.restic_tags}), ./maintenance_stop.rhai, ./backup_check.rhai
+    (+ ./backup_prune.rhai, shipped and unwired).
+  vynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file,
+    @shell_run (int return code), @log_info (registrars per /common/src/rhaihandler.sdd).
+
+References:
+  /agent/src/service/backup.sdd — the caller: fixed `backup` snippet, ten-key `args`, resolver
+    directories and the exit-4 lane every throw here lands in.
+  ./../tenant/backup.rhai — the diff-verified twin (mongodb + redis prepare blocks added;
+    unspecified).
+  ./install.sdd — sibling orchestrator style reference: the merge discipline this file drops
+    and the schedule_backup/delete_backup decision that lives there instead.
+  /agent/tests/rhai_backup_redis.rs — the nearest test file (Tasks; mock engine points at
+    scripts/lib + scripts/tenant, tenant-flavored).
+
+Scenario: custom backup.sh replaces the whole lane
+  Given `${args.package_dir}/scripts/backup.sh` exists in the mounted package scripts
+  When @run executes and the script exits 0
+  Then the RESTIC_REPOSITORY-exported copy ran, @import_run("backup_post") followed and @run
+    returned the rc — backup_init, the maintenance pair, every prepare engine, backup_run and
+    backup_check never ran
+  But given the script exits 3
+  Then the throw text is `${context.package_dir}/scripts/backup.sh FAILED returning 3` and no
+    backup_post import runs
+
+Scenario: prepare ladder order and per-engine replacement
+  Given no `backup_prepare.sh` and no per-engine scripts
+  When @run passes the prepare gate
+  Then @import_run fires secret → postgresql → mysql in that fixed order on the one context
+    map, whatever the three lists hold (empty lists still import_run, the loops no-op)
+  Given the same package ships `backup_prepare_postgresql.sh` only
+  Then the postgresql leg is the exported shell run and the other two legs stay module imports
+
+Scenario: whole prepare block replaced
+  Given `backup_prepare.sh` exists and exits 5
+  Then the throw names `backup_prepare.sh FAILED returning 5` with no engine leg — script or
+    module — ever running; on exit 0 the flow continues to the backup_before gate
+
+Scenario: stock image skips unshipped hooks and returns via the post-hook
+  Given a package with no custom scripts and a stock engine directory set
+  When @run completes
+  Then `backup_pre` and `backup_post` hit the two debug-log skip markers (they ship nowhere),
+    run returns that unit, and the log line `Starting backup using target: s3:/` proves the
+    bare-env degraded s3_url is only logged, never validated
+
+Scenario: stage throw aborts mid-window
+  Given the sequence reached ./backup_run.rhai and restic backup exits 2
+  Then the stage's own throw propagates through @import_run: maintenance_stop, backup_check
+    and the backup_post hook never run and the Rust lane exits 4 behind `Rhai script error: `
+
+Scenario: retention envs decide nothing
+  Given RESTIC_MAX_DAYLY / WEEKLY / MONTHLY / YEARLY set and no custom script replacing anything
+  Then `restic forget` never executes — the only prune caller is the commented
+    `//import_run("backup_prune", context);` — and the four decoded `max_*` keys stay unread
+
+Tasks:
+  [ ] Map the six Scenarios to tests: /agent/tests/rhai_backup_redis.rs runs a mock engine over
+      scripts/lib + scripts/tenant and names only `backup_prepare_redis`/`restore_redis` — zero
+      coverage of this orchestrator or of any service stage module (rhai_lib.rs is lib-only
+      and calls no backup fn).
+  [?] The maintenance window toggles nothing: ./maintenance_start.rhai and
+      ./maintenance_stop.rhai contain only hook passthroughs around a scale TO-DO, so dumps
+      run against live workloads — decide whether to implement the deployment/statefulset
+      scaling or delete the window.
+  [?] Prune is commented out while `from_args` decodes the four retention envs — revive the
+      `backup_prune` call (after backup_check is the shipped position) or drop the call site
+      and its envs from the service Job contract.
+  [?] `backup_pre`/`backup_post` ship in no engine directory — package-side hook slots only,
+      same posture as ./install.sdd's unshipped hooks; confirm intentional.
+  [?] The `backup.sh` replacement also skips backup_check and the maintenance pair and its
+      rc-0 return is discarded by Rust — confirm the package-owned-backup semantics (failure
+      then requires the package script to exit non-zero) rather than a partial override.
+  [?] backup_init runs even when all three engine lists are empty (and on the degraded
+      `s3:/`): decide whether init on an envless/degenerate destination should fail fast here
+      or keeps riding restic's own rc (which ./backup_init.rhai also ignores unless equal
+      to 10).
+  [?] Service-vs-tenant decode gap: @ctx::from_args always decodes Mongo/Redis lists and nine
+      other keys the service lane never reads — decide whether service supports those engines
+      (missing prepare blocks, cf. tenant's five) or the env decode narrows per kind.
+
+Done when:
+  Every Scenario carries a passing mock-engine test against ./backup.rhai (resolver list
+    including scripts/service), the frozen order and the six throw texts still match the
+    source, and `specdd lint` is green on this file.

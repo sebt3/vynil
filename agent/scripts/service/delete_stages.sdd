@@ -1,0 +1,285 @@
+Spec: EtapesSuppressionService
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Un seul contrat, cinq instances, pour les stages « bucket » de la suppression service.
+    Regroupement justifié (option C, même discipline que ./install_stages.sdd pour
+    l'install) : ./delete_befores.rhai, ./delete_others.rhai, ./delete_posts.rhai et
+    ./delete_scalables.rhai sont des squelettes isomorphes de 40 lignes dont toute la
+    différence est du renommage — la clé `status.<bucket>` relue et les noms des deux
+    hooks `delete_<bucket>_pre`/`delete_<bucket>_post`, soit 4 lignes par fichier, diff
+    vérifié fichier à fichier ; ./delete_vitals.rhai garde exactement ce squelette avec
+    deux ajouts inertes seulement : l'import `wait` de ligne 1 (jamais appelé) et deux
+    commentaires TODO backup-final. Écart de toute la famille avec ses jumeaux install :
+    le status est SEULEMENT RELU, JAMAIS ÉCRIT — `status.<bucket>` comme inventaire
+    unique de ce que l'install a posé, aucun appel de méthode `set_status_*`, zéro
+    @throw, et aucun `delete_<singulier>_failed` en regard des marqueurs singuliers
+    posés par ./install_stages.sdd.
+  Hors couverture, cross-refs cités : ./delete_backup.rhai a son contrat propre déjà
+    gelé dans ./delete_backup.sdd (sweep étiqueté `*-backups`, hors `status.<bucket>`) ;
+    ./delete_crds.rhai n'est pas du pattern (garde des children par @list_meta, attente
+    d'objet absente, aucun spec same-basename — contrat amont seulement cité par
+    ./delete.sdd, et byte-identique à son jumeau ./../system/delete_crds.rhai tel que
+    consigné par ./../system/delete.sdd) ; ./delete_tofu.rhai n'est pas un bucket
+    (restaurateur @get_tfstate, `tfg::gen_files`, `tf::run_init` puis `tf::run_destroy`,
+    zéro lecture de `status.<bucket>`) — exclu après diff contre les quatre squelettes,
+    comme ./install_stages.sdd exclut ./install_tofu.rhai.
+
+Owns:
+  ./delete_befores.rhai
+  ./delete_others.rhai
+  ./delete_posts.rhai
+  ./delete_scalables.rhai
+  ./delete_vitals.rhai
+
+References:
+  ./delete.sdd — l'orchestrateur : ordre d'appel, gates `is_dir`, et discipline de
+    discard/merge de ses dix @import_run (fusion `map` pour les six lanes bucket,
+    affectation non gardée pour la lane tofu, retours de `delete_backup` et
+    `delete_post` jetés) ; son Handle « Backup sweep rides the `vitals` gate » et son
+    Scenario « backup sweep rides the vitals directory » consignent que le gate
+    `vitals` déclenche `delete_backup` AVANT `delete_vitals`.
+  ./install_stages.sdd — twin install de la même famille, pour le contraste
+    install↔delete : apply/add/purge + méthode `set_status_<bucket>` + marqueur
+    singulier + attente finale là-bas ; simple relecture d'inventaire ici.
+  ./delete_backup.sdd — spéc existante du voisin qui chevauche le même gate ; sa
+    cueillette par sélecteur de labels est un contrat d'inventaire cluster, pas de
+    bucket status.
+  ./../lib/install_from_dir.sdd — lane du @dir::remove de la lib (diff d'apply install
+    -temps contre le status antérieur) : cette famille n'importe JAMAIS cette lib et
+    n'appelle jamais son remove ; la suppression delete marche la liste consignée,
+    sans diff contre un rendu frais.
+  ./../lib/wait.sdd — lane @wait::all ici jamais utilisée ; l'inertie de
+    `import "wait" as wait;` dans les stages delete y est déjà consignée en Tasks.
+  ./../tenant/delete_{befores,others,posts,scalables}.rhai,
+    ./../tenant/delete_tofu.rhai et ./../tenant/delete_backup.rhai — jumeaux tenant
+    byte-identiques (diff vérifié) ; ./../tenant/delete_vitals.rhai seul diffère : 54
+    lignes contre 43, un bloc de 11 lignes sous `/* */` intercalé entre les deux TODO ;
+    aucun jumeau n'est spécifié ici (Tasks).
+  ./../system/delete.sdd — consigne la byte-identité de ./../system/delete_crds.rhai
+    avec ./delete_crds.rhai (hors couverture, diff vérifié).
+  /agent/tests/rhai_lifecycle.rs — harnais mock des lanes service : aucun des cinq
+    modules n'y est nommé aujourd'hui (Tasks).
+
+Must:
+  Les cinq @run déroulent exactement le même squelette, dans cet ordre gelé : @import_run
+    du hook `delete_<bucket>_pre` puis fusion du contexte seulement si @type_of de son
+    retour est `map` — double garde « `instance.status != ()` ET
+    `instance.status.<bucket> != ()` » — parcours de `status.<bucket>` : namespace
+    `old.namespace` sinon @instance.metadata.namespace, api construit par
+    @k8s_resource avec `old.api_version` sinon `old.apiVersion` (les deux graphies sont
+    acceptées) sinon @k8s_resource de `old.kind` seul — garde @api.exist, puis dans try
+    @get_obj(`old.name`) → @delete → empilage dans
+    `deleted` — catch par switch de @type_of : string contenant `NotFound` totalement
+    muette, string autre via @log_warn verbatim, erreur non-string via @log_warn de
+    @json_encode — puis, boucle séparée APRÈS le parcours, pour chaque objet empilé dans
+    l'ordre d'empilage : @log_info du littéral
+    `Waiting for ${d.original_kind} ${d.metadata.name} to be deleted` puis
+    @wait_deleted(`60*5` = `300` s) — puis @import_run du hook
+    `delete_<bucket>_post` avec la même fusion `map`, puis la valeur terminale `context`.
+  Traiter `status.<bucket>` comme l'INVENTAIRE unique : ne supprimer que ce que
+    l'install y a consigné, champ par champ (`name`, `namespace`, `api_version`/
+    `apiVersion`, `kind`), sans @list_meta, sans sélecteur de labels, sans parcours de
+    dossier du paquet.
+  N'écrire AUCUNE trace d'inventaire ici : aucun appel `set_status_*`, aucun patch,
+    aucune condition sur le CR — la posture « Finish by silence » de ./delete.sdd
+    descend sur ces cinq modules ; le succès observable est l'objet disparu du
+    cluster, pas le status.
+  Traiter le false de @api.exist comme un saut SILENCIEUX : une entrée dont le kind a
+    disparu de la discovery (CRD retirée en amont) n'est ni supprimée, ni loggée, ni
+    attendue.
+  Garder les imports comme seul écart de code entre membres : les quatre buckets purs
+    n'ont zéro import, ./delete_vitals.rhai seul charge `wait` sans jamais appeler une
+    de ses fn — @wait_deleted est une méthode d'objet de l'engine, pas de cette lib ;
+    zéro effet de bord au chargement pour les cinq.
+  Logger seulement ici, et pas plus : la ligne `Waiting for ...` de la boucle d'attente
+    et les @log_warn du catch ; zéro log pour le saut `NotFound`, le saut
+    @api.exist-faux, et les fusions de hooks.
+
+Must not:
+  Appeler le @dir::remove de ./../lib/install_from_dir.rhai : le remove de la lib est
+    le DIFF install-temps entre un rendu frais et le status ; ici la liste consignée est
+    supprimée intégralement, sans diff — les confondre double-supprimerait ou
+    épargnerait des orphelins.
+  Se gater soi-même sur l'existence du dossier de bucket : le gate `is_dir` est la
+    prérogative de ./delete.sdd et ces cinq fichiers ne lisent même pas `package_dir` ;
+    recopier un gate (réflexe des squelettes install) dé-synchroniserait le contrat.
+
+Depends on:
+  L'API d'engine vynil-core 0.7.7 et les globaux montés par @Script
+    (/common/src/rhaihandler.sdd) : le shim @import_run à trois arguments (skip
+    absent-module/absent-`run` contre rethrow-erreur, frontière gelée dans
+    ./delete.sdd), @k8s_resource et @api.exist, les méthodes K8sObject @get_obj,
+    @delete, @original_kind et @wait_deleted du registrar core k8sgeneric (rappel de
+    l'attribution, même citation dans ./delete_backup.sdd), plus @type_of,
+    @json_encode, @log_info et @log_warn.
+  Les hooks `delete_<bucket>_pre` et `delete_<bucket>_post` : slots côté paquet
+    seulement, livrés par personne dans l'atelier ; absents, le retour `()` du skip
+    @import_run n'est jamais fusionné.
+
+Exposes:
+  `@run(instance, context)` — seul @fn de chacun des cinq modules, atteint par
+    l'orchestrateur ./delete.sdd via `import_run("delete_befores", instance, context)`
+    (et `delete_others`, `delete_posts`, `delete_scalables`, `delete_vitals` de même),
+    chacun derrière son gate `is_dir` sur `${context.package_dir}/<bucket>` ;
+    `delete_vitals` derrière le même gate, avec `delete_backup` exécuté juste avant
+    lui — gates, ordre et merges downstream gelés dans ./delete.sdd, pas ici.
+
+Accepts:
+  @instance — lu, jamais remué ni rafraîchi : `instance.status` puis
+    `instance.status.<bucket>` (double garde du parcours seulement),
+    @instance.metadata.namespace (namespace par défaut des entrées sans namespace) et,
+    par entrée, les champs `namespace`, `api_version`/`apiVersion`, `kind`, `name`. Le
+    status observé est exactement le CR fetché par la lane Rust avant le script : aucun
+    @get_service_instance n'existe côté delete (asymétrie avec l'install gelée dans
+    ./delete.sdd).
+  @context — traversé sans être lu : ces cinq fichiers ne lisent AUCUNE clé (contraire
+    de leurs jumeaux ./install_stages.sdd qui interpolent `package_dir`) ; ils ne font
+    que le transmettre aux hooks, et un hook `_pre`/`_post` ayant renvoyé une `map` le
+    REMPLACE — tout ce qui suit lit la carte de remplacement, aucune clé d'absence
+    n'est gardée.
+
+Returns:
+  La valeur terminale `context` — la carte éventuellement remplacée par les hooks ;
+    ./delete.sdd ne la remonte que sous son propre test `map` (double garde : module
+    puis orchestrateur).
+  Sur la voie d'échec : rien n'est retourné — la levée propagée (notamment le timeout
+    @wait_deleted, sans catch possible) traverse @import_run et avorte la delete lane
+    vers la sortie exit-3 de /agent/src/service/delete.sdd citée par ./delete.sdd.
+
+Raises:
+  Zéro @throw dans ces cinq fichiers : toute erreur est propagation ou log.
+  - Hook livré par le paquet dont le `run` lève : la levée du `_pre` ou du `_post`
+    sort sans marqueur, côté delete il n'existe aucun écrit de status d'échec.
+  - @k8s_resource ou @api.exist qui lèvent (construction hors du try d'entrée) : la
+    levée traverse et aborte le stage.
+  - @wait_deleted expiré (`Elapsed`) ou en erreur : levée NON catchée, émise après que
+    toutes les suppressions du parcours ont été lancées — les objets encore en attente
+    ne sont pas attendus par ce script et le hook `_post` ne tourne pas.
+  - @json_encode de l'erreur qui lèverait lui-même dans le switch du catch : cette
+    levée de rattrapage escape et aborte le stage.
+
+Handles:
+  - `instance.status` à `()` ou clé du bucket absente (delete d'une instance importée
+    jamais installée, ou bucket jamais posé) : tout le parcours est sauté, les hooks
+    tournent et `context` revient tel quel — lane no-op sans lever.
+  - Hooks absents (cas de tout paquet standard) : skip @import_run, retour `()` non
+    `map`, aucune fusion.
+  - Erreur d'entrée contenant `NotFound` (objet déjà parti) : muette, l'entrée n'est
+    pas empilée donc jamais attendue, le parcours continue.
+  - Erreur d'entrée d'un autre type : @log_warn (verbatim si string, sinon
+    @json_encode), empilage sauté, parcours repris à l'entrée suivante.
+  - @api.exist faux : entrée passée en silence (voir le [?] orphelins muets).
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs : les cinq delete_* ne
+      sont jamais nommés dans le harnais (seul @service_delete_runs_without_error
+      touche l'orchestrateur) et la fixture /agent/tests/fixtures/package ne contient
+      aucun dossier de bucket — ajouter des fixture category-dirs et des objets
+      mockés pour épingler parcours, gardes, tolérance `NotFound` et attente.
+  [ ] Écrire ou exclure formellement le contrat de ./delete_crds.rhai : aucun spec
+      same-basename, byte-identique à ./../system/delete_crds.rhai, rôle seulement
+      cité par ./delete.sdd et ./../system/delete.sdd.
+  [ ] Harmoniser l'orthographe du moteur : Platform et Depends on familiaux écrivent
+      « vynil-core » alors que /Cargo.toml et /vynil.sdd épinglent la crate
+      `vynil-core` ; même retouche pour ./install_stages.sdd et
+      ./../tenant/maintenance_windows.sdd.
+  [ ] Trancher la spec familiale jumelle ./../tenant/delete_*.rhai (quatre buckets et
+      tofu/backup byte-identiques, vitals seul diffère) : une spec tenant symétrique
+      ou le gel par référence croisée depuis ici.
+  [?] Backup-final avant la destruction des vitals : les deux commentaires TODO de
+      ./delete_vitals.rhai (`// TODO : trigger a backup before cleaning` ligne 7,
+      `// TODO : wait for the backup-job to finish` ligne 8) et le bloc de 11 lignes
+      sous `/* */` du jumeau tenant (rendu de `manualbackup.yaml` conditionné par
+      `context.namespace.use_backup`, posé par @dir::install_allowed_obj) sont la
+      seule trace de l'intention, jamais exécutée sous aucun kind — et le bloc tenant
+      appelle un alias `dir` que le fichier tenant n'importe pas non plus. ./delete.sdd
+      reportait cette décision « le jour où delete_vitals sera authored » : ce jour
+      est venu — décider si le dernier backup se déclenche dans ce stage-ci ou dans
+      l'orchestrateur.
+  [?] Zéro marqueur d'échec côté delete : aucun @throw, aucun appel `set_status_*`,
+      et pas de `delete_<singulier>_failed` en regard de @set_status_before_failed et
+      consorts de l'install (./install_stages.sdd) — une suppression avortée ne laisse
+      que des logs et un exit-3. Décider si la discipline des marqueurs singuliers
+      doit être dupliquée côté delete.
+  [?] Orphelins muets : entrée dont @api.exist répond faux, ou dont @get_obj/@delete
+      échoue, n'est jamais attendue ni recomptée, et le run revient propre — le
+      contrôleur lâche le finalizer sur des ressources jamais vues partir. Décider un
+      warn ou un recomptage, en cohérence avec le [?] « status-blind gates » de
+      ./delete.sdd.
+  [?] Import `wait` mort de ./delete_vitals.rhai (méthode d'objet @wait_deleted, pas de
+      lib) déjà consigné aux Tasks de ./../lib/wait.sdd : décider de le retirer ici ou
+      là-bas, mais une seule fois des deux.
+
+Done when:
+  Chaque Scenario porte un test mappé ou un [?] tranché, et tout re-diff de révision
+    confirme que les quatre buckets purs ne diffèrent que de leurs 4 lignes de
+    renommage, que ./delete_vitals.rhai ne porte que ses deux ajouts inertes, et que
+    les jumeaux tenant restent identiques sauf le bloc documenté — le jour où un
+    membre dérive au-delà, il sort d'ici avec sa propre spec.
+
+Scenario: parcours de destruction d'un bucket plein
+  Given une instance dont `instance.status.befores` liste deux entrées complètes et
+    deux objets vivants dans le mock k8s
+  When @run de ./delete_befores.rhai s'exécute
+  Then chaque entrée est résolue par @k8s_resource, get, supprimée, empilée, puis la
+    boucle d'attente log et appelle @wait_deleted(300 s) objet par objet dans l'ordre
+    d'empilage
+  And la valeur terminale est `context`, carte que les hooks `_pre`/`_post` ont
+    éventuellement remplacée
+  Aucun test mappé (Tasks)
+
+Scenario: delete d'une instance jamais installée
+  Given `instance.status` à `()` ou sans clé pour le bucket du module
+  When @run s'exécute
+  Then zéro appel cluster hormis les deux hooks, aucune fusion sans retour `map`, et
+    `context` est retourné sans levée
+  Aucun test mappé (Tasks)
+
+Scenario: kind disparu de la discovery
+  Given une entrée dont @api.exist répond faux (CRD de son kind déjà retirée)
+  When le parcours atteint cette entrée
+  Then elle est sautée en silence — zéro log, zéro delete, zéro attente — et le
+    parcours reprend à l'entrée suivante
+  Voir le [?] orphelins muets (Tasks)
+
+Scenario: NotFound avalé, autres erreurs warnées
+  Given une entrée dont get/delete lève une string contenant `NotFound` puis une
+    entrée dont il lève une autre string et une dont il lève un objet d'erreur
+  When le switch du catch les traite à tour de rôle
+  Then la première ne produit aucun log, la deuxième un @log_warn verbatim, la
+    troisième un @log_warn de @json_encode
+  And aucune des trois n'est empilée ni attendue, et le parcours continue
+  Aucun test mappé (Tasks)
+
+Scenario: timeout d'attente avec suppressions déjà lancées
+  Given trois suppressions émises et un @wait_deleted qui expire sur la deuxième
+    attente
+  When la levée traverse @import_run sans trouver de catch
+  Then le troisième objet n'est plus attendu par ce script, le hook `_post` ne tourne
+    pas, et rien n'est écrit sur le CR
+  And ./delete.sdd avorte sans marqueur vers la lane exit-3 (son Scenario « stage
+    throw aborts with no delete-side marker »)
+  Aucun test mappé (Tasks)
+
+Scenario: le gate vitals fait glisser le sweep avant la destruction
+  Given un paquet avec un dossier `vitals/` et des objets `*-backups` vivants d'un
+    backup schedule
+  When ./delete.sdd franchit le gate du dossier `vitals`
+  Then `import_run("delete_backup", ...)` s'exécute AVANT ./delete_vitals.rhai et son
+    retour est jeté en entier (cross-ref : ./delete_backup.sdd et le Scenario
+    « backup sweep rides the vitals directory » de ./delete.sdd)
+  But ./delete_vitals.rhai lui-même ne déclenche aucun backup — ses TODO restent des
+    commentaires
+  Aucun test mappé : la fixture ne contient aucun dossier `vitals/`
+
+Example:
+  (tableau des deltas complets entre les cinq membres — tout le reste est commun ;
+    les chemins sont les fichiers Owns ci-dessus)
+  `befores` : relit `status.befores`, hooks `delete_befores_pre` et `delete_befores_post`
+  `others` : relit `status.others`, hooks `delete_others_pre` et `delete_others_post`
+  `posts` : relit `status.posts`, hooks `delete_posts_pre` et `delete_posts_post`
+  `scalables` : relit `status.scalables`, hooks `delete_scalables_pre` et `delete_scalables_post` — aucun traitement de scaling, ni ici ni côté install
+  `vitals` : même squelette, relit `status.vitals`, hooks `delete_vitals_pre` et `delete_vitals_post`, plus `import "wait" as wait;` ligne 1 jamais appelé et les deux commentaires TODO lignes 7-8 ; son jumeau tenant intercale de plus un bloc commenté de 11 lignes entre les deux TODO
+  commun aux cinq : zéro écriture de status, aucun marqueur `delete_<singulier>_failed`, zéro lecture de `package_dir`, `old.api_version` et `old.apiVersion` acceptés indifféremment, boucle d'attente `60*5` après toutes les suppressions

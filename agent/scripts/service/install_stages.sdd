@@ -1,0 +1,230 @@
+Spec: EtapesInstallService
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Un seul contrat, quatre instances, pour les stages « bucket » de l'install service.
+    Regroupement justifié (option C de la famille install_*) : ./install_befores.rhai,
+    ./install_others.rhai, ./install_posts.rhai et ./install_scalables.rhai sont des squelettes
+    isomorphes d'environ 38 lignes dont toute différence se réduit au nom du bucket : dossier
+    appliqué, noms des trois hooks `install_<bucket>_pre`/`_add`/`_post`, propriété de `status`
+    relue, méthode d'enregistrement `set_status_<bucket>` et son jumeau singulier
+    `set_status_<singulier>_failed` (diff vérifié fichier à fichier ; seul le fichier scalables
+    porte en plus un commentaire mort `// TODO: scale a target`). Chacun applique le dossier de
+    bucket de son paquet, fusionne les retours de hooks, purge les entrées périmées, écrit le
+    status du bucket puis attend la readiness. Non couverts ici : ./install_crds.rhai et
+    ./install_vitals.rhai, du même dossier mais à logique propre (rendu et replace de
+    `CustomResourceDefinition` d'un côté ; refus de suppression des vitals avec carry-forward
+    et log `Not deleting vitals ...` de l'autre) qui auront leur spec séparée, ainsi que
+    ./install_tofu.rhai qui n'est pas un bucket.
+
+Owns:
+  ./install_befores.rhai
+  ./install_others.rhai
+  ./install_posts.rhai
+  ./install_scalables.rhai
+
+Exposes:
+  `@run(instance, context)` — le seul @fn de chacun des quatre modules, atteint par
+    l'orchestrateur ./install.sdd via `import_run("install_befores", instance, context)` (et
+    `install_others`, `install_posts`, `install_scalables` de même), chacun derrière son gate
+    `is_dir(`${context.package_dir}/<bucket>`)` — gates, ordre des buckets et merges downstream
+    gelés dans ./install.sdd, pas ici.
+
+Accepts:
+  @instance — la copie du ServiceInstance que l'orchestrateur tient à jour (refresh
+    @get_service_instance après chaque bucket pris, côté ./install.sdd — jamais dans ces
+    modules). Lus : @instance.metadata.namespace (3e argument de @dir::remove, namespace par
+    défaut des entrées périmées) et les deux gardes `instance.status` et
+    `instance.status.<bucket>` tous deux différents de `()` avant la purge. L'objet n'est pas
+    muté par affectation : seules les méthodes d'enregistrement posent du status.
+  @context — la carte construite par ./context.rhai. Lu directement : `package_dir` (seule
+    interpolation de ces fichiers, évaluée après la fusion `_pre`). Le `_pre` comme le `_post`
+    peuvent REMPLACER `context` par une carte retournée, et tout ce qui suit lit la carte de
+    remplacement ; aucune clé d'absence n'est gardée. Transmis entier aux hooks et à
+    @dir::install.
+  L'inventaire des courses précédentes via `instance.status.<bucket>` (shape gelée dans
+    ./../lib/install_from_dir.sdd).
+
+Returns:
+  La valeur terminale `context` — la carte éventuellement remplacée par les hooks : la fusion
+    `_add` ne remonte jamais dans le contexte (ses retours vont dans la liste appliquée
+    seulement). ./install.sdd ne fusionne cette valeur que si @type_of est `map`, puis refresh
+    l'instance ; ce que le bucket a vraiment fait ne voyage pas par la valeur de retour mais
+    par le status posé ici.
+  Sur la voie d'échec : rien n'est retourné, l'erreur relancée à cru traverse @import_run et
+    ./install.sdd avorte (sortie 1, gelée dans ./install.sdd et /agent/src/service/install.sdd).
+
+Raises:
+  Zéro @throw à payload dans ces quatre fichiers : la seule énonciation explicite est le
+    `throw;` nu du catch, qui relance l'erreur d'origine sans la transformer.
+  - Hors try : une levée du hook `_pre` ou du hook `_post` (fichier livré par le paquet et son
+    `run` qui lève) sort sans marqueur d'échec ; le `_post` ne tourne jamais si le corps du try
+    a levé.
+  - Dans try — toute levée de @dir::install (kind inconnu, lane de parsing), du hook `_add`,
+    de @dir::remove, de la méthode de status (conversion Rhai de la liste, patch ou event
+    @KubeError) ou de @wait::all (timeout Elapsed, erreur de watch) déclenche le catch :
+    erreur string passée verbatim, sinon texte de @json_encode, puis appel de la méthode
+    `set_status_<singulier>_failed`, puis relance à cru — jamais d'avaler.
+  - Si l'écriture du marqueur d'échec lève elle-même, cette levée remplace et masque l'erreur
+    d'origine.
+  - Lecture non gardée : `context.package_dir` — une absence levée dans le template interpolé
+    à l'intérieur du try et serait donc convertie en marqueur d'échec avant relance.
+
+Handles:
+  - Les trois hooks par bucket ne sont livrés nulle part dans l'atelier : slots côté paquet
+    seulement. Absents, @import_run les skippe (return `()`) : `_pre`/`_post` sans fusion,
+    `_add` renvoyant `()` qu'aucune branche du switch ne traite — zéro entrée ajoutée.
+  - Type du retour `_add` : `map` acceptée seulement si @dir::validate_add_item répond vrai ;
+    `array` filtrée par le même garde puis appendue ; tout autre type ignoré en silence.
+  - `status` absent ou clé du bucket absente (`()` au premier install, ou bucket jamais posé) :
+    aucune purge @dir::remove.
+  - Liste appliquée vide : status écrit vide, @wait::all no-op. L'erreur catchée est soit le
+    texte brut (string), soit un dump @json_encode.
+
+Must:
+  Les quatre @run déroulent exactement le même squelette, dans cet ordre gelé : @import_run du
+    hook `install_<bucket>_pre` et fusion seulement si @type_of de son retour est `map` — puis
+    le bloc try contenant, dans l'ordre : @dir::install(instance, context, chemin interpolé
+    `package_dir` + bucket, allow_cluster `true`, force_ns `false`) → @import_run du hook
+    `install_<bucket>_add` et fusion selon le switch de Handles → @dir::remove(liste appliquée,
+    `status.<bucket>`, namespace de l'instance) sous la double garde « les deux différents de
+    `()` » → `@set_status_<bucket>`(liste appliquée) → @wait::all(liste appliquée) — catch
+    marqueur singulier puis relance à cru — puis @import_run du hook `install_<bucket>_post`
+    avec la même fusion `map`, puis la valeur terminale `context`.
+  Le wait est le @wait::all arity-une (budgets par lane du registre ./../lib/wait.sdd),
+    identique dans les quatre buckets, positionné APRÈS l'écriture du status : un échec de wait
+    marque le bucket en échec alors que la liste appliquée et patchée reste en place — le
+    marqueur singulier exclut la condition ok du bucket, ajoute les conditions ko (dont
+    installed_ko et ready_ko) et ne réécrit pas la clé de liste (mécanique gelée dans
+    /common/src/instance_macros.sdd).
+  La liste écrite dans le status = les entrées de @dir::install plus les entrées `_add`
+    validées ; @dir::remove n'y retire rien (il purge le cluster, pas l'inventaire).
+  Fidélité aux noms enregistrés : écriture ok plurielle (@set_status_befores,
+    @set_status_others, @set_status_posts, @set_status_scalables), écriture d'échec singulière
+    (@set_status_before_failed, @set_status_other_failed, @set_status_post_failed,
+    @set_status_scalable_failed) — l'asymétrie pluriel/singulier est le contrat de
+    /common/src/instanceservice.sdd.
+  Import d'un module `install_from_dir` (alias dir) et d'un module `wait` (alias wait), sans
+    effet de bord au chargement ; ZÉRO appel de log à ce niveau (tout le bavardage appartient
+    aux libs et aux méthodes Rust appelées).
+  Le retour éventuel des hooks `_pre`/`_post` ne devient le contexte qu'au test `map` du
+    module lui-même, ET une seconde fois au test `map` de l'orchestrateur (./install.sdd) —
+    double garde, le deuxième écran ne peut voir qu'une carte puisqu'ici elle ne devient
+    jamais autre.
+  Les deltas par bucket hors renommage sont nuls : mêmes arguments de @dir::install, même
+    @wait::all, même discipline de fusion dans les quatre fichiers — le tableau `Example`
+    épuise les écarts.
+
+Must not:
+  Se gateer soi-même sur l'existence du dossier de bucket : le gate `is_dir` est la prérogative
+    de ./install.sdd ; recopier un gate ici dé-synchroniserait le contrat (et l'appel direct
+    hors gate est un cas non couvert, voir Tasks).
+  Rafraîchir l'instance (@get_service_instance) ou le cache de discovery (@update_k8s_crd_cache)
+    : le refresh post-bucket est la prérogative de l'orchestrateur (gelé ./install.sdd).
+
+Depends on:
+  ./../lib/install_from_dir.rhai (import sous `dir`) — @dir::install, @dir::remove,
+    @dir::validate_add_item ; contrat dans ./../lib/install_from_dir.sdd (cite, ne
+    re-spécifie pas).
+  ./../lib/wait.rhai (import sous `wait`) — @wait::all, lane d'attente post-apply ; contrat
+    dans ./../lib/wait.sdd.
+  /common/src/instanceservice.sdd et /common/src/instance_macros.sdd — enregistrement et corps
+    des méthodes `set_status_<bucket>` et `set_status_<singulier>_failed` (patch de conditions,
+    events, troncature de la raison à 1023 caractères).
+  L'API d'engine vynil-core 0.7.7 et les globaux montés par @Script
+    (/common/src/rhaihandler.sdd) : @import_run dont la frontière skip-absent contre
+    rethrow-erreur est gelée dans ./install.sdd — ici seulement le relancement à cru —
+    @type_of, @json_encode.
+  ./context.rhai (+ ./../lib/build_context.rhai) — producteur de `package_dir` ; contrat amont
+    non re-décrit.
+
+References:
+  ./install.sdd — l'orchestrateur : gates `is_dir`, ordre befores → others → scalables → posts,
+    fusions, refresh d'instance et sort final.
+  ./../tenant/install_{befores,others,posts,scalables}.rhai — jumeaux tenant, specs pending ;
+    diff vérifié : une seule ligne d'écart par fichier, `dir::install(..., `true`, `false`)`
+    devient `dir::install_allowed(instance, context, dossier, context.tenant.namespaces)` —
+    aucun de ces modules, service ou tenant, n'appelle de refresh d'instance.
+  /agent/tests/rhai_lifecycle.rs — harnais mock des lanes service ; aucun test n'importe ces
+    quatre modules aujourd'hui (Tasks).
+
+Example:
+  (tableau des deltas complets entre les quatre fichiers — tout le reste est commun ; les
+    chemins `./install_*.rhai` sont les fichiers Owns ci-dessus)
+  `befores` : dossier `befores` du paquet, hooks `install_befores_pre`/`install_befores_add`/`install_befores_post`, garde relit `status.befores`, écrit @set_status_befores, marqueur @set_status_before_failed
+  `others` : dossier `others`, hooks `install_others_pre`/`install_others_add`/`install_others_post`, garde relit `status.others`, écrit @set_status_others, marqueur @set_status_other_failed
+  `posts` : dossier `posts`, hooks `install_posts_pre`/`install_posts_add`/`install_posts_post`, garde relit `status.posts`, écrit @set_status_posts, marqueur @set_status_post_failed
+  `scalables` : dossier `scalables`, hooks `install_scalables_pre`/`install_scalables_add`/`install_scalables_post`, garde relit `status.scalables`, écrit @set_status_scalables, marqueur @set_status_scalable_failed — et le seul commentaire mort du groupe `// TODO: scale a target` entre l'apply et le hook add ; aucun wait ni scaling particulier malgré le nom
+  commun aux quatre : @dir::install avec allow_cluster `true` et force_ns `false`, @wait::all arity-une, valeur terminale `context`, `let tmp` de la méthode de status jamais relu
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs : la fixture `package` ne ship
+      que `package.yaml`, donc les gates de ./install.sdd sont faux et CES quatre modules ne
+      sont jamais importés par les tests actuels (service_install_runs_without_error meurt au
+      close, jamais en bucket) — ajouter une fixture category-dirs et des mocks
+      K8sInstanceMock (/common/src/k8smock.sdd, où `set_status_*` sont des no-ops enregistres)
+      pour épingler ordre, fusions, gardes de purge et marqueurs.
+  [ ] Écrire la spec twin ./../tenant/install_{befores,others,posts,scalables}.rhai (ou une
+      spec familiale jumelle) : delta unique `dir::install_allowed` +
+      `context.tenant.namespaces`, gelé en References ici.
+  [?] Le commentaire `// TODO: scale a target` de ./install_scalables.rhai est du code mort :
+      ce module ne scale rien, il applique et attend comme `befores`. Décider si le scaling
+      vers un target doit être implémenté ici, ailleurs, ou retiré.
+  [?] Une levée entre @dir::install et `set_status_<bucket>` (hook add, purge, erreur de la
+      méthode elle-même) laisse des objets appliqués sans aucune trace d'inventaire : le
+      @dir::remove des courses suivantes, qui diff contre le status antérieur, ne les verra
+      jamais — orphelins. Décider un écrit de status intermédiaire ou un autre ordre.
+  [?] Le @wait::all positionné APRÈS `set_status_<bucket>` convertit un timeout en marqueur
+      d'échec du bucket alors que ses manifests sont appliqués et comptés : le statut final
+      porte les listes sans la condition ok. Décider l'intention (écrire après le wait, ou
+      condition dédiée).
+  [?] Les six hooks par bucket (trois ici, trois côté tenant) ne shipent nulle part dans
+      l'atelier et un retour `_add` d'un autre type que `map`/`array` est ignoré sans le
+      moindre log. Confirmer la convention de slot purement paquet et décider de warn ou non.
+  [?] `let tmp` reçoit le retour des méthodes de status sans jamais être relu (quatre fois) :
+      garder la valeur (le CR patched) ou retirer le binding.
+  [?] Un paquet dont le script shadow appelle un de ces stages sans le gate `is_dir` de
+      l'orchestrateur : @dir::install sur dossier absent dépend du comportement de @read_dir
+      sur chemin inexistant, que ./../lib/install_from_dir.sdd ne gèle pas. Trancher là-bas
+      puis citer ici.
+
+Done when:
+  Chaque Scenario a un test mappé ou une tâche [?] tranchée, le squelette d'ordre ci-dessus
+    recolle au texte des quatre fichiers lors de toute révision, et le regroupement tient
+    tant que les quatre fichiers restent isomorphes — le jour où un bucket dérive au-delà du
+    renommage, il sort d'ici avec sa propre spec.
+
+Scenario: application puis attente dans l'ordre gelé
+  Given un paquet dont `package_dir` contient le dossier du bucket et un mock k8s
+  When @run(instance, context) s'exécute sur le module du bucket
+  Then les manifestes sont appliqués par @dir::install, les entrées valides du hook `_add`
+    s'ajoutent à la liste appliquée, la purge s'enchaîne seulement si la clé de status existe,
+    `set_status_<bucket>` pose liste et condition ok, puis @wait::all attend la même liste
+  And la valeur terminale est `context`, `map` qui deviendra le contexte de l'orchestrateur
+  Aucun test mappé (Tasks)
+
+Scenario: premier install sans purge
+  Given une instance dont `status` vaut `()`
+  When @run applique le bucket
+  Then @dir::remove n'est pas appelé, la liste appliquée est écrite telle quelle, et l'absence
+    du hook `_add` (return `()`) ajoute zéro entrée
+  Aucun test mappé (Tasks)
+
+Scenario: échec dans le try marque et relance
+  Given une levée de @dir::install, d'un hook `_add` livré, de la purge ou de la méthode de
+    status elle-même
+  When le catch la reçoit
+  Then la méthode `set_status_<singulier>_failed` est appelée avec la string verbatim ou le
+    @json_encode, l'erreur d'origine est relancée à cru, le hook `_post` ne tourne pas
+  And le `_pre` qui lève avant le try ne laisse aucun marqueur
+  Aucun test mappé (Tasks)
+
+Scenario: timeout du wait après l'écriture ok
+  Given le bucket appliqué, la purge faite et `set_status_<bucket>` réussi
+  When @wait::all lève un Elapsed
+  Then le catch pose le marqueur singulier en plus : le status garde la liste appliquée mais
+    perd la condition ok et gagne les conditions ko, et l'erreur du timeout relancée à cru
+    aborte ./install.sdd
+  Aucun test mappé : les mocks ne rendent pas les timeouts atteignables
+    (/common/src/k8smock.sdd et la tâche de tests ci-dessus)

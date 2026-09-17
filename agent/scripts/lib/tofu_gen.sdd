@@ -1,0 +1,218 @@
+Spec: LibTofuGen
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Write the OpenTofu source bundle of a package's `${package_dir}/tofu` working directory —
+    the provider pinning file, the instance locals snapshot, the typed `variable` blocks and
+    `vynil.tfvars` — and answer the predicate that gates the tofu lanes: does this package
+    carry user-authored `.tf` sources. All HCL type/value rendering is delegated to
+    ./tofu.rhai; this file itself only lists directories and writes files.
+
+Exposes:
+  @has_tofu_files(path) — bool directory predicate, the sole name the per-kind install/delete
+    lanes call (always on `${context.package_dir}/tofu`).
+  @gen_files(context) — the whole bundle in fixed order @gen_provider, @gen_locals, @gen_vars,
+    @gen_tfvars; the sole name the install_tofu/delete_tofu lanes call.
+  @gen_provider(path), @provider_constraint(namespace, name, fallback),
+    @cached_version(namespace, name), @gen_vars(options, path), @gen_tfvars(context),
+    @gen_locals(context) — generation helpers; every top-level @fn of a script module is
+    reachable through the alias, and /agent/tests/rhai_tofu_gen.rs already calls
+    @gen_provider and @provider_constraint directly.
+  Reached as `tfg::` from the 12 lane scripts and `tg::` from the tests. The file imports
+    `import "tofu" as tf` and calls exactly @get_tf_type and @to_tf of the six-name frozen
+    surface in ./tofu.sdd — the `run_*`/@get_output half belongs to the calling lanes, never here.
+
+Accepts:
+  @path — @String @tofu working directory. @gen_provider requires it to exist: @file_write
+    creates no parent directories.
+  @context — @rhai map whose keys are read with unguarded property access, a missing key
+    raises: `package_dir` (@String), `cluster`, `defaults`, `extra` and `instance` (each
+    handed to @to_tf verbatim by @gen_locals; unit renders as HCL `null`), `values` (map, or
+    `()` which the guard skips) and the `instance["package"]` then `options` chain.
+    The map producer of these lanes is ./build_context.rhai plus package `install_tofu_pre`
+    hooks; note `extra` has no producer in this repository (see Tasks).
+  @options — option-name to descriptor map, the same JSON-decoded shape as ./tofu.sdd @item;
+    every descriptor must carry a `default` key (`options[k]["default"]` is an unguarded
+    map index).
+  @namespace / @name — provider source halves (e.g. `hashicorp` / `kubernetes`); @fallback —
+    HCL constraint text returned verbatim when the cache misses.
+
+Returns:
+  @has_tofu_files — @bool; @provider_constraint — `= <ver>` or the @fallback text;
+    @cached_version — a version directory name or "". The gen_* fns return unit; their
+    product is four files under one directory: `providers.tf`, `00_vynil_locals.tf`,
+    `00_vynil_vars.tf` and `vynil.tfvars` into `${path}` / `${context.package_dir}/tofu`.
+
+Raises:
+  Zero @throw statements of its own: every failure is an engine raise from the host fns or a
+    propagated throw of ./tofu.sdd.
+  Engine raises: @file_write on a missing/unwritable target directory (bundle order starts
+    with @gen_provider, so a missing `${package_dir}/tofu` fails before any other file is
+    written); @read_dir on an unreadable directory (@has_tofu_files' @is_dir guard covers
+    non-existence only); every missing-key read above; @get_tf_type unit answers are not
+    errors (./tofu.sdd Tasks).
+  @to_tf raises — tofu console missing, non-zero, or the stderr trap frozen in ./tofu.sdd —
+    propagate through @gen_vars/@gen_tfvars/@gen_locals; the catch boundary is the lane spec.
+
+Handles:
+  Non-directory @path in @has_tofu_files: `false` from the @is_dir guard, never a raise.
+    Directory entries match regardless of type — a sub-directory named `main.tf` counts;
+    there is no @is_file check.
+  `()` or empty @options/@values: the corresponding file is still written, 0 bytes.
+  A descriptor with a missing/unknown @.type: @get_tf_type answers unit and the template
+    interpolates `()` into the `type` text — invalid HCL, recorded there, unfixed here.
+  Mid-bundle failure: @gen_files writes file by file with no rollback; earlier files stay
+    on disk when a later @to_tf or write raises.
+  A package carrying its own `providers.tf`: it is treated as generated (excluded from the
+    predicate) and overwritten — user providers must be declared under other file names.
+
+Must:
+  @has_tofu_files rule, in order: @is_dir else false; scan @read_dir entries, @basename each,
+    case-sensitive @glob `*.tf`, skip the exact-name generated set
+    `00_vynil_vars.tf` / `00_vynil_locals.tf` / `providers.tf`, short-circuit `true` on the
+    first other `.tf` name, `false` after the scan. `vynil.tfvars` can never match the glob.
+  Generated `providers.tf` shape: a `terraform`/`required_providers` block declaring
+    `hashicorp/kubernetes` then `gavinbunney/kubectl` with each version constraint in double
+    quotes, then full `provider` blocks: host `https://kubernetes.default.svc`, token and
+    cluster_ca_certificate as HCL `file(...)` reads of the in-cluster ServiceAccount mount
+    under `/run/secrets/kubernetes.io/serviceaccount/`, `load_config_file = false` on kubectl.
+  Keep the two `file(...)` expressions in @String let-variables spliced into the backtick
+    template: the generated `${file(...)}` syntax would otherwise be eaten by Rhai
+    interpolation — the code comment names this, and any rework of the template must keep the
+    indirection or an equivalent escape.
+  Derive each version cached-first: @provider_constraint returns `= <ver>` when
+    @cached_version finds @basename of the first @read_dir entry under
+    `/nonexistent/.terraform.d/plugins/registry.opentofu.org/<namespace>/<name>`, else the
+    fallback — `~> 2.34.0` for kubernetes, `~> 1.16.0` for kubectl, the same pins as
+    /agent/providers.tf; the `/nonexistent` mirror root is the tree ./tofu.sdd @run_init
+    mirrors and /agent/Dockerfile seeds.
+  Render one variable block per @options key in @rhai @Map alphabetical key order:
+    `variable "<k>" { default = <to_tf(default)>  type    = <get_tf_type(descriptor)> }` plus a
+    blank line; @optional is hardcoded `false` at this file's only @get_tf_type call site, so
+    top-level types never gain the `optional(...)` wrapper even though nested object
+    properties do (./tofu.sdd).
+  Lay out `default`/`type` on separate lines by relying on @to_tf's verbatim trailing newline
+    (frozen in ./tofu.sdd) landing before the literal `  type    = `: with a trimmed value the
+    generated block collapses onto one line and stops being valid HCL (see Tasks).
+  Write `vynil.tfvars` on every @gen_files run, one `${k} = <to_tf(value)>` entry per
+    `values` key — blank line between entries, the value newline plus the template newline —
+    with no check that a key matches a declared `variable`: an extra key only fails later at
+    @run_plan, which needs this file to exist at all.
+  Snapshot exactly five locals in `00_vynil_locals.tf`: `vynil_cluster`, `vynil_instance`,
+    `vynil_defaults`, `vynil_extra`, `vynil_owner` = verbatim @to_tf renderings of the
+    matching @context keys plus @vynil_owner() (./../../../common/src/rhaihandler.sdd), inside
+    a `locals { ... }` block closing without a trailing newline.
+  Overwrite unconditionally: every target is a fresh @file_write truncation on each run,
+    never appended, never diffed, even when a file's content set is empty.
+  Never create `${package_dir}/tofu` (@create_dir unused) and never touch `tfstate`,
+    `tf.plan`; the install_tofu lanes restore state around @gen_files.
+  Import-effect is the single top-level statement `import "tofu" as tf`: loading this module
+    resolves and evaluates ./tofu.rhai (itself I/O-free at import, ./tofu.sdd) and defines no
+    globals and runs nothing else; an unresolvable `tofu` module fails this import too.
+
+Must not:
+  Shell out or invoke the `tofu` binary: rendering goes through `tf::` only, and
+    @gen_* must not reach the run lane — init/plan/apply/destroy stay with the lanes' calls to
+    ./tofu.sdd after @gen_files returns.
+  Rename any of `providers.tf` / `00_vynil_vars.tf` / `00_vynil_locals.tf` / `vynil.tfvars`
+    independently of @has_tofu_files' generated set and ./tofu.sdd's `-var-file=vynil.tfvars`:
+    the four names and the three-name exclusion list are one frozen pair.
+  Reintroduce `providers.tf` as user-editable source: predicate-visible user files must be
+    other `.tf` names.
+
+Depends on:
+  vynil-core 0.7.7 engine API — @is_dir, @read_dir (full-path entries, OS order), @basename,
+    @file_write (`fs`), @glob (wildmatch, case-sensitive), and the @vynil_owner global; the
+    script surface assembled behind /common/src/rhaihandler.sdd, live on mock engines too.
+  ./tofu.rhai + ./tofu.sdd — @get_tf_type and @to_tf contracts, incl. the trailing-newline
+    and unit-answer facts this file's output layout rests on.
+  ./build_context.rhai — producer of the lane @context map (`cluster`/`instance`/`values`/
+    `defaults`/`package_dir`, no `extra` key).
+  /agent/scripts/{system,service,tenant}/install.rhai and /agent/scripts/{system,service,tenant}/delete.rhai —
+    @has_tofu_files call site gating the tofu lanes.
+  /agent/scripts/{system,service,tenant}/install_tofu.rhai and /agent/scripts/{system,service,tenant}/delete_tofu.rhai —
+    @gen_files call sites; no Rust or other code imports this module (grep).
+  /agent/Dockerfile + /agent/providers.tf — seeded provider plugin cache and pins backing
+    @cached_version and the fallbacks.
+
+Scenario: non-existent or empty directory answers false
+  Given a path that does not exist, and separately an empty temp directory
+  When @has_tofu_files runs on each
+  Then both answer `false`, the missing one from the @is_dir guard with no raise
+  Maps to @has_tofu_files_returns_false_for_nonexistent_dir and @has_tofu_files_returns_false_for_empty_dir
+
+Scenario: generated files never count as user sources
+  Given a directory containing only `00_vynil_vars.tf` and `00_vynil_locals.tf`, and one
+    containing only `providers.tf`
+  When @has_tofu_files runs on each
+  Then both answer `false` through the exact-name exclusion list
+  Maps to @has_tofu_files_returns_false_for_only_generated_files and @has_tofu_files_returns_false_for_providers_tf_only
+
+Scenario: one user file flips the predicate in mixed directories
+  Given directories holding `main.tf` alone, `providers.tf` + `main.tf`, and
+    `00_vynil_vars.tf` + `00_vynil_locals.tf` + `main.tf`
+  When @has_tofu_files runs on each
+  Then all three answer `true` — the first non-generated `.tf` name short-circuits
+  Maps to @has_tofu_files_returns_true_for_user_tf_file,
+    @has_tofu_files_returns_true_when_providers_tf_and_user_file_coexist and
+    @has_tofu_files_returns_true_when_generated_and_user_files_coexist
+
+Scenario: non-.tf files never trigger tofu
+  Given a directory holding only `config.yaml` and `README.md`
+  When @has_tofu_files runs
+  Then it answers `false`
+  Maps to @has_tofu_files_ignores_non_tf_files
+
+Scenario: providers.tf is regenerated fresh on every call
+  Given a temp directory with a stale `providers.tf` (`# stale old content with ~> 1.14.0`)
+  When @gen_provider runs on it, and on a fresh temp dir
+  Then both writes replace the file wholesale, declaring `hashicorp/kubernetes` and
+    `gavinbunney/kubectl`, in-cluster host/token/ca auth, and — no plugin cache in the test
+    env — the fallback constraints (`~> 2.34.0` or a `= 2.` pin)
+  Maps to @gen_provider_creates_providers_tf_with_fallback_versions and @gen_provider_overwrites_existing_providers_tf
+
+Scenario: provider_constraint prefers cache over range off-image
+  Given a test host where `/nonexistent/.terraform.d/plugins` is absent
+  When @provider_constraint("hashicorp", "kubernetes", "~> 2.34.0") runs
+  Then @cached_version answers "" and the call returns the fallback text verbatim
+  But the cache-hit branch (`= <first entry basename>`) has no test
+  Maps to @provider_constraint_returns_fallback_when_cache_absent
+
+Scenario: variable blocks and tfvars from a context (untested)
+  Given a @context with `options` of descriptors each carrying `default`, populated
+    `values`, and an existing tofu dir, with a fake `tofu` on PATH
+  When @gen_files runs
+  Then `00_vynil_vars.tf` holds one `variable "<k>" { default = ...  type = ... }` block per
+    option in alphabetical key order, `vynil.tfvars` one `k = <hcl>` per value,
+    `00_vynil_locals.tf` the five-locals snapshot with `vynil_owner` from @vynil_owner()
+    (`#{}` before any set_owner on a mock engine)
+  No mapped test exists (see Tasks).
+
+Tasks:
+  [ ] Extend /agent/tests/rhai_tofu_gen.rs — today's 11 tests cover only @has_tofu_files,
+      @gen_provider and @provider_constraint; add @gen_files/@gen_vars/@gen_tfvars/@gen_locals
+      cases (fake `tofu` on PATH for @to_tf) that also exercise the module-internal `tf::`
+      namespace calls, and a cache-hit case for @cached_version.
+  [?] @context.extra has no producer in this repository (./build_context.rhai omits it): with
+      the key absent the property read raises mid-bundle, after `providers.tf` is written.
+      Decide whether `extra` is a mandatory context key (build_context must emit it) or a
+      hook-only addition (gen_locals must guard with a default).
+  [?] @cached_version returns @basename of the FIRST @read_dir entry — OS listing order, not
+      the highest version; multi-version cache trees pick arbitrarily. Decide whether to sort
+      and pick the greatest, or constrain the mirror to one version.
+  [?] An option descriptor without a `default` key raises at the map index and fails the
+      whole install. Decide whether to omit the `default` line instead, or validate option
+      descriptors before @gen_files.
+  [?] @key interpolation into `variable "<k>"` and `${k} = ` is unescaped and unquoted: keys
+      carrying `"` or `${` corrupt the generated HCL. Decide whether to reject non-identifier
+      option/value keys here or record a package-author charset limit (related to the ./tofu.sdd
+      quoting decision).
+  [?] The `default = ${d}  type    = ${t}` one-line source relying on @to_tf's trailing
+      newline is fragile-by-construction. Decide whether the templates should @trim the parts
+      and emit explicit newlines, decoupling generated layout from `tofu console` output
+      shape.
+
+Done when:
+  The untested generation scenarios have mapped tests or recorded decisions, the `extra`
+    key question is settled, and `specdd lint` is green on this file.

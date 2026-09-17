@@ -1,0 +1,272 @@
+Spec: SuppressionCrdsService
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Spec propre du stage `crds` de la suppression service, ./delete_crds.rhai — HORS du
+    pattern familial de ./delete_stages.sdd, qui l'exclut déjà et en réclamait la rédaction :
+    il ne parcourt pas des entrées-maps avec get→delete→@wait_deleted, il rejoue en miroir la
+    purge gardée aux enfants que ./install_crds.sdd pratique à la création — l'inventaire est
+    `instance.status.crds`, liste de noms `plural.group` consignée par l'install ; un CRD
+    n'est supprimé que si son kind d'instances ne compte plus aucun enfant, sinon le warn
+    littéral identique part et le CRD reste. Rien d'autre : ni @create/@replace, ni lecture
+    du dossier `crds` du paquet, ni écriture de status — @set_status_crds n'est jamais
+    appelé ici. Jumeau octet-pour-octet côté system : ./../system/delete_crds.rhai (diff
+    vérifié, rôle consigné par ./../system/delete.sdd) ; aucun jumeau tenant, la lane tenant
+    n'ayant pas de bucket crds (gelé ./../tenant/delete.sdd).
+
+Owns:
+  ./delete_crds.rhai
+
+Exposes:
+  @run(instance, context) — seul @fn du module, atteint par ./delete.sdd via
+    `import_run("delete_crds", instance, context)` derrière le gate
+    `is_dir(`${context.package_dir}/crds`)` — dernier bucket de la séquence, avant le hook
+    `delete_post` ; gate, position et fusion `map` downstream gelés dans ./delete.sdd,
+    pas ici.
+
+Accepts:
+  @instance — lu, jamais remué ni rafraîchi (aucun @get_service_instance côté delete,
+    asymétrie avec l'install gelée ./delete.sdd) : double garde `instance.status != ()` ET
+    `instance.status.crds != ()` avant tout parcours, lues dans cet ordre ; l'inventaire est
+    un tableau de @String — noms de CRD `plural.group` — et non les maps des autres buckets,
+    sans champs `name`/`namespace`/`kind` à résoudre ; @instance.metadata.namespace n'est
+    jamais lu (le handle d'inventaire se construit au premier segment du nom, portée
+    cluster).
+  @context — traversé sans être lu : ce fichier ne lit AUCUNE clé (contraire de
+    ./install_crds.rhai qui interpole `package_dir`, `config_dir` et lit `cluster.crds`) ;
+    il ne fait que le transmettre aux hooks, et un retour `map` de `_pre`/`_post` le
+    REMPLACE intégralement sans qu'aucune ligne d'ici ne le relise ensuite.
+
+Returns:
+  La valeur terminale `context` — carte éventuellement remplacée par les hooks, que
+    ./delete.sdd ne remonte que sous son propre test @type_of (double garde module puis
+    orchestrateur). Le produit réel ne voyage pas là : il est dans le seul cluster — CRD
+    supprimés ou survivants — sans aucune trace de status pour le porter.
+  Sur la voie d'échec : rien n'est retourné — une levée de hook `_pre`/`_post` ou de la
+    construction du handle CRD traverse @import_run et avorte la lane delete vers la
+    sortie exit-3 de /agent/src/service/delete.sdd citée par ./delete.sdd ; toute autre
+    levée est avalée par le catch par-entrée (Raises, Handles).
+
+Raises:
+  Zéro @throw et zéro `throw;` nu dans ce fichier — delta majeur avec le catch de
+    ./install_crds.rhai qui relance à cru : ici tout ce qui atteint un catch est warné et
+    la lane continue.
+  - Levées hors de tout try, donc abortant le stage sans aucun marqueur (côté delete il
+    n'existe aucune écriture d'échec, posture ./delete_stages.sdd) : levée du hook `_pre`
+    (avant tout contact cluster, le handle CRD de la ligne 6 ne sera pas construit), levée
+    du hook `_post` (après que les suppressions du parcours ont déjà été lancées — sans
+    retour en arrière), levée de la construction @k8s_resource("CustomResourceDefinition")
+    qui précède même la double garde et tourne à chaque exécution, @json_encode de l'erreur
+    non-string qui lèverait lui-même dans un switch de catch.
+  - Aucune levée d'attente : zéro @wait_deleted appelé ici, donc aucun `Elapsed`
+    atteignable depuis ce fichier, contrairement aux buckets de ./delete_stages.sdd.
+
+Handles:
+  - Hooks absents (cas de tout paquet standard) : slots `delete_crds_pre` et
+    `delete_crds_post` côté paquet seulement, livrés nulle part dans l'atelier ; le skip
+    @import_run renvoie `()`, non `map`, aucune fusion. Aucun slot `_add` n'existe (même
+    écart qu'./install_crds.rhai face aux quatre buckets).
+  - `instance.status` à `()` ou clé `crds` absente (instance importée jamais installée,
+    ou paquet sans crds posés) : zéro parcours, le handle CRD est construit quand même,
+    les deux hooks tournent, `context` revient — lane no-op sans lever.
+  - Kind d'instances ne résolvant plus (@exist répond faux) : entrée passée en SILENCE —
+    zéro delete, zéro log ; le CRD peut rester au cluster (même branche d'oubli que
+    ./install_crds.sdd, sans aucun inventaire ici pour le retenir).
+  - Enfants présents (`items.len()` > 0, tous namespaces confondus) : @log_warn du
+    littéral `Ignoring to delete ${old} as it still have ${cnt} children`, zéro delete ;
+    contrairement à
+    l'install, AUCUN carry-forward — le nom ne survit dans aucune liste.
+  - get/delete levant une string contenant `NotFound` : muet total (CRD déjà parti) — la
+    tolérance vit au niveau du try intérieur, là où ./install_crds.rhai ne tolère pas du
+    tout NotFound.
+  - Toute autre levée par entrée — construction du handle-kind, @exist, @list_meta, ou
+    delete : catch extérieur — string warnée verbatim, la tolérance `NotFound` n'existe
+    PAS à ce niveau ; non-string warnée via @json_encode ; le parcours continue à l'entrée
+    suivante.
+
+Must:
+  Dérouler exactement, ordre gelé : @import_run du hook `delete_crds_pre` et fusion
+    seulement si @type_of du retour est `map` — construction du handle CRD
+    `api = k8s_resource("CustomResourceDefinition")`, argument unique cluster-scopée, avant
+    la garde et hors try — double garde `instance.status` puis `instance.status.crds` —
+    parcours des noms dans l'ordre de la liste consignée, chaque entrée dans son try
+    extérieur : handle d'instances `old.split(".")[0]` (premier segment pointé seul — le
+    pluriel, sans le groupe) via @k8s_resource → @exist → @list_meta().items.len() →
+    enfants > 0 : warn de Handles, sans delete ; enfants nuls : @log_info du littéral
+    `Deleting CRD ${old}` puis @get_obj(old) sur le handle CRD et @delete() sur l'objet,
+    dans le try intérieur à tolérance `NotFound` — catch extérieurs aux switches de
+    @type_of (string verbatim, sinon @json_encode) conformes à Handles — puis @import_run
+    du hook `delete_crds_post` avec la même fusion `map`, puis la valeur terminale
+    `context`.
+  Ne jamais supprimer un CRD dont le kind d'instances comptait des enfants au moment où
+    @list_meta a répondu ; la garde-enfants est le seul contrôle de pose : ce code ne
+    supprime lui-même aucun enfant et n'en attend aucun.
+  Supprimer via @get_obj puis la méthode d'objet @delete uniquement : l'engine (registrar
+    k8s de vynil-core 0.7.7, k8s.rs) envoie des DeleteParams `foreground()` — cascade
+    premier plan posée par l'engine, aucun paramètre de propagation, de grâce ou
+    d'arrière-plan fourni par ce fichier.
+  N'attendre aucune disparition : zéro @wait_deleted, zéro import du module
+    ./../lib/wait.rhai, zéro re-lecture de @list_meta après le delete — un CRD supprimé
+    peut rester `Terminating` quand le stage revient, et le run se termine propre malgré
+    lui ; rien ici n'observe la fin de la disparition ni la réapparition d'enfants entre
+    le comptage et le delete.
+  N'écrire aucune trace d'inventaire : zéro appel @set_status_crds, zéro
+    @set_status_crd_failed (méthodes de la création, absentes de la suppression), zéro
+    patch du CR — `status.crds` garde les noms morts tant que le CR de l'instance vit,
+    jusqu'à sa propre suppression par le contrôleur ; la posture `Finish by silence` de
+    ./delete.sdd descend sur ce stage.
+  Rester sans aucun import de module : le contenu entier du fichier est son @fn, ni `dir`
+    ni `wait` ne sont chargés, tous les globaux (@k8s_resource,
+    @import_run, @type_of, @json_encode, @log_info, @log_warn) appelés en direct, zéro
+    effet de bord au chargement.
+  Borner l'observabilité aux deux littéraux plus les warns des catch : aucune ligne
+    `Waiting for ...`, contrairement aux buckets de ./delete_stages.sdd — faute
+    d'attente à logger.
+  Ne jamais pouvoir avorter depuis le parcours : toute levée d'entrée trouve son catch et
+    la boucle continue ; l'abort n'est possible que hors boucle (Raises) — tolérance delta
+    avec ./install_crds.rhai (marqueur + relance) et avec les buckets delete (wait
+    non capturé).
+
+Must not:
+  Parcourir des entrées-maps ou appeler @dir::remove de ./../lib/install_from_dir.rhai :
+    la lib n'a jamais connu la catégorie `crds` (gelé là-bas) et cette lane ne connaît ni
+    nom-d'entrée, ni namespace par défaut, ni `apiVersion` — les confondre ciblerait des
+    kinds sans rapport avec les CRD.
+  Lire ou rendre `${context.package_dir}/crds` : le dossier du paquet ne sert que de gate
+    à ./delete.sdd ; ce stage ne lit aucun fichier, moitié pure purge du couple dont
+    ./install_crds.rhai est la moitié création.
+
+Depends on:
+  L'API d'engine vynil-core 0.7.7 montée par @Script (/common/src/rhaihandler.sdd) : le
+    shim @import_run à trois arguments (frontière skip-absent contre rethrow gelée dans
+    ./delete.sdd), @k8s_resource forme argument unique cluster-scopée, les méthodes
+    K8sGeneric @exist, @list_meta, @get_obj et la méthode d'objet @delete (DeleteParams
+    premier plan, k8s.rs de l'engine), plus @type_of, @json_encode, @log_info, @log_warn.
+  Les hooks `delete_crds_pre` et `delete_crds_post` : slots côté paquet seulement,
+    livrés par personne dans l'atelier ; absents, le retour `()` du skip n'est jamais
+    fusionné.
+
+References:
+  ./delete.sdd — l'orchestrateur : gate `is_dir` du dossier `crds`, place de la lane (le
+    dernier bucket, après `delete_befores`, avant le hook `delete_post` dont le retour est
+    jeté), ordre des dix appels et son Handle qui cite le rôle `warn-away` de cette lane.
+  ./install_crds.sdd — le jumeau du côté création : garde-enfants @exist/@list_meta, handle
+    construit sur `split(".")[0]` et littéral `Ignoring to delete ... children` sont
+    partagés à l'octet près de sens ; l'Example fige les deltas.
+  ./delete_stages.sdd — le pattern familial dont ce fichier est exclu ; ses Tasks
+    réclamaient la présente spec et son [?] orphelins muets est la question-mère de
+    celle-ci.
+  ./../system/delete_crds.rhai — jumeau byte-identique (diff vérifié), rôle consigné dans
+    ./../system/delete.sdd.
+  ./../tenant/delete.sdd — gel de l'absence : la lane tenant supprime le bloc `crds`
+    entier, aucun jumeau tenant dû.
+  /agent/tests/rhai_lifecycle.rs — harnais mock des lanes service : aucun test ne nomme
+    aujourd'hui ce module, ni même `crds` (Tasks).
+
+Example:
+  (deltas entre le bloc de purge de ./install_crds.rhai et tout ./delete_crds.rhai — sont
+    communs la double garde `status.crds`, le handle d'instances sur le premier segment
+    pointé, @exist, @list_meta et le littéral de warn enfants)
+  install seul — carry-forward `applied_crds.push(old)` de l'entrée à enfants ; delete par
+    `api.delete(old)` au nom sans get préalable ; NotFound lève, marqueur
+    @set_status_crd_failed et `throw;` nu ; écriture @set_status_crds finale ; aucun log de
+    delete réussi
+  delete seul — @get_obj puis @delete() sur l'objet ; `NotFound` muet au try intérieur ;
+    @log_info `Deleting CRD ${old}` avant chaque delete ; catch extérieur qui avertit et
+    continue sans tolérance NotFound ; zéro écriture de status ; zéro wait
+  communs d'ailleurs — hooks `_pre`/`_post` en fusion `map`, ZÉRO hook `_add`, valeur
+    terminale `context`, zéro import de module
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs : ni ce module ni la chaîne
+      `crds` ne sont nommés dans le harnais aujourd'hui (seul
+      @service_delete_runs_without_error tourne, sur une fixture dont le gate `is_dir` est
+      faux — cette lane n'y est jamais atteinte) ; ajouter fixture avec dossier `crds/`,
+      status.crds peuplé et mocks @exist/@list_meta/@get_obj/@delete pour épingler la
+      garde-enfants, les tolérances et l'absence d'attente.
+  [ ] Écrire la spec twin ./../system/delete_crds.sdd en lockstep de celle-ci (fichiers
+      byte-identiques, identité déjà consignée ./../system/delete.sdd ; revérifier le diff
+      à chaque révision et acter la divergence si un kind dérive).
+  [ ] Harmoniser l'orthographe du moteur : le Platform et le Depends on de cette spec
+      rejoignent les instances familiales « vynil-core » suivies par une Tasks de
+      ./delete_stages.sdd (/Cargo.toml épingle la crate `vynil-core`).
+  [?] purge par garde-enfants, status jamais effacé : après une purge complète le CR garde
+      des noms morts dans `status.crds` jusqu'à sa propre suppression par le contrôleur au
+      clean return — la liste ne vit que le temps de cette lane, et un run intermédiaire
+      échoué rejouera les mêmes noms sur des CRD déjà partis (muet via NotFound). Décider
+      si un écrit de status pendant ou après la purge est dû pour l'observabilité
+      (l'asymétrie totale avec install est-elle voulue ?).
+  [?] CRD survivants devenus invisibles : l'entrée à enfants et l'entrée @exist-faux
+      laissent le CRD au cluster ; le premier a un warn comme seule trace, la seconde
+      aucune, et le CR qui les nommait est détruit juste après — le CRD orphelin n'a plus
+      de rattacheur. Décider une trace plus forte (log nommant l'instance, refus assumé,
+      ou recomptage plus tard).
+  [?] delete premier plan sans attente : @delete revient à l'acceptation de la requête et
+      l'engine force la cascade premier plan — un CRD finalisé ou des enfants créés entre
+      @list_meta et le delete (aucune précondition de compte au delete) laissent un
+      `Terminating` que personne n'observe, le clean return libérant le finalizer. Décider
+      si cette lane doit @wait_deleted ses CRD comme les buckets attendent leurs objets.
+  [?] Tolérance NotFound asymétrique entre les deux couches de catch (muette au try
+      intérieur, warnée au catch extérieur qui n'appelle pas @contains) et zéro relance
+      totale : une lane où chaque entrée lève finit propre avec les warns pour seule
+      trace. Décider une tolérance unifiée et le lien avec le [?] status-blind gates de
+      ./delete.sdd.
+
+Done when:
+  Chaque Scenario porte un test mappé ou un [?] tranché, la séquence figée ici recolle au
+    texte du fichier à toute révision, et l'identité byte avec le jumeau system est tenue
+    ou sa divergence actée.
+
+Scenario: la garde-enfants trie les CRD en trois lots
+  Given `instance.status.crds` tenant `a.example.com` dont le kind d'instances compte 2
+    enfants tous namespaces confondus, `b.example.com` à 0 enfant, `c.example.com` dont le
+    kind ne résout plus (@exist faux)
+  When @run(instance, context) déroule la purge
+  Then `a` déclenche @log_warn du littéral `Ignoring to delete a.example.com as it still have 2 children`
+    et n'est pas supprimé, `b` est supprimé par @get_obj puis @delete juste après
+    @log_info `Deleting CRD b.example.com`, `c` est oublié sans delete ni log
+  And aucun écrit de status, aucune attente, et `context` revient
+  Aucun test mappé (Tasks)
+
+Scenario: delete d'une instance jamais installée
+  Given `instance.status` à `()` ou sans clé `crds` (paquet importé, CRD jamais posés)
+  When @run s'exécute
+  Then le handle CRD est construit, le parcours est sauté par la double garde, les deux
+    hooks tournent sans fusion (retour `()` non `map`) et `context` revient sans lever
+  And zéro appel @exist/@list_meta/@get_obj/@delete
+  Aucun test mappé (Tasks)
+
+Scenario: NotFound muet au get/delete, autres levées warnées et parcours repris
+  Given trois entrées dont la première lève à @get_obj une string contenant `NotFound`, la
+    deuxième une autre string, la troisième un objet d'erreur
+  When le catch intérieur les traite à tour de rôle
+  Then la première ne produit aucun log, la deuxième un @log_warn verbatim, la troisième un
+    @log_warn de @json_encode
+  And aucune n'interrompt le parcours, les entrées suivantes sont traitées, le stage
+    revient propre après le hook `_post`
+  Aucun test mappé (Tasks)
+
+Scenario: levée hors fenêtre gardée warnée sans tolérance
+  Given une entrée qui lève une string (contenant ou non `NotFound`) à la construction de
+    son handle-kind, à @exist ou à @list_meta — donc hors du try intérieur — suivie d'une
+    entrée saine
+  When le catch extérieur reçoit la string
+  Then @log_warn part verbatim, le switch n'appelle aucun test `NotFound` ici, aucun
+    delete n'est tenté sur l'entrée fautive
+  And l'entrée saine est traitée normalement ; et même si TOUTES les entrées levaient, le
+    stage finirait propre, les warns comme seule trace
+  Aucun test mappé (Tasks)
+
+Scenario: la voie d'abortion réduite aux hooks et au handle
+  Given une levée du hook `delete_crds_pre`, ou du hook `delete_crds_post`, ou de la
+    construction @k8s_resource("CustomResourceDefinition"), ou de @json_encode dans un
+    switch de catch
+  When la levée traverse le code
+  Then aucun catch de parcours ne l'atteint, le stage meurt sans marqueur — la suppression
+    delete n'écrit rien de tel (posture ./delete_stages.sdd) — ./delete.sdd avorte sans
+    jamais relancer `delete_post` et la lane Rust tombe en exit-3
+  But given le `_pre` qui lève avant tout
+  Then zéro contact cluster n'a eu lieu, handle CRD compris ; given le `_post` qui lève
+    après tout, les deletes du parcours sont déjà partis, sans retour en arrière
+  Aucun test mappé (Tasks)

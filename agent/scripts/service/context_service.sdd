@@ -1,0 +1,152 @@
+Spec: ServiceContextServiceScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  The `context_service` slot ./context.sdd runs right after minting the `namespace` map:
+    @template stamps the three static block keys (`ha`, `use_backup`, `name`), @run then reads
+    the instance's `Namespace` object and overlays its `vynil.solidite.fr/`-prefixed
+    annotations into the same map, JSON-decoded. This read is the single cluster touch of the
+    whole context build and it stays on the live lane: `agent template service` lands on
+    @template (a `template` fn exists, so @import_template never falls back) and no engine k8s
+    call happens. Both fns mutate and return the same context map.
+
+Exposes:
+  @template(@instance, @context) — offline twin, chosen by the three-arg @import_template of
+    ./context.rhai on the template lane; writes the static triple, zero k8s calls.
+  @run(@instance, @context) — live twin, chosen by @import_run on the install, delete and
+    `agent package test` lanes: @template first, then the guarded Namespace annotation
+    overlay; returns the map.
+  No other @fn; the module body is the two @fn declarations only (slot contract frozen in
+    ./context.sdd Returns item 5).
+
+Accepts:
+  @instance — the injected @Dynamic ./context.rhai forwards (typed CR live, the synthesized
+    `#{metadata: {name, namespace}}` map offline, the mock in /agent/src/testing/handler.sdd).
+    Direct reads: `.metadata.namespace` twice only — the `name` stamp and the @get argument.
+  @context — the running orchestrator map. Reads: `cluster.ha` (boolean always set by
+    ./../lib/build_context.sdd on both lanes: agent.yaml value or `nodes.len() > 1`).
+    Precondition: `context.namespace` is the map ./context.sdd minted immediately before this
+    slot (maintenance pair present), never replaced by a `()` or non-map at slot time.
+
+Returns:
+  `context` — last expression of both fns, the same map object mutated in place (the
+    orchestrator's map-guard rebind is ceremonial). New keys inside `namespace`:
+    `ha` — verbatim copy of `context.cluster.ha`,
+    `use_backup` — the boolean `false` (not a string; ./install.rhai gates the vitals backup
+      branch on it),
+    `name` — `instance.metadata.namespace`,
+    plus @run's overlay: one key per prefixed annotation, @json_decode of the value text.
+  The maintenance pair flows untouched unless an annotation overrides one of the two keys.
+    @run never touches the top-level map.
+
+Raises:
+  Zero @throw statements; incidental throws split on @try placement:
+    - @template raises propagate on both lanes (in @run it runs before the @try): a non-map
+      `context.namespace`, a missing `context.cluster`, or a missing `instance.metadata`
+      chain abort the lane run — shapes the three shipped callers satisfy.
+    - The @k8s_resource("Namespace") construction is outside the @try too; its failure aborts.
+    - Inside the @try: a failing @get (real kube NotFound error, or the mock-engine string
+      `Failed to find Namespace {name} in the Mock database`) and the `instance.metadata.`
+      read are caught → @log_warn, no re-throw, lane continues with the triple only.
+    - Inside the loop: a non-JSON annotation text makes @json_decode raise; the per-key @try
+      warns, writes nothing for that key, and the loop continues with the next key.
+
+Handles:
+  Missing object (no namespace mock, NotFound cluster): the whole guarded block degrades to
+    one @log_warn line — stock mock-engine tests exercise exactly this string branch.
+  `ns.metadata.annotations` absent or `()`: the `type_of(annotations) == "map"` guard skips
+    the loop silently.
+  Both catches share one switch: `type_of(e) == "string"` logs the raw text, anything else
+    goes through @json_encode first (@log_warn takes a string only).
+  Annotation key equal to the bare prefix yields the `""` key and stores its decoded value
+    under it. JSON `null` values land `()` under the key.
+
+Must:
+  Stamp the triple in @template on every lane, in this assignment order: `ha` copied from
+    `context.cluster.ha`, `use_backup` literal `false` always (a prior value under the key is
+    clobbered), `name` from `instance.metadata.namespace`.
+  Run the overlay after the triple: same-named annotations win over `ha`/`use_backup`/`name`
+    and the maintenance pair — last writer is the annotation (that is the customization
+    surface: an annotation can flip `use_backup` back to `true`).
+  Select annotations by the literal key prefix `"vynil.solidite.fr/"` via @starts_with, and
+    derive the namespace key with the Rhai string @remove — substring removal of every
+    occurrence of the prefix text, not a leading-position trim.
+  Decode each selected value with @json_decode inside its own @try — one bad value loses its
+    own key, never the batch.
+  Degrade every guarded-path failure to @log_warn (never @throw, never an instance
+    `set_status_` call, never a second k8s call) and return `context` unchanged-but-stamped.
+  Preserve the key spellings `ha`, `use_backup`, `name` and the prefix literal — readers are
+    ./install.rhai (`namespace.use_backup`), ./../lib/backup_context.rhai (@run reads
+    `namespace.ha` for the Job memory env) and the template renders of `namespace.name`.
+
+Must not:
+  Write anywhere outside `context.namespace` — the top-level context gains no key here.
+  Read cluster state on the @template path (the offline lane must stay engine-call-free).
+
+Depends on:
+  vynil-core 0.7.7 script surface (registered behind /common/src/rhaihandler.sdd):
+    @k8s_resource + @K8sGeneric @get (cluster-scope, one-arg), @json_decode/@json_encode,
+    @type_of, @log_warn, array @filter, map @keys, string @starts_with and the `string_more`
+    substring @remove.
+  ./../lib/build_context.sdd — provides-and-shape authority for `cluster.ha` (read-through).
+  ./context.rhai — sole caller through the slot shims; slot ordering is that contract.
+
+References:
+  ./context.sdd — Returns item 5 names this file's additions; the `namespace` mint before
+    the slot and the map-guard after it.
+  /agent/src/template/service.sdd — pins the offline outcome: `name` = instance namespace,
+    `use_backup` `false`, `ha` from `cluster.ha`.
+  ./install.sdd — `namespace.use_backup` reader; ./../lib/backup_context.sdd —
+    `namespace.ha` reader.
+
+Scenario: offline template stamps the block with zero cluster calls
+  Given the /agent/src/template/service.sdd synthesized instance and the freshly minted
+    maintenance map
+  When @template(@instance, @context) runs
+  Then `namespace` holds `ha` = the profile's `cluster.ha` boolean, `use_backup` `false`,
+    `name` the instance namespace, the maintenance keys survive, and no engine call is made
+  Covered from the lane side by /agent/src/template/service.sdd namespace-block scenarios
+
+Scenario: live annotation overlay merges and overrides
+  Given a mocked engine holding a `Namespace` object in the instance namespace, whose
+    `metadata.annotations` carry `vynil.solidite.fr/use_backup` JSON text `true` and
+    `vynil.solidite.fr/maintenance_start_hour` JSON text `"3"`
+  When @run(@instance, @context) runs
+  Then `use_backup` is `true` (annotation beat the false stamp), `maintenance_start_hour` is
+    the string `"3"` (annotation beat the minted `"0"`), `ha`/`name` keep the stamped values
+  No mapped test
+
+Scenario: one malformed annotation loses only its key
+  Given a mocked `Namespace` in the instance namespace whose `metadata.annotations` carry
+    `vynil.solidite.fr/ha` with the invalid JSON text `yes` and `vynil.solidite.fr/name`
+    with the JSON string text `"\"renamed\""`
+  When @run(@instance, @context) runs
+  Then @log_warn reports the @json_decode failure, `ha` stays the cluster boolean, `name`
+    becomes `renamed`, the run completes
+  No mapped test
+
+Scenario: namespace object absent degrades to a warning
+  Given the stock /agent/tests/rhai_lifecycle.rs mock set (ServiceInstance only, no
+    Namespace)
+  When @run(@instance, @context) runs
+  Then the string @type_of branch calls @log_warn with the raw text, no annotation key is
+    written, a map is returned
+  Indirectly covered by @service_context_builds_context_from_instance (lane-completes side)
+
+Tasks:
+  [ ] Extend /agent/tests/rhai_lifecycle.rs mocks: add a `Namespace` object with prefixed
+      annotations to pin overlay/override, per-key JSON isolation and the no-annotations
+      silent skip (today the get always fails on the mock string, so the loop is untested).
+  [?] `@remove` strips every occurrence of the prefix text, so a key containing the prefix
+      mid-string gets a multi-segment name — decide keep vs leading-only trim before any
+      longer-lived annotation naming guide ships.
+  [?] The `_` catch branch @json_encodes the caught dynamic and that call itself raising
+      would escape the last @try and abort the lane — decide whether the error switch needs
+      a @log_warn fallback on the `${e}` interpolation.
+  [?] The overlay intentionally reaches the maintenance pair and `name`: confirm the
+      override surface is the contract rather than restricting settable keys.
+
+Done when:
+  The four scenarios have mapped tests or recorded decisions, the key spellings cross-check
+    against ./context.sdd Returns item 5 and the two reader specs, and `specdd lint` is green.

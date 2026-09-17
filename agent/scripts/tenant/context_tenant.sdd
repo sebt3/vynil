@@ -1,0 +1,140 @@
+Spec: ContextTenantScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  The shipped `context_tenant` slot of ./context.rhai: turns the freshly minted
+    `tenant` map into the working namespace view the install/backup/render lanes
+    read. The offline half defaults `use_backup` to `false`, copies `ha` from the
+    cluster profile, aliases the map under `namespace`, and rewrites `name` to the
+    instance namespace; the live half then overlays the `vynil.solidite.fr/`-prefixed
+    annotations of the real @Namespace object, JSON-decoding each value. Mutates the
+    received map in place and returns it.
+
+Exposes:
+  @template(@instance, @context) — offline half, invoked via @import_template by
+    the orchestrator slot; touches NO cluster object.
+  @run(@instance, @context) — live half, invoked via @import_run: runs the
+    template half by DIRECT call (`template(instance, context)`, not through the
+    shim), then does the annotation read.
+  No other @fn; these two match @ENTRY_POINT_FUNCTIONS.
+
+Accepts:
+  @instance — read only for `metadata.namespace` (typed @TenantInstance @Dynamic
+    on the live halves, the synthesized `#{metadata: {name, namespace}}` map
+    offline — callers frozen in /agent/src/tenant/install.sdd,
+    /agent/src/tenant/delete.sdd, /agent/src/template/tenant.sdd).
+  @context — the running context as handed by ./context.sdd slot 4/5: requires a
+    `tenant` map (the orchestrator always mints it before this slot) and reads
+    `cluster.ha`. No `args`.
+
+Returns:
+  The SAME mutated map (Rhai maps are by reference — the orchestrator's map-guard
+    then rebinds to the very same object, `namespace` and `tenant` become one map,
+    not a copy). After @template: `tenant.use_backup` `false` (@bool),
+    `tenant.ha` = the `cluster.ha` value, `context["namespace"]` aliasing it, and
+    `name` = `instance.metadata.namespace` — overwriting the template-lane `client`
+    placeholder AND the run-lane `get_tenant_name()` label value alike. After the
+    live @run additionally: zero or more overlay keys, each stored under the
+    annotation key without the `vynil.solidite.fr/` prefix (`ssl` for
+    `vynil.solidite.fr/ssl`), as the @json_decode of the annotation string.
+
+Raises:
+  Zero @throw of its own. Unguarded reads: `context.cluster.ha` and
+    `context.tenant[...]` — a context replaced earlier without those keys raises
+    the interpreter error here and aborts the lane (the orchestrator's guard
+    cannot protect its own later slot). Guarded: the whole namespace read and
+    the overlay walk (`try`/`catch` — @log_warn verbatim for a string error, else
+    @json_encode), and one inner catch per @json_decode.
+
+Handles:
+  Namespace absent, unreadable, or `metadata.namespace` landing `()` — outer catch
+    logs the warning and the run returns with only the template-half defaults.
+  `metadata.annotations` not a map — the overlay and the use_backup re-check are
+    skipped entirely, defaults stand.
+  Annotation value not valid JSON — inner catch warns, that one key is omitted:
+    overlay values must be JSON-encoded scalars (`"8080"`, `true`), not raw text.
+  Overlay key colliding with a minted key (e.g. annotation
+    `vynil.solidite.fr/use_backup` or `.../name`) — it writes through the alias
+    into the shared map like any key; the final use_backup re-check cannot undo
+    a non-bool write (Tasks).
+
+Must:
+  Run the offline half in exactly this order: set `context.tenant` `use_backup`
+    to `false`; set its `ha` to `context.cluster.ha`; alias
+    `context["namespace"] = context.tenant`; then set `namespace["name"]` to
+    `instance.metadata.namespace`; return `context`.
+  Run the live half after the template half: @k8s_resource("Namespace").@get of
+    the instance namespace, iterate the annotation keys starting with prefix
+    `vynil.solidite.fr/`, strip the prefix from the candidate key (value-semantic
+    @remove on a copy), store @json_decode(value) under that key.
+  Keep the alias a reference, not a copy: every later mutation is visible through
+    both `namespace` and `tenant`, and this is the mechanism by which the
+    orchestrator's Returns promise `namespace.use_backup`/`namespace.ha` for
+    ./install.rhai and ./../lib/backup_context.rhai.
+  Run the use_backup re-check last: when `type_of` of
+    `context.namespace.use_backup` is not bool, reassign it from
+    `context.tenant.use_backup`.
+
+Must not:
+  Call any @k8s_resource in the @template half — the offline lane of
+    /agent/src/template/tenant.sdd stays cluster-free only while this half keeps
+    zero engine reads beyond properties.
+
+Depends on:
+  ./context.rhai — sole caller (slot contract in ./context.sdd).
+  vynil-core 0.7.7 script surface (registrars behind /common/src/rhaihandler.sdd):
+    @k8s_resource("Namespace").@get, @json_decode, @json_encode, @log_warn,
+    @type_of, string @keys()/@starts_with/@remove.
+
+References:
+  ./../../../common/src/instancetenant.sdd — same `vynil.solidite.fr/` domain is
+    the tenant LABEL key there; annotations read here are an independent channel.
+  ./../service/context_service.sdd — the service-kind twin slot: it builds its
+    `namespace` block independently of this file, no shared code.
+
+Scenario: offline half materializes the default namespace view
+  Given the template-lane context with `tenant` placeholder `client` and profile
+    `cluster.ha` `false`, synthesized instance namespace `team-a`
+  When @template(instance, context) runs
+  Then `tenant.use_backup` is the bool `false`, `ha` `false`, `name` `team-a`
+    (the `client` placeholder erased), `namespace` and `tenant` are the same map,
+    and no cluster call was made
+  No mapped test
+
+Scenario: live half overlays prefixed annotations
+  Given @Namespace `team-a` annotated `vynil.solidite.fr/ssl: "true"` and
+    `vynil.solidite.fr/note: not-json` (invalid JSON)
+  When @run(instance, context) runs
+  Then `namespace["ssl"]` is the bool `true`, `note` is absent with a @log_warn
+    naming the decode failure, non-prefixed annotations are ignored, and defaults
+    set by the template half stand where not overlaid
+  No mapped test
+
+Scenario: namespace read failure keeps the defaults
+  Given the @Namespace get raises (namespace gone or RBAC)
+  When @run catches at the outer block
+  Then the warning is logged, no overlay key exists, and the returned map still
+    carries use_backup/ha/name from the template half
+  No mapped test
+
+Tasks:
+  [ ] Cover the scenarios from ./context.sdd's new tenant resolver test harness
+      (no tenant hook test ships today).
+  [?] The name rewrite erases the `get_tenant_name()` label value (e.g. `acme`
+      becomes `team-a`) one slot after it was fetched; the label identity then
+      exists nowhere in the final context. Confirm the rewrite is the contract or
+      the fetch should move.
+  [?] The use_backup re-check is self-referential through the alias: it can fire
+      only when an annotation wrote a non-bool, and it then reads back that very
+      corrupted slot — a no-op, `false` can never be restored. Decide whether it
+      must hold a reference to the minted default (or be dropped).
+  [?] Type-trust on the overlay: `vynil.solidite.fr/ha: "\"yes\""` would land a
+      string and the `if context.namespace.ha` branch in
+      ./../lib/backup_context.rhai fails on a non-bool condition. Decide whether
+      overlay values get a type allowlist.
+
+Done when:
+  Scenarios mapped through the orchestrator slot, the Task decisions closed, key
+    spellings cross-checked against ./context.sdd and
+    ./../lib/backup_context.rhai, `specdd lint` green.

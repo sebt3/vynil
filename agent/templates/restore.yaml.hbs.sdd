@@ -1,0 +1,220 @@
+Spec: GabaritRestorePod
+
+Platform: Handlebars 6.4.2 (moteur crate `vynil-core` 0.7.7 via @new_hbs en mode strict + @handlebars::no_escape, partials via @register_partial_dir)
+
+Purpose:
+  Donner au `Job` `init-restore` — premier install d'une instance depuis un snapshot restic —
+    le pod qu'il embarque : un conteneur unique `restore` lançant `agent <type> restore` avec
+    la carte env/envFrom/volumes produite par @bctx::run.
+  Le fichier n'est jamais autonome : entièrement encapsulé dans un bloc @to_json(`format="yaml"`),
+    il rend un objet JSON `{metadata, spec}` sans `apiVersion` ni `kind`, injecté comme valeur
+    de `template:` par l'hôte ./init_job.yaml.hbs — et par lui seul, jamais par une lane Rhai,
+    présente ou passée (voir References).
+
+Owns:
+  ./restore.yaml.hbs
+
+Depends on:
+  /common/src/handlebarshandler.sdd — enregistrement @new_hbs et helper contextuel
+    @selector_from_ctx : lit `instance.selector` sur `this` en `.get()` Rust seulement, donc
+    un `selector` absent retombe sur la carte vide `{}` enrichie `app.kubernetes.io/component`
+    sans lever le mode strict.
+  crate `vynil-core` 0.7.7 (dépendance /common/Cargo.toml) — helpers vendored @json_to_str et
+    @to_json (module `hbs_json`) : @to_json(`format="yaml"`) relit le bloc rendu en YAML
+    (`serde_yaml`) puis écrit un JSON pretty (`@serde_json::to_string_pretty`).
+  /agent/scripts/lib/backup_context.sdd — productrice de @bctx::run et de la forme réelle de
+    `envs`, `envs_from`, `volumes`, `mounts`, `service_account` ; l'appel vivant passe le 3e
+    argument `true` (`RESTIC_SNAPSHOT` ajouté aux `envs`, montage des secrets skipped).
+  /agent/scripts/lib/build_context.sdd — productrice de la vue `instance` (`package.type`,
+    `selector`) que lisent les substitutions directes et @selector_from_ctx.
+  /agent/scripts/service/context.sdd et /agent/scripts/tenant/context.sdd — injection de la
+    clue `agent_image` dans la carte.
+  /box/vynil/systems/PriorityClasses.yaml.hbs — pourvoit le `priorityClassName` `vynil-backup`
+    que le pod requiert à l'ordonnancement sans jamais le créer.
+
+References:
+  ./init_job.yaml.hbs — seul hôte : `{{> restore.yaml}}` ligne 40 sous `template:`, sans
+    changement de contexte, donc le partial voit la carte entière ; son contrat (ordre des
+    documents décodés, application par `install_from_dir`) est gelé ./init_job.yaml.hbs.sdd.
+  /agent/scripts/service/init_from.sdd et /agent/scripts/tenant/init_from.sdd — appel
+    bout-à-bout : @render_from(`"{{> init_job.yaml }}"`, @bctx::run(..., `true`)) ligne 20 des
+    deux jumeaux ; enregistrement `template_dir` (=`/usr/lib/vynil/templates`,
+    /agent/Dockerfile ligne 68) puis `${package_dir}/pods` — un package posant
+    `pods/restore.yaml.hbs` masquerait silencieusement le présent gabarit.
+  /agent/scripts/service/restore.sdd et /agent/scripts/tenant/restore.sdd — résidentes du pod
+    rendu ici, jamais rendeuses. Vérification gelée : pickaxe git `restore.yaml` sur tout
+    l'historique des `.rhai`, zéro hit ; le commit fondateur (93a8f4e) le créait déjà comme
+    partial de init_job (args `tenant` en dur, généralisé en `<type>` par 3462ae7, labels
+    ajoutés par 27887c0, priorité par efb89e9, resources par 16ef92c puis doublés par 9d9e30d).
+  /agent/Dockerfile — livre le partial sous `/usr/lib/vynil/templates` (ligne 68) et pose
+    l'`ENTRYPOINT` `agent` (ligne 73) qui font du couple d'args
+    `{{instance.package.type}}` + `restore` la commande réelle `agent <type> restore` du pod.
+
+Exposes:
+  Le partial enregistré sous le nom `restore.yaml` (@register_partial_dir strippe le suffixe
+    `.hbs` du nom de fichier). Seule surface d'appel : `{{> restore.yaml}}` de l'hôte
+    ./init_job.yaml.hbs (ligne 40). Aucune lane Rhai ne le cible en direct — aucun
+    @render_from ni @render_named du dépôt, présent ou passé, ne nomme `restore.yaml`.
+
+Accepts:
+  La carte retournée par @bctx::run(@instance, @context, `true`) — la carte de l'hôte, repassée
+    sans changement de contexte par `{{> restore.yaml}}`. Surface exacte des clés lues :
+  substitutions directes — `agent_image` (ligne 10), `instance.package.type` (ligne 13),
+    `service_account` (ligne 39).
+  paramètres de @json_to_str — `envs` (ligne 15), `envs_from` (ligne 16), `mounts` (ligne 17),
+    `volumes` (ligne 38).
+  helper contextuel — @selector_from_ctx(`this`, `comp="restore"`) (ligne 6), qui ne lit que
+    `instance.selector`.
+  Zéro @if, zéro @each, zéro sous-partial, zéro accès env/fichier/cluster à l'intérieur du
+    fichier.
+
+Returns:
+  Une chaîne : l'objet JSON de la template de pod, multi-ligne au format pretty, deux clés
+    top-level `metadata` et `spec` seules et en ordre alphabétique (relecture BTreeMap, le
+    feature @serde_json `preserve_order` est absent du graphe), non l'ordre de rédaction du
+    gabarit. Pas de préfixe `template:` (le hôte l'écrit), pas de `---` dans la sortie ; la
+    chaîne complète forme un YAML flux valide sous la clé `template:` de ./init_job.yaml.hbs
+    et se relit telle quelle par @yaml_decode_multi.
+  Le partial ne décode jamais lui-même ce qu'il rend.
+
+Raises:
+  Zéro garde et zéro erreur fabriquée dans le fichier : tous les échecs viennent du moteur,
+    remontent par @render_from au try de la lane appelante (gelé
+    /agent/scripts/service/init_from.sdd) et @yaml_decode_multi est alors sans objet.
+  Clé root ou chemin direct absent (`agent_image`, `service_account`, `instance`,
+    `instance.package.type`) — erreur handlebars strict « Failed to access variable in strict
+    mode » (moteur @new_hbs en strict, sonde empirique handlebars 6.4.2).
+  Clé absente passée comme paramètre de helper (`envs`, `envs_from`, `volumes`, `mounts`) —
+    erreur « helper param required but not found » du @json_to_str vendored. Les deux voies
+    échouent : une clé manquante ne se dégrade jamais en substitution vide.
+  Valeur d'une substitution directe dont le contenu casse le YAML interne au bloc (deux-points
+    ou saut de ligne dans `agent_image`) — le bloc @to_json ne parse plus, erreur de relecture
+    YAML remontée par @render_from : le fichier n'échappe pas ses substitutions directes.
+
+Handles:
+  Clé présente de valeur nulle — un `()` de mutation hook arrive en JSON null après le
+    round-trip sérialisé de la carte Rhai (@rhai::Map) : handlebars substitue la chaîne vide,
+    @json_to_str(`null`) rend un mot `null` dans le YAML interne puis `"null"` dans le JSON,
+    et le rendu réussit intégralement (voir Scenario dédié).
+  `instance.selector` absent ou carte vide — @selector_from_ctx retombe sur la carte seule
+    `{app.kubernetes.io/component: restore}` ; le rendu complète sans erreur, le mode strict
+    n'est pas atteint (lecture `.get()` dans le Rust du helper).
+  `volumes` réduit à l'unique `empty-dir` de @bctx::run (instance sans vitals montés) monté
+    sous `/backup` : cas normal, le pod démarre avec ce seul volume.
+
+Must:
+  Rester encapsulé de bout en bout dans le bloc @to_json(`format="yaml"`) — la sortie observable
+    est toujours un JSON pretty multi-ligne, jamais le YAML interne brut ; le `---` de tête du
+    bloc est consommé par la relecture du helper et ne ressort jamais dans le flux de
+    l'hôte.
+  Rendre exactement deux clés top-level — `metadata` et `spec` — et aucune `apiVersion` ni
+    `kind` : le rendu n'est pas une ressource, c'est la valeur de `template:` d'un `Job`.
+  Écrire `metadata` avec la seule annotation `mayfly.cloud.namecheap.com/expire: 120h` en dur
+    et des labels = @json_to_str de @selector_from_ctx(`this`, `comp="restore"`) — soit le
+    contenu de `instance.selector` plus `app.kubernetes.io/component: restore`.
+  Rendre un conteneur unique nommé `restore` : `image` = `agent_image`, `imagePullPolicy`
+    `IfNotPresent`, args = le couple figé (`instance.package.type` puis `restore`) — couplé à
+    l'`ENTRYPOINT` `agent`, le pod exécute donc `agent service restore` ou
+    `agent tenant restore` selon le kind de l'instance.
+  Passer `env`, `envFrom` et `volumeMounts` tels quels par @json_to_str des listes produites
+    par @bctx::run (`envs`, `envs_from`, `mounts`) — leur contenu (dont l'env
+    `RESTIC_SNAPSHOT` que le pod relira via @bctx::from_args pour choisir le snapshot à
+    restaurer, `SUB_PATH` et le secret d'`envs_from` pour la repo restic) est le contrat du
+    producteur (spec citée), jamais une invention du gabarit.
+  Fixer les `resources` en dur : limits cpu `2000m`, mémoire `2Gi` ; requests cpu `50m`,
+    mémoire `512Mi`.
+  Garder la sécurité figée aux deux niveaux : conteneur `runAsUser`/`runAsGroup` `0`,
+    `privileged` `false`, `allowPrivilegeEscalation` `false`, capabilities drop `ALL` puis add
+    `CHOWN`/`FOWNER`/`DAC_OVERRIDE`/`DAC_READ_SEARCH` ; pod `runAsUser`/`runAsGroup` `0`,
+    `runAsNonRoot` `false` (le restore de fichiers backup-és en root s'exécute en root).
+  Écrire `serviceAccountName` = la clue `service_account` (nommée `{appslug}-backup` par le
+    producteur, liée au RoleBinding posé par ./init_job.yaml.hbs), `priorityClassName` en dur
+    `vynil-backup`, `restartPolicy` `Never`, et `volumes` = @json_to_str des volumes bctx.
+
+Must not:
+  Se rendre autonome : ni `apiVersion` ni `kind` n'apparaissent, et aucun slot hors `template:`
+    d'un `Job` ne saurait consommer la sortie — poser l'un de ces deux clés ou viser un autre
+    hôte créerait un pod hors de la chaîne gelée par l'hôte.
+  Lire les clés annexes pourtant présentes dans la carte (@bctx::run produit aussi `files`,
+    `has_files`, `schedule`, `backup_affinity`, les listes `*_LIST`) : la clé `backup_affinity`
+    est appliquée comme affinity au pod backup (./backup.yaml.hbs, ligne 46) et jamais ici —
+    l'asymétrie est une tâche [?] ci-dessous, pas une lecture implicite.
+
+Tasks:
+  [?] Annotation externe `mayfly.cloud.namecheap.com/expire: 120h` en dur sur chaque pod
+    init-restore : décision ouverte depuis ./init_job.yaml.hbs.sdd, ce fichier en est le
+    porteur réel — retirer, rendre configurable ou assumer, décider plus tard.
+  [?] `backup_affinity` produite par @bctx::run est ignorée ici alors que le pod backup la
+    colocalise (./backup.yaml.hbs, ligne 46) : pod de restore/init volontairement non
+    colocalisé au data, ou trou de gabarit ? décider plus tard.
+  [?] `resources` en dur couplés par leurs valeurs aux env bctx `GOMEMLIMIT` `1560MiB`, `GOGC`
+    et `GOMAXPROCS` : aucune liaison de code (le pair `1000m`/`1Gi` de 16ef92c a été doublé en
+    `2000m`/`2Gi` par 9d9e30d sans retoucher les env) — source unique ou duplication assumée,
+    décider plus tard.
+  [?] Valeurs non échappées dans les substitutions directes (une `agent_image` dont la chaîne
+    casse le YAML interne du bloc fait échouer tout le rendu) et absence de garde sur les
+    valeurs `()` mutées (`"image": null`, args `[null, "restore"]` produits sans signal) —
+    assert côté gabarit, garde côté lane, ou confiance aux producteurs ? décider plus tard.
+  [x] Orthographe du moteur : la crate est `vynil-core` 0.7.7 (/common/Cargo.toml ligne 10,
+    Cargo.lock) — la graphie fautive « wynil-core » répandue dans la famille de specs a été
+    corrigée en masse (pass sed sur tout le corpus @.sdd).
+  [x] Désaccord de specs arbitré à la source : @handlebars_misc_helpers 0.17.0 src/lib.rs:41
+    @set_strict_mode(`true`) + lib.rs:42 @no_escape — le mode strict LEVE (la sonde avait
+    raison) ; ./init_job.yaml.hbs.sdd a été corrigé en conséquence (seul un @() présent rend
+    vide, une clé jamais mintée lève @RenderError).
+  [?] Zéro test ne rend ce partial (ni `initFrom` ni `init_from` appelés dans /agent/tests) —
+    trou TTD partagé avec l'hôte ./init_job.yaml.hbs.sdd : test de rendu sur carte mock
+    @bctx::run à écrire.
+
+Done when:
+  Chaque Scenario dispose d'un test de rendu vert sur carte @bctx::run mockée (service,
+    tenant, selector absent, clé manquante, valeur `()`).
+  Les décisions [?] annotation `120h`, affinity et gardes des substitutions sont closes et
+    appliquées au gabarit.
+  `specdd lint` est vert sur ce fichier et ./init_job.yaml.hbs.sdd ne contredit plus le contrat
+    de substitution en mode strict.
+
+Scenario: Rendu standard dans un Job d init service
+  Given une carte @bctx::run(..., `true`) avec `agent_image` `reg/agent:t`,
+    `instance.package.type` `service`, `service_account` `shop-backup`, `instance.selector`
+    peuplé et `envs` contenant `RESTIC_SNAPSHOT`
+  When ./init_job.yaml.hbs appelle `{{> restore.yaml}}` à la ligne 40
+  Then la clé `template:` du document `Job` reçoit un objet JSON aux seules clés `metadata` et
+    `spec`, sans `apiVersion` ni `kind`, et `metadata.annotations` réduit à la seule annotation
+    expire `120h`
+  And `spec.containers` est le conteneur unique `restore` aux args `service` puis `restore`,
+    `serviceAccountName` `shop-backup`, `restartPolicy` `Never` et `priorityClassName`
+    `vynil-backup`
+  And `env`, `envFrom`, `volumeMounts` et `volumes` sont les listes bctx reconstruites à
+    l'identique
+
+Scenario: Pod rendu pour un tenant
+  Given la même carte mais `instance.package.type` `tenant`
+  When le partial est rendu
+  Then le premier arg est `tenant` — le pod lancera `agent tenant restore` et les stages
+    /agent/scripts/tenant/restore.sdd
+
+Scenario: Clé root manquante en mode strict
+  Given une carte où la clé `agent_image` est absente (mutation de hook ; la lane normale
+    l'injecte via /agent/scripts/service/context.sdd)
+  When le hôte rend `{{> init_job.yaml }}` par @render_from
+  Then le rendu échoue sans produire de chaîne (« Failed to access variable in strict mode »)
+    et remonte au try de la lane `init_from`
+  And @yaml_decode_multi ne voit aucun document : ni `ConfigMap`, ni `ServiceAccount`, ni
+    `Job` appliqués
+
+Scenario: Selector d instance absent
+  Given une vue `instance` sans clé `selector`
+  When le partial est rendu
+  Then les labels du pod se réduisent à la carte unique `app.kubernetes.io/component: restore`
+    (repli `.get()` de @selector_from_ctx, le mode strict n'est jamais atteint)
+  And le rendu complète sans erreur
+
+Scenario: Mutations hook aux valeurs nulles
+  Given une carte où `agent_image` et `instance.package.type` sont présents de valeur `()`
+    (elles arrivent en JSON null par le round-trip sérialisé de la carte Rhai)
+  When le partial est rendu
+  Then le rendu réussit intégralement et produit `"image": null` et des args
+    `[null, "restore"]`
+  But @yaml_decode_multi et la voie d'application ne reçoivent aucun signal du gabarit : seul
+    l'API server rejettera ce `Job` invalide

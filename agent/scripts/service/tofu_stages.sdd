@@ -1,0 +1,263 @@
+Spec: PaliersTofuService
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  La voie OpenTofu du kind service, avant et arrière, gelée en UNE spec :
+    ./install_tofu.rhai (35 lignes) applique la couche tofu du paquet et
+    ./delete_tofu.rhai (21 lignes) la détruit. Regroupement justifié : les deux directions
+    d'un même contrat — même générateur ./../lib/tofu_gen.sdd écrivant les mêmes quatre
+    fichiers dans `${package_dir}/tofu`, `providers.tf` des paquets compris — et ni l'un ni
+    l'autre n'est un bucket, explicitement exclus de ./install_stages.sdd et
+    ./delete_stages.sdd qui citent cette paire. Position gelée en amont : chaque fichier
+    n'est appelé que derrière la gate @has_tofu_files de son orchestrateur (5e lane dans
+    ./install.rhai, 3e dans ./delete.rhai, avant `others`), y compris l'assign `context =`
+    SANS GARDE côté delete et le clobber `ctx` stale côté install — tous deux gelés comme
+    points ouverts dans ./install.sdd et ./delete.sdd, cités ici, jamais re-décidés.
+
+Owns:
+  ./install_tofu.rhai
+  ./delete_tofu.rhai
+
+Exposes:
+  `@run(instance, context)` — le seul @fn de chacun des deux modules, atteint par les
+    `import_run` `install_tofu` puis `delete_tofu` des orchestrateurs, derrière leurs
+    gates (ordre, positions et discipline de merge downstream
+    gelés dans ./install.sdd et ./delete.sdd).
+
+Accepts:
+  @instance — le ServiceInstance transmis par l'orchestrateur, jamais re-bound (aucun
+    @get_service_instance ici) et jamais lu en properties : seules ses méthodes sont
+    appelées — @get_tfstate dans les deux fichiers, plus @set_tfstate et
+    @set_status_tofu_failed dans ./install_tofu.rhai uniquement ; mécanique des patches de
+    status et events gelée dans /common/src/instance_macros.sdd.
+  @context — la carte construite par ./context.rhai (+ ./../lib/build_context.sdd). Seule
+    lecture directe : `package_dir`, en accès de propriété non gardé à chaque interpolation,
+    y compris dans le catch. Le `_pre` comme le `_post` peuvent REMPLACER `context` par la
+    carte retournée sous la seule garde @type_of == `map` ; tout ce qui suit lit alors la
+    carte de remplacement, sans garde d'absence de clé.
+
+Returns:
+  Les deux : la valeur terminale est `context` — la carte éventuellement remplacée par
+    `_post` — donc @type_of `map`, jamais l'unité, jamais la carte des outputs seule.
+    L'assign non gardée de ./delete.rhai rend cette forme porteuse : la version shipée la
+    satisfait toujours (un shadow paquet qui ne renvoie pas de carte fait lever la gate
+    d'après, gelé dans ./delete.sdd).
+  install : sur le chemin complet sans levée, la carte retournée porte la clé `tofu` —
+    c'est le SEUL canal de sortie des outputs tofu de cette voie ; et sur la voie
+    d'échec, rien n'est retourné, l'erreur relancée traverse @import_run.
+
+Raises:
+  Zéro @throw à payload dans les deux fichiers ; le seul `throw;` nu du catch install
+    relance l'erreur d'origine inchangée (vérifié sur le rhai 1.25.1 verrouillé).
+  install — dans le try : toute levée de @gen_files, @run_init, @run_plan, @run_apply,
+    @get_output, @file_read ou @set_tfstate est convertie en appel unique de
+    @set_status_tofu_failed(state, reason) puis relance à cru.
+  install — hors try : levée du `_pre`, de @get_tfstate (état stocké indécodable en
+    base64+gzip), du @file_write de restauration ou du `_post` : sort sans aucun marqueur.
+  Dans le catch : si @json_encode, la lecture d'état ou la méthode de marqueur lève
+    elle-même (@KubeError du patch ou de l'event), cette levée remplace et masque l'erreur
+    d'origine, sans second marqueur.
+  delete : zéro marqueur par construction — aucun `set_status_` n'existe dans ce fichier
+    comme dans tous les `delete_*.rhai` (gelé ./delete.sdd) ; toute levée sort à cru,
+    sortie 3 et finalizer retenu.
+  Au chargement : `tofu_gen` (→ `tofu`) non résoluble avorte l'import du module avant
+    @run (sémantique gelée dans ./install.sdd et ./delete.sdd).
+
+Handles:
+  Les quatre slots `install_tofu_pre`/`_post` et `delete_tofu_pre`/`_post` ne sont livrés
+    nulle part dans l'atelier — au-delà de l'absence, un retour non-map des hooks n'est
+    jamais fusionné (garde @type_of du module lui-même, puis celle de l'orchestrateur).
+  Forme de l'erreur reçue par le catch (vérifiée sur le rhai verrouillé) : les @throw
+    script (`tofu init failed`, `tofu plan failed`, `tofu apply failed`) et TOUTES les
+    erreurs levées par les fonctions host vynil-core — textes de @shell_output
+    (`Command failed, rc=N`, `Command had stderr : ...`) comme les échecs de @gen_files,
+    @file_read, @set_tfstate ou @json_decode — arrivent en `string` → bras `"string"` du
+    switch, raison verbatim dans le marqueur ; seules les levées natives pures du moteur
+    (variable absente, propriété sur `()`, module non résoluble) arrivent en `map` (avec un
+    champ `error` — le même format qu'épie l'@import_run pour ses deux skip) → bras `_`,
+    raison en texte de @json_encode.
+  `orig != ""` est la garde de restauration : état absent du CR ou marqueur ayant stocké
+    `""` sont indiscernables — pas d'écriture de `terraform.tfstate`, tofu court sur
+    dossier vide.
+  La lecture d'état de fin d'install n'est pas gardée : un apply revenu 0 sans fichier de
+    state est une levée prise par le try, donc un marqueur avec état `""` — enregistré,
+    non corrigé.
+  @gen_files régénère à chaque course les quatre fichiers générés et écrase un
+    `providers.tf` d'auteur (gelé ./../lib/tofu_gen.sdd) ; il ne touche ni
+    `terraform.tfstate` ni `tf.plan`.
+
+Must:
+  Le @run d'install déroule exactement : @import_run de `install_tofu_pre` et fusion `map` ;
+    @get_tfstate et, si le texte est non vide, @file_write de l'état dans
+    `${package_dir}/tofu/terraform.tfstate` — ce bloc de restauration est HORS du try à
+    venir ; dans le try : @gen_files(context), @run_init, @run_plan, @run_apply (le couple
+    `tf.plan` de ./../lib/tofu.sdd, pas un apply direct), @get_output dont le texte est
+    @json_decode puis posé dans la clé `tofu` de `context`, @file_read du
+    `terraform.tfstate` puis @set_tfstate ; au catch : relecture d'état gardée @is_file
+    (sinon `""`), puis @set_status_tofu_failed(state, reason), puis `throw;` ; après le
+    try : @import_run de `install_tofu_post` et fusion `map`, puis valeur `context`.
+  Le @run de delete déroule exactement, sans try, sans marqueur et sans capture d'outputs :
+    @import_run de `delete_tofu_pre` et fusion `map` ; restauration d'état identique à
+    install ; puis en séquence non gardée @gen_files(context), @run_init, @run_destroy
+    (le `apply -destroy` qui re-plan, sans `tf.plan`, gelé ./../lib/tofu.sdd) ;
+    @import_run de `delete_tofu_post` et fusion `map` ; valeur `context`.
+  Poser la destination exacte des outputs : `context.tofu` = le document `tofu output -json`
+    décodé verbatim (enveloppe CLI : output déclaré → sous-carte dont `value` ; le
+    fichier ne lit jamais l'intérieur), en écrasement sans garde ni merge — `{}` décodé en
+    carte vide quand le paquet ne déclare aucun output ; aucune lecture de `context.tofu`
+    n'existe dans l'atelier (grep des scripts et des lanes Rust) : seuls les hooks aval
+    côté paquet peuvent la consommer.
+  Écrire la close succès du palier via @set_tfstate avant le `_post` : condition ok
+    `TofuInstalled`, tfstate encodé et event Normal `TofuApplySucceed` (mécanique gelée
+    /common/src/instance_macros.sdd) — aucune méthode de succès type `set_status_tofu`
+    n'existe ni n'est appelée.
+  Faire porter au marqueur d'échec @set_status_tofu_failed l'état lu du disque (partiel
+    après un apply interrompu, restauré après un init/plan en échec, `""` sinon) en plus
+    des conditions ko et de l'event Warning `TofuApplyFailed` (mêmes sources).
+  Restaurer l'état AVANT @gen_files : l'ordre garantit que la génération n'écrase jamais le
+    state restauré ; la recourse d'un échec de @run_init ou @run_plan marque donc avec
+    l'état stocké dans le CR re-posé tel quel.
+  Garder zéro appel de log dans les deux fichiers ; les deux @import top-level (`tofu`
+    alias tf, `tofu_gen` alias tfg) sont les seuls effets de bord du chargement — aucun
+    chemin d'exécution n'atteint `tfg::` ou `tf::` sans leur import résolu au chargement.
+  Ne jamais rafraîchir l'instance ni lire `status.<bucket>` : ces paliers ne touchent
+    aucun inventaire du CR hormis via les trois méthodes d'état nommées plus haut.
+
+Must not:
+  Se gateer eux-mêmes (@is_dir ou @has_tofu_files dans ces fichiers) : la gate est la
+    prérogative de l'orchestrateur, gelée ./install.sdd et ./delete.sdd — la recopier ici
+    dé-synchroniserait le contrat.
+  Écrire quoi que ce soit dans le status depuis ./delete_tofu.rhai : aucun @set_tfstate,
+    aucun @set_status_* — la destruction ne met à jour ni l'état ni les conditions du CR.
+
+Depends on:
+  ./../lib/tofu_gen.rhai (import sous tfg) — @gen_files, seul point d'entrée utilisé ;
+    contrat et écrasements dans ./../lib/tofu_gen.sdd.
+  ./../lib/tofu.rhai (import sous tf) — @run_init, @run_plan, @run_apply, @run_destroy,
+    @get_output et leurs @throw verbatim ; contrat ./../lib/tofu.sdd.
+  API d'engine vynil-core 0.7.7 et globaux montés par @Script (/common/src/rhaihandler.sdd) :
+    @import_run dont la frontière skip-absent contre rethrow-erreur est gelée dans
+    ./install.sdd, @type_of, @file_write, @file_read, @is_file, @json_encode, @json_decode.
+  /common/src/instanceservice.sdd et /common/src/instance_macros.sdd — enregistrement et
+    corps de @get_tfstate, @set_tfstate, @set_status_tofu_failed (encodage base64+gzip,
+    patch de conditions et tfstate, events, troncature de la raison à 1023 caractères).
+  ./context.rhai (+ ./../lib/build_context.rhai) — producteur de `package_dir`.
+
+References:
+  ./install.sdd — 5e lane, gate @has_tofu_files, assign non gardée du retour tofu puis
+    re-merge du `ctx` stale (son Tasks, Scenario « tofu context merge clobber »).
+  ./delete.sdd — 3e lane, l'assign `context =` unique sans garde et son Scenario de clobber.
+  ./install_stages.sdd et ./delete_stages.sdd — les specs familiales voisines qui excluent
+    explicitement cette paire (« tofu n'est pas un bucket »).
+  ./../tenant/install_tofu.rhai, ./../tenant/delete_tofu.rhai, ./../../system/delete_tofu.rhai,
+    ./../../system/install_tofu.rhai — jumeaux inter-kinds, non specifiés ici (specs twins
+    ailleurs) ; deltas en Example.
+  /agent/tests/rhai_tofu_gen.rs et /agent/tests/rhai_lifecycle.rs — harnais de tests, aucun
+    n'importe ces deux modules aujourd'hui (Tasks).
+  /common/src/k8smock.sdd — mocks `get_tfstate`/`set_tfstate`/`set_status_tofu_failed` des
+    tests mock (lecture brute de `status.tfstate`, marqueur no-op).
+
+Example:
+  (tableau des jumeaux, diff vérifié fichier à fichier — un seul écart comportemental en six
+    fichiers des trois kinds)
+  `./../tenant/install_tofu.rhai` et `./../tenant/delete_tofu.rhai` : identiques à l'octet
+    près aux fichiers ownés.
+  `./../../system/delete_tofu.rhai` : identique à l'octet près à ./delete_tofu.rhai.
+  `./../../system/install_tofu.rhai` : deux écarts — ligne blanche après les imports, et le
+    premier hook sans `let` (`ctx = import_run(...)` en ligne 5) ; l'affectation d'un nom
+    non déclaré dans la portée fraîche d'une fonction lève `Variable not found: ctx` sur le
+    rhai verrouillé, APRÈS évaluation du hook `_pre` à droite — voir Tasks, la lane tofu
+    system semble morte (tâche à la spec twin).
+  delta interne owned-to-owned : seule ./install_tofu.rhai porte le try/catch + marqueur,
+    le plan+apply, la clé `tofu` et @set_tfstate (35 lignes) ; ./delete_tofu.rhai appelle
+    @run_destroy sans aucun de ces habits (21 lignes).
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs : aujourd'hui AUCUN test
+      n'importe ces deux paliers — /agent/tests/rhai_tofu_gen.rs ne teste que le générateur
+      (@has_tofu_files, @gen_provider, @provider_constraint) et les fixtures de
+      /agent/tests/rhai_lifecycle.rs n'ont pas de dossier `tofu/`, donc la gate ne s'ouvre
+      jamais. Ajouter une fixture à `.tf` utilisateur, un faux `tofu` sur PATH et les mocks
+      K8sInstanceMock (dont le marqueur no-op et la lecture brute de `status.tfstate`,
+      /common/src/k8smock.sdd).
+  [ ] Tenir les trois byte-identities tenant + system/delete en lockstep : toute
+      modification des fichiers ownés doit être poussée aux copies octet pour octet, ou la
+      spec twin qui l'absorbe doit naître ; re-différer à chaque révision.
+  [?] Outputs-tofu : destination `context.tofu` en écrasement sans garde (les `value`
+      restent sous l'enveloppe CLI), zéro consommateur dans l'atelier, clé potentiellement
+      perdue par le clobber d'./install.sdd ou par l'assign sans garde que consomme
+      ./delete.sdd, et jamais présente au `_pre` ni dans aucune lane delete. Décider le ou
+      les consommateurs réels (hooks aval côté paquet ?), et si une autre destination (ex.
+      une clé merge dans `context.extra`, dont ./../lib/tofu_gen.sdd note déjà qu'aucun
+      producteur existe) doit remplacer l'écrasement.
+  [?] Tfstate après destroy : ./delete_tofu.rhai ne relit ni ne re-écrit jamais l'état
+      après @run_destroy — le state détruit meurt dans le `package_dir` temporaire du job
+      et le CR reste sur son tfstate d'avant-destroy jusqu'à sa propre disparition ; une
+      retriale après destroy partielle re-restaure l'état périmé du CR dans un dossier vide
+      et re-tente le destroy. Décider si delete doit re-filtrer ou effacer le tfstate du CR
+      après destroy, et si un destroy partiel doit se reprendre depuis le CR ou depuis rien.
+  [?] Posture d'état partiel quand init/plan passent mais que apply échoue : le marqueur
+      stocke l'état partiel du disque et la retriale le restaure pour reprendre ; état
+      retrouvé puis conditions ko sur le CR. Décider si c'est la reprise voulue ou s'il
+      faut réinitialiser l'état à l'échec.
+  [?] Écart `let` du jumeau ./../../system/install_tofu.rhai : sur le moteur verrouillé,
+      `ctx = import_run(...)` sans déclaration préalable lève `Variable not found: ctx`
+      après avoir exécuté les effets de bord du hook `_pre` — l'installation tofu d'un
+      system avec `.tf` semble donc toujours avorter, marqueur compris impossible (levée
+      hors du try, avant tout). Confirmer sur le harnais réel puis trancher en spec twin :
+      corriger le `let` manquant ou assumer.
+
+Done when:
+  Chaque Scenario a un test mappé ou une tâche [?] tranchée, les byte-identities du tableau
+    Example et l'écart system sont re-vérifiés au diff à chaque révision, et `specdd lint`
+    est vert sur ce fichier.
+
+Scenario: install succès écrit outputs et état
+  Given un paquet dont `${package_dir}/tofu` porte un `.tf` utilisateur et un CR avec un
+    tfstate stocké décodable
+  When le palier import_run("install_tofu") de ./install.sdd déroule @run
+  Then l'état restauré est suivi de @gen_files, @run_init, @run_plan puis @run_apply sur le
+    `tf.plan`
+  And les outputs décodés @json_decode atterrissent dans la clé `tofu` de la carte et l'état
+    relu passe par @set_tfstate (condition `TofuInstalled` ok, event Normal `TofuApplySucceed`)
+  And `install_tofu_post` reçoit la carte portant `tofu`, et la valeur retournée est une carte
+  Aucun test mappé (Tasks)
+
+Scenario: apply en échec marque avec l'état partiel
+  Given @run_apply qui lève `tofu apply failed` (string) avec un `terraform.tfstate`
+    partiel écrit par tofu sur le disque
+  When le catch d'install reçoit la levée
+  Then @set_status_tofu_failed reçoit la string verbatim et l'état partiel, que le marqueur
+    écrit aussi dans le CR
+  And l'erreur est relancée à cru, `install_tofu_post` ne tourne pas, et ./install.sdd avorte
+    sans marqueur d'aucune autre lane
+  Aucun test mappé (Tasks)
+
+Scenario: lever hors du try ne marque rien
+  Given @get_tfstate échouant à décoder un tfstate stocké corrompu, OU bien une carte
+    fusionnée par `install_tofu_pre` dont `package_dir` est absent
+  When la levée survient hors du try (install) ou n'importe où (delete, aucun try)
+  Then elle sort sans marqueur ni merge supplémentaire : le seul record est la levée
+    reçue par l'orchestrateur (sortie 1 côté ./install.sdd, sortie 3 et finalizer retenu
+    côté ./delete.sdd)
+  Aucun test mappé (Tasks)
+
+Scenario: warning tofu après un apply pourtant réussi
+  Given un `tofu` qui rend un `output -json` exit 0 avec une notification sur stderr
+    (piège @shell_output gelé ./../lib/tofu.sdd)
+  When @get_output s'exécute après un @run_apply réussi
+  Then l'erreur host `Command had stderr : ...` lève, prend le bras `string`, et le marqueur
+    écrit la raison verbatim plus l'état lu du disque — le CR porte donc l'état complet sans
+    @set_tfstate, sans condition `TofuInstalled` et sans clé `tofu` — puis la relance à cru
+  Aucun test mappé (Tasks)
+
+Scenario: delete ne marque jamais et ne sauve rien
+  Given un CR dont le tfstate restauré dans `${package_dir}/tofu` précède @gen_files puis
+    @run_destroy
+  When @run_destroy lève `tofu destroy failed` (ou @gen_files/@run_init lèvent)
+  Then aucune écriture de status n'a eu lieu — zéro @set_status_/@set_tfstate dans ce
+    fichier — la levée sort à cru et ./delete.sdd sort 3, finalizer retenu
+  And une retriale re-restore le MÊME tfstate du CR, inchangé par la tentative
+    d'effondrement, dans un nouveau package_dir
+  Aucun test mappé (Tasks)

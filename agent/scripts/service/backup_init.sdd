@@ -1,0 +1,119 @@
+Spec: ServiceBackupInitScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Vérifier que le dépôt restic du backup existe et le créer quand il manque — premier étage
+    exécuté de la séquence de ./backup.sdd (@import_run("backup_init"), juste après le gate
+    `backup.sh`). Une sonde `restic cat config` dont seul le rc `10` déclenche un
+    `restic init`, deux hooks de slot, zéro @throw. Fichier identique à l'octet près à son
+    jumeau ./../tenant/backup_init.rhai (diff vérifié,
+    jumeau sans spec) : cette spec est la source des deux copies, lockstep obligatoire.
+
+Owns:
+  ./backup_init.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("backup_init", context) de ./backup.rhai
+    (shim 2 args : la carte passe comme unique paramètre du `run` ciblé) ; remplaçable sans
+    toucher l'appelant par un module éponyme sous `${package_dir}/scripts` (première
+    priorité du résolveur, gelée dans ./backup.sdd).
+
+Accepts:
+  @context — la carte mutée en place par @ctx::from_args (producteur gelé dans
+    ./../lib/backup_context.sdd, cité sans re-spécification). Ce fichier n'en LIT que deux
+    clés :
+      `context.s3_url` — destination restic ;
+      `context.restic_args` — flags globaux `""` ou `" --insecure-tls"`, position figée par
+        le code : AVANT le sous-ordre dans la sonde, APRÈS `init` à la création.
+  Aucune liste de moteur, aucune clé de retention n'est touchée ici. @context non-map : le
+    premier pointé lève avant tout shell.
+
+Returns:
+  Unité — aucun `return` dans le fichier, et ./backup.rhai jette de toute façon la valeur
+    d'@import_run. Le succès observable pour la lane est une exécution terminée : CE module
+    ne peut pas faire échouer la lane, il ne fait que créer le dépôt ou prétendre qu'il est là.
+
+Raises:
+  Zéro @throw littéral. Levées engine possibles, non gardées :
+    - @shell_run ne lève que si le `sh -c` ne peut être lancé ; un restic tué par signal lui
+      rend rc `0` (statut non chiffré remplacé par `0`, vynil-core 0.7.7 `src/shell.rs`) ;
+    - `context` non-map lève sur le premier `context.` (propriété sur `()`).
+  Absences avalées par le langage, pas par le code : clé scalaire absente = `()` interpolé
+    littéral dans la commande (`export RESTIC_REPOSITORY="()"`…), sans throw.
+
+Handles:
+  Sonde `restic cat config`, trois destins : rc `10` → création ; rc `0` → dépôt vivant, rien
+    de plus ; tout autre rc (ou signal→`0`) → traité comme vivant sans examen, la suite de la
+    lane décidera sur d'autres codes.
+  Slots de hooks : @import_run("backup_init_pre", context) avant la sonde,
+    @import_run("backup_init_post", context) en fin de course — non livrés dans ./,
+    ./../tenant et ./../lib → skip-marker debug (`No … module, skipping.` /
+    `No …::run function, skipping.`, ./backup.sdd) ; un hook qui lève remonte, seuls les
+    deux markers sont avalés.
+  Aucun gate `.sh` propre à l'étage : ./backup.sdd ne gate que `backup.sh` (lane entière) et
+    le bloc prepare ; ici le remplacement fin se fait ONLY par ombre de module éponyme.
+
+Must:
+  Dérouler exactement : hook pre → @log_info("Checking for restic repository existance") —
+    la faute `existance` est le texte figé du log — → sonde → si rc égal `10` :
+    @log_info("Create restic repository") puis création → hook post.
+  Invoquer la sonde verbatim :
+    `export RESTIC_REPOSITORY="${context.s3_url}";restic ${context.restic_args} cat config`
+    et la création verbatim :
+    `export RESTIC_REPOSITORY="${context.s3_url}";restic init ${context.restic_args}`.
+  Ne jamais lire le rc de la création : le code ne le réceptionne pas ; un init qui échoue
+    passe pour un init réussi et la fonction rend l'unité.
+  Laisser stdout/stderr de restic hérités (sémantique @shell_run) : la sortie va au log du
+    Job de backup, le script ne capture, ne parse et ne log rien d'elle.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur des seules clés lues (`s3_url`, `restic_args`).
+  ./backup.sdd — appelant, position dans la séquence, discipline des skip-markers.
+  API moteur vynil-core 0.7.7 — @import_run (version 2 args), @shell_run (rc int64 brut),
+    @log_info (registrars /common/src/rhaihandler.sdd).
+
+References:
+  ./../tenant/backup_init.rhai — jumeau byte-identique, sans spec à ce jour.
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine résolvant scripts/service :
+      /agent/tests/rhai_backup_redis.rs est le mock TENANT (scripts/lib + scripts/tenant) et
+      ne nomme que `backup_prepare_redis`/`restore_redis` — coverage nulle pour cet étage
+      comme pour son jumeau octet-pour-octet.
+  [?] Confirmer que le rc `10` de `restic cat config` signifie bien « dépôt inexistant ou
+    non initialisé » sur les backends visés — association d'auteur, invérifiée depuis les
+    deux dépôts.
+  [?] Tout rc hors {`0`, `10`} continue sans bruit (dépôt injoignable, repo abîmé, sonde
+    tuée par signal→`0`) : décider s'il faut logger ou jeter avant le premier backup.
+  [?] Le rc de `restic init` est ignoré — un init raté laisse la lane sauvegarder vers un
+    dépôt absent : décider s'il devient fatal.
+
+Done when:
+  Les Scenario tiennent sur un mock service, les deux [?] rc sont tranchés, et les deux
+    copies (service + tenant) restent verrouillées en lockstep.
+
+Scenario: dépôt vivant, la sonde passe
+  Given un contexte dont `s3_url` vise un dépôt initialisé et un @shell_run répondant `0`
+  When @run(context) s'exécute
+  Then `restic init` n'est jamais invoqué et le module rend l'unité après le hook post
+
+Scenario: rc 10, création déclenchée
+  Given la sonde répondant `10`
+  When @run s'exécute
+  Then la ligne exacte `Create restic repository` est loggée et la commande de création
+    verbatim est exécutée
+  Et quel que soit le retour de ce `restic init`, rien ne le lit — le module rend l'unité
+
+Scenario: rc surprise, silence total
+  Given la sonde répondant `1`
+  When @run s'exécute
+  Then ni création ni throw ni log de plus : le module rend l'unité, la suite de la lane
+    encaissera le dépôt fantôme sur les commandes d'après
+
+Scenario: carte sans les deux clés
+  Given une carte sans `s3_url` ni `restic_args` (mais bien une carte)
+  When @run s'exécute
+  Then rien ne lève depuis ce fichier : les shells exécutés portent le `()` littéral de
+    l'interpolation et c'est le rc du moteur qui décide de la suite

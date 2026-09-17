@@ -1,0 +1,122 @@
+Spec: ServiceBackupRunScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Prendre le snapshot lui-même : `restic backup /backup` taggé, l'étape pivot de la lane,
+    appelée par @import_run("backup_run", context) de ./backup.sdd entre le gate
+    `backup_before.sh` et @import_run("maintenance_stop"). Un seul @throw, fatal dès que
+    restic ne rend pas `0`. Fichier identique à l'octet près à
+    ./../tenant/backup_run.rhai (diff vérifié, jumeau sans spec) : cette spec est la source
+    des deux copies, lockstep obligatoire.
+
+Owns:
+  ./backup_run.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("backup_run", context) ; remplaçable
+    sans toucher l'appelant par un module éponyme sous `${package_dir}/scripts` (première
+    priorité du résolveur, gelée dans ./backup.sdd).
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification). Trois clés lues :
+      `context.s3_url` — destination, exportée inline avant la commande ;
+      `context.restic_args` — flags globaux `""` ou `" --insecure-tls"`, interpolés APRÈS le
+        sous-ordre `backup` ;
+      `context.restic_tags` — chaîne virgule `namespace:…,instance:…,component:…,version:…`
+        produite par backup_context, passée telle quelle en UN seul flag `--tag`.
+  La source `/backup` est codée en dur : l'arborescence que les étages prepare d'avant ont
+    remplie (« prepared dumps under /backup », ./backup.sdd) plus les mounts posés par la
+    moitié @run de ./../lib/backup_context.sdd ; ce qui vit sous `/secrets` n'est PAS du
+    périmètre sauvegardé par cette commande.
+
+Returns:
+  Unité — aucun `return` ; ./backup.rhai jette la valeur d'@import_run. La lane ne lit
+    qu'un canal 0-ou-throw : snapshot réussi = hook post atteint.
+
+Raises:
+  Le @throw du fichier, texte verbatim `restic backup FAILED returning ${rc}` (rc interpolé),
+    gardé par `if rc != 0` et rien d'autre. Il traverse @import_run (qui n'avale que ses
+    deux skip-markers) et tue la lane : exit-4 côté Rust (./backup.sdd,
+    /agent/src/service/backup.sdd).
+  Levées engine non gardées : @shell_run ne lève que si le `sh -c` ne peut être lancé, mais
+    rend `0` à un process tué par signal (vynil-core 0.7.7 `src/shell.rs`) ; `context`
+    non-map lève au premier `context.`.
+  Absences sans throw : clé scalaire absente = `()` interpolé littéral — une carte sans
+    `restic_tags` fait tourner `--tag ""` et laisse le rc de restic décider.
+
+Handles:
+  Exactement deux destins : rc `0` → hook post, unité ; rc non nul → throw, hook post jamais
+    atteint. Aucun code « toléré », aucun retry, aucune lecture de la sortie.
+  Slots @import_run("backup_run_pre", context) / @import_run("backup_run_post", context) —
+    non livrés dans ./, ./../tenant, ./../lib → skip-markers debug ; un hook qui lève
+    remonte (seuls les deux markers sont avalés).
+  Pas de gate `.sh` d'étage dans ./backup.sdd : le remplacement global est son `backup.sh`,
+    le remplacement fin est l'ombre de module éponyme.
+
+Must:
+  Dérouler exactement : hook pre → @log_info("Starting restic backup") → commande → garde
+    `rc != 0` → hook post ; aucun autre log, aucune autre branche.
+  Invoquer verbatim :
+    `export RESTIC_REPOSITORY="${context.s3_url}";restic backup /backup ${context.restic_args} --tag "${context.restic_tags}"`
+    — cible `/backup` littérale, `restic_args` avant `--tag`, valeur des tags entre
+    guillemets doubles.
+  Traiter tout rc non nul comme fatal sur ce site (comparaison exclusive à `0`).
+  Laisser stdout/stderr de restic hérités vers le log du Job (@shell_run) : le script ne
+    capture pas la sortie, ne vérifie pas que le snapshot est paru, ne note aucun id.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur des trois clés lues.
+  ./backup.sdd — appelant, position dans la séquence, sémantique exit-4 du throw.
+  API moteur vynil-core 0.7.7 — @import_run (version 2 args), @shell_run, @log_info
+    (registrars /common/src/rhaihandler.sdd).
+
+References:
+  ./../tenant/backup_run.rhai — jumeau byte-identique, sans spec à ce jour.
+  ./backup_init.rhai — l'étage d'avant : si son init a échoué en silence, c'est ce @throw
+    qui révèle le dépôt absent.
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine résolvant scripts/service :
+      /agent/tests/rhai_backup_redis.rs est le mock TENANT (scripts/lib + scripts/tenant) et
+      ne nomme que `backup_prepare_redis`/`restore_redis` — coverage nulle pour cet étage et
+      son jumeau octet-pour-octet.
+  [?] Fatalité stricte `rc != 0` : les codes de backup partiellement terminé que restic peut
+    rendre sont donc fatals — confirmer la posture sévère plutôt qu'une liste de codes
+    tolérés.
+  [?] Un restic tué par signal rend rc `0` à @shell_run : un backup OOM-killed est compté
+    réussi. Décider si `0` suffit comme preuve ou s'il faut checker la sortie/les snapshots.
+  [?] `restic_tags` vide produit `--tag ""` littéral : sauter le flag quand vide, ou garantir
+    des tags non vides côté producteur ?
+
+Done when:
+  Les Scenario tiennent sur un mock service, les trois [?] sont tranchés, et les deux copies
+    restent verrouillées en lockstep.
+
+Scenario: snapshot nominal
+  Given un contexte avec `restic_tags` = `"namespace:a,instance:b"` et un @shell_run
+    répondant `0`
+  When @run(context) s'exécute
+  Then la commande verbatim de `Must` tourne, `backup_run_post` est import_run après,
+    l'unité est rendue, et `Starting restic backup` reste le seul log
+
+Scenario: rc non nul, throw véridique
+  Given @shell_run rendant `2`
+  When @run s'exécute
+  Then la chaîne levée est exactement `restic backup FAILED returning 2`, et
+    `backup_run_post` n'est jamais appelé
+  And @import_run ne filtre pas ce throw : la lane Rust sort en exit-4 (./backup.sdd)
+
+Scenario: process tué, faux succès
+  Given un restic backup tué par signal (rc remonté `0` par @shell_run)
+  When @run s'exécute
+  Then le module atteint le hook post et rend l'unité : la lane poursuit comme si le
+    snapshot avait réussi
+
+Scenario: tags vides
+  Given `context.restic_tags` = `""` (environnement nu côté @ctx::from_args)
+  When @run s'exécute
+  Then la commande exécutée contient `--tag ""` sans garde ajoutée ici, et c'est le rc de
+    restic sur cette commande qui décide du succès ou du throw

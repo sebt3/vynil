@@ -1,0 +1,152 @@
+Spec: LibStorageClassSelector
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Pick the one StorageClass entry a workload family should use — singleton PVC, deployment
+    shared volume, statefulset volume, or VM disk — by walking a fixed preference chain over
+    @context.cluster.prefered_storage of the enriched class list and falling back to the
+    cluster default class. Pure read-only selectors over the `cluster.storage_classes` /
+    `cluster.prefered_storage` shape ./build_context.rhai mounts; no cluster access of its own.
+
+Exposes:
+  @for_singletons(context, typed) / @for_singletons(context) — RWO-shaped chain; the
+    1-arity overload forwards @typed = `()`.
+  @for_deployments(context, typed) / @for_deployments(context) — RWX-first chain; 1-arity
+    overload forwards `()`.
+  @for_statefulsets(context, typed) / @for_statefulsets(context) — RWO-only chain; 1-arity
+    overload forwards `()`.
+  @for_vm(context) — Block-mode chain; deliberately no typed overload.
+  All seven top-level fns are importable; the only import in the repo is
+    `import "storage_class_selector" as sel` in ./../../tests/rhai_lib.rs — no shipped
+    .rhai/.hbs calls these fns (Tasks).
+
+Accepts:
+  @context — map read as @context.cluster.storage_classes (Array of enriched entries; the
+    predicates read @name, @volumeMode, @is_default) and @context.cluster.prefered_storage
+    (map with the keys @get_prefered_sc writes, per ./storage_class_enrich.sdd). Missing
+    keys inside a present map read as `()`; absent @cluster / @prefered_storage maps or a
+    non-array @storage_classes raise (Raises).
+  @typed — optional @String; only `"fast"` and `"cheap"` carry meaning. Any other value —
+    including the wrappers' `()` — behaves as untyped: `() == "fast"` is false. Never validated.
+
+Returns:
+  The matched ENTRY MAP — the whole enriched `#{name, provisioner, volumeMode, ...}` entry,
+    not just @name (callers index @name themselves) — or `()` on any rhai @find miss.
+    Absence NEVER throws: empty list, unmatched arm, or no @is_default hit all yield `()`;
+    a caller's `.name` on the unit is the error site.
+  Fallback asymmetry: the else arm's predicate is @is_default alone — no @volumeMode guard —
+    so @for_vm's fallback can surface a `"Filesystem"` default although its block arms
+    require `"Block"`.
+
+Raises:
+  Zero @throw and zero @try in these 68 lines; the only raises are rhai engine errors
+    escaping tolerant reads: dereferencing a property of `()` when @cluster or
+    @cluster.prefered_storage is absent (the FIRST chain guard already dereferences
+    @prefered_storage, so even an all-unit run needs it present), or @find on a non-array.
+    Name mismatches and wrong @volumeMode are plain false predicates, never errors.
+
+Handles:
+  `storage_classes: []` with any preference set → `()`: the guarded arm is selected by the
+    key check, its @find simply misses (test-pinned).
+  A set preference whose entry is absent or has the wrong @volumeMode → the if/else chain
+    selects an arm by the `!= ()` guard, NOT by find success → returns `()` and later
+    preferences are never consulted.
+  Un-enriched entries (no @volumeMode key): reads `()`, never equals `"Filesystem"`/`"Block"`
+    → every preference arm misses → @is_default decides regardless of the class's real mode.
+  Missing/non-boolean @is_default — taken as never-matching, the @pick_sc posture frozen for
+    the same engine in ./storage_class_enrich.sdd; not probed on this lane (Tasks).
+
+Must:
+  The chain order IS the algorithm; first `!= ()`-guard hit wins and consumes the chain.
+    `[fast]`/`[cheap]` mark arms that additionally require @typed to equal that literal.
+    Every preference arm's predicate is `s.name == <key> && s.volumeMode == "Filesystem"`
+    (`for_vm` arms: `"Block"`); all keys are under @cluster.prefered_storage:
+    - @for_singletons: `distibuted_readWriteOnce` → [fast] `fs_fast_readWriteOnce` →
+      [cheap] `fs_cheap_readWriteOnce` → `fs_readWriteOnce` → @is_default.
+    - @for_deployments: [fast] `fs_fast_readWriteMany` → [cheap] `fs_cheap_readWriteMany` →
+      `fs_readWriteMany` → [fast] `fs_fast_readWriteOnce` → [cheap]
+      `fs_cheap_readWriteOnce` → `distibuted_readWriteOnce` → `fs_readWriteOnce` →
+      @is_default.
+    - @for_statefulsets: [fast] `fs_fast_readWriteOnce` → [cheap] `fs_cheap_readWriteOnce`
+      → `fs_readWriteOnce` → @is_default; reads no readWriteMany nor distributed key at all.
+    - @for_vm: `block_readWriteMany` → `block_readWriteOnce` → @is_default.
+  In @for_singletons the `distibuted_readWriteOnce` arm PRECEDES the typed arms — a
+    `"fast"` singleton still gets the distributed class; in @for_deployments all three RWX
+    arms outrank everything RWO below them.
+  The if/else chain is the function value: rhai returns the taken branch's @find result as
+    the fn result; the three 1-arity wrappers delegate with `()`, so the fast/cheap arms
+    cannot match through them even if the keys were populated.
+  Key names are read verbatim, misspellings included: `distibuted_readWriteOnce` and
+    `prefered_storage` are the frozen contract of ./storage_class_enrich.sdd and
+    ./build_context.rhai, not to be normalized here.
+  Zero side effects, zero engine-API calls: import-time code is nil (fn declarations only),
+    no @k8s_resource/@throw/@log; all data arrives via @context and is never mutated.
+  The fast/cheap arms (file lines 5-8, 21-24, 27-30, 45-48) are unreachable as shipped —
+    @get_prefered_sc never writes `fs_cheap_*`/`fs_fast_*` (frozen in
+    ./storage_class_enrich.sdd Must), the only callers (tests) use the 1-arity wrappers,
+    and the sole other lane is a hand-written `agent.yaml` preference map past
+    ./build_context.rhai's injection guard — no shipped config sets those keys (Tasks,
+    decision shared with the producer's open item).
+
+Depends on:
+  rhai std only — @find, `==`, and the tolerant map-miss-to-unit semantics frozen in
+    ./build_context.sdd; zero vynil-core registrations are reached.
+  ./storage_class_enrich.sdd — upstream producer of the entry shape (@volumeMode,
+    @is_default) and of the preference map; its never-written cheap/fast slots define this
+    file's dead arms.
+  ./build_context.sdd — the @template/@run lanes mounting the two keys under @cluster and
+    the agent.yaml lane that could substitute a hand-authored preference map (the only
+    route that could revive the typed arms).
+
+Scenario: distributed preference resolves a singleton volume
+  Given storage_classes [local-path FS, ceph-distributed FS], distibuted_readWriteOnce
+    = "ceph-distributed", every other preference key `()`
+  When @for_singletons(context) runs
+  Then the ceph-distributed entry map is returned (test-pinned in ./../../tests/rhai_lib.rs)
+
+Scenario: empty class list yields unit, not error
+  Given storage_classes [] and distibuted_readWriteOnce = "ceph-distributed"
+  When @for_singletons(context) runs
+  Then the distributed arm is selected, its @find misses, and `()` is returned without a
+    raise (test-pinned)
+
+Scenario: set preference with a missing entry starves later preferences
+  Given distibuted_readWriteOnce = "gone" (no such @name in the list) and
+    `fs_readWriteOnce` = "local-path" (present, `"Filesystem"`)
+  When @for_singletons(context) runs
+  Then `()` is returned — the chain was consumed by the first `!= ()` guard and
+    `fs_readWriteOnce` is never consulted
+
+Scenario: deployments fall through RWX to the RWO preference
+  Given all readWriteMany keys `()`, `fs_readWriteOnce` = "ceph-rwo" with that entry
+    present as `"Filesystem"`
+  When @for_deployments(context) runs
+  Then the ceph-rwo entry is returned (test-pinned)
+
+Scenario: vm fallback ignores volumeMode
+  Given `block_readWriteMany` and `block_readWriteOnce` both `()` and the only default
+    entry carrying @volumeMode `"Filesystem"`
+  When @for_vm(context) runs
+  Then that Filesystem default entry is returned — the fallback predicate is @is_default
+    alone
+
+Tasks:
+  [ ] Extend ./../../tests/rhai_lib.rs to the unpinned surface: @for_vm, @for_statefulsets,
+      2-arity typed calls, the wrong-mode/missing-entry `()` arm-consumption case, and the
+      missing-@is_default fallback posture.
+  [?] The fast/cheap arms are dead as shipped (producer never writes the keys, no caller
+      passes @typed): decide jointly with ./storage_class_enrich.sdd's matching `[?]` —
+      populate the slots from some signal, or drop the four arms and the keys together.
+  [?] Chain-order intent: for_singletons ranks distributed above fast/cheap,
+      for_deployments ranks RWX above typed-RWO, for_statefulsets ignores readWriteMany and
+      distributed entirely — confirm these are the deliberate family semantics.
+  [?] No shipped consumer exists (repo grep: only ./../../tests/rhai_lib.rs imports it); a
+      tier-2 toolkit asset like ./apps.rhai or ./gen_package.rhai. Also
+      /docs/packages/lifecycle.md still names a non-existent `storage_class.rhai`. Decide
+      wire-up target or removal, stale doc name included.
+
+Done when:
+  Every chain and the `()`-on-miss posture above has a green mock-engine test on the
+    ./../../tests/rhai_lib.rs harness and the fast/cheap decision is recorded jointly with
+    ./storage_class_enrich.sdd.
