@@ -1,313 +1,332 @@
-# File spec for ./update.rhai — the scan-and-rewrite lane the Rust side of
-# /agent/src/package/update.sdd evaluates: `import("update")` then `update::run(args)`.
-# Script semantics only: the clap surface, the `args` JSON, the resolver-dir order and the
-# exit-2 trap are that spec's; the yaml/semver/registry/fs cores are vynil-core 0.7.7's and
-# the @YamlDoc indexer legs /common/src/yamlhandler.sdd's. Calibrated on ./build.sdd and
-# ./../lib/package_yaml.sdd. Behaviour below was exercised end-to-end over the real
-# @YamlDoc and locked rhai with a stub registry (see Tasks).
+# Spec fichier de ./update.rhai — la voie scan-and-rewrite que le côté Rust de
+# /agent/src/package/update.sdd évalue : `import("update")` puis `update::run(args)`.
+# Sémantique de script seulement : la surface clap, le JSON de `args`, l'ordre des
+# répertoires de résolution et le piège exit-2 appartiennent à cette spec ; les coeurs
+# yaml/semver/registry/fs sont ceux de vynil-core 0.7.7 et les jambes d'indexeur @YamlDoc
+# celles de /common/src/yamlhandler.sdd. Calibré sur ./build.sdd et
+# ./../lib/package_yaml.sdd. Le comportement ci-dessous a été exercé de bout en bout sur le
+# @YamlDoc réel et le rhai verrouillé avec un registry stub (voir Tasks).
 
 Spec: PackagesUpdate
 
-Platform: Rhai script (vynil-core 0.7.7 engine / locked rhai 1.25.1)
+Platform: script Rhai (moteur vynil-core 0.7.7 / rhai verrouillé 1.25.1)
 
 Purpose:
-  Own the whole script side of `agent package update`: list every `images` entry's
-    registry tags, keep the semver-parsable ones, bump each image's string `tag` to the
-    newest, roll untagged (or non-string-tagged) images into one app-wide candidate that
-    bumps `metadata.app_version` when it outranks it, and re-emission-write
-    `{source}/package.yaml` in place at most once per run; everything sits between the
-    optional `update_pre` (first) and `update_post` (last) hook calls. No k8s contact,
-    no staging, no push, no Handlebars.
-  Complete file structure: one top-level line `import "package_yaml" as pck;` then one
-    @fn @run and nothing else — importing the module evaluates the @pck import and defines
-    @run, with no other top-level effect; @run takes `args`.
+  Posséder tout le côté script de `agent package update` : lister les tags du registry de
+    chaque entrée `images`, garder ceux parsables en semver, pousser le `tag` texte de
+    chaque image vers le plus récent, faire converger les images sans tag (ou au tag non
+    texte) en un seul candidat d'application qui pousse `metadata.app_version` quand il le
+    dépasse, et réémettre sur place `{source}/package.yaml` au plus une fois par run ; tout
+    cela s'insère entre les appels optionnels aux hooks `update_pre` (premier) et
+    `update_post` (dernier). Aucun contact k8s, pas de staging, pas de push, pas de
+    Handlebars.
+  Structure complète du fichier : une ligne de plus haut niveau `import "package_yaml" as pck;`
+    puis un seul @fn @run et rien d'autre — l'import du module évalue l'@import de @pck et
+    définit @run, sans autre effet de plus haut niveau ; @run reçoit `args`.
 
 Exposes:
-  @run(args) — the module's sole @fn, called by the Rust snippet; its return value is
-    discarded upstream, and success is completion (return-never-inspected verdict).
-  Import contract: `import "update" as update` plus this file's own `package_yaml` import
-    and its @import_run hook names `update_pre` / `update_post` all resolve over the Rust
-    lane's four resolver dirs — `{source}/scripts`, `{config_dir}` (default `.` = process
-    cwd), `{script_dir}/packages`, `{script_dir}/lib` — so the first entry (or the default
-    cwd) shadows this module OR @pck OR either hook by name. A shadowed `package_yaml`
-    replaces the gate; the bare @pck import lives at module-evaluation time, so
-    module-not-found aborts before @run is ever reached — unlike the hooks, whose
-    absence is the core @import_run shim's debug-log skip.
+  @run(args) — le seul @fn du module, appelé par le snippet Rust ; sa valeur de retour est
+    ignorée en amont, et le succès est la complétion (verdict : retour jamais inspecté).
+  Contrat d'import : `import "update" as update` plus l'import `package_yaml` propre au
+    fichier et les noms de hooks `update_pre` / `update_post` de son @import_run se résolvent
+    tous sur les quatre répertoires de résolution de la voie Rust — `{source}/scripts`,
+    `{config_dir}` (défaut `.` = cwd du processus), `{script_dir}/packages`,
+    `{script_dir}/lib` — donc la première entrée (ou le cwd par défaut) éclipse ce module OU
+    @pck OU l'un des hooks par son nom. Un `package_yaml` éclipsé remplace le gate ; l'import
+    nu de @pck vit au moment de l'évaluation du module, donc un module-intouvable avorte avant
+    que @run soit jamais atteint — contrairement aux hooks, dont l'absence est le skip avec
+    log_debug du shim @import_run du core.
 
 Accepts:
-  @args — the injected scope map; the ONLY key read is `source`, used twice as the
-    `+`-concatenated manifest path `{source}/package.yaml` for @file_read and @file_write;
-    `script_dir`/`config_dir` never appear here, and neither is validated — an absent
-    `source` key yields @() and the `+` concat raises.
-  The manifest is taken as text → @yaml_decode_ordered into an ordered @YamlDoc map type
-    (registered name `map`), never @yaml_decode; decode failures are plain raises.
-  Expected shape: `metadata.app_version` (read only when `metadata` is a map), `images` as
-    a map of entries each with `registry`, `repository` and optionally a string `tag`.
-    Nothing is shape-checked first — see Raises for what malformed entries do.
+  @args — la carte de scope injectée ; la SEULE clé lue est `source`, utilisée deux fois comme
+    chemin de manifeste concaténé par `+` `{source}/package.yaml` pour @file_read et
+    @file_write ; `script_dir`/`config_dir` n'apparaissent jamais ici, et ni l'un ni l'autre
+    n'est validé — une clé `source` absente donne @() et la concat `+` lève.
+  Le manifeste est pris comme texte → @yaml_decode_ordered vers une carte @YamlDoc ordonnée
+    (type, nom enregistré `map`), jamais @yaml_decode ; les échecs de décodage sont de simples
+    levées.
+  Forme attendue : `metadata.app_version` (lu seulement quand `metadata` est une carte),
+    `images` comme carte d'entrées ayant chacune `registry`, `repository` et éventuellement un
+    `tag` texte. Rien n'est vérifié en forme au préalable — voir Raises pour ce que font les
+    entrées malformées.
 
 Returns:
-  `()` — side effects only. ZERO @print anywhere (unlike ./build.rhai): the only
-    user-visible outputs are the per-image @log_info `Scanning ${registry}/${repository}`
-    line emitted BEFORE any registry contact and the @log_warn lines below.
+  `()` — effets de bord seulement. ZÉRO @print nulle part (contrairement à ./build.rhai) : les
+    seules sorties visibles de l'utilisateur sont la ligne @log_info par image
+    `Scanning ${registry}/${repository}` émise AVANT tout contact registry et les lignes
+    @log_warn ci-dessous.
 
 Raises:
-  One scripted @throw in the file, verbatim with runtime interpolation:
+  Un seul @throw scripté dans le fichier, verbatim avec interpolation d'exécution :
     `Tag found for ${yaml["images"][k]["registry"]}/${yaml["images"][k]["repository"]} (${newt}) doesn't match the tag found for other images (${found})` —
-    raised from the second untagged image whose newest candidate differs from the
-    established one, mid-loop, before any write.
-  @pck::validate's eight throw texts ride the tag-only pass and the fallback pass
-    (./../lib/package_yaml.sdd owns them).
-  Engine raises, uncaught — every one aborts the run as the Rust side's
-    `Rhai script error:` exit-2 lane (/agent/src/package/update.sdd via its mod): @file_read stdio on a
-    missing/unreadable `{source}/package.yaml`; the `YamlError:`-prefixed decode failure;
-    @new_registry or @list_tags core errors (real network contact, per-image, no retry, no
-    per-image catch); @list_tags or
-    @new_registry called with @() from an `images` entry that is a scalar or lacks
-    `registry`/`repository` (function-not-found on the @() argument aborts the whole run);
-    @file_write stdio on the tag-only pass or on the fallback's retry; a
-    `update_pre`/`update_post` module whose body throws (the shim bare-rethrows
-    non-module/function errors); a failing @semver_from on a candidate comparison outside
-    the two guarded legs.
-  Caught, never propagating: non-semver LISTED tags (the filter leg's
-    `try{let x = semver_from(v);true}catch(e){false}` — v-prefixed counts as parsable);
-    a non-semver CURRENT string tag → @log_warn of the raw error when @type_of(@e) is
-    `string`, else of @json_encode(@e), old text kept; the whole candidate leg —
-    @semver_from(@app_version) refusing an unparseable or non-string `app_version`, AND a
-    failed @file_write inside it (a candidate write that errors with `changed` unset is
-    silently swallowed: run completes, nothing persists; with `changed` set the fallback
-    @file_write failure is NOT caught and fails the run).
+    levé depuis la seconde image sans tag dont le candidat le plus récent diffère de celui
+    établi, en pleine boucle, avant toute écriture.
+  Les huit textes de @throw de @pck::validate accompagnent la passe tag-seul et la passe de
+    repli (./../lib/package_yaml.sdd en est propriétaire).
+  Levées du moteur, non interceptées — chacune avorte le run comme la voie exit-2
+    `Rhai script error:` du côté Rust (/agent/src/package/update.sdd via son mod) : @file_read
+    stdio sur un `{source}/package.yaml` manquant/illisible ; l'échec de décodage préfixé
+    `YamlError:` ; les erreurs core de @new_registry ou @list_tags (contact réseau réel, par
+    image, sans retry, sans catch par image) ; @list_tags ou @new_registry appelés avec @()
+    depuis une entrée `images` qui est un scalaire ou sans `registry`/`repository`
+    (fonction-introuvable sur l'argument @(), qui avorte tout le run) ; @file_write stdio sur
+    la passe tag-seul ou sur le retry du repli ; un module `update_pre`/`update_post` dont le
+    corps lève (le shim relance brutes les erreurs non-module/fonction) ; un @semver_from en
+    échec sur une comparaison de candidat hors des deux jambes gardées.
+  Interceptés, ne propagent jamais : les tags LISTÉS non-semver (la jambe de filtre
+    `try{let x = semver_from(v);true}catch(e){false}` — préfixé v compte comme parsable) ; un
+    `tag` texte COURANT non-semver → @log_warn de l'erreur brute quand @type_of(@e) est
+    `string`, sinon de @json_encode(@e), texte ancien conservé ; toute la jambe candidat —
+    @semver_from(@app_version) refusant un `app_version` non parsable ou non texte, ET un
+    @file_write en échec en son sein (une écriture de candidat qui lève avec `changed` non posé
+    est avalée en silence : le run complète, rien ne persiste ; avec `changed` posé, l'échec du
+    @file_write de repli N'EST PAS intercepté et fait échouer le run).
 
 Handles:
-  `images` absent or not a map → zero scanning, zero writing; both hooks still run
-    (@update_post lives outside the `images` gate — it runs even on a manifest with no
+  `images` absent ou pas une carte → zéro scan, zéro écriture ; les deux hooks tournent quand
+    même (@update_post vit hors du gate `images` — il tourne même sur un manifeste sans
     `images`).
-  Per entry, in `yaml["images"].keys()` insertion order: log the Scanning line,
-    `new_registry(registry, "", "")` → @list_tags(repository) → keep semver-parsable tags
-    → @semver_from each → sort descending → `tags[0]` = newest; empty answer → `continue`
-    (entry skipped without warning).
-  String `tag` leg: newest `>` current parses OK → assign the bump text and set `changed`;
-    current tag unparseable → warn, keep, `changed` NOT set; current newer or equal →
-    silent no-op.
-  Non-string `tag` leg (missing, int, map — anything not `type_of` `string`) participates
-    ONLY when `app_version != ()`: first entry seeds the candidate, a differing candidate
-    throws the Tag-found text, equal candidate is a no-op; with `app_version` `()` the
-    entry is inert (no candidate is even recorded).
-  Post-loop write discipline, at most one successful @file_write per run — the three
-    arms, fully proven:
-      candidate newer — `new_version` set, parse-compare succeeds, `new_version > old_v`:
-      assign `metadata.app_version` to the `to_string()` text and @file_write the
-      @yaml_encode_ordered re-emission with NO @pck::validate gate; same-run tag bumps are
-      already in the map and ride along un-gated.
-      catch fallback — `app_version` unparseable/non-string OR the candidate write failed:
-      run @pck::validate and rewrite ONLY when `changed`; otherwise write nothing and
-      finish clean.
-      tag-only — no candidate and `changed`: @pck::validate then @file_write.
-  Every other combination writes NOTHING: a clean or already-newest manifest keeps its
-    bytes (no normalization rewrite, proven byte-identical), a candidate equal to
-    `app_version` discards same-run `changed` tag bumps forever (Tasks), an untagged entry
-    without `app_version` contributes nothing.
-  @pck::validate runs over the @YamlDoc on the gated passes and COMPLETES: rhai dot access
-    on the custom type falls back to the registered `[]` indexer pair, so the header
-    injections, `requirements: []` default and @properties_improve rewrites verifiably land
-    in the rewritten file alongside the bumps (settles the ./../lib/package_yaml.sdd
-    dot-access question; the misspelled-default decision stays there).
-  Ordering gives no atomicity: a registry that dies mid-loop aborts before the (single)
-    write so one dead `repository` blocks every other image's bump; @update_post runs AFTER
-    the write, so a throwing post hook leaves an updated manifest plus a failed run.
+  Par entrée, dans l'ordre d'insertion de `yaml["images"].keys()` : logger la ligne Scanning,
+    `new_registry(registry, "", "")` → @list_tags(repository) → garder les tags parsables en
+    semver → @semver_from sur chacun → tri décroissant → `tags[0]` = le plus récent ; réponse
+    vide → `continue` (entrée passée sans avertissement).
+  Jambe `tag` texte : plus récent `>` courant si le courant se parse OK → assigner le texte du
+    bump et poser `changed` ; tag courant non parsable → warn, conserver, `changed` NON posé ;
+    courant plus récent ou égal → no-op silencieux.
+  Jambe `tag` non texte (manquant, int, carte — tout ce dont @type_of n'est pas `string`) ne
+    participe QUE quand `app_version != ()` : la première entrée ensemence le candidat, un
+    candidat divergent lève le texte Tag-found, un candidat égal est un no-op ; avec
+    `app_version` à `()` l'entrée est inerte (aucun candidat n'est même enregistré).
+  Discipline d'écriture post-boucle, au plus un @file_write réussi par run — les trois bras,
+    tous prouvés :
+      candidat plus récent — `new_version` posé, la comparaison après parse réussit,
+      `new_version > old_v` : assigner `metadata.app_version` au texte de `to_string()` et
+      @file_write la réémission @yaml_encode_ordered SANS gate @pck::validate ; les bumps de
+      tags du même run sont déjà dans la carte et passent sans gate.
+      repli du catch — `app_version` non parsable/non texte OU l'écriture du candidat a échoué :
+      lancer @pck::validate et réécrire SEULEMENT quand `changed` ; sinon n'écrire rien et
+      finir propre.
+      tag-seul — pas de candidat et `changed` : @pck::validate puis @file_write.
+  Toute autre combinaison n'écrit RIEN : un manifeste propre ou déjà au plus récent garde ses
+    octets (pas de réécriture de normalisation, prouvé byte-identique), un candidat égal à
+    `app_version` jette pour toujours les bumps de tags `changed` du même run (Tasks), une
+    entrée sans tag sans `app_version` n'apporte rien.
+  @pck::validate s'exécute sur le @YamlDoc sur les passes gardées et COMPLÈTE : l'accès par
+    point rhai sur le type custom retombe sur la paire d'indexeurs `[]` enregistrée, donc les
+    injections d'en-tête, le défaut `requirements: []` et les réécritures @properties_improve
+    atterrissent de façon vérifiable dans le fichier réécrit avec les bumps (tranche la
+    question d'accès par point de ./../lib/package_yaml.sdd ; la décision du défaut mal
+    orthographié reste là-bas).
+  L'ordonnancement n'apporte aucune atomicité : un registry qui meurt en pleine boucle avorte
+    avant l'écriture (unique) donc un `repository` mort bloque le bump de toute autre image ;
+    @update_post tourne APRÈS l'écriture, donc un hook post qui lève laisse un manifeste mis à
+    jour plus un run en échec.
 
 Must:
-  Persist through exactly two channel facts — the chained map writes
-    `yaml["images"][k]["tag"] = new_tag.to_string()` and
-    `yaml["metadata"]["app_version"] = new_version.to_string()` DO reach the document, and
-    the ONLY persistence is whole-file `@file_write({source}/package.yaml,
-    @yaml_encode_ordered(yaml))` — never line-level, never a partial patch. Chained writes
-    propagate because @YamlDoc registers BOTH indexer legs and locked rhai's
-    index/dot-chain assign re-sets each hop's modified temp child through its parent's
-    setter — an `idx_get` clone is not the end of the story (this settles the
-    /agent/src/package/update.sdd chained-write `[?]` against execution; see Tasks).
-  Re-emit with @yaml_encode_ordered — rust-yaml RoundTrip dump (insertion order preserved,
-    comments-preserved config); the re-emission's reshaping hazards belong to
+  Persister par exactement deux faits de canal — les écritures chaînées sur cartes
+    `yaml["images"][k]["tag"] = new_tag.to_string()` et
+    `yaml["metadata"]["app_version"] = new_version.to_string()` ATTEIGNENT bien le document,
+    et la SEULE persistance est l'écriture fichier entier `@file_write({source}/package.yaml,
+    @yaml_encode_ordered(yaml))` — jamais ligne à ligne, jamais de patch partiel. Les écritures
+    chaînées se propagent car @YamlDoc enregistre LES DEUX jambes d'indexeur et que
+    l'assignation en chaîne d'index/points du rhai verrouillé re-paramètre chaque enfant
+    temporaire modifié de chaque maillon via le setter de son parent — un clone d'`idx_get`
+    n'est pas la fin de l'histoire (cela tranche le `[?]` d'écriture chaînée de
+    /agent/src/package/update.sdd contre l'exécution ; voir Tasks).
+  Réémettre avec @yaml_encode_ordered — dump rust-yaml RoundTrip (ordre d'insertion préservé,
+    config commentaires préservés) ; les dangers de remodelage de la réémission appartiennent à
     /common/src/yamlhandler.sdd.
-  Compare versions ONLY through the @Semver registered ops
-    (@semver_from / `>` / `==` / `!=` / @to_string) — @Semver ordering is the DERIVED
-    lexicographic order of `(InnerVersion, use_v)`, so at equal versions a `v`-prefixed
-    tag is strictly GREATER than the bare one: manifest tag `8.0.0` against listed
-    `v8.0.0` bumps (gaining the `v`), and untagged images answering `v2.0.0` vs `2.0.0`
-    count as divergent candidates and throw. @to_string round-trips the `v` verbatim into
-    the written text.
-  Sort with the exact descending comparator `|a,b| if a==b {0} else if a<b {1} else {-1}`
-    and take `tags[0]`; keep the @filter-before-@map order (filter re-parses via
-    @semver_from inside the try, @map parses again — each surviving tag parses twice).
-  Read `app_version` exactly once, up front, as `if type_of(yaml["metadata"]) == "map"
-    {yaml["metadata"]["app_version"]} else {()}` — `()` (absent metadata, absent key,
-    non-map metadata) turns the whole candidate machinery off.
-  Gate @pck::validate as exactly `yaml = @pck::validate(yaml)` (rebound from the return)
-    on the tag-only and fallback passes, never on the candidate-newer pass.
-  Query registries anonymously and unguarded: `@new_registry(registry, "", "")` — empty
-    credentials, core @RegistryAuth anonymous posture, 100-tag single-page @list_tags cap
-    (no continuation), NO pull-secret/@get_auth_from use anywhere; a `>100`-tag repository
-    can have its true newest outside the returned page.
-  Keep @import_run hook sites: `@import_run("update_pre", args)` as @run's FIRST
-    statement, `@import_run("update_post", args)` after the write decision, reached
-    whenever @run reaches its end normally — including no-scan and no-write runs; no
-    shipped `update_pre`/`update_post` exists in the tree, so today both legs are the
-    core shim's `log_debug No ${name} module, skipping.`
-  Stay pure-script: the consumed engine surface is exactly @file_read/@file_write,
-    @yaml_decode_ordered/@yaml_encode_ordered, @log_info/@log_warn (+ the shim's
-    @log_debug), @json_encode, @semver_from/@Semver/@to_string, @new_registry/@list_tags,
-    @import_run, and @type_of/array @filter/@map/@sort/@len/@keys — no k8s names, no hbs,
-    no @print, no other lib imports.
+  Comparer les versions UNIQUEMENT par les ops enregistrées de @Semver (@semver_from / `>` /
+    `==` / `!=` / @to_string) — l'ordre de @Semver est l'ordre lexicographique DÉRIVÉ de
+    `(InnerVersion, use_v)`, donc à versions égales un tag préfixé `v` est strictement PLUS
+    GRAND que le nu : le tag de manifeste `8.0.0` face au `v8.0.0` listé se bump (gagne le
+    `v`), et des images sans tag répondant `v2.0.0` vs `2.0.0` comptent comme candidats
+    divergents et lèvent. @to_string conserve le `v` verbatim dans le texte écrit.
+  Trier avec le comparateur décroissant exact `|a,b| if a==b {0} else if a<b {1} else {-1}` et
+    prendre `tags[0]` ; garder l'ordre @filter-avant-@map (le filtre reparse via @semver_from
+    dans le try, @map reparse encore — chaque tag survivant est parsé deux fois).
+  Lire `app_version` exactement une fois, d'emblée, comme `if type_of(yaml["metadata"]) == "map"
+    {yaml["metadata"]["app_version"]} else {()}` — `()` (metadata absent, clé absente, metadata
+    non-carte) désactive toute la machinerie de candidat.
+  Garder @pck::validate exactement comme `yaml = @pck::validate(yaml)` (réassigné depuis le
+    retour) sur les passes tag-seul et repli, jamais sur la passe candidat-plus-récent.
+  Interroger les registries en anonyme et sans garde : `@new_registry(registry, "", "")` —
+    credentials vides, posture anonyme @Registry du core, plafond @list_tags d'une seule page
+    de 100 tags (pas de continuation), AUCUN usage de pull-secret/@get_auth_from nulle part ;
+    un repository de `>100` tags peut avoir son vrai plus récent hors de la page renvoyée.
+  Garder les sites de hooks @import_run : `@import_run("update_pre", args)` comme PREMIÈRE
+    instruction de @run, `@import_run("update_post", args)` après la décision d'écriture,
+    atteints dès que @run atteint sa fin normalement — y compris les runs sans scan et sans
+    écriture ; aucun `update_pre`/`update_post` livré n'existe dans l'arbre, donc aujourd'hui
+    les deux jambes sont le `log_debug No ${name} module, skipping.` du shim core.
+  Rester pur-script : la surface de moteur consommée est exactement @file_read/@file_write,
+    @yaml_decode_ordered/@yaml_encode_ordered, @log_info/@log_warn (+ le @log_debug du shim),
+    @json_encode, @semver_from/@Semver/@to_string, @new_registry/@list_tags, @import_run, et
+    @type_of/array @filter/@map/@sort/@len/@keys — aucun nom k8s, pas de hbs, pas de @print,
+    pas d'autre import de lib.
 
 Must not:
-  Write any file other than `{source}/package.yaml`, nor touch manifest fields beyond
-    `images.*.tag` and `metadata.app_version` — @pck::validate's header/requirements/options
-    edits ride the gated write as its side effect only.
-  Authenticate, read credentials, retry a failed registry call, or catch a per-image
-    network failure into a continue.
+  Écrire tout autre fichier que `{source}/package.yaml`, ni toucher des champs du manifeste
+    au-delà de `images.*.tag` et `metadata.app_version` — les éditions
+    en-tête/requirements/options de @pck::validate accompagnent l'écriture gardée uniquement
+    comme son effet de bord.
+  S'authentifier, lire des credentials, relancer un appel registry en échec, ou intercepter une
+    panne réseau par image dans un continue.
 
 Depends on:
-  ./../lib/package_yaml.rhai (./../lib/package_yaml.sdd) — imported as `pck`; @validate is
-    the tag-only/fallback gate with its throws and warnings.
-  /agent/src/package/update.sdd — the caller and every surrounding Rust fact (clap, args
-    JSON, resolver dirs, exit ladder); the write-discipline decisions (candidate-discard
-    arm, gate asymmetry, shadow, docs-hook) are owned there — pointer, not fork.
-  /common/src/yamlhandler.sdd — @YamlDoc + the registered indexer pair + the ordered
-    encode/decode this lane's persistence rides on; carries the stale `idx_get`-clone
-    never-writes-through wording this spec's execution contradicts (Tasks).
-  vynil-core 0.7.7 — @Registry anonymous auth + 100-tag page, @Semver parse/compare/
-    @to_string, `fs` @file_read/@file_write, @json_encode, the @import_run/@assert common
-    shims, tracing-backed @log_*; locked rhai 1.25.1's chain re-set propagation and
-    dot→indexer fallback are the mechanics the persistence posture relies on.
-  /common/src/rhaihandler.sdd — @Script::new assembly supplying this file's engine names.
+  ./../lib/package_yaml.rhai (./../lib/package_yaml.sdd) — importé comme `pck` ; @validate est
+    le gate tag-seul/repli avec ses levées et ses warnings.
+  /agent/src/package/update.sdd — l'appelant et chaque fait Rust alentour (clap, args JSON,
+    répertoires de résolution, échelle des exit) ; les décisions de discipline d'écriture (bras
+    du discard de candidat, asymétrie du gate, éclipse, hook de docs) y sont propriétaires —
+    pointer, pas fork.
+  /common/src/yamlhandler.sdd — @YamlDoc + la paire d'indexeurs enregistrée + l'encodage/
+    décodage ordonné sur lesquels la persistance de cette voie roule ; porte le wording périmé
+    du clone `idx_get` qui n'écrit jamais en travers, que l'exécution de cette spec contredit
+    (Tasks).
+  vynil-core 0.7.7 — auth anonyme @Registry + page de 100 tags, parse/compare/@to_string de
+    @Semver, `fs` @file_read/@file_write, @json_encode, les shims communs @import_run/@assert,
+    les @log_* branchés sur tracing ; la propagation de re-paramétrage en chaîne et le repli
+    point→indexeur du rhai verrouillé 1.25.1 sont la mécanique sur laquelle repose la posture
+    de persistance.
+  /common/src/rhaihandler.sdd — l'assemblage @Script::new qui fournit les noms du moteur de ce
+    fichier.
 
 References:
-  /agent/tests/rhai_build.rs — the mock lane proves the absence: it never imports
-    `update`, and mock @list_tags answers `[]` only, so the scan legs are untestable
-    through it as-is.
-  ./build.sdd — sibling script spec for the shared conventions (@security_filter absence,
-    the v-prefix drift pairing, the listing-posture contrast: build catches its listing
-    failure, update does not).
+  /agent/tests/rhai_build.rs — la voie mock prouve l'absence : elle n'importe jamais `update`,
+    et le @list_tags mock ne répond que `[]`, donc les jambes de scan sont intestables à
+    travers lui en l'état.
+  ./build.sdd — spec script soeur pour les conventions partagées (absence de @security_filter,
+    l'appariement de la dérive v-prefix, le contraste de posture de listing : build intercepte
+    son échec de listing, update non).
 
 Tasks:
-  [ ] Map the Scenarios below into tests — `agent/tests/` has ZERO coverage of this module
-      today; the proof harness that settled the persistence questions (real @YamlDoc,
-      locked rhai, stub @list_tags per repository against this exact file) belongs ported;
-      ./../../tests/rhai_build.rs must first gain a stub/mock registry that answers tags.
-  [?] Chained-write `[?]` of /agent/src/package/update.sdd — SETTLED BY EXECUTION here:
-      bumps land and persist via the two frozen passes; a clean run rewrites nothing; both
-      write scenarios hold. The surviving decision is documentary: move
-      /common/src/yamlhandler.sdd's `idx_get`-clone never-writes-through wording (and the
-      Rust spec's "rests on the chained-write decision" scenario lines) onto the
-      registered-indexer-pair write-back truth. Owners: those two specs, not this file.
-  [?] Dot-access-on-@YamlDoc `[?]` of ./../lib/package_yaml.sdd — SETTLED BY EXECUTION
-      here: the tag-only pass reaches @validate and completes (property access falls back
-      to the indexer pair; injections observably persist). Carry the wording change there;
-      the misspelled-default decision stays in /agent/src/package/update.sdd.
-  [?] Candidate-not-newer arm is a permanent discard (proven): candidate equal to
-      `app_version` while string tags bumped → no pass writes, forever, silently. Likely
-      lane bug; paired with /agent/src/package/update.sdd's same-named `[?]` — decide once.
-  [?] Candidate-newer pass persists WITHOUT @pck::validate (proven: a manifest bumped this
-      way still has no `apiVersion`/`kind`/`requirements` defaults while the same file's
-      tag-only run injects them) — gate asymmetry decided once in
+  [ ] Mapper les Scenarios ci-dessous en tests — `agent/tests/` a ZÉRO couverture de ce module
+      aujourd'hui ; le harnais de preuve qui a tranché les questions de persistance (@YamlDoc
+      réel, rhai verrouillé, @list_tags stub par repository contre ce fichier exact) est à
+      porter ; ./../../tests/rhai_build.rs doit d'abord gagner un registry stub/mock qui répond
+      des tags.
+  [?] `[?]` d'écriture chaînée de /agent/src/package/update.sdd — TRANCHÉ PAR L'EXÉCUTION ici :
+      les bumps atterrissent et persistent via les deux passes gelées ; un run propre ne
+      réécrit rien ; les deux scenarios d'écriture tiennent. La décision survivante est
+      documentaire : déplacer le wording jamais-écrit-en-travers du clone `idx_get` de
+      /common/src/yamlhandler.sdd (et les lignes de scenario « rests on the chained-write
+      decision » de la spec Rust) sur la vérité d'écriture par la paire d'indexeurs
+      enregistrée. Propriétaires : ces deux specs, pas ce fichier.
+  [?] `[?]` d'accès-par-point-sur-@YamlDoc de ./../lib/package_yaml.sdd — TRANCHÉ PAR
+      L'EXÉCUTION ici : la passe tag-seul atteint @validate et complète (l'accès par propriété
+      retombe sur la paire d'indexeurs ; les injections persistent de façon observable).
+      Reporter le changement de wording là-bas ; la décision du défaut mal orthographié reste
+      dans /agent/src/package/update.sdd.
+  [?] Le bras candidat-non-plus-récent est un discard permanent (prouvé) : candidat égal à
+      `app_version` alors que des tags texte ont bumpé → aucune passe n'écrit, pour toujours,
+      silencieusement. Bug probable de la voie ; apparié au `[?]` du même nom dans
+      /agent/src/package/update.sdd — décider une seule fois.
+  [?] La passe candidat-plus-récent persiste SANS @pck::validate (prouvé : un manifeste bumpé
+      ainsi n'a toujours pas les défauts `apiVersion`/`kind`/`requirements` alors que la passe
+      tag-seul du même fichier les injecte) — asymétrie du gate tranchée une fois dans
       /agent/src/package/update.sdd.
-  [?] Candidate write failure with `changed` unset is swallowed: the run exits success
-      with nothing persisted (the catch's retry only fires on `changed`). Decide whether a
-      failed @file_write must always abort.
-  [?] `v`-prefix artefacts of @Semver's derived ordering (bump `8.0.0`→`v8.0.0`;
-      `v2.0.0` vs `2.0.0` candidates throw) — same family as ./build.sdd's `v`-prefix
-      drift `[?]`; normalize-or-freeze must be decided for both lanes together.
-  [?] @list_tags one-page-100 cap can miss an untagged or tagged image's true newest on
-      busy repositories (core-owned posture, already frozen in ./build.sdd) — confirm
-      acceptance for the update lane or fix in vynil-core.
-  [?] `update_pre`/`update_post` ship nowhere (/docs/cli.md advertises the post hook;
-      only shadow trees can supply them) — decision owned by
-      /agent/src/package/update.sdd; this spec only freezes the call sites.
+  [?] L'échec d'écriture du candidat avec `changed` non posé est avalé : le run sort en succès
+      sans rien avoir persisté (le retry du catch ne se déclenche qu'avec `changed`). Décider si
+      un @file_write en échec doit toujours avorter.
+  [?] Artéfacts du `v`-prefix de l'ordre dérivé de @Semver (bump `8.0.0`→`v8.0.0` ; candidats
+      `v2.0.0` vs `2.0.0` qui lèvent) — même famille que le `[?]` de dérive `v`-prefix
+      de ./build.sdd ; normaliser-ou-geler doit être décidé pour les deux voies ensemble.
+  [?] Le plafond 100-tags-d'une-page de @list_tags peut rater le vrai plus récent d'une image
+      sans tag ou taggée sur des repositories chargés (posture propriétaire core, déjà gelée
+      dans ./build.sdd) — confirmer l'acceptation pour la voie update ou corriger dans
+      vynil-core.
+  [?] `update_pre`/`update_post` ne sont livrés nulle part (/docs/cli.md annonce le hook post ;
+      seuls des arbres d'éclipse peuvent les fournir) — décision propriétaire de
+      /agent/src/package/update.sdd ; cette spec ne gèle que les sites d'appel.
 
 Done when:
-  Every Scenario carries a mapped passing test or a written exemption, the two
-    execution-settled wording moves are recorded in the specs they belong to, the `[?]`s
-    are decided, and `cargo test -p agent` with clippy, `cargo +nightly fmt --check` and
-    `specdd lint` stay green.
+  Chaque Scenario porte un test mappé qui passe ou une exemption écrite, les deux déplacements
+    de wording tranchés par l'exécution sont consignés dans les specs qui les concernent, les
+    `[?]`s sont tranchés, et `cargo test -p agent` avec clippy,
+    `cargo +nightly fmt --check` et `specdd lint` restent verts.
 
 Scenario: string tag bump persists and is idempotent
-  Given a fully authored manifest with image tag `8.0.35` and listed tags
+  Given un manifeste entièrement rédigé avec le tag d'image `8.0.35` et les tags listés
     `8.0.35`, `latest`, `8.0.40`
-  When @run completes
-  Then the rewritten `{source}/package.yaml` carries tag `8.0.40` and no `8.0.35`
-  And an immediate second @run leaves the file byte-identical
-  Proven by the proof harness; no mapped repo test exists.
+  When @run complète
+  Then le `{source}/package.yaml` réécrit porte le tag `8.0.40` et plus aucun `8.0.35`
+  And un second @run immédiat laisse le fichier byte-identique
+  Prouvé par le harnais de preuve ; aucun test mappé n'existe.
 
 Scenario: tag-only pass gates through validate on @YamlDoc
-  Given a manifest with no `apiVersion`, no `kind`, no `requirements`, one `options`
-    property carrying only a `default`, and a bumpable string tag
-  When @run completes
-  Then the single write carries the bumped tag AND the injected
-    `vinyl.solidite.fr/v1beta1`/`Package`/`requirements: []` AND the
-    @properties_improve'd `type: string` — all through dot-assignment onto a @YamlDoc
-  Proven; no mapped repo test exists.
+  Given un manifeste sans `apiVersion`, sans `kind`, sans `requirements`, une propriété
+    `options` portant seulement un `default`, et un tag texte bumpable
+  When @run complète
+  Then la seule écriture porte le tag bumpé ET les injections
+    `vinyl.solidite.fr/v1beta1`/`Package`/`requirements: []` ET le `type: string` passé par
+    @properties_improve — le tout par assignation par point sur un @YamlDoc
+  Prouvé ; aucun test mappé n'existe.
 
 Scenario: candidate-newer writes the app_version un-gated
-  Given untagged images, `app_version: 1.0.0`, newest uniform candidate `2.0.0`, manifest
-    with no headers
-  When @run completes
-  Then `app_version: 2.0.0` is persisted and NO `apiVersion`-style defaults were injected
-  And the second run writes nothing
-  Proven; no mapped repo test exists.
+  Given des images sans tag, `app_version: 1.0.0`, un candidat uniforme le plus récent `2.0.0`,
+    un manifeste sans en-têtes
+  When @run complète
+  Then `app_version: 2.0.0` est persisté et AUCUN défaut de style `apiVersion` n'a été injecté
+  And le second run n'écrit rien
+  Prouvé ; aucun test mappé n'existe.
 
 Scenario: candidate not newer discards collected tag work
-  Given `app_version: 2.0.0`, one untagged image newest `2.0.0`, and another image whose
-    string tag bumps `1.0.0`→`1.5.0`
-  When @run completes
-  Then it exits success and the file still carries `tag: 1.0.0` — the `changed` bump is
-    never written while a candidate stands (equal is never >)
-  Proven; no mapped repo test exists.
+  Given `app_version: 2.0.0`, une image sans tag dont le plus récent est `2.0.0`, et une autre
+    image dont le tag texte bump `1.0.0`→`1.5.0`
+  When @run complète
+  Then il sort en succès et le fichier porte toujours `tag: 1.0.0` — le bump `changed` n'est
+    jamais écrit tant qu'un candidat tient (égal n'est jamais >)
+  Prouvé ; aucun test mappé n'existe.
 
 Scenario: unparseable app_version falls back to the gated write
-  Given `app_version: abc`, an untagged image seeding a candidate, and a bumpable string
-    tag
-  When @run reaches the candidate comparison
-  Then @semver_from throws into the catch and the fallback validates and writes: bumped tag
-    plus header defaults persist, `abc` survives unchanged
-  And with `changed` unset the same catch writes nothing and the run ends clean
-  Proven (first leg); no mapped repo test exists.
+  Given `app_version: abc`, une image sans tag qui ensemence un candidat, et un tag texte
+    bumpable
+  When @run atteint la comparaison de candidat
+  Then @semver_from lève dans le catch et le repli valide et écrit : le tag bumpé plus les
+    défauts d'en-tête persistent, `abc` survit inchangé
+  And avec `changed` non posé le même catch n'écrit rien et le run finit propre
+  Prouvé (première jambe) ; aucun test mappé n'existe.
 
 Scenario: divergent v-sensitive candidates throw before any write
-  Given two untagged images (or more, with `app_version` set) whose newest candidates
-    differ — `2.0.0` then `3.0.0`, or `v2.0.0` then `2.0.0` equally
-  When the loop reaches the second image
-  Then the run fails with `Tag found for <registry>/<repository> (<newt>) doesn't match
-    the tag found for other images (<found>)` and the manifest is untouched
-  Proven (first pair); no mapped repo test exists.
+  Given deux images sans tag (ou plus, avec `app_version` posé) dont les candidats les plus
+    récents diffèrent — `2.0.0` puis `3.0.0`, ou `v2.0.0` puis `2.0.0` indifféremment
+  When la boucle atteint la seconde image
+  Then le run échoue avec `Tag found for <registry>/<repository> (<newt>) doesn't match the
+    tag found for other images (<found>)` et le manifeste est intact
+  Prouvé (première paire) ; aucun test mappé n'existe.
 
 Scenario: non-semver current tag warns and retires
-  Given the only image tagged `latest`, registry offering `1.0.0`/`2.0.0`
-  When @run completes
-  Then the run reports success, @log_warn received the failure text, `latest` stays and —
-    because `changed` was never set and no candidate exists — the file is byte-untouched
-  Proven; no mapped repo test exists.
+  Given la seule image taggée `latest`, un registry offrant `1.0.0`/`2.0.0`
+  When @run complète
+  Then le run rapporte un succès, @log_warn a reçu le texte d'échec, `latest` reste et — parce
+    que `changed` n'a jamais été posé et qu'aucun candidat n'existe — le fichier est intact
+    octet pour octet
+  Prouvé ; aucun test mappé n'existe.
 
 Scenario: untagged entry inert without app_version
-  Given an untagged image and a metadata map WITHOUT `app_version`
-  Then @run succeeds, writing nothing: the candidate machinery is switched off by `()`
-  Proven; no mapped repo test exists.
+  Given une image sans tag et une carte de metadata SANS `app_version`
+  Then @run réussit sans rien écrire : la machinerie de candidat est coupée par `()`
+  Prouvé ; aucun test mappé n'existe.
 
 Scenario: dead registry blocks the whole scan
-  Given two bumpable images where the SECOND repository's @list_tags raises
-  Then the run fails and NEITHER bump was persisted — the loop's later failure kills the
-    earlier in-memory work because the single write sits after the loop
-  Proven; no mapped repo test exists.
+  Given deux images bumpable dont le SECOND repository fait lever @list_tags
+  Then le run échoue et AUCUN bump n'a été persisté — l'échec plus loin dans la boucle tue le
+    travail mémoire précédent parce que l'écriture unique est après la boucle
+  Prouvé ; aucun test mappé n'existe.
 
 Scenario: post hook runs after the write and is not atomic with it
-  Given a shadow `update_post` (resolvable via the resolver dirs) on a manifest due one
-    tag bump
-  Then the hook executes after the rewrite (sentinel side effect observable), and a
-    THROWING `update_post` turns the run red while the bumped manifest lies on disk
-  Proven both legs; no mapped repo test exists.
+  Given un `update_post` éclipsé (résolvable via les répertoires de résolution) sur un
+    manifeste attendu pour un bump de tag
+  Then le hook s'exécute après la réécriture (effet de bord sentinel observable), et un
+    `update_post` qui LÈVE passe le run au rouge alors que le manifeste bumpé gît sur le disque
+  Prouvé les deux jambes ; aucun test mappé n'existe.
 
 Example:
-  scan line per image, before contact: `Scanning docker.io/library/mysql`
-  args consumed: only `source` — manifest path is `source + "/package.yaml"`, doubled
-    slash accepted for a trailing-separator `--source`
-  comparator as written: `|a,b| if a==b {0} else if a<b {1} else {-1}` — descending by
-    @Semver order, `tags[0]` newest
-  derived-order artefact: manifest `tag: 8.0.0` with listed `v8.0.0` bumps the `v` prefix ON.
+  ligne de scan par image, avant contact : `Scanning docker.io/library/mysql`
+  args consommés : seulement `source` — le chemin du manifeste est `source + "/package.yaml"`,
+    le double slash est accepté pour un `--source` à séparateur final
+  comparateur tel qu'écrit : `|a,b| if a==b {0} else if a<b {1} else {-1}` — décroissant par
+    ordre @Semver, `tags[0]` le plus récent
+  artéfact d'ordre dérivé : un manifeste `tag: 8.0.0` avec `v8.0.0` listé bump le préfixe `v`
+    ON.
