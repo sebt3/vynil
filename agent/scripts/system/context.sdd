@@ -1,0 +1,228 @@
+Spec: SystemContextScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  The system-kind context orchestrator: structural twin of ./../service/context.rhai
+    (./../service/context.sdd) and ./../tenant/context.rhai (./../tenant/context.sdd),
+    one level above @build_context. It delegates the whole assembly to `build_context`
+    and drives named hook slots, nothing more — the purest of the three orchestrators:
+    it reads no `instance` property, no `args` key, and no engine surface of its own
+    beyond the hook shims. Deltas from the twins: it overlays `template_dir` and
+    `agent_image` on neither lane (no system Rust lane carries those flags), it mints
+    no kind block at all — no `namespace`, no `tenant`, hence no
+    `maintenance_start_hour`/`maintenance_start_minut` pair anywhere on the system
+    contract — the kind slot is `context_system` whose shipped default
+    ./context_system.rhai is an identity, and the offline chain stops at
+    `context_post` — `context_after` never resolving offline, the tenant-twin
+    asymmetry the service twin does not have.
+
+Exposes:
+  @run(@instance, @args) — live lane, the entry point the agent system `install` and
+    `delete` Rust snippets call as `import("context") as ctx; ctx::run(instance, args)`
+    (/agent/src/system/install.sdd, /agent/src/system/delete.sdd; also the
+    @ENTRY_POINT_FUNCTIONS lint name `run` of /agent/src/linting/rhai_checker.sdd);
+    delegates to `build::run`, invokes the five hooks through the three-arg
+    @import_run.
+  @template(@instance, @args) — offline twin for `agent template system`: delegates to
+    `build::template`, hooks through three-arg @import_template, four slots only —
+    `context_after` is never resolved here.
+  No other @fn exists — importing this module (alias convention `as ctx`, also under
+    the package-shadow name `context`) exposes exactly these two.
+
+Accepts:
+  @instance — forwarded only, never property-read and never method-called here (the
+    tenant twin's inline identity reads have no system counterpart). Callers inject:
+    the typed @SystemInstance @Dynamic fetched by @SystemInstance::get before the eval
+    (/agent/src/system/install.sdd, /agent/src/system/delete.sdd), the synthesized
+    `#{metadata: {name, namespace}}` map of the offline lane
+    (/agent/src/template/system.sdd), or the mock-sink value reached under registered
+    name @get_system_instance in `agent package test` (/agent/src/testing/handler.sdd).
+  @args — plain map, read by zero key in this file (both twins read two keys here —
+    delta): install lane the eight snake_case keys of the serialized @Parameters
+    (`namespace`, `instance`, `vynil_namespace`, `package_dir`, `script_dir`, `tag`,
+    `config_dir`, `controller_values`); delete lane the same minus `tag`, so
+    `instance.requested` lands `()` from the delegation upstream (tolerated map-miss —
+    the delete-stage scripts never index it, while ./install.rhai closes the install
+    lane through `context.instance.requested`); template lane the nine keys of
+    /agent/src/template/system.sdd (@Parameters adds `context_name`). NO system lane's
+    @Parameters carries `template_dir` or `agent_image` — the @clap fields the
+    service/tenant twins drop are absent from the system shape, not merely unread.
+    Everything is consumed downstream through the delegation and the hooks (read
+    contract ./../lib/build_context.sdd).
+
+Returns:
+  The context map (last expression; the calling snippet passes it as the second
+    argument to `install::run`/`delete::run`, and the Rust lane discards the snippet
+    @Dynamic). Stock insertion order of top-level keys, both lanes identical:
+    1. the delegate's seven: `cluster`, `controller`, `instance`, `values`, `defaults`,
+        `package_dir`, `config_dir` (key contract owned by ./../lib/build_context.sdd
+        Returns),
+    2. whatever the `context_pre` replacement leaves (whole-map replacement can rewrite
+        or erase every key above),
+    3. `extra` — always written to the `context_extra` result, no guard; the stock
+        image (no such module ships) stores `()` under the key.
+    `context_post` (both lanes) and `context_after` (run lane only) may then rebind the
+    whole map again. Eight stock keys — the service stock had eleven because it also
+    minted `template_dir`/`agent_image`/`namespace`; a system context NEVER shows
+    those three keys unless a hook injects them, and a `context.namespace...` read in
+    a package script ported from the twin lanes then gets the tolerant-map-miss `()`
+    downstream, not an error here. Later stage modules of the same run add keys (e.g.
+    ./install_tofu.rhai's `tofu`); that is their contract.
+
+Raises:
+  Zero @throw statement, zero @try, zero guard of its own:
+    - Delegation errors land whole (package.yaml read, agent.yaml YAML, unguarded
+      cluster reads per ./../lib/build_context.sdd Raises).
+    - Hook errors: @import_run/@import_template swallow ONLY absent-module /
+      absent-function (skip with @log_debug, semantics owned by wynil-core
+      @add_common); anything a hook throws for real propagates through `throw ;` and
+      aborts the lane run — surfaced per lane as @common::Error::Core exiting
+      install `1`, delete `3`, template `3` (/agent/src/system/install.sdd,
+      /agent/src/system/delete.sdd, /agent/src/template/system.sdd Err lanes).
+    - A hook that returns a map lacking a later-read key is NOT an error here — the
+      property read fails downstream in the consuming stage.
+
+Handles:
+  Stock image hook posture: only the kind slot `context_system` ships (this
+    directory); `context_pre`/`context_extra`/`context_post`/`context_after` skip on
+    every lane to `()` so the `type_of` guards keep the running context and only
+    `extra` changes (to `()`). The shipped kind slot keeps the map identical
+    (./context_system.rhai identity).
+  Non-map hook return (including the skip `()`) silently keeps the previous context —
+    the guard is `type_of(ctx) == "map"`, whole-value replacement, no key merge.
+  @import_template fallback: a hook module without a `template` fn but with a `run` is
+    invoked at `run(instance, context)` on the offline lane — the shipped
+    ./context_system.rhai is the built-in example, its identity is exactly how the
+    system template lane passes its kind slot.
+  Delete-lane missing `tag`: tolerated map-miss upstream, `()` flows on.
+  Package shadow resolution: the calling lanes search `{package_dir}/scripts`,
+    `{config_dir}`, `{script_dir}/system`, `{script_dir}/lib` in order — a package
+    `context.rhai` replaces this whole orchestrator, a package `context_system.rhai`
+    replaces just the kind slot ahead of the identity default, and a package
+    `build_context.rhai` replaces the delegate this file imports plainly.
+
+Must:
+  Keep the module body at one plain `import "build_context" as build` plus the two
+    `fn` declarations — no top-level statement runs at import; both entry names match
+    @ENTRY_POINT_FUNCTIONS.
+  Run the two lanes in this order, each guarded slot exactly once: delegate into
+    `build::run` (or `build::template`) whole; slot `context_pre`; slot
+    `context_system`; write `context["extra"]` from slot `context_extra`; slot
+    `context_post`; then [run lane only] slot `context_after`; then return `context`.
+  Hand the hook the running context as third argument: @import_run("context_pre",
+    @instance, @context) on the live lane, @import_template("context_pre", @instance,
+    @context) on the offline lane — always the three-arg shims, so wynil-core resolves
+    the 3-arg overloads.
+  Replace the context on the pre/system/post/after slots through the
+    `type_of(ctx) == "map"` guard, whole map, no key merge; write `extra` unguarded
+    from the slot result (any value, including `()`, becomes the stored value).
+  Mint nothing but `extra`: `extra` is the only key this file writes; `template_dir`,
+    `agent_image`, `namespace` and `tenant` are never stored here on either lane.
+  Touch nothing: zero k8s/file/http engine calls, zero property reads of @instance or
+    @args in these 42 source lines; every read lives behind the delegation
+    (./../lib/build_context.sdd Handles) or a resolved hook.
+  Preserve the key spelling `extra` — its one shipped consumer is ./install_tofu.rhai
+    calling @tfg::gen_files, whose @gen_locals renders `context.extra` into the
+    `vynil_extra` local of `00_vynil_locals.tf` (/agent/scripts/lib/tofu_gen.sdd); no
+    other script under this directory reads `context.extra` directly.
+
+Must not:
+  Re-sync onto the twin lanes by adding a `namespace`/maintenance mint or a
+    `template_dir`/`agent_image` overlay: the system contract is keyless-by-design on
+    all three keys (Accepts/Returns, decision frozen-open in
+    /agent/src/template/system.sdd Tasks), and nothing under this directory reads a
+    maintenance pair (the system kind ships no backup/restore lane at all).
+
+Depends on:
+  ./../lib/build_context.rhai — the whole delegation (frozen in
+    ./../lib/build_context.sdd; only the seam — call once, per lane, first — is this
+    file's contract).
+  ./context_system.rhai — the one shipped hook slot; slot placement only here, the
+    identity itself in ./context_system.sdd.
+  wynil-core 0.7.7 script surface (@Script `add_common` behind
+    /common/src/rhaihandler.sdd): three-arg @import_run and @import_template with the
+    four-overload family and the absent-`template` run-fallback, @type_of, plain module
+    `import` name resolution.
+  Counterpart contracts, call edges flow the other way (they import this module):
+    /agent/src/system/install.sdd and /agent/src/system/delete.sdd (live `ctx::run`),
+    /agent/src/template/system.sdd (offline `ctx::template`),
+    /agent/src/testing/handler.sdd (mock-engine lane of `agent package test`).
+
+References:
+  ./../service/context.sdd and ./../tenant/context.sdd — the twin specs. The
+    three-way diff: only this file skips the `template_dir`/`agent_image` overlay and
+    the kind mint; service's own References paragraph ("neither mints
+    template_dir/agent_image") is true of this file and already corrected FALSE for
+    tenant in ./../tenant/context.sdd; its "both twins call `context_after` only on
+    the live lane" claim is true of both twins (this file's offline stop verified
+    against source).
+  /agent/src/template/system.sdd — the Rust lane that freezes this file's behaviour
+    from its side: no hardcoded kind block, chain stops at `context_post`, keyless
+    args.
+  /agent/scripts/lib/tofu_gen.sdd — the `vynil_extra` consumer of `extra`.
+  /agent/src/linting/rhai_checker.sdd — the `run`/`template` entry-name lint.
+
+Scenario: stock live lane assembles with the identity kind slot
+  Given a mock engine resolving the `scripts/system` and `scripts/lib` dirs, no
+    package-side hook modules, a mocked @SystemInstance
+  When @run(@instance, @args) executes
+  Then the delegate's seven keys exist in order, `context_system` runs its identity
+    `run` and the guarded replace keeps the identical map, the four absent hooks
+    @log_debug their skip lines, `extra` is `()` as a present key, eight top-level
+    keys come back, and no `namespace`/`template_dir`/`agent_image` key was added
+  No mapped test
+
+Scenario: offline lane mirrors the sequence and stops at context_post
+  Given the /agent/src/template/system.sdd synthesized `#{metadata: {name,
+    namespace}}` and the nine template-lane args
+  When @template(@instance, @args) executes
+  Then the four slots run via the template shim in pre → system → extra → post order,
+    the kind slot is reached through the absent-`template` run-fallback, a package
+    `context_after` module is never resolved offline, and the map carries no
+    kind-block key
+  No mapped test
+
+Scenario: a hook returning a map replaces everything
+  Given a hook module (package `context_pre`) whose callable returns `#{only: 1}`
+  When a guarded slot takes it
+  Then the context becomes `#{only: 1}` (delegate keys erased), after which this file
+    still writes `extra` onto it — consumers reading erased keys get `()` downstream,
+    not an error here
+  No mapped test
+
+Scenario: a package shadows the identity kind slot
+  Given `${package_dir}/scripts/context_system.rhai` returning a map that adds a
+    `kind` block ahead of the shipped default
+  When a lane slot resolves `context_system`
+  Then the package copy wins the resolver order, its guarded map replacement takes
+    over, and later slots see its output
+  No mapped test
+
+Tasks:
+  [ ] Map the scenarios: /agent/tests/rhai_lifecycle.rs builds service engines only
+      (`make_service_script` over `scripts/service` + `scripts/lib`); add a
+      system-lane resolver builder plus a fixture packages dir so hook shadowing and
+      the run-fallback are testable before the TTD green gate.
+  [?] Keyless-lane confirmation: no system lane ever sees `template_dir` or
+      `agent_image` (Rust @Parameters drops them AND this file overlays nothing), so
+      tooling ported from the twin data contract reads `()` — mirror the
+      deliberately-keyless-vs-restore decision open in
+      /agent/src/template/system.sdd Tasks and the three-leaf @Parameters
+      unification there.
+  [?] Kind-block absence as contract: no system context carries a maintenance pair
+      and nothing under this directory reads one (no system backup/restore lane
+      exists to consume it, unlike the twins' ./../lib/backup_context.rhai cron).
+      Confirm the absence is deliberate and permanent, not pending backup support.
+  [?] `extra` unguarded and whole-map replacement semantics: same open decisions as
+      ./../service/context.sdd and ./../tenant/context.sdd Tasks — decide once for
+      all three lanes.
+  [?] `context_after` offline absence: the live-only asymmetry this file shares with
+      the tenant twin (service fires it on both lanes) — resolve together with
+      ./../tenant/context.sdd's twin-drift task and a unified slot set.
+
+Done when:
+  Every Scenario has a mock-engine test or a decided Task, the three-way twin diff
+    above still matches all three sources, the key claims cross-check
+    ./../lib/build_context.sdd, ./context_system.sdd and
+    /agent/src/template/system.sdd, and `specdd lint` is green.

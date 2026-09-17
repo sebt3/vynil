@@ -1,0 +1,69 @@
+Spec: FenetresMaintenanceTenant
+
+Platform: scripts Rhai (moteur wynil-core 0.7.7)
+
+Purpose:
+  Les deux passe-plats de fenêtre de maintenance du kind tenant, `./maintenance_start.rhai`
+    et `./maintenance_stop.rhai`, gelés en UNE spec : deux squelettes de 5 lignes identiques
+    à l'octet près aux jumeaux service (diff vérifié), eux-mêmes gelés dans
+    ./../service/maintenance_windows.sdd. Regroupement justifié : copies strictes sans
+    contrat propre — toute spec par fichier ne ferait que recopier le texte du jumeau.
+
+Owns:
+  ./maintenance_start.rhai
+  ./maintenance_stop.rhai
+
+Exposes:
+  @run(context) — même @fn dans les deux fichiers, atteints par les lanes backup/restore
+    tenant via `import_run("maintenance_start"/"maintenance_stop", context, ())`
+    (sites gelés dans ./backup.sdd et ./restore.sdd).
+
+Accepts:
+  @context — la carte de contexte tenant construite par ./context.sdd ; le stub ne LIT
+    rien dedans (les listes citées dans les commentaires TODO — deployment_list,
+    statefulset_list, scale_target — ne sont jamais touchées) et ne mute rien.
+
+Returns:
+  Unité dans les deux lanes : pas de `return`, les valeurs des hooks @import_run ne sont
+    jamais fusionnées (contrairement à la discipline `type_of == "map"` des buckets
+    d'./install.sdd) — un hook shadowé qui renvoie une nouvelle carte est silencieusement
+    perdu.
+
+Raises:
+  Zéro @throw ici. Un hook dont le FICHIER existe mais dont le `run` lève remonte par
+    @import_run (voir le shim wynil-core gelé dans ./context.sdd) et le try/catch de la
+    lane appelante le convertit en throw FAILED + exit 4/5 ; un fichier hook absent est
+    silencieusement ignoré.
+
+Must:
+  Rester identique à l'octet près aux jumeaux ./../service/maintenance_{start,stop}.rhai
+    (diff vérifié) ; toute modification doit franchir les deux kinds en lockstep.
+  Garder les commentaires TODO comme seule trace de l'intention : start met à 0 les
+    « scalables », stop remonte à `context.scale_target` — RIEN n'est implémenté, donc la
+    « fenêtre de maintenance » tenant du backup et du restore englobe le vide (le
+    self-scaling des lanes redis/mongodb de ./restore.sdd est le seul vrai garde-fou).
+  N'appeler QUE les quatre hooks `maintenance_start_pre/_post` et
+    `maintenance_stop_pre/_post`, livrés par personne dans l'atelier (convention de slot
+    côté paquet).
+
+Depends on:
+  ./../service/maintenance_windows.sdd — le contrat source dont ceci est la copie tenant.
+  ./backup.sdd, ./restore.sdd — seuls appelants ; ./install.sdd ne les appelle pas.
+
+Tasks:
+  [ ] Décider plus tard le vrai scale-to-0/scale-target (décision unique prise côté
+      ./../service/maintenance_windows.sdd, répercutée ici en lockstep), ou retirer les
+      fenêtres et le self-scaling des legs redis/mongo devient la norme.
+  [ ] Décider si les retours de hooks doivent fusionner comme les buckets.
+  [ ] Ajouter des tests mock : `rhai_backup_redis.rs` n'importe jamais ces deux modules.
+
+Done when:
+  Le TODO de scaling atterrit (la spec grossit) ou les fenêtres sont retirées ; les deux
+    copies restent verrouillées l'une sur l'autre.
+
+Scenario: la fenêtre s'ouvre et se ferme sans rien changer
+  Etant donné `FenetresMaintenanceTenant` sans aucun fichier hook maintenance_* dans les
+    répertoires résolveurs
+  Quand une lane backup tenant import_run start puis stop
+  Alors les deux renvoient l'unité, les quatre hooks sont ignorés en silence, et le backup
+    tourne contre des workloads vivants non mis à l'échelle

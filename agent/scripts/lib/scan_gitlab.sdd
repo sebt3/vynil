@@ -1,0 +1,185 @@
+Spec: LibScanGitlab
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  List every container-registry repository of a GitLab project — the `gitlab` variant of a
+    JukeBox source — as a flat list of full OCI image references, authenticated with an
+    on-cluster docker pull Secret, so the scan lane can enumerate images before tag and
+    annotation scanning.
+
+Must:
+  Read `url`, `registry` and `project` off @spec.source.gitlab and hand `url` verbatim to
+    @new_http_client as the API base; request paths are relative (`api/v4/...`) without leading
+    slash because the core client joins `base` + "/" + `path` — a trailing slash in `url`
+    produces a double-slash request path and nothing here normalises either.
+  Authenticate exactly one lane: @secret::get_auth_from(@spec.pull_secret, @namespace,
+    `registry`) then @add_header_bearer of `auth.pass` — the decoded `user` is unused, no
+    `PRIVATE-TOKEN` header lane exists, and there is no anonymous fallback lane (unlike
+    ./scan_harbor.rhai); a PAT or deploy token with `read_api` + `read_registry` scopes serves
+    both roles, per the in-file note.
+  Address the project by its URL-encoded `namespace%2Fpath` directly as the `:id` path param of
+    the `registry/repositories` endpoint — no project-search round-trip, no numeric-id
+    resolution (the retired search lane matched unscoped across all of GitLab and capped at one
+    page, silently missing common project names).
+  Produce @encoded_project by mutating a copy of the string (Rhai @String.replace is in-place,
+    returns `()`), so the raw `project` still interpolates unencoded into the project-name error
+    message.
+  Paginate on the `x-total-pages` response header: the initial GET sends `?per_page=20` with no
+    `page` param; then for `i` in `2..(total_pages + 1)` the loop GETs `&page=${i}` with the
+    same `per_page=20` and appends; the header is read from the initial response only, an
+    absent header counts as `1`, and header value `0` simply skips the loop.
+  Check `code != 200` and @throw on the initial request and on every later page, with the two
+    distinct messages frozen under Raises.
+  Return every array entry's `location` field verbatim — no registry-prefix composition, no
+    sort, no dedup (the Harbor lane composes `${registry}/${name}`; this one trusts `location`
+    to already be the full OCI reference `registry/path`).
+  Keep `import "secret_dockerconfigjson" as secret` on line 1 as the only load-time effect; the
+    module body is the single @fn definition and performs no I/O at import.
+
+Depends on:
+  ./secret_dockerconfigjson.rhai (./secret_dockerconfigjson.sdd) — @get_auth_from decoder;
+    this lane consumes only its `pass` field and inherits the first-colon split posture frozen
+    open over there.
+  wynil-core 0.7.7 http surface — @new_http_client, @add_header_bearer, @RestClient.@get
+    (result map `code`/`headers`/`body`/`json`, `json` an empty object on a non-JSON body),
+    @headers_get (case-insensitive, `()` when absent), reached as script names through
+    @http_rhai_register in the /common/src/rhaihandler.sdd assembly; plus the @rhai builtins
+    @parse_int, @Array.map, @Array.append, @String.replace and the `in`/@keys probes.
+  /common/src/jukebox.sdd — the @JukeBoxDef::Gitlab `{url, registry, project}` wire trio (all
+    three serde-required) and @JukeBoxSpec.pull_secret @Option; read-only shape contract,
+    revalidated by nothing in this file.
+  ./../boxes/scan.rhai — the only script importer (`import "scan_gitlab" as gitlab`); it calls
+    this @fn on the `"gitlab" in spec.source.keys()` leg with @args.namespace, splits each
+    returned reference on `/` into registry/repository, records string throws via
+    `set_status_failed` and rethrows — so the throw texts here are that file's user-visible
+    failure texts. The Rust lane launching scan.rhai is /agent/src/boxes/scan.sdd, whose head
+    imports require this module file to exist.
+
+Exposes:
+  @list_repository(spec, namespace) — the module's sole @fn; reached by importers as
+    `gitlab::list_repository(...)` (alias chosen by the importer; the credential convention is
+    frozen across ./scan_harbor.rhai and here per ./secret_dockerconfigjson.sdd). Returns an
+    @Array of `location` strings.
+
+Accepts:
+  @spec — a JukeBox spec map. Consumes `spec.source.gitlab.url` (GitLab API base),
+    `spec.source.gitlab.project` (`group/subgroup/path`; the only field touched, and only on a
+    copy) and `spec.source.gitlab.registry` — used exactly as the docker-config `.auths` key,
+    never in the API call nor in the composed results.
+  @spec.pull_secret — optional Secret name; the lane guard is `"pull_secret" in spec.keys()`
+    plus `!= ""`.
+  @namespace — @String namespace owning the pull Secret, handed to the decoder untouched.
+
+Returns:
+  @Array of @String in fetch order: page 1's `location` entries, then each later page's
+    appended in page order; `[]` when the project has no container repositories. The value is
+    the @fn's last expression (no @return keyword).
+
+Raises:
+  Plain-string @throw — propagated by ./../boxes/scan.rhai which logs it, stores it via
+    `set_status_failed` and rethrows — on exactly three lanes:
+      - pull Secret absent or empty: `GitLab registry requires a pull_secret (deploy token or
+        PAT with read_registry + read_api scopes)`;
+      - initial page non-200: `Unable to list repositories for project ${project} on ${url}:
+        HTTP ${initial.code} (check the project path and that the token has read_api +
+        read_registry scope)` — `project` raw, not percent-encoded;
+      - later page non-200: `Unable to list repositories from ${url} page ${i}:
+        HTTP ${list.code}` — no project, no scope hint.
+  Engine-raised surfaces, uncaught here and caught likewise upstream: @.get transport failures
+    raise before any `code` exists; @parse_int raises on a non-numeric `x-total-pages`; a 200
+    whose body is not a JSON array leaves `json` as an empty map and @Array.map then raises;
+    Secret lookup misses raise inside @get_auth_from (./secret_dockerconfigjson.sdd).
+
+Handles:
+  `pull_secret` key absent or empty string — the dedicated throw, before any HTTP call leaves
+    (an unset-on-wire `()` admitted past the guard is an open question under Tasks).
+  Empty initial result set — `result` stays `[]`; with header `0` the page loop never runs and
+    the empty array is returned; page ≥ 1 headers of later responses are never consulted, only
+    the initial response decides the page count.
+
+Tasks:
+  [ ] Cover the lanes @agent/tests/rhai_scan_gitlab.rs cannot reach today: page-2+ HTTP
+      failure, the empty-string `pull_secret` leg, the absent-`x-total-pages` default, and the
+      empty-repository `[]` result.
+  [ ] Assert on a wiremock matcher that requests carry exactly `Authorization: Bearer <pass>`
+      and freeze that `user` is never sent — success tests imply the lane ran but assert no
+      header.
+  [ ] Pin the three verbatim throw texts; current tests assert only the `404`/`403`/`401`/
+      `pull_secret` substrings.
+  [?] The guard is `!= ""` with no `!= ()` leg, while ./../boxes/scan.rhai's own `use_auth`
+      guard excludes `()`. @JukeBoxSpec.pull_secret carries no `skip_serializing_if`, so an
+      unset secret can serialize as `null` → `()` into the spec map and be admitted into the
+      Secret lane, failing in the k8s lookup instead of the clear throw. Verify whether a
+      stored JukeBox ever presents the key with a `()`, then decide whether to mirror the
+      `!= ()` guard.
+  [?] `location` flows through unchecked: the registry later keyed for pull auth is the FIRST
+      segment of the returned reference (split by the caller), not @spec.source.gitlab.registry,
+      so a GitLab instance reporting `location` under a different container-registry hostname
+      silently redirects both inventory and credential lookup there. Decide whether to validate
+      the prefix or compose addresses from `registry` as ./scan_harbor.rhai does.
+  [?] A non-numeric `x-total-pages` surfaces as a bare @parse_int engine error with no context.
+      Decide whether to wrap it into a labelled throw.
+
+Done when:
+  Every Scenario is a passing mapped test or a carried Task, the `[?]` decisions above are
+    recorded, and the ./secret_dockerconfigjson.sdd and ./../boxes/scan.rhai contracts still
+    hold unchanged.
+
+Scenario: Addressing the project by encoded path
+  Given a `gitlab` source with project `my-group/my-project`, the mock server uri as `url`, and
+    a pull Secret whose docker-config has an `auths` entry for `registry.gitlab.com`
+  When @list_repository runs through ./../boxes/scan.rhai
+  Then a GET lands on `/api/v4/projects/my-group%2Fmy-project/registry/repositories` with
+    `per_page=20` and no `page` param — no project-search round-trip — and with
+    `x-total-pages: 1` the scan completes ok
+  Maps to test @scan_gitlab_lists_repositories_via_direct_path
+
+Scenario: Pull Secret lane signs with bearer only
+  Given the docker-config `auth` decodes to `k8s:testtoken` (user `k8s`)
+  When the lane authenticates the client
+  Then @add_header_bearer carries `testtoken` and the user segment is never used
+  Covered only incidentally by @scan_gitlab_lists_repositories_via_direct_path — the lane ran
+    but no test asserts the header (see Tasks)
+
+Scenario: Missing pull secret fails with its own text
+  Given a JukeBox spec without a `pull_secret` key
+  When @list_repository is called
+  Then the plain-string throw mentioning `pull_secret` precedes any HTTP request, and the scan
+    run ends @Err carrying that text
+  Maps to test @scan_gitlab_no_pull_secret_fails
+  But the empty-string leg shares the message and has no mapped test
+
+Scenario: Initial page answers non-200
+  Given a valid pull Secret lane
+  When the initial GET answers `404`, `403` or `401`
+  Then the throw text names the raw project path, the base `url` and the numeric `code`, and
+    asks to check the token's `read_api` + `read_registry` scopes; the scan ends @Err quoting
+    the digit
+  Maps to tests @scan_gitlab_project_not_found_fails, @scan_gitlab_registry_api_forbidden_fails,
+    @scan_gitlab_registry_api_unauthorized_fails
+
+Scenario: x-total-pages drives the page loop
+  Given the initial response carries `x-total-pages: 2` at code `200`
+  When @list_repository runs
+  Then a second GET for the same encoded path with `page=2` follows, its `location` entries land
+    in the result after page 1's, and no third request is made
+  Maps to test @scan_gitlab_pagination_fetches_all_pages
+
+Scenario: Later page fails
+  Given `x-total-pages: 2` on the initial response, and page 2 answering non-200
+  Then the throw carries the `url`, the page number and the code — without the project name or
+    the scope hint
+  No mapped test exists.
+
+Scenario: x-total-pages header absent counts as one page
+  Given an initial 200 response whose headers omit `x-total-pages`
+  Then @headers_get yields `()`, `total_pages` is `1`, exactly one GET leaves, and the page-1
+    result is returned as-is
+  No mapped test exists.
+
+Example:
+  request: `GET <url>/api/v4/projects/my-group%2Fmy-project/registry/repositories?per_page=20`
+    with only the `Authorization: Bearer <token>` addition
+  page body `[{"location": "registry.gitlab.com/my-group/my-project/my-image"}]` with
+    `x-total-pages: 1` → result `["registry.gitlab.com/my-group/my-project/my-image"]`

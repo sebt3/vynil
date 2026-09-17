@@ -1,0 +1,79 @@
+Spec: ServiceMaintenanceWindows
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  The two maintenance-window hook pass-throughs, `./maintenance_start.rhai` and
+    `./maintenance_stop.rhai`, frozen as ONE spec: two 5-line stubs of identical shape
+    (grouping justification: same-basename convention would duplicate byte-equivalent
+    contract text four times — these two files plus their byte-identical tenant twins
+    verified by diff), each exposing only a `run` that brackets pre/post hooks while the
+    actual scaling stays an unimplemented TODO.
+
+Owns:
+  ./maintenance_start.rhai
+  ./maintenance_stop.rhai
+
+Exposes:
+  @run(context) — identical @fn name in both files; reached by the backup/restore and
+    init lanes as `import_run("maintenance_start"/"maintenance_stop", context)` sites
+    frozen in ./backup.sdd, ./restore.sdd (and ./init_from.sdd by contrast: NO call
+    there — restore-only pairing).
+
+Accepts:
+  @context — the service build-context map; the stubs READ NOTHING from it (the lists
+    named in the TODO comments, deployment_list/statefulset_list/scale_target, are never
+    touched) and mutate nothing.
+
+Returns:
+  Unit in both lanes: no `return`, hook @import_run results are INVOKED FOR EFFECT ONLY
+    and never merged back (contrast the bucket `type_of == "map"` merge discipline in
+    ./install.sdd) — a shadowed hook returning a new map is silently dropped.
+
+Raises:
+  Zero @throw sites. Failure lanes: a hook module whose FILE exists but whose
+    `maintenance_start_pre`/`_post` (resp. stop) `run` raises propagates out of
+    @import_run (wynil-core skips only absent-module/absent-run per
+    ./../service/context.sdd shim freeze) and the surrounding backup/restore try/catch
+    turns it into a FAILED throw + exit 4/5. An absent hook file skips silently.
+  Engine property errors are impossible here: no property access at all.
+
+Must:
+  Keep the TODO comments as the ONLY record of intent: start scales "scalables" to 0,
+    stop scales to `context.scale_target` — NEITHER is implemented today, so every
+    caller's "maintenance window" (backup.sdd, restore.sdd) currently brackets
+    NOTHING; frozen, not fixed.
+  Import-run EXACTLY the four hook names `maintenance_start_pre`,
+    `maintenance_start_post`, `maintenance_stop_pre`, `maintenance_stop_post` —
+    shipped by nobody in-repo (package-slot convention only).
+  Leave hook calls OUTSIDE any try/catch (frozen: raises escape; the callers, not these
+    stubs, own marking).
+  Stay byte-identical with ./../tenant/maintenance_{start,stop}.rhai (diff-verified);
+    tenant call sites (./../tenant/backup.sdd, ./../tenant/restore.sdd pending) share
+    this contract verbatim.
+
+Depends on:
+  ./context.sdd — wynil-core @import_run skip/raise shim.
+  ./backup.sdd, ./restore.sdd — the only callers (window brackets both lanes; restore
+    brackets the whole engine ladder, and NEITHER scales anything while these are TODO).
+
+Tasks:
+  [ ] Decide later the real scale-to-0/scale-target implementation (which workloads
+      are even trackable here: the lists come from backup_context env-encoded names,
+      and init_from.sdd shows the Job lane waiting 20 min) — until then the spec
+      freezes a no-op window and every "maintenance protects the restore" assumption
+      made elsewhere is FICTION; keep this cross-referenced in any backup-lane review.
+  [ ] Decide whether hook returns should merge like buckets (currently discarded).
+  [ ] Add mock tests: no test in agent/tests exercises these two files (their hook
+      slots never ship), scenarios unmapped.
+
+Done when:
+  Either the TODO scaling lands (spec then regrows Must clauses) or the windows are
+    retired; tests cover hook-raise escape and silent-skip posture either way.
+
+Scenario: window opens and closes doing nothing
+  Given `ServiceMaintenanceWindows` with no maintenance_* hook files in any resolver
+    dir
+  When a backup lane import_runs start then stop
+  Then both return unit, skip all four hooks silently, and no workload changes —
+    the backup runs against live, unscaled deployments

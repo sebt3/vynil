@@ -1,0 +1,558 @@
+Spec: LibGenPackage
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Turn a rendered manifest set (typically `@yaml_decode_multi` of a `helm template` run) into
+    a Vynil package tree: rewrite each document into instance-portable form, bucket the
+    generated Handlebars/static YAML under the frozen `get_crds`/`get_systems`/`get_scalables`/
+    `get_others`/`get_vitals` directories of a package dir, and keep `package.yaml` the source
+    of truth for extracted `images:`/`resources:` entries. The module builds no runtime scope
+    `context` map: its "context" is the on-disk package dir plus the Handlebars helper calls it
+    bakes into the templates; the instance context itself is injected at render time by
+    ./../../../common/src/handlebarshandler.sdd.
+
+Exposes:
+  File emitters:
+    @gen_yaml(path, data) — @file_write of `---` line + @yaml_encode(data) to @path.
+    @gen_crd_yaml(path, data) — same, prefaced with the extra line
+      `# yamllint disable rule:line-length` (CRDs carry long OpenAPI description lines).
+    @gen_yaml_if(path, type, data) — writes the body wrapped in
+      `{{#if (ctx_have_crd this "<type>")}}` / `{{/if}}`, `type` frozen at call sites to
+      `servicemonitors.monitoring.coreos.com`, `prometheusrules.monitoring.coreos.com` or
+      `certificates.cert-manager.io`.
+  Placeholder / text plumbing:
+    @placeholder() — random release-name/namespace placeholder: @shell_output of the kernel
+      uuid read, kept as `v<first-8-hex-segment>` when the first `@split("-")` segment has
+      length >= `4`, else the literal fallback `vnsplaceholder`; the whole read is inside
+      `try`/`catch(e) {}`, so any shell failure silently returns the fallback.
+    @replace_first(s, from, to) — returns the text with only the FIRST `from` occurrence
+      replaced, rebuilt via @split + tail re-join (deliberately not via side-effect
+      @replace); no occurrence returns @s unchanged.
+    @apply_replace_in_dir(dir_path, from, to) — if @is_dir, for every direct child that is
+      @is_file: @file_read, side-effect @replace of ALL @from occurrences, @file_write. Not
+      recursive: sub-directories are skipped silently.
+    @apply_replace_to_generated(path, from, to) — the sweep over the five frozen sub-dirs
+      `get_crds`, `get_systems`, `get_scalables`, `get_others`, `get_vitals` of @path.
+    @apply_namespace_to_generated(path, ns) — whole-text pass replacing @ns with
+      `{{instance.namespace}}`; no-op when ns is `()` or empty.
+    @apply_name_to_generated(path, name) — same pass replacing @name with `{{instance.appslug}}`;
+      no-op when name is `()` or empty.
+    @read_pkg_name(path) — `metadata.name` string from `${path}/package.yaml` @yaml_decode'd,
+      `()` when the file is absent or `metadata` is not a map.
+    @apply_dedup_to_generated(path, pkg_name) — whole-text pass replacing
+      `{{instance.appslug}}-<pkg_name>` with `{{instance.appslug}}` (kills the `{release}-{pkg}`
+      fullname redundancy, e.g. cert-manager); no-op on `()` / empty.
+    @clean_file_name(doc_name, release_name) — delegates to the 3-arg form with ns = `()`.
+    @clean_file_name(doc_name, release_name, ns) — file-slug text: strips a leading
+      `release_name-`, maps a bare @release_name to `"app"`, strips `-${ns}` then every @ns
+      when ns present, collapses runs of `--` to `-`, and maps empty to `"app"`.
+  Image / resource extraction:
+    @parse_image(image_str) — returns the `#{registry, repository, tag}` map. Registry is the
+      first `/`-segment that contains `.` or equals `localhost`, else `""`. Tag is the segment
+      after the LAST `:` of the (registry-stripped) repository, `()` when none.
+    @make_img_key(release_name, container_name) — image-key slug: spaces and `/` become `-`
+      (side-effect), a leading `release_name-` is stripped, a bare @release_name or empty key
+      becomes `"app"`.
+    @extract_images_resources_from_containers(containers, prefix, release_name) — returns
+      `#{containers, images, resources}`. Key = `${prefix}-${c_name}` (prefix `"init"` for
+      initContainers, `""` otherwise) from @make_img_key. Each container `image` is parsed,
+      stored under `images[key]` as `#{registry, repository[, tag]}`, and replaced in-doc by
+      the marker text `IMAGE_CTX_<key>`; a `resources` map is stored under `resources[key]`
+      and replaced by `RESOURCES_CTX_<key>`. Container `args` entries containing `-image=` are
+      split on `=`, keyed by the `--`-flag name via @make_img_key with empty release (flag
+      names carry no release prefix), and their value becomes `<flag>=IMAGE_CTX_<key>`.
+    @extract_workload_images_resources(doc, release_name) — returns
+      `#{doc, images, resources}` after extracting `spec.template.spec` containers and
+      initContainers; absent/incomplete paths return the untouched doc with empty maps.
+    @extract_cronjob_images_resources(doc, release_name) — same over
+      `spec.jobTemplate.spec.template.spec`.
+    @apply_image_resource_expressions(filepath, images_keys, resources_keys) — post-pass on a
+      written file: every `IMAGE_CTX_<key>` becomes `{{image_from_ctx this "<key>"}}` and every
+      `RESOURCES_CTX_<key>` becomes `{{json_to_str (resources_from_ctx this "<key>")}}`, each in
+      bare, `"quoted"` and `'single'` forms; always calls @file_write on the result.
+    @update_package_yaml_images_resources(path, images, resources) — rewrites
+      `${path}/package.yaml` by raw line surgery (never re-parsed: the in-file comment freezes
+      the reason — `rust_yaml` RoundTrip node metadata corrupts around block scalars): builds
+      new `images:` text (`  <key>:` then `    registry:`, `    repository:`, optional
+      `    tag:` only for a non-empty string tag) and `resources:` text (`    requests:` /
+      `    limits:` then `      <field>: <value>` per present map phase), replaces any existing
+      top-level `images:`/`resources:` section line-by-line (header + children, children
+      detected by non-top-level lines — column-`0` comments do not end a replaced section),
+      keeps the original section when no new content exists for it, appends sections the file
+      lacked, ensures a leading `---` line, and calls @file_write. No-op when both maps are empty
+      or `package.yaml` is absent.
+  Metadata / label rewriters:
+    @replace_label_values(labels, name) — copy-map of @labels whose string values have @name
+      replaced with `{{instance.appslug}}`, and a value exactly `"Helm"` becomes `"vynil"`.
+      No in-module caller; reached only by importers/tests (see Tasks).
+    @clean_metadata(metadata, name) — removes annotation keys containing `helm.sh` or
+      `checksum/` (drops `annotations` entirely when it empties), then ALWAYS removes
+      `labels`; the @name parameter is never read (see Tasks).
+    @clean_annotations(metadata) — the same annotation pass without label removal
+      ("backward compat" per its comment); no in-module caller.
+  Pod-doc rewriters (all mutate/return the passed doc, every branch `in`/`() !=`-guarded):
+    @replace_image_pull_secrets(ips, name) — each subject's `.name` gets @name →
+      `{{instance.appslug}}` (side-effect replace), list rebuilt.
+    @replace_volumes(volumes, name) — same substitution in `configMap.name`,
+      `secret.secretName`, `persistentVolumeClaim.claimName`, and inside each
+      `projected.sources` entry's `configMap.name` / `secret.name`.
+    @replace_containers(containers, name) — container `.name` becomes the 2-arg
+      @clean_file_name slug; `envFrom[].configMapRef.name` / `envFrom[].secretRef.name`,
+      `env[].valueFrom.configMapKeyRef.name` / `env[].valueFrom.secretKeyRef.name`, plain
+      `env[].value` text and every `args` element all get @name → `{{instance.appslug}}`.
+    @replace_pod_spec(spec, name) — `serviceAccountName`, imagePullSecrets, volumes,
+      containers and initContainers run through the helpers above; returns @spec.
+    @replace_pod_template(tmpl, name) — @clean_metadata of the template metadata plus
+      @replace_pod_spec of its spec.
+    @add_security_contexts(spec) — only where absent: pod-level
+      `#{runAsNonRoot: true, seccompProfile: #{"type": "RuntimeDefault"}}`; per-container and
+      per-initContainer `#{allowPrivilegeEscalation: false, readOnlyRootFilesystem: true,
+      runAsNonRoot: true, capabilities: #{drop: ["ALL"]}}`; existing contexts are kept.
+    @convert_affinity_to_tsc(spec, pod_labels) — when TSC already present, only strips
+      `podAntiAffinity` (and `affinity` when emptied) and returns. Otherwise derives
+      `topologyKey` (fallback `"kubernetes.io/hostname"`) and `matchLabels` from the first
+      `podAntiAffinity` term (preferred and required variants both collected; `matchLabels`
+      from its `labelSelector`), strips `podAntiAffinity`, falls back to the first present of
+      `"app.kubernetes.io/instance"`, `"app.kubernetes.io/name"`, `"app"` in @pod_labels, last
+      resort `#{"app.kubernetes.io/instance": "{{instance.appslug}}"}`, and SETS
+      `spec.topologySpreadConstraints` to exactly one entry:
+      `#{maxSkew: 1, topologyKey: <key>, whenUnsatisfiable: "ScheduleAnyway", labelSelector:
+      #{matchLabels: <labels>}}`.
+    @extract_env_configmap(path, doc_name, doc, name) — collects every plain-value env var
+      (no `valueFrom`) of all containers into a data map keyed by @e.name; when non-empty
+      @create_dir on `${path}/get_others` and @gen_yaml of a bare
+      `#{apiVersion: "v1", kind: "ConfigMap", metadata: #{name: <doc.metadata.name>-envs},
+      data: <envs>}` doc to `${path}/get_others/ConfigMap_<clean_file_name(doc_name,
+      name)>-envs.yaml.hbs`, then in the doc removes the plain envs (entry removed when only
+      valueFrom-less ones existed) and prepends `envFrom: #{configMapRef: #{name: <same
+      cm_name>}}` to every container that had one; returns @doc.
+    @add_reloader_annotations(metadata, spec) — collects deduplicated ConfigMap names
+      (volumes `configMap.name`, projected sources, `envFrom[].configMapRef.name`,
+      `env[].valueFrom.configMapKeyRef.name`) and Secret names (volumes `secret.secretName`,
+      projected `secret.name`, `envFrom[].secretRef.name`,
+      `env[].valueFrom.secretKeyRef.name`); when either list is non-empty creates
+      `metadata.annotations` if needed and sets the comma-joined
+      `configmap.reloader.stakater.com/reload` and/or `secret.reloader.stakater.com/reload`.
+    @replace_binding_impl(doc, name, roleref_prefix) — every `subjects[].name` gets @name →
+      `{{instance.appslug}}` and every `subjects[].namespace` is ASSIGNED
+      `{{instance.namespace}}` (key added when absent); `roleRef.name` gets @name →
+      @roleref_prefix (side-effect replace — every occurrence, unlike the metadata-name
+      first-occurrence rule) and a present `roleRef.namespace` is assigned
+      `{{instance.namespace}}`.
+    @replace_binding(doc, name) — impl with prefix `{{instance.appslug}}` (RoleBinding: the
+      target Role is namespaced).
+    @replace_cluster_binding(doc, name) — impl with prefix
+      `{{instance.namespace}}-{{instance.appslug}}`, matching the renamed ClusterRole.
+    @replace_webhooks(doc, name) — `webhooks[].clientConfig.service.name` gets @name →
+      `{{instance.appslug}}`, `.namespace` assigned `{{instance.namespace}}`.
+    @replace_ingress(doc, name) — @clean_metadata, then `spec.rules[].http.paths[].backend.
+      service.name` and `spec.tls[].secretName` substitutions.
+  Kind-level processors:
+    @replace_workload(path, doc_name, doc, name) — 4-arg form with extract_envs `true`.
+    @replace_workload(path, doc_name, doc, name, extract_envs) — @clean_metadata; when
+      `spec.template` present: @replace_pod_template, pod labels snapshot,
+      @add_security_contexts + @convert_affinity_to_tsc on `spec.template.spec` (Unguarded:
+      a template WITHOUT a `.spec` throws at the `spec.template.spec` read, see Raises);
+      StatefulSet gets `spec.serviceName` and every `volumeClaimTemplates[].metadata.name`
+      substituted; optional @extract_env_configmap; then @add_reloader_annotations when
+      `spec.template.spec` exists. Selector markers are NOT applied here (caller's job).
+    @replace_job(path, doc_name, doc, name[, extract_envs]) — same minus TSC conversion and
+      StatefulSet handling; Job workloads get security contexts and (4-arg default) env
+      extraction, never a topology-spread constraint.
+    @replace_cronjob(path, doc_name, doc, name) — the @replace_pod_template +
+      @add_security_contexts + @add_reloader_annotations cycle against
+      `spec.jobTemplate.spec.template`; NO env extraction and NO TSC at all.
+  Selector analysis:
+    @selector_matches(selector, labels) — false for an empty selector, else all selector keys
+      present in @labels with values equal after `${}` string coercion.
+    @extract_comp(val, name) — label value minus a leading `${name}-` (only when it is a true
+      prefix and content remains).
+    @find_diff_key(workloads) — first of `"app.kubernetes.io/component"`, `"component"`,
+      `"app"` held by every workload with pairwise-distinct stringified values, else `""`.
+    @build_analysis(docs, name) — filters map docs whose `kind` is present and not `()`, with
+      map `metadata`, records workloads (`Deployment`, `StatefulSet`, `DaemonSet`,
+      `ReplicaSet`)
+      with their pod-template labels, Services with selector and metadata labels, service→
+      workload `pairs` via @selector_matches, then `comp_map` (workload metadata.name → comp
+      text: sole workload is `"app"`; otherwise the @extract_comp-ed diff-key value, else the
+      name suffix when it differs, else `"app"`) and `svc_comp_map` (service name → paired
+      workload comp, default `"app"`). Returns
+      `#{workloads, services, pairs, comp_map, svc_comp_map}`.
+    @find_comp_for_selector(analysis, selector) — comp of the first workload whose pod labels
+      the selector matches, else `""`.
+    @find_comp_for_svc_labels(analysis, sm_selector) — comp via matched Service metadata
+      labels first, workload pod labels as fallback, else `""`.
+    @apply_workload_selectors(doc, comp) — `spec.selector.matchLabels` becomes the marker
+      text `SELECTOR_COMP_<comp>`, `spec.template.metadata.labels` becomes `LABELS_FROM_CTX`,
+      and each existing `topologySpreadConstraints[].labelSelector.matchLabels` becomes
+      `#{matchLabels: <marker>}`.
+    @apply_svc_selectors(doc, comp) — `spec.selector` becomes `SELECTOR_COMP_<comp>`.
+    @apply_selector_expressions(filepath, comp) — file post-pass replacing
+      `SELECTOR_COMP_<comp>` (bare/`"quoted"`/`'single'`) with
+      `{{json_to_str (selector_from_ctx this comp="<comp>")}}` and `LABELS_FROM_CTX`
+      (bare/quoted) with `{{json_to_str (labels_from_ctx this comp="<comp>")}}`; always
+      rewrites the file.
+  Package generators (the importers' entry points):
+    @gen_system_core(path, docs, name, ns) — @build_analysis, then per filtered doc: CRDs go
+      to @create_dir plus @gen_crd_yaml of `get_crds/<name>.yaml` (or `.yaml.hbs` only when
+      `spec.conversion` + `spec.conversion.webhook` exist — that branch also rewrites
+      `conversion.webhook.clientConfig.service.{name,namespace}`, unguarded below
+      `webhook`); `Namespace` docs are DROPPED; every other kind goes to `get_systems`:
+      cluster-scoped kinds (`ClusterRoleBinding`, `ClusterRole`,
+      `ValidatingWebhookConfiguration`, `MutatingWebhookConfiguration`, `APIService`) rename
+      `metadata.name` with @replace_first to `{{instance.namespace}}-{{instance.appslug}}`
+      (then strip any embedded ns text), everything else with `{{instance.appslug}}`;
+      `metadata.namespace` is removed; @clean_metadata; binding/webhook/APIService
+      sub-passes (ClusterRoleBinding roleRef gets the same ns-strip); workloads + `Job` run
+      extraction then @replace_workload or @replace_job with extract_envs FALSE, so system
+      generation never emits `-envs` ConfigMaps; workloads also apply
+      @apply_workload_selectors + @apply_selector_expressions when a comp exists; `Service`
+      via svc_comp_map + @apply_svc_selectors; `ServiceMonitor` via
+      @gen_yaml_if(`servicemonitors.monitoring.coreos.com`) with matched Service-label comp;
+      `PrometheusRule` via @gen_yaml_if(`prometheusrules.monitoring.coreos.com`); catch-all
+      for `NetworkPolicy` (`podSelector.matchLabels`) / `PodDisruptionBudget`
+      (`spec.selector.matchLabels`) comp substitution; files written
+      `get_systems/<Kind>_<file_name>.yaml.hbs` (@gen_yaml or @gen_yaml_if); image/resource
+      markers resolved by @apply_image_resource_expressions per written file; finish with
+      @update_package_yaml_images_resources(path, all_images, all_resources). No-op when
+      @name is `()`.
+    @gen_system(path, docs, name) — core with ns = `()`.
+    @gen_system(path, docs) — @name read from `package.yaml` metadata (UNGUARDED read — @file_read
+      throws when the file is absent, unlike @read_pkg_name); core with ns `()`; then
+      @apply_dedup_to_generated(path, name) only.
+    @gen_system(path, docs, name, ns) — core; then @apply_name_to_generated,
+      @apply_namespace_to_generated, and @apply_dedup_to_generated keyed by
+      @read_pkg_name(path).
+    @gen_tenant_core(path, docs, name, ns) — same extraction/marker finish as system, but the
+      bucketing is by role: `PersistentVolumeClaim` → `get_vitals`; workloads →
+      `get_scalables` WITH env extraction (4-arg defaults); the list `Namespace`,
+      `CustomResourceDefinition`, `ClusterRole`, `ClusterRoleBinding`,
+      `ValidatingWebhookConfiguration`, `MutatingWebhookConfiguration`, `APIService` →
+      `get_systems` (ClusterRoleBinding there uses @replace_binding, NOT the cluster-prefixed
+      form — see Tasks); everything else → `get_others`, including `Job`/`CronJob` extraction,
+      `HorizontalPodAutoscaler.scaleTargetRef.name`, @replace_ingress, `Certificate.
+      secretName`, the Service/PDB/NetworkPolicy/ServiceMonitor comp cases,
+      @gen_yaml_if wrapping for `ServiceMonitor`, `PrometheusRule` and
+      `Certificate`(`certificates.cert-manager.io`); CRDs land as plain `<Kind>_
+      <file_name>.yaml.hbs` under `get_systems` — no `get_crds/`, no yamllint header.
+      Metadata-name rewrite is always first-occurrence `{{instance.appslug}}` (never the
+      ns-prefixed form) and `metadata.namespace` is removed.
+    @gen_tenant(path, docs[, name][, ns]) — the same three-overload ladder as @gen_system
+      (`3`- and `2`-arg and `4`-arg, with the matching post-pass ladders).
+    @gen_service_core(path, docs, name, ns) — @gen_tenant_core's shape with two changes only:
+      `CustomResourceDefinition` gets its own system-style branch (get_crds + @gen_crd_yaml +
+      the conversion-webhook rewrite), and `Namespace` alone keeps `get_systems`;
+      `ClusterRole`, `ClusterRoleBinding`, webhooks and `APIService` fall into the
+      `get_others` catch-all (@replace_binding for both binding kinds).
+    @gen_service(path, docs[, name][, ns]) — same three-overload ladder.
+
+Accepts:
+  @path — package-dir string; every write is under `${path}/<bucket>` plus `${path}/package.yaml`.
+  @docs — @Array of plain Rhai maps as produced by core @yaml_decode or @yaml_decode_multi
+    (JSON-shaped maps — NOT `YamlDoc` ordered documents, whose accessor surface does not answer
+    property-chain reads); non-map, kind-less or map-metadata-less entries are filtered out by
+    the three cores, and filtered-in docs must carry a present `metadata.name`.
+  @name — the Helm release name used for rendering @docs (conventionally a @placeholder()
+    token, or the real package name in the `2`-arg overloads).
+  @ns — the Helm `--namespace=` value, optionally `()` in the `2`/`3`-arg overloads.
+  Marker-bearing generated files may be re-read/re-written by the `apply_*` passes, so all five
+    buckets must stay inside @path.
+
+Returns:
+  The `gen_*` package generators return nothing observable to scripts (`()`); their output is
+    the package tree (files named `<Kind>_<file_name>.yaml.hbs`, plain `.yaml` for webhook-less
+    CRDs, and the rewritten `package.yaml`).
+  Text/analysis helpers return strings or maps exactly as itemised in `Exposes`
+    (@parse_image, @build_analysis and the three `extract_*` maps being the load-bearing ones).
+  Docs/containers/maps passed to the rewriters are mutated in place as well as returned; the
+    caller-visible shape is the returned doc (the mutation model is under `Must`).
+
+Raises:
+  Zero @throw statements in the file: every failure is an interpreter or registered-API error.
+    @file_read, @file_write, @create_dir and @read_dir raise wrapped stdio errors;
+    @yaml_encode or @yaml_decode raise on unencodable/invalid input; @shell_output raises on
+    non-zero exit OR any stderr text, but ONLY inside @placeholder, where it is swallowed by
+    `catch`.
+  Unguarded accesses that raise when input docs deviate: `metadata.name` missing on a
+    filtered-in doc (@build_analysis and the three cores index it); `spec.template.spec`
+    on a template that exists without it (@replace_workload); the whole
+    `spec.conversion.webhook.clientConfig.service.name` chain below a present `webhook`
+    (CRD conversion branches); `spec.service.name` on `APIService` (all three cores);
+    `env[].name` in the data-map key write of @extract_env_configmap; @replace_ingress
+    requires map `metadata`; non-map `annotations` breaks @clean_metadata (@keys on it);
+    `subjects[].name`-style side-effect replaces inside otherwise-guarded helpers require
+    string values (non-string raises function-not-found).
+  The `2`-arg @gen_system, @gen_tenant and @gen_service read `package.yaml` with NO
+    @is_file guard — a missing file raises, while the `4`-arg ladder's @read_pkg_name
+    silently returns `()`.
+
+Handles:
+  No-op guards: empty `()` / texts for @name, @ns and @pkg_name in every `apply_*`/dedup pass;
+    empty `images`+`resources` maps or missing `package.yaml` in the package-yaml rewrite;
+    non-directory target in @apply_replace_in_dir.
+  @placeholder fallback leg: uuid read failure (shell unavailable, non-zero exit, or stderr
+    output) yields the static `vnsplaceholder` without any log.
+  Defensive `in` + `!= ()` guards on every optional Kubernetes field the rewriters touch, plus
+    the deliberate drops: @gen_system_core discards `Namespace` docs, jobs discard TSC,
+    cronjobs discard env extraction, and pre-existing `securityContext`/TSC entries are never
+    overwritten.
+  Block-scalar safety in `package.yaml`: surgery is line-text only, so `>`, `|`, `>-`, `|-`
+    descriptions elsewhere in the file survive regeneration untouched.
+  Quoting tolerance: marker resolution matches bare, `"double"` and `'single'` quoted forms
+    because @yaml_encode may or may not quote a marker depending on content.
+
+Must:
+  Be import-pure: the file is entirely function declarations and comments, so
+    `import_run` of the module executes nothing and mutates no state; every effect happens in
+    an explicit call.
+  Rely on the locked `@rhai` `1.25` side-effect string model — `@replace`/`@trim` mutate the
+    receiving string variable and return unit — because the whole rewriter family
+    (`replace_*`, `apply_replace_*`, `clean_file_name`, `replace_containers`) calls strings'
+    methods for their mutation and never assigns results; property-chain mutations through
+    reassigned containers are pinned green by the ./../../tests/rhai_lib.rs suite.
+  Freeze the instance placeholders `{{instance.appslug}}` and `{{instance.namespace}}` as the
+    replacement targets, and use random @placeholder() tokens (docs contract) as release name
+    AND namespace so the whole-text passes cannot false-positive on real words.
+  Write `package.yaml` under the exact wire keys `images:` → per-key `registry:`,
+    `repository:`, optional `tag:`, and `resources:` → per-key `requests:`/`limits:` → raw
+    `field: value` lines — the shapes @VynilPackageSource and the @image_from_ctx /
+    @resources_from_ctx script-helpers index (./../../../common/src/vynilpackage.sdd,
+    ./../../../common/src/handlebarshandler.sdd) — and always re-ensure a leading `---`.
+  Freeze the internal marker vocabulary `IMAGE_CTX_<key>` / `RESOURCES_CTX_<key>` /
+    `SELECTOR_COMP_<comp>` / `LABELS_FROM_CTX` as document-stage-only tokens ALWAYS resolved by
+    the `apply_*` post-passes on the same file before regeneration finishes.
+  Freeze the emitted Handlebars call texts `{{image_from_ctx this "<key>"}}`,
+    `{{json_to_str (resources_from_ctx this "<key>")}}`,
+    `{{json_to_str (selector_from_ctx this comp="<comp>")}}`,
+    `{{json_to_str (labels_from_ctx this comp="<comp>")}}` and the
+    `{{#if (ctx_have_crd this "<plural.group>")}}` wrapper, and only ever call them — helper
+    behaviour is owned by ./../../../common/src/handlebarshandler.sdd (`json_to_str` by
+    wynil-core `hbs_json`).
+  Bucket per flavour exactly: system → `get_crds` + `get_systems` only (workloads included,
+    no `-envs` ConfigMap); tenant → `get_vitals` (PVC) + `get_scalables` (workloads, env
+    extraction ON) + `get_systems` (the cluster-scoped list incl. `Namespace` and CRDs) +
+    `get_others` (catch-all incl. `-envs` ConfigMaps); service → tenant buckets plus
+    `get_crds` for CRDs, with `Namespace` in `get_systems`.
+  Name every generated file `<Kind>_<clean_file_name-with-ns>.yaml.hbs` except CRDs
+    (`<crd-name>.yaml[.hbs]`, never kind-prefixed) and `-envs` ConfigMaps (2-arg slug, so the
+    ns strip of their file names only arrives via the `4`-arg whole-text pass).
+  Prefix cluster-scoped renames `{{instance.namespace}}-{{instance.appslug}}-…` in the system
+    flavour only (metadata via @replace_first, ClusterRoleBinding roleRef via the every-
+    occurrence side-effect replace + ns strip); tenant/service use bare `{{instance.appslug}}`
+    everywhere including for `ClusterRoleBinding`.
+  Run the `4`-arg post-pass ladder in this order only: core generation → @apply_name_to_generated
+    → @apply_namespace_to_generated → @apply_dedup_to_generated(@read_pkg_name(path)); the
+    `3`-arg form runs none of them; the `2`-arg form runs only the dedup with the
+    package.yaml-read name.
+  Resolve selector equivalence on stringified values (@selector_matches compares
+    `${labels[k]}` to `${selector[k]}`) so integer/bool label values still match, and keep the
+    comp-resolution chain (diff-key, name suffix, paired Service, service labels, last-resort
+    `app.kubernetes.io/instance`) as internal analysis detail that never guesses across
+    selector misses (`""` → markers are not applied).
+  Strip per-instance noise identically in every flavour: Helm/`checksum/` annotations, all
+    `metadata.labels`, `metadata.namespace`, container name prefixes via the `"app"`-fallback
+    slug, and add security contexts only on absent ones (never override a chart's own).
+  Add the Stakater reloader annotations `configmap.reloader.stakater.com/reload` /
+    `secret.reloader.stakater.com/reload` as the frozen comma-joined names, and the TSC
+    literals `maxSkew: 1` / `whenUnsatisfiable: "ScheduleAnyway"` /
+    fallback `topologyKey` `kubernetes.io/hostname`.
+  Confine all effects to the `fs` registrar primitives plus the single @shell_output use inside
+    @placeholder: no cluster, registry, HTTP, env, logging, base64, image or typed-YAML call
+    appears in the file — the k8sraw/k8sgeneric/http/json/image/env registrar surfaces of the
+    engine are simply unused here.
+
+Depends on:
+  wynil-core 0.7.7 registered APIs, by registrar: `fs` (@file_read, @file_write, @create_dir,
+    @read_dir, @is_file, @is_dir — engine.rs), `yaml` (@yaml_encode, @yaml_decode — yaml.rs;
+    NOT the ordered-YamlDoc surface of ./../../../common/src/yamlhandler.sdd, which only the
+    outer update flow uses), and `shell` (@shell_output — shell.rs); everything else is
+    `@rhai` built-in (@type_of, string/array/map methods, `in`, coercion).
+  Engine assembly and resolver: ./../../../common/src/rhaihandler.sdd — the module is reached
+    through the FileModuleResolver dirs (e.g. `agent/scripts/lib`).
+  Downstream render contract: ./../../../common/src/handlebarshandler.sdd — @image_from_ctx
+    reads `images[key].registry/repository[/tag]` with the app_version tag fallback,
+    @resources_from_ctx maps only cpu/memory per phase, @selector_from_ctx / @labels_from_ctx
+    answer the comp selectors/labels, @ctx_have_crd gates the wrapper bodies.
+  Wire model: ./../../../common/src/vynilpackage.sdd — the `images` / `resources` sections
+    written into `package.yaml` are @VynilPackageSource wire keys.
+  Caller/importer convention `import "gen_package" as gen` — frozen in the docs contract
+    /docs/gen-package.md and in ./../../tests/sample/scripts/update_post.rhai (the only real
+    importer in the repo; it drives @placeholder plus the `4`-arg @gen_system from an
+    `update_post` regeneration hook). No shipped runtime script under `agent/scripts` imports
+    this module; its consumers are package authors' update hooks and
+    ./../../tests/rhai_lib.rs.
+
+Tasks:
+  [ ] Add tests for @replace_cronjob / @extract_cronjob_images_resources: no case in
+      ./../../tests/rhai_lib.rs drives a CronJob doc at all (pod-template cycle, reloader,
+      no-env/no-TSC posture all unpinned).
+  [ ] Add tests pinning the @add_security_contexts default literals (pod
+      runAsNonRoot+RuntimeDefault seccomp, container drop-ALL/readOnly trio) — no test name
+      in ./../../tests/rhai_lib.rs covers them.
+  [ ] Add tests for the @gen_yaml_if wrapping legs: ServiceMonitor, PrometheusRule and
+      Certificate `#if` bodies (all three CRD-header variants are tested, none of the CRD-
+      gated tenant/service wrappers).
+  [ ] Add a direct test for @apply_image_resource_expressions quoted-form legs (bare markers
+      are pinned only indirectly through @gen_system image tests; `"quoted"`/`'single'`
+      variants are unexercised).
+  [ ] Add fallback-leg coverage for @placeholder (shell failure → `vnsplaceholder`): only the
+      success and k8s-validity legs are tested (`placeholder_returns_random_value_not_fallback`,
+      `placeholder_is_kubernetes_valid`).
+  [ ] Add unit coverage for the pure analysis helpers @selector_matches, @extract_comp,
+      @find_diff_key, @replace_label_values and @read_pkg_name — currently reached only
+      through whole-core @gen_system tests.
+  [ ] Decide whether @clean_metadata's @name parameter (read nowhere) and the callers-less
+      @replace_label_values / @clean_annotations trio are kept for external importers or
+      deleted — nothing inside this file calls them.
+  [?] @gen_tenant_core renames `ClusterRoleBinding` metadata to bare `{{instance.appslug}}`
+      and fixes roleRef via @replace_binding, while @gen_system_core prefixes
+      `{{instance.namespace}}-` on BOTH sides; a tenant chart whose ClusterRoleBinding binds a
+      ClusterRole keeps both names equal here, but the flavours' post-pass text sweeps could
+      still diverge. Decide whether the flavour split is the intended cluster-name policy.
+  [?] @gen_service_core routes `ClusterRole`, `ClusterRoleBinding`, webhooks and `APIService`
+      into `get_others` while @gen_tenant_core puts the same list in `get_systems`. Decide
+      whether bucket placement (not just behaviour) must be flavour-stable.
+  [?] @update_package_yaml_images_resources emits every `requests`/`limits` field verbatim,
+      but the @resources_from_ctx script-helper (./../../../common/src/handlebarshandler.sdd)
+      re-renders ONLY cpu and memory — `nvidia.com/gpu`-style fields survive in `package.yaml`
+      yet vanish from rendered manifests. Decide whether the script should mirror that
+      whitelist or the helper should pass fields through.
+  [?] @parse_image treats the registry as the first slash-segment containing a `.`:
+      dotless-port registries (`myregistry:5000/app`) lose the registry, and digest pins
+      (`repo@sha256:<hex>`) split into a bogus `repository: ...@sha256` + short tag. Decide
+      the supported reference grammar (the docs examples are always `host/...:tag`).
+  [?] The `2`-arg @gen_system, @gen_tenant and @gen_service read `package.yaml` unguarded while
+      @read_pkg_name is @is_file-guarded: missing file = hard error in one lane, silent `()`
+      in the other. Decide which posture wins.
+  [?] /docs/gen-package.md claims system generation extracts plain env vars into a ConfigMap
+      and types `ctx_have_crd` as `group/version/kind`, while the code passes extract_envs
+      FALSE for system kinds (pinned by @gen_system_deployment_no_env_extraction) and writes
+      plural-group ids (`servicemonitors.monitoring.coreos.com`). Decide doc-vs-code polarity
+      per claim before the docs become authority.
+  [?] @apply_selector_expressions bakes `comp="<comp>"` into the @labels_from_ctx call while
+      the docs table advertises a bare `labels_from_ctx (ctx)`; scripts cannot know which the
+      helper requires. Confirm the hash-key contract with the handlebarshandler owner.
+  [?] `subjects[].namespace` is ASSIGNED unconditionally in @replace_binding_impl — subjects
+      like a `Group` principal gain a bogus `{{instance.namespace}}` key. Decide whether the
+      key must be set only when already present.
+
+Done when:
+  Every `Scenario` maps to a green test in ./../../tests/rhai_lib.rs (current map below in
+    Tasks/Scenario lines), the open `[?]` decisions are recorded, and `specdd lint` plus the
+    Rhai-suite regression run stay green.
+
+Scenario: import has no effects
+  Given the module resolved from `agent/scripts/lib`
+  When a script only runs `import "gen_package" as gen;`
+  Then no file, directory or shell access happens and the unit value is produced
+
+Scenario: placeholder keeps the UUID first segment
+  Given a kernel uuid readable via @shell_output (`2>/dev/null` keeps stderr empty)
+  When @placeholder() runs
+  Then the answer is `v` + the first `-`-segment of the uuid (test @placeholder_returns_random_value_not_fallback)
+  And it passes the k8s-name validity probe pinned by @placeholder_is_kubernetes_valid
+  But a shell failure (spawn error, non-zero rc, stderr) is swallowed and the
+    frozen `vnsplaceholder` is returned
+
+Scenario: system flavour buckets and drops
+  Given @docs with a CRD, a Namespace, a ClusterRole, a Deployment and a NetworkPolicy
+  When @gen_system(path, docs, placeholder, ns-placeholder) runs
+  Then `get_crds/<crd-name>.yaml` starts with the yamllint line then `---`
+    (tests @gen_crd_yaml_writes_yamllint_header, @gen_system_crd_without_webhook_has_yamllint_header),
+    a conversion-webhook CRD instead gets `.yaml.hbs` and the rewritten webhook service
+  And every generated file is under `get_systems/` named `<Kind>_<slug>.yaml.hbs`, with the
+    Namespace doc dropped entirely (the `Handles` flavour map; ns-substitution legs are pinned
+    by @gen_system_namespace_replaced_in_clusterrole_name and
+    @gen_system_namespace_not_replaced_without_param)
+  And the ClusterRole name is `{{instance.namespace}}-{{instance.appslug}}-<suffix>` with no
+    leftover ns placeholder (test @gen_system_clusterrole_name_has_no_double_namespace) and
+    its ClusterRoleBinding roleRef matches (test @gen_system_clusterrolebinding_rolref_matches_clusterrole_name)
+  And no `-envs` ConfigMap exists (test @gen_system_deployment_no_env_extraction)
+  And `package.yaml` gained the extracted `images:` keys with placeholders stripped from keys
+    and file names (tests @gen_system_deployment_extracts_image_to_package_yaml,
+    @gen_system_filename_does_not_contain_release_name_placeholder,
+    @gen_system_image_key_strips_release_name_prefix)
+
+Scenario: update_package_yaml surgery is text-only
+  Given a `package.yaml` whose `description:` uses `>`, `|`, `>-` or `|-` block scalars and
+    top-level keys in author order
+  When @update_package_yaml_images_resources replaces or appends `images:`/`resources:`
+  Then key order and block scalars are untouched (tests @update_package_yaml_preserves_top_level_key_order,
+    @update_package_yaml_preserves_metadata_structure and the four block-scalar cases)
+  And the file starts with `---` (@update_package_yaml_starts_with_document_separator)
+  But a regeneration with an empty extraction pass leaves an existing section intact and a
+    container without resources keeps its stored entry
+    (@gen_system_keeps_existing_resources_when_container_has_none)
+
+Scenario: tenant flavour extracts envs
+  Given a tenant Deployment with plain-value env vars
+  When @gen_tenant(path, docs, name, ns) runs
+  Then the workload file lands in `get_scalables/`, the env vars land in a `ConfigMap` doc at
+    `get_others/ConfigMap_<slug>-envs.yaml.hbs` whose name is `<doc-name>-envs`, and the
+    containers keep only `valueFrom` envs plus a prepended `envFrom` configMapRef
+    (test @gen_tenant_deployment_extracts_env_to_configmap)
+
+Scenario: selector markers resolve once
+  Given a generated workload or NetworkPolicy file carrying `SELECTOR_COMP_<comp>` /
+    `LABELS_FROM_CTX` tokens from the `apply_*` stages
+  When @apply_selector_expressions rewrites it
+  Then the tokens become the `{{json_to_str (selector_from_ctx this comp="<comp>")}}` /
+    `{{json_to_str (labels_from_ctx this comp="<comp>")}}` calls
+    (tests @gen_package_apply_selector_expressions_replaces_markers_in_file,
+    @gen_system_networkpolicy_uses_selector_expression,
+    @gen_system_tsc_matchlabels_replaced_with_selector_expression)
+  And an empty comp result means no tokens were ever planted (no marker → no rewrite guarantee)
+
+Scenario: whole-text post-pass ladder on a system regen
+  Given a generation run with random placeholder name/ns and package name `cert-manager`
+  When the `4`-arg ladder finishes
+  Then every leftover name became `{{instance.appslug}}` and ns became `{{instance.namespace}}`
+    (tests @gen_system_release_name_replaced_in_annotation_values,
+    @gen_system_namespace_replaced_in_clusterrole_name with the
+    @gen_system_namespace_not_replaced_without_param negative leg,
+    @gen_tenant_namespace_replaced_in_generated_files)
+  And the `{{instance.appslug}}-cert-manager` double is collapsed once
+    (tests @apply_dedup_to_generated_removes_redundant_pkg_suffix_in_all_fields,
+    @apply_dedup_to_generated_no_change_when_no_redundancy,
+    @apply_dedup_to_generated_noop_when_pkg_name_unit,
+    @gen_system_no_duplicate_appslug_when_upstream_name_prefixed)
+  And ns-aware file slugs hold via @clean_file_name (tests @clean_file_name_strips_ns_placeholder_from_filename,
+    @clean_file_name_strips_ns_in_middle_of_filename, @clean_file_name_without_ns_behaves_as_before)
+
+Scenario: metadata hygiene
+  Given a doc with `helm.sh/chart`, `meta.helm.sh/release-name`, `checksum/config`, custom
+    annotations and labels
+  When any flavour's core @clean_metadata pass touches it
+  Then the three Helm/checksum keys and the whole `labels` key are gone, the custom annotation
+    stays, and an emptied `annotations` key is removed
+    (tests @gen_package_clean_metadata_removes_helm_annotations,
+    @gen_package_clean_metadata_empty_annotations, @gen_package_clean_metadata_removes_labels,
+    @clean_metadata_removes_all_helm_sh_annotations,
+    @gen_system_non_crd_has_no_metadata_labels, @gen_system_deployment_metadata_has_no_labels_key,
+    @gen_tenant_objects_have_no_metadata_labels)
+
+Scenario: image and args extraction keys
+  Given a container `image` of `ghcr.io/traefik/traefik:v3.7.1`, an `--acme-http01-solver-image=quay.io/...`
+    arg, dotless image `traefik:v3` and a `quay.io/with/path/img:v3` form
+  When the extraction fns run
+  Then @parse_image yields registry/repository/tag exactly per its segment rules
+    (tests @parse_image_extracts_registry_repo_tag, @parse_image_no_registry_uses_empty_string,
+    @parse_image_quay_registry_with_path)
+  And both images reach `package.yaml` and the in-doc `{{image_from_ctx …}}` calls
+    (test @gen_system_deployment_extracts_image_from_args), regenerated runs overwrite the
+    whole `images:` block (@gen_system_overwrites_existing_images_on_regeneration)
+
+Example:
+  marker → generated call (verbatim texts this file guarantees):
+    `IMAGE_CTX_traefik` → `{{image_from_ctx this "traefik"}}`
+    `RESOURCES_CTX_init-cert-manager` → `{{json_to_str (resources_from_ctx this "init-cert-manager")}}`
+    `SELECTOR_COMP_controller` → `{{json_to_str (selector_from_ctx this comp="controller")}}`
+    `LABELS_FROM_CTX` → `{{json_to_str (labels_from_ctx this comp="controller")}}`
+    CRD-gated body head → `{{#if (ctx_have_crd this "servicemonitors.monitoring.coreos.com")}}`
+  package.yaml section shape:
+    `images:` / two-space key / four-space `registry:`, `repository:`, `tag:` (optional)
+    `resources:` / two-space key / four-space `requests:`|`limits:` / six-space `cpu: 100m`
+  bucket map: system CRD → `get_crds/`; system everything else → `get_systems/`;
+    tenant PVC → `get_vitals/`; tenant workload → `get_scalables/`; cluster list →
+    `get_systems/`; rest → `get_others/`; service adds `get_crds/`.

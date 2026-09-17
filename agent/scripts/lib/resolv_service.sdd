@@ -1,0 +1,196 @@
+Spec: LibResolvService
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Resolve published service records — the entries of `context.cluster.services` and
+    `context.tenant.services` that other `ServiceInstance`/`TenantInstance` CRs publish — by
+    exact service `key` or by publishing package name (exact or glob), and inline their cluster
+    payload: a resolved record whose `definition` points at a ConfigMap (a Secret via
+    @resolv_secret) comes back with that object's `data` folded into the returned map, so a
+    package script gets one plain connection+config value for cross-service wiring. The file
+    itself never computes a host/port/url: connection fields arrive already flattened by the
+    context producers it consumes.
+
+Exposes:
+  All fourteen in-file `@fn` declarations are the module surface, reached as
+    `svc::name(...)` under the `import "resolv_service" as svc` convention of the only
+    in-repo importer, @/agent/tests/rhai_lib.rs; nothing runs at import time (pure declarations).
+  @resolv_cm(svc) — enrich-one: when `svc?.definition?.kind == "ConfigMap"` pull that ConfigMap
+    and merge its `data` over the record, then drop `definition`; otherwise return the record
+    untouched. Every hit of every lookup below passes through it.
+  @resolv_secret(svc) — the Secret twin: same guard/drop posture, values merged are
+    @base64_decode of each `.data` key; not called by any function in this file.
+  @get_from_key(svcs, names) — first array record whose `key` equals a wanted name.
+  @get_from_package(svcs, names) / @get_from_package(svcs, key, names) — arity overloads: first
+    record whose `"package".name` equals a wanted name, the 3-arg form conjoined with `s.key == key`.
+  @service_glob(svcs, matcher) — all records with `@glob(s["package"].name, matcher)`,
+    @resolv_cm-mapped, returned as an array.
+  @get_system(context, names) / @get_tenant(context, names) — @get_from_key over
+    `context?.cluster?.services` / `context?.tenant?.services`.
+  @get_system_package(context, names) / (context, key, names) and @get_tenant_package(context,
+    names) / (context, key, names) — same lane split over @get_from_package, both arities.
+  @glob_system_package(context, pattern) / @glob_tenant_package(context, pattern) — @service_glob
+    over the two context lanes.
+
+Accepts:
+  Records — array elements must be maps as the producers mint them (see `Depends on`): `key`
+    (String), `"package"` (map with `name`), `definition` (@Children shape: `kind`, `name`,
+    `namespace`), plus passthrough fields (`fqdn`, `port`, `instance`, `tenant`) which this file
+    reads never and forwards verbatim. Records missing `key` are simply non-matches for the key
+    lanes (missing map property answers `()`); records missing `"package"` are not tolerated by
+    the package/glob lanes (see `Raises`).
+  @svcs — the record array, or `()` (the guard), anything else is unguarded (see `Raises`).
+  @names — @String matched by full equality, or an iterable treated as a preference list: the
+    first name in @names order that matches anything wins; other types raise in the `for`.
+  @matcher — glob pattern text for the engine @glob helper (wildmatch semantics).
+  @context — the run-context map; safe-nav `?.` chains make an absent lane answer `()` instead
+    of raising, so tenant-lane functions on a service-instance context and cluster-lane
+    functions without `build_context` output both degrade to "not found".
+
+Returns:
+  Lookup hits — one record map (or an array of them in @service_glob), never an aggregate of
+    multiple matches, never wrapped. Lookup misses — `()`, always: no @throw exists anywhere in
+    the file and absence never raises. Merged maps keep every original record key not overwritten
+    by the fetched `data` plus/minus what `Must` lists.
+  @resolv_cm / @resolv_secret return the (possibly enriched) record itself — including for a
+    `()` or `definition`-free input.
+
+Raises:
+  No @throw and no typed error: the only uncaught interpreter errors are rhai shape failures —
+    a record whose `"package"` index answers `()` (or a non-map) followed by `.name` on it, in
+    @get_from_package (both arities; the 3-arg form only for records already matching `key`) and
+    in @service_glob (every record, it is the predicate), and @filter not existing on a
+    non-array @svcs. No `?.` guards protect these indexes; the caller sees the raw interpreter error.
+  Every @k8s_resource failure inside the two enrichers is caught and logged, never raised (@rhai_err
+    turns engine errors into string-carrying texts, so the catch's `type_of(e) == "string"`
+    branch takes them to @log_warn; other thrown values go to @log_warn(@json_encode(e))).
+
+Handles:
+  `svcs == ()` — the first statement of every lookup returns `()` unchanged.
+  Non-ConfigMap / `definition`-free records — returned as-is, `definition` key kept (the
+    `@remove("definition")` sits inside the kind branch).
+  ConfigMap fetch failure (kind/CRD unresolved, object absent, no `.data`, bad namespace
+    coordinate) — @log_warn, no data merged, but `definition` is still dropped, and the record
+    is returned, not replaced by `()`.
+  Secret decode failure on some mid-loop key — earlier keys stay decoded into the record
+    (partial merge), then @log_warn and the `definition` drop.
+  Array @names with no match, and any non-hit path — the trailing `()`.
+
+Must:
+  Read only four record fields: `key`, `"package".name`, and `definition.kind` / `definition.name`
+    / `definition.namespace`; the enrichers touch no other cluster kind beyond the literal
+    @k8s_resource("ConfigMap", ns) / @k8s_resource("Secret", ns) `@get(name)` lookup — no
+    typed-instance getter (`get_instance` family) is imported.
+  Take the first element of the filtered array (`found[0]`, @svcs order) as the one match; array
+    @names resolve by caller-preference order, first name with any match wins.
+  Merge fetched `data` over the record with `+=` (or per-key assignment for Secrets): colliding
+    data keys overwrite record keys such as `key`/`fqdn`/`port`, and Secret values are stored
+    decoded via @base64_decode, never as base64 text.
+  Drop `definition` from enriched records on both the success and the swallowed-failure leg of
+    each kind branch, and keep it on every other record.
+  Stay mutation-free toward the caller: enrichment happens on a by-value copy (rai
+    clone-on-write parameter semantics), so the @svcs/@context maps the caller owns never gain
+    data or lose `definition`.
+  Freeze the `?.` posture: enrichers and context wrappers safe-navigate, lookup predicates do
+    not — which is exactly why `"package"`-free records raise while `key`-free ones miss.
+  Keep the 2-arg/3-arg overloads of @get_from_package, @get_system_package and @get_tenant_package
+    coexisting as distinct signatures (rhai dispatches by arity).
+
+Depends on:
+  wynil-core `0.7.7` engine API — @k8s_resource(kind, ns)`@get` on the `K8sGeneric` lane of
+    @k8sgeneric_rhai_register, @glob (./glob.rs-style `glob(text, pattern)` helper), @log_warn,
+    @json_encode, @base64_decode: the string-error conversion is @rhai_err / @error_chain; host
+    ownership behind the @/common/src/rhaihandler.sdd assembly.
+  Record shape producers (read context, not owned here): @/agent/scripts/lib/build_context.sdd —
+    `cluster.services` entries with `fqdn`/`port` already flattened, `"package"` and `instance`
+    attached, `definition` verbatim; `../tenant/context.rhai` — the `tenant.services` twin
+    (`tenant:`-filtered only in the cluster lane; this file applies no `tenant` filtering itself).
+  @/common/src/instanceservice.sdd + @/common/src/lib.sdd — the `ServiceInstance` CR whose
+    `status.services` (@Published with `@Children` `definition`) the producers enumerate: the
+    upstream source of every key this library matches.
+  @rhai `?.`-returns-`()` on unit/missing properties, map index miss answering `()`, map `+=`
+    merge, `@remove` on maps, and @filter/@map/@len array helpers.
+
+References:
+  @/agent/tests/rhai_lib.rs — sole importer to date (`make_lib_script`, resolver dir
+    `./scripts/lib`, mock engine with empty k8s mocks); five tests pin the pure-map lanes only.
+  `/docs/packages/lifecycle.md` — advertises this library to package authors as the
+    service-discovery toolkit lane.
+
+Scenario: key hit inlines ConfigMap data
+  Given a cluster-lane record `#{key: "pg", fqdn: "pg.ns", port: 5432, definition: #{kind: "ConfigMap", name: "pg-conf", namespace: "ns"}}`
+  When @get_from_key(svcs, "pg") runs and the ConfigMap fetch answers `#{data: #{tls: "on"}}`
+  Then the return carries `key`/`fqdn`/`port` 5432 plus `tls: "on"`, and no longer contains `definition`
+
+Scenario: key miss answers unit, never an error
+  Given the same @svcs
+  When @get_from_key(svcs, "nonexistent") runs
+  Then the result is `()` with no cluster call and no throw
+  Maps to @resolv_service_get_from_key_returns_unit_when_not_found (and the hit half to
+    @resolv_service_get_from_key_finds_service — those fixtures carry no `definition`, so the
+    enricher runs as a typed no-op there)
+
+Scenario: array names keep caller order authoritative
+  Given records listed secondary-first
+  When @get_from_key(svcs, ["primary", "secondary"]) runs
+  Then the `primary` record returns, though `secondary` stands first in @svcs
+  Maps to @resolv_service_get_from_key_with_array_of_names
+
+Scenario: package-name lanes, exact and paired
+  Given records each carrying `"package"` `#{name: ...}`
+  When @get_from_package(svcs, "postgresql") runs, then @get_from_package(svcs, "svc1", "redis")
+  Then the first returns the `svc1` record, the second the record whose `key` and package name
+    both match, and a name no record publishes answers `()`
+  Maps to @resolv_service_get_from_package_finds_by_package_name (2-arg leg only)
+
+Scenario: glob lanes return every match or unit
+  Given three records, two carrying package names `postgres-*` matches
+  When @service_glob(svcs, "postgres-*") runs
+  Then an array of the two @resolv_cm-mapped records returns; a pattern matching nothing answers
+    `()` — not an empty array
+  Maps to @resolv_service_service_glob_filters_and_maps (miss leg unmapped)
+
+Scenario: ConfigMap lookup failure is swallowed but shaping continues
+  Given a `ConfigMap`-kinded record whose object no longer exists
+  When any lookup resolves it
+  Then @log_warn carries the fetch text, no data appears in the result, yet the record returns
+    minus `definition`
+  No mapped test exists; see the open task below.
+
+Scenario: Secret records pass through lookups, decode only via @resolv_secret
+  Given a record with `definition.kind: "Secret"`
+  When @get_from_key resolves it
+  Then it returns exactly as stored, `definition` intact — no lookup lane auto-resolves Secrets
+  But @resolv_secret(svc) on the same record returns it with each `.data` key base64-decoded and
+    `definition` removed
+  No mapped test exists for either leg.
+
+Scenario: malformed records raise in the package lanes only
+  Given an @svcs array in which one record carries no `"package"` key
+  When @get_from_package or @service_glob filters it
+  Then the whole call dies on the interpreter property-access error, uncaught
+  But @get_from_key over the same array returns normally
+  No mapped test exists; see the open task below.
+
+Tasks:
+  [ ] Cover the cluster lane with @make_lib_script_with_k8s: the ConfigMap hit, miss-swallow and
+      Secret-decode scenarios above, plus the package-lane raise and the glob miss leg — the five
+      current tests never set `definition`, so no fetch branch executes today.
+  [?] Freeze the tier: no shipped script imports this library (repo grep finds only the test
+      file); decide later whether it is the public service-discovery surface for boxes/packages
+      or a dormant toolkit, and whether @resolv_secret — called from nothing — stays exposed.
+  [?] Decide return shapes: @service_glob answers `()`-or-array while every multi-match lookup
+      silently truncates to the first match; unify to always-list or document the truncation.
+  [?] Merge precedence: fetched data keys overwrite the record's own `key`/`fqdn`/`port`; decide
+      whether connection fields must win instead.
+  [?] @resolv_secret partial merge: the loop leaves earlier decoded keys in place when a later
+      @base64_decode throws; decide whether to prevalidate or roll back.
+  [?] Findings left unfixed: the `s["package"].name` predicates carry no `?.` so one malformed
+      record aborts a whole lookup, @service_glob ends in an unreachable trailing `()` after both
+      branches already return, and `get_tenant_package(context, names)` reads `tenant.services`
+      entries that only TenantInstance contexts carry — confirm each posture or correct it.
+
+Done when:
+  Every scenario above has a mapped test (mock-k8s lane included), the tier and shape decisions
+    are recorded, and `cargo test -p agent` is green.

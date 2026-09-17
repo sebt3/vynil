@@ -1,0 +1,54 @@
+Spec: SuppressionBackupTenant
+
+Platform: scripts Rhai (moteur wynil-core 0.7.7)
+
+Purpose:
+  Balaye les artefacts de backup planifié du kind tenant quand le backup se désactive ou
+    qu'on installe sans schedule. Ce fichier est la copie IDENTIQUE à l'octet près de
+    ./../service/delete_backup.rhai (diff vérifié) : spec séparée minimale avec note de
+    jumeau, regroupement justifié par le fait qu'elle ne possède aucun contrat propre.
+
+Owns:
+  ./delete_backup.rhai
+
+Exposes:
+  @run(instance, context) — atteint par les trois sites gelés dans ./install.sdd (bras
+    sans-schedule x2) et ./delete.sdd (garde du bucket vitals), retour TOUJOURS jeté par
+    les appelants.
+
+Must:
+  Reproduire à l'octet près le contrat gelé dans ./../service/delete_backup.sdd :
+    balayage dans `instance.metadata.namespace` des CronJob/RoleBinding/ConfigMap
+    `{appslug}-backups` par nom (NotFound avalé) et des Jobs listés puis supprimés à la
+    chaîne par labels `component=backup|restore` + `instance={nom CR}` +
+    `name={nom paquet}`.
+  Ne PAS balayer le ServiceAccount ni le Role `{appslug}-backup` singuliers (faille RBAC
+    orpheline, `[?]` ouvert côté jumeau service — décision en lockstep).
+  Lever zéro @throw : hooks prepare à échec doux, hooks pre/post sans garde,
+    `wait_deleted(5 min)` par suppression dans une boucle non gardée.
+  Conserver le `import "install_from_dir"` d'import-time comme code MORT à retirer.
+
+Depends on:
+  ./../service/delete_backup.sdd — le contrat source complet.
+  ./schedule_backup.sdd — producteur posant le RoleBinding singulier non balayé.
+  ./../lib/backup_context.sdd, ./../lib/gen_package.sdd — la voie `gen` que ce balayage
+    ne connaît pas.
+
+Tasks:
+  [ ] Décider la correction du nom RoleBinding singulier/pluriel et du SA orphelin dans
+      les DEUX kinds en lockstep (portée unique : les templates `.hbs` + ce sweeper).
+  [ ] Supprimer l'import mort dans les deux copies.
+  [ ] Étendre `rhai_backup_redis.rs` (seul harnais résolvant les répertoires tenant) à
+      ce module — jamais nommé par les tests aujourd'hui.
+
+Done when:
+  Les deux copies restent verrouillées et le balayage couvre réellement ce que les
+    templates posent.
+
+Scenario: désactivation du backup laisse le RoleBinding
+  Etant donné une instance tenant installée avec un CronJob de backup posé par les
+    templates (`{appslug}-backup` singulier sur RBAC et SA)
+  Quand la lane install sans schedule appelle `SuppressionBackupTenant`
+  Alors le CronJob, le RoleBinding pluriel et le ConfigMap disparaissent (le RoleBinding
+    pluriel visait un nom jamais posé : NotFound avalé en silence)
+  Et le RoleBinding et le ServiceAccount singuliers survivent à chaque cycle

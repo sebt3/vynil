@@ -1,0 +1,164 @@
+Spec: LibStorageClassEnrich
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Turn a cluster's raw StorageClass list into the deployment-time storage vocabulary: enrich
+    each class from a curated CSI-driver capability/access-mode catalog, expand raw-block
+    drivers into twin Block+Filesystem entries, and reduce the list to one named-preference map
+    (@class_enrich's output feeds `cluster.storage_classes` and `cluster.prefered_storage`) so
+    templates and @storage_class_selector choose classes by role key instead of reading cluster
+    annotations themselves.
+
+Exposes:
+  @classes_enrich(scs) — the main entry (importers reach it as `sce::classes_enrich(...)` via
+    `import "storage_class_enrich" as sce` in ./build_context.rhai). Returns the enriched Array.
+  @get_prefered_sc(scs) — second entry; consumes enriched classes, returns the 9-slot
+    `#{...}` preference map of class-name Strings or unit.
+  @pick_sc(scs) — "default else first" name selector; also called back into @get_prefered_sc.
+  @get_known_class() — the 12-entry driver catalog (rebuilt fresh on every call, no cache;
+    @classes_enrich rebuilds it once per enrichment loop iteration).
+  @get_default_access_modes_from_all(all) — precedence collapse `ReadWriteMany` >
+    `ReadWriteOnce` > passthrough.
+
+Accepts:
+  @classes_enrich — Array of StorageClass maps. Required per entry: @provisioner (@String —
+    only @contains on it is read). All other keys pass through untouched; @volumeMode,
+    `capabilities`, @allAccessModes, @accessModes are SET (overwritten) on the returned copies.
+  @get_prefered_sc — enriched entries: reads @volumeMode, @accessModes (array @String
+    equality match), @provisioner, @is_default, and @name (via @pick_sc).
+  @pick_sc — any non-empty Array; predicate reads @is_default per entry and returns @name.
+
+Returns:
+  @classes_enrich → new Array in input order; caller input Arrays are NEVER mutated (rhai for
+    loop items are copy-on-write values — verified: input map gains no `volumeMode` key).
+    Raw-capable drivers yield TWO entries pushed Block-first then Filesystem.
+  @get_known_class → Array of 12 `#{driverClass, accessModes, capabilities}` maps; accessModes
+    maps hold all four mode keys with boolean values; capabilities key sets vary per driver.
+  @get_prefered_sc → the fixed 9-key map `block_readWriteMany`, `block_readWriteOnce`,
+    `fs_cheap_readWriteMany`, `fs_fast_readWriteMany`, `fs_readWriteMany`,
+    `fs_cheap_readWriteOnce`, `fs_fast_readWriteOnce`, `distibuted_readWriteOnce` (typo frozen —
+    consumers @storage_class_selector and ./build_context read it verbatim), `fs_readWriteOnce`;
+    each value a class-name @String or the unit `()` left unset.
+  @pick_sc → @String `def.name` for the first entry whose @is_default predicate hit, else
+    `scs[0].name`. A missing or non-boolean @is_default key reads as unit and simply never
+    matches the @find.
+  @get_default_access_modes_from_all → `["ReadWriteMany"]` if present in `all`, else
+    `["ReadWriteOnce"]` if present, else `all` unchanged (probed: empty in → empty out).
+
+Raises:
+  No @throw exists anywhere in this file; the only raises are rhai engine errors escaping its
+    own indexing/typelookups:
+      - @pick_sc([]) — `Array index 0 out of bounds: array is empty`, annotated
+        `@ 'storage_class_enrich'` in the caller frame.
+      - @classes_enrich on an entry with no @provisioner key — the key reads as `()` and
+        `().contains(...)` aborts `Function not found: contains ((), &str...)`.
+
+Handles:
+  Unknown provisioner (no catalog substring hit) → conservative floor: `capabilities` = `#{}`,
+    `allAccessModes` = `["ReadWriteOnce"]`, `accessModes` = `["ReadWriteOnce"]`, one
+    `Filesystem` entry.
+  Missing @capabilities.raw on a matched driver (e.g. `smb`, `nfs`, `filestore`, `efs`,
+    `local-path`) — `f.capabilities.raw == true` compares unit to `true` → false → no Block
+    twin; only literal `true` expands (probed catalog: `rbd.csi.ceph.com`, `csi.scaleway.com`,
+    `ebs.csi.aws.com`, `ebs.csi.eks.amazonaws.com`).
+  @get_prefered_sc([]) → full 9-key all-unit map (every bucket guard is a `.len() > 0` check;
+    the `pick_sc(many)` fallback in the block branch is never reached with `many` empty when
+    `others` is empty because block is then entirely `many`).
+
+Must:
+  Match by substring, not equality: catalog @find uses `i.provisioner.contains(k.driverClass)`
+    (provisioner CONTAINS catalog driver; `rook-ceph.rbd.csi.ceph.com` matches
+    `rbd.csi.ceph.com`, probed), first catalog-array hit wins.
+  Every matched entry gets `volumeMode` set to `"Filesystem"` FIRST, then the catalog
+    `capabilities` map verbatim, then `allAccessModes` = keys of the catalog accessModes map
+    with truthy values in BTreeMap alphabetical order (`ReadOnlyMany`, `ReadWriteMany`,
+    `ReadWriteOnce`, `ReadWriteOncePod` order probed).
+  Raw twin is a value snapshot BEFORE the Filesystem entry is re-filtered: the Block entry
+    keeps `ReadWriteMany` in `allAccessModes` and its `accessModes` derive from that unfiltered
+    list (rbd Block → `["ReadWriteMany"]` probed), while the Filesystem twin has
+    `ReadWriteMany` removed from both lists (rbd FS → `["ReadWriteOnce"]` probed). Consequence:
+    only a raw+RWMany driver's BLOCK twin can ever satisfy the `accessModes ==
+    ["ReadWriteMany"]` buckets in @get_prefered_sc.
+  @get_prefered_sc buckets: `block*` from `volumeMode=="Block"` split by exact
+    `accessModes == ["ReadWriteMany"]`; `fs_readWriteMany` from Filesystem + that exact array;
+    FS-single-mode pool = Filesystem whose `accessModes` array-equals exactly
+    `["ReadWriteOncePod"]` or `["ReadWriteOnce"]`; when that pool has >1 member,
+    `distibuted_readWriteOnce` takes the @pick_sc of NON-`rancher.io/local-path` members and
+    `fs_readWriteOnce` the local-path @pick_sc when both kinds exist (probed), single-member
+    pools put the same name in both keys.
+  Key-name contract: the `accessModes`/`allAccessModes`/`capabilities`/`volumeMode`/
+    `provisioner`/`is_default`/`name` keys and all nine preference keys — including the
+    `distibuted_readWriteOnce` misspelling — are the frozen interface to
+    ./storage_class_selector.rhai and ./build_context.rhai.
+  The `fs_cheap_*` / `fs_fast_readWriteMany` / `fs_fast_readWriteOnce` preference slots are
+    initialised to `()` and NEVER assigned (no writer exists in 157 lines) — @storage_class_selector
+    fast/cheap arms (its lines 5-8, 21-24, 27-30, 45-48) are therefore permanently dead against
+    this producer's map (see Tasks).
+  The local-path split filter `!s.accessModes.contains(["ReadWriteMany"])` tests a nested
+    Array against an array of Strings and is always true — `onlys` always equals the FS pool
+    (see Tasks).
+
+Depends on:
+  rhai std library only (@find/@filter/@keys/@contains/@push, Array/Map equality, unit-vs-value
+    compare) — zero wynil-core registrations are called here (no @k8s_resource, no @throw, no
+    JSON/HTTP helpers); cluster data arrives pre-shaped by the caller:
+    ./build_context.rhai maps `k8s_resource("StorageClass").list().items` to
+    `#{name, provisioner, is_default}` (annotation
+    `storageclass.kubernetes.io/is-default-class=="true"`) before calling @classes_enrich.
+  ./storage_class_selector.rhai (pending spec) — reads the produced preference key names; the
+    misspelled key and the never-set fast/cheap keys are its input shape.
+  /agent/tests/rhai_lib.rs — five mock-engine tests (`make_lib_script`, resolver
+    `agent/scripts/lib`) cover: field presence on match, unknown floor, raw twin `raw`
+    capability, ebs 2-entry expansion + default-over-first via @get_prefered_sc.
+
+Scenario: rbd expands into RWMany Block twin and RWO Filesystem twin
+  Given scs = [#{name: "ceph-rbd", provisioner: "rbd.csi.ceph.com", is_default: false}]
+  When @classes_enrich runs
+  Then len == 2, enriched[0].volumeMode == "Block" with accessModes ["ReadWriteMany"] and
+    allAccessModes all four modes, enriched[1].volumeMode == "Filesystem" with accessModes
+    ["ReadWriteOnce"] and allAccessModes without ReadWriteMany (all probed)
+  And the caller's input map has gained no keys
+
+Scenario: unknown provisioner floor and substring match
+  Given provisioner "example.com/mystery"
+  Then one Filesystem entry with capabilities `#{}`, allAccessModes and accessModes
+    ["ReadWriteOnce"] (probed)
+  Given provisioner "rook-ceph.rbd.csi.ceph.com" (unknown verbatim, substring-known)
+  Then it matches rbd.csi.ceph.com and gets the full rbd twin treatment (probed)
+
+Scenario: preference map with local-path sharing the FS pool
+  Given enriched [cephfs RWMany default-false, mystery RWO default-false,
+    rancher.io/local-path RWO default-true]
+  When @get_prefered_sc runs
+  Then fs_readWriteMany == "cephfs", distibuted_readWriteOnce == "weird" (the non-local-path,
+    name-not-default → array-first via @pick_sc), fs_readWriteOnce == the local-path class name
+  And block_* and all cheap/fast slots remain () (probed)
+
+Scenario: pick_sc on empty array
+  Given scs = []
+  When @pick_sc runs
+  Then the run aborts `Array index 0 out of bounds: array is empty` — no guard of its own
+
+Tasks:
+  [ ] Complete the catalog — source header TODO names the upstream:
+      https://storageclass.info/csidrivers/ (csidrivers.yaml).
+  [?] The `onlys` filter and the inner `else if onlys.len() > 0` / final `else` branches at
+      lines 128-151 are unreachable given `fs_only.len() > 1` and the always-true nested-array
+      contains. Decide whether to simplify or leave as future-capable scaffolding.
+  [?] `fs_cheap_*`/`fs_fast_readWriteMany`/`fs_fast_readWriteOnce` are never written yet the
+      selector reads them. Decide intent: populate (from what signal?) or drop the keys and
+      selector arms together.
+  [?] The Block twin's accessModes are computed from the UN-filtered allAccessModes, so a raw
+      RWMany driver is advertised Block+ReadWriteMany; the Filesystem twin cannot be RWMany.
+      Confirm this asymmetry is the design (it is what makes block_readWriteMany fillable)
+      rather than an ordering slip on the `b = i` snapshot.
+  [?] Keeping `distibuted_readWriteOnce` misspelled is today's frozen cross-file contract;
+      decide someday whether it is renamed coordinated with selector/build_context/boxes.
+  [ ] Extend /agent/tests/rhai_lib.rs coverage to the unprobed edges: rbd RWMany twin
+      asymmetry, local-path preference split, @get_prefered_sc([]) full-unit map, @pick_sc([])
+      raise, missing-provisioner raise.
+
+Done when:
+  Catalog TODO tracked, the quirk Tasks above have decisions or pinned tests, and the five
+    existing + extended @rhai_lib.rs cases are green under `cargo test -p agent`.

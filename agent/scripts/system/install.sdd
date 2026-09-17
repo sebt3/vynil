@@ -1,0 +1,208 @@
+Spec: SystemInstallScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Orchestrate the install of one @SystemInstance: run the package's category buckets in a fixed
+    order through `@import_run` — `install_pre` hook, `crds` (plus discovery-cache refresh), tofu,
+    `systems` — then run the `install_post` hook (whose return is discarded) and close by writing
+    the CR `Ready`/`Installed` status with the requested tag. This file applies no manifests and
+    writes no bucket marker: per-lane cluster work and per-lane failure markers live in the stage
+    modules it imports; its own only status write is the success close. Twin note:
+    ./../service/install.sdd is the fully specified twin — this shape is its strict bucket subset
+    (no `befores`, `vitals`, `init_from`, `others`, `scalables` or `posts` buckets, no backup
+    section) plus two posture divergences: the tofu lane dropped its twin's stale-`ctx` re-merge
+    down to the bare unconditional assignment, and `install_post`'s return is dropped rather than
+    merged; ./../tenant/install.rhai remains unspecified.
+
+Exposes:
+  @run(@instance, @context) — the module's sole @fn and entry point (`install.rhai` + `run` match
+    the entry-point patterns of /agent/src/linting/rhai_checker.sdd); invoked as
+    `install::run(instance, context)` by the Rust lane /agent/src/system/install.sdd, whose
+    snippet discards the returned value.
+
+Accepts:
+  @instance — the injected @SystemInstance @Dynamic. Read: `.metadata.namespace`/`.metadata.name`
+    (the three log-line interpolations and every refresh argument) plus the `@set_status_ready`
+    call itself. Unlike the service twin, no `status` or `spec` field is read before the close.
+    Re-bound after each taken bucket (Must).
+  @context — map built by ./context.rhai @run for this lane. Keys read, all unguarded property
+    access: `package_dir` (the three gate paths and their in-line log interpolation) and
+    `instance.requested` (the tag of the final close, set to `args.tag` by
+    ./../lib/build_context.rhai via ./context.rhai). No backup or namespace flag is read here.
+
+Returns:
+  No value channel of its own: the function's implicit value is the trailing @set_status_ready
+    call result (the patched CR) and the Rust caller discards it. The observable outcome is the
+    final `status` patch — `Ready`/`Installed` conditions added to the carried stage conditions,
+    `tag` equal to `instance.requested`, the options digest — plus a Normal `InstallSucceed`
+    event (macro semantics in /common/src/instancesystem.sdd).
+
+Raises:
+  Zero @throw statement and zero @try/@catch in this file: failure is always a propagated engine
+    raise, and only the close touches `status` — every abort except the close's own lands with no
+    status write made at this level.
+  - Stage/hook module throw: @import_run swallows only the absent-module and absent-`run`
+    markers (`log_debug` with text `No ${name} module, skipping.` /
+    `No ${name}::run function, skipping.`); any other error — including everything a stage
+    re-throws after writing its own `*_failed` marker — is re-thrown and aborts the install.
+  - `@get_system_instance` raise (CR deleted, forbidden or unreachable) at any bucket refresh.
+  - @has_tofu_files raise: the gate runs on an unreadable existing `${package_dir}/tofu` past its
+    `@is_dir` guard (raise rules in ./../lib/tofu_gen.sdd).
+  - Property-on-`()` raises at the next `context.package_dir` gate read or the final
+    `context.instance.requested` once `context` stops being a map — only the tofu lane's
+    unguarded assignment can do that (Tasks, Scenario).
+  - `@set_status_ready` raise: a @common `KubeError` from the status patch or the event publish
+    fails an otherwise-complete install.
+
+Handles:
+  - Bucket-directory absent: the `@is_dir` gates (`@has_tofu_files` for tofu — also false when the
+    directory holds no user-authored `.tf` beyond the three generated bundle files) skip the whole
+    lane including its log, its import and any refresh — skipped buckets never call
+    @get_system_instance or @update_k8s_crd_cache.
+  - `install_pre` / `install_post` ship nowhere in ./../scripts — on a stock image both hooks take
+    the @import_run skip path, return `()`; the pre-hook merge guard sees no map and the
+    post-hook's `()` is dropped anyway.
+  - No first-run distinction: this level never reads the CR's prior `status`, so every dispatch is
+    a full replay of all three buckets — idempotence lives entirely in the stage modules.
+
+Must:
+  Run exactly these lanes, once each, in this order: `import_run("install_pre")`;
+    `is_dir(`${context.package_dir}/crds`)` gate → `install_crds`;
+    `tfg::has_tofu_files(`${context.package_dir}/tofu`)` gate → `install_tofu`;
+    `is_dir(`${context.package_dir}/systems`)` gate → `install_systems`;
+    `import_run("install_post")`;
+    `instance.set_status_ready(context.instance.requested)` — then return, with nothing after
+    the close.
+  Close as the file's only status marker; the bucket markers belong to the stage modules:
+    @set_status_crds / @set_status_crd_failed, @set_tfstate on success /
+    @set_status_tofu_failed on failure, and @set_status_systems / @set_status_system_failed
+    respectively (bridge contracts in /common/src/instancesystem.sdd), each failure setter
+    followed by the stage's own re-throw, which aborts here.
+  Thread the context through a map merge only on `@type_of` == `map` of each hook/bucket return —
+    `install_pre`, `install_crds` and `install_systems` use the guard; the `install_tofu` lane
+    instead assigns the @import_run return to `context` unconditionally, with no `ctx` block at
+    all (Tasks); `install_post`'s return is discarded outright.
+  Refresh the instance after each taken bucket with
+    `@get_system_instance(instance.metadata.namespace, instance.metadata.name)` — in the `crds`
+    lane directly after @update_k8s_crd_cache, which the core side makes best-effort (keeps the
+    old cache and only tracing-warns on a failed refresh; mock no-op per /common/src/k8smock.sdd).
+    The refreshed copy is the @set_status_ready receiver and the argument source of the next
+    bucket's log and refresh.
+  Log exactly three lines, each inside its taken gate and before its import_run, via @log_info:
+    `Installing CRDs from ${context.package_dir}/crds`,
+    `Running tofu apply from ${context.package_dir}/tofu` and
+    `Installing systems from ${context.package_dir}/systems`, each followed by the shared suffix
+    `from ${instance.metadata.namespace} ${instance.metadata.name}`; no other log statement lives
+    at this level.
+  Close successfully through @set_status_ready with the requested tag (build_context's
+    `instance.requested` = `args.tag`), which also stamps the options digest and can fail the
+    whole install per Raises.
+  Load ./../lib/tofu_gen.rhai (and transitively ./../lib/tofu.rhai) at import time via the single
+    top-level `import "tofu_gen" as tfg` — before any `run` call, package without `.tf` files
+    included.
+  Resolve every stage/hook module against the four resolver directories frozen by the Rust lane,
+    so a package `scripts/` directory shadows the shipped lanes: a package shadowing
+    `install_tofu` must return the context map or `context` stops being a map mid-run (Tasks,
+    Scenario).
+
+Must not:
+  Apply manifests, render templates or wait on workloads from this file: apply ordering lives in
+    ./../lib/install_from_dir.sdd and readiness in ./../lib/wait.sdd, both reached here only
+    through ./install_systems.rhai — importing either directly would duplicate the lane contract.
+  Run the service twin's `befores`/`vitals`/`others`/`scalables`/`posts` buckets, its `init_from`
+    lane or its backup section: none of those modules ships in this directory, and carrying them
+    over from the twin would import code only ./../service provides.
+  Gate any skip on the CR's current `status` or `spec`: this file's flow never reads them.
+
+Depends on:
+  ./../lib/tofu_gen.rhai — the only import; @has_tofu_files answers the `tofu` gate (its spec
+    ./../lib/tofu_gen.sdd).
+  The shipped stage modules of this directory, all specs pending: ./install_crds.rhai,
+    ./install_tofu.rhai, ./install_systems.rhai — each writes its own `set_status_*` marker,
+    re-throws after its failure marker, and returns the (maybe hook-merged) context map.
+  wynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
+    `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises), @is_dir,
+    @log_info/@log_debug and @update_k8s_crd_cache.
+  /common/src/instancesystem.sdd — the registered bridges used as method/global:
+    @get_system_instance and @set_status_ready.
+  /common/src/rhaihandler.sdd — the @Script constructor that mounts the above for the agent
+    lanes.
+  ./context.rhai (+ ./../lib/build_context.rhai, ./context_system.rhai) — producers of every
+    `context` key this file reads; the key-by-key contract is owned by
+    ./../lib/build_context.sdd and by ./context_system.rhai's pending spec.
+
+References:
+  /agent/src/system/install.sdd — the caller: snippet, `instance`/`args` injection, resolver
+    directories and the exit-1 error lane this script's raises land in.
+  /agent/src/linting/rhai_checker.sdd — the entry-point filename/`run` patterns this file's
+    top level satisfies.
+  ./../service/install.sdd and ./../tenant/install.rhai — cross-kind orchestrator twins; the
+    specified service copy documents the stale-`ctx` tofu re-merge this copy dropped and the
+    `install_post` merge-guard this copy discards instead.
+  /agent/tests/rhai_lifecycle.rs — the mock-engine test harness (Tasks: no system coverage).
+
+Scenario: full bucket order with all directories present
+  Given a package dir holding a `crds` dir, a `tofu` dir with a user-authored `.tf` and a
+    `systems` dir, on a live engine
+  When @run executes
+  Then the stage modules are imported in exactly pre → crds → tofu → systems → post order,
+    @update_k8s_crd_cache fires between the crds apply and its refresh, and a refresh follows
+    each taken bucket
+  And the close runs last whatever the buckets returned
+  No mapped test: /agent/tests/rhai_lifecycle.rs builds only the service harness.
+
+Scenario: empty package skips clean
+  Given a stock image (neither `install_pre` nor `install_post` ships) and a package dir with no
+    bucket directory
+  When @run executes
+  Then both hooks and all three gates skip with debug logs only, no refresh and no cache update
+    run, and the sole cluster-visible effect is @set_status_ready
+  Maps to nothing — the harness never evals this system module (Tasks).
+
+Scenario: stage throw aborts after its own marker
+  Given a bucket stage that fails — it writes its `set_status_*_failed` marker and re-throws
+  When the throw crosses @import_run
+  Then it is not one of the two skip markers, so it re-throws: no later bucket, no close, and
+    the Rust lane fails to exit(1) — a failure raised inside THIS file instead (refresh, tofu
+    predicate, close) leaves the install mid-stage with no failed marker
+  No mapped test.
+
+Scenario: tofu shadow clobbers the context
+  Given a package `scripts/install_tofu.rhai` whose `run` returns a non-map value and a tofu gate
+    that is true
+  When @run reaches the tofu exit
+  Then `context` becomes that non-map outright — no `type_of` guard applies — and the next
+    `context.package_dir` gate read, or the close if `systems` is absent, raises property-on-`()`
+  But given the shipped ./install_tofu.rhai, which returns the map, the chain survives and the
+    tofu stage's own updates reach `install_post` and the close
+  No mapped test; the service twin behaves differently at this exit (Tasks).
+
+Scenario: install_post cannot alter the close
+  Given a package hook `install_post` whose `run` returns a merged context map
+  When it returns
+  Then the return is discarded and @set_status_ready reads `context.instance.requested` from the
+    context as it stood after the last taken bucket — a post-hook rewrite of `instance` or the
+    tag source cannot reach the close
+  No mapped test; whether the discard is intended stays open (Tasks).
+
+Tasks:
+  [ ] Map the Scenarios to /agent/tests/rhai_lifecycle.rs: the file is service-only today
+      (@make_service_script and the four `service_*` tests), so this system lane has zero
+      coverage; add a fixture package with the three bucket dirs and refs to pin
+      order/refresh/gates above.
+  [?] Tofu-lane bare assignment: `context = import_run("install_tofu", ...)` with no `type_of`
+      guard (Scenario "tofu shadow clobbers the context") — a shadowed module returning a non-map
+      kills the run, while the shipped module keeps the chain and, unlike the service twin's
+      stale-`ctx` re-merge, its tofu updates do reach the close here. Decide one canonical merge
+      posture across the three twins.
+  [?] `install_post`'s return is discarded while every other hook/bucket return is merged —
+      decide whether post-hook context updates are meant to reach the close (today: they cannot,
+      and only the close follows).
+  [?] `install_pre`/`install_post` ship in no engine directory, so they exist only as package-side
+      hooks ({package_dir}/scripts). Confirm that is intentional (a shipped no-op default, or
+      documentation, is the alternative).
+
+Done when:
+  Every Scenario carries a passing mapped test or a recorded decision, the bucket/hook order,
+    gate texts and close above still match the source, and `specdd lint` is green on this file.

@@ -1,0 +1,225 @@
+Spec: ServiceInstallScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Orchestrate the install of one `ServiceInstance`: run the package's category buckets in a
+    fixed order through `@import_run` — `install_pre` hook, `crds` (plus discovery-cache refresh),
+    `befores`, `vitals`, tofu, first-run `init_from`, `others`, `scalables`, `posts` — then pick
+    between backup scheduling and backup cleanup, run `install_post`, and close by writing the CR
+    `Ready`/`Installed` status with the requested tag. This file applies no manifests and waits on
+    nothing itself: per-lane cluster work and per-lane failure markers live in the stage modules
+    it imports; its own only status write is the success close. Neat twin of
+    ./../tenant/install.rhai (identical bar the `crds` bucket and `@get_tenant_instance`), while
+    ./../system/install.rhai is a different shape (single `systems` bucket, no vitals, no
+    `init_from`, no backup section).
+
+Exposes:
+  @run(@instance, @context) — the module's sole @fn and entry point (`install.rhai` + `run` match
+    the entry-point patterns of /agent/src/linting/rhai_checker.sdd); invoked as
+    `install::run(instance, context)` by the Rust lane /agent/src/service/install.sdd, whose
+    snippet discards the returned value.
+
+Accepts:
+  @instance — the injected @ServiceInstance @Dynamic. Read: `.metadata.namespace`/`.metadata.name`
+    (log line and every refresh argument), the guards `.status != ()`, `.status.vitals != ()`,
+    `@type_of` of `.status.tag`, and `.spec.initFrom`. Re-bound after most taken buckets (Must).
+  @context — map built by ./context.rhai @run for this lane. Keys read, all unguarded property
+    access: `package_dir` (eight gate paths and log interpolation), `namespace.use_backup`
+    (backup gate; shipped default `false` set by ./context_service.rhai), `instance.requested`
+    (the tag of the final close) and `instance.namespace` (the backup-Secret lookup namespace).
+
+Returns:
+  No value channel of its own: the function's implicit value is the trailing
+    `@set_status_ready` call result (the patched CR) and the caller discards it. The observable
+    outcome is the final `status` patch — conditions `Ready`/`Installed`, `tag` equal to
+    `instance.requested`, the options digest — plus a Normal `InstallSucceed` event
+    (macro semantics in /common/src/instanceservice.sdd).
+
+Raises:
+  Zero @throw statement in this file: failure is always a propagated engine raise.
+  - Stage/hook module throw: @import_run swallows only the absent-module and absent-`run`
+    markers (`log_debug` with text `No ${name} module, skipping.` /
+    `No ${name}::run function, skipping.`); any other error — including everything a stage
+    re-throws after writing its own `*_failed` marker — is re-thrown and aborts the install.
+  - `@get_service_instance` raise (CR deleted, forbidden or unreachable) at a bucket refresh —
+    the abort lands with no failed-status write from this lane.
+  - @has_tofu_files raise: the gate runs on an unreadable existing `${package_dir}/tofu` past its
+    `@is_dir` guard (raise rules in ./../lib/tofu_gen.sdd).
+  - Property-on-`()` raises at the `context.namespace.use_backup` /
+    `context.instance.requested` reads once `context` stops being a map (see Tasks — the tofu
+    lane can set it to `()`).
+  - `@set_status_ready` raise: a @common `KubeError` from the patch/event, or a non-string
+    `instance.requested`, fails an otherwise-complete install with no marker written.
+  - The one @try/@catch: the `backup-settings` Secret probe — every error from its `@get` is
+    caught (string warned verbatim, other errors as @json_encode text) and treated as "absent",
+    never re-thrown.
+
+Handles:
+  - Bucket-directory absent: the `@is_dir` gate (`@has_tofu_files` for tofu) skips the whole lane
+    including its instance refresh — skipped buckets never call `@get_service_instance`.
+  - `install_pre` / `install_post` ship nowhere in ./../scripts — on a stock image both hooks take
+    the @import_run skip path, return `()`, and the `type_of` merge guard sees no map.
+  - First run: `status` is `()` at entry, so the `init_from` gate is false until the `vitals`
+    bucket has written `status.vitals` and the refresh re-read it — that is the exact
+    "initial installation" moment the code comment names.
+  - Backup gate false (no status, no vitals, or `use_backup` false): still runs
+    `delete_backup` — every stock service install sweeps stale backup objects.
+  - Backup-Secret probe error: warned, `found` stays false, the lane degrades to
+    `delete_backup` — a permission or transient API error reads as "no backup configured"
+    (see Tasks).
+
+Must:
+  Run exactly these lanes, once each, in this order: `import_run("install_pre")`;
+    `is_dir(`${context.package_dir}/crds`)` gate → `install_crds`; `befores` gate →
+    `install_befores`; `vitals` gate → `install_vitals`;
+    `tfg::has_tofu_files(`${context.package_dir}/tofu`)` gate → `install_tofu`;
+    `instance.status != () && instance.status.vitals != () && type_of(instance.status.tag) == "()"
+    && instance.spec.initFrom != ()` gate → `init_from`; `others` gate → `install_others`;
+    `scalables` gate → `install_scalables`; `posts` gate → `install_posts`; backup section;
+    `import_run("install_post")`; `instance.set_status_ready(context.instance.requested)` —
+    then return, with nothing after the close.
+  Gate the first install exactly as written: `init_from` runs only when the CR already reports
+    `status.vitals`, its `status.tag` is still unset (`type_of` == `"()"`) and `spec.initFrom` is
+    set — so a completed install (tag written by the close) never runs it again.
+  Decide backups on `instance.status != () && instance.status.vitals != () &&
+    context.namespace.use_backup`: when true, schedule only if
+    `@k8s_resource("Secret", context.instance.namespace).get("backup-settings")` succeeds —
+    `schedule_backup` — and `delete_backup` on probe-absent-or-any-error; when false,
+    unconditionally `delete_backup`. Exactly one of the two runs per install.
+  Thread the context through a map merge only on `@type_of` == `map` of each hook/bucket return —
+    `install_pre`, the five `is_dir` buckets and `install_post` use the guard; the `install_tofu`
+    lane instead assigns the return unconditionally and then re-applies the stale `ctx` variable
+    when that is a map (Tasks); `init_from`, `schedule_backup` and `delete_backup` have their
+    returns discarded whole.
+  Refresh the instance after each taken manifest bucket with
+    `@get_service_instance(instance.metadata.namespace, instance.metadata.name)` — for `crds`
+    directly after @update_k8s_crd_cache, which the core side makes best-effort (keeps the old
+    cache and only tracing-warns on a failed refresh; mock no-op per /common/src/k8smock.sdd).
+    The refreshed copy is what the `init_from`/backup guards and the close read; the `init_from`
+    and backup lanes themselves never refresh.
+  Log the one literal line, `Installing CRDs from ${context.package_dir}/crds from
+    ${instance.metadata.namespace} ${instance.metadata.name}` via @log_info, inside the taken
+    `crds` gate and before its import_run; no other log statement lives at this level.
+  Close successfully through @set_status_ready with the requested tag (build_context's
+    `instance.requested` = `args.tag`), which also stamps the options digest and can fail the
+    whole install per Raises.
+  Load ./../lib/tofu_gen.rhai (and transitively ./../lib/tofu.rhai) at import time via the single
+    top-level `import "tofu_gen" as tfg` — before any `run` call, package without `.tf` files
+    included.
+  Resolve every stage/hook module against the four resolver directories frozen by the Rust lane,
+    so a package `scripts/` directory shadows the shipped lanes: a package shadowing
+    `install_tofu` must return the context map or `context` becomes `()` mid-run (Tasks).
+
+Must not:
+  Apply manifests, render templates or wait on workloads from this file: apply ordering lives in
+    ./../lib/install_from_dir.sdd and readiness in ./../lib/wait.sdd, both reached only through
+    the stage modules — importing either here would duplicate the lane contract.
+  Gate on the current `status.tag` to skip a rerun: replays are total; only the `init_from` and
+    backup guards read prior status.
+
+Depends on:
+  ./../lib/tofu_gen.rhai — the only import; @has_tofu_files answers the `tofu` gate (its spec
+    ./../lib/tofu_gen.sdd).
+  The shipped stage modules of this directory, all specs pending: ./install_crds.rhai,
+    ./install_befores.rhai, ./install_vitals.rhai, ./install_tofu.rhai, ./init_from.rhai,
+    ./install_others.rhai, ./install_scalables.rhai, ./install_posts.rhai,
+    ./schedule_backup.rhai, ./delete_backup.rhai — each writes its own `set_status_*` /
+    `set_status_*_failed` marker and re-throws, and each returns the (maybe hook-merged) context.
+  wynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
+    `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises), @is_dir,
+    @log_info/@log_debug/@log_warn, @json_encode, @k8s_resource(...).@get and
+    @update_k8s_crd_cache.
+  /common/src/instanceservice.sdd — the registered bridges used as methods/globals:
+    @get_service_instance and @set_status_ready.
+  /common/src/rhaihandler.sdd — the @Script constructor that mounts the above for the agent
+    lanes.
+  ./context.rhai (+ ./../lib/build_context.rhai) — producer of every `context` key this file
+    reads; key-by-key contract owned by ./../lib/build_context.sdd and ./context_service.rhai's
+    pending spec.
+
+References:
+  /agent/src/service/install.sdd — the caller: snippet, `instance`/`args` injection, resolver
+    directories and the exit-1 error lane this script's raises land in.
+  ./../tenant/install.rhai and ./../system/install.rhai — cross-kind orchestrator twins
+    (unspecified yet); the tenant copy shares this tofu-lane merge posture verbatim.
+  /agent/tests/rhai_lifecycle.rs — the mapped mock-engine tests (Tasks).
+
+Scenario: full bucket order with directories present
+  Given a package dir holding all seven category directories and tofu sources, on a live engine
+  When @run executes
+  Then the stage modules are imported in exactly pre → crds → befores → vitals → tofu →
+    others → scalables → posts → backup → post order, @update_k8s_crd_cache fires between crds
+    apply and its refresh, and a refresh follows each taken manifest bucket
+  And the close runs last whatever the buckets returned
+  No mapped test: ./../../tests/fixtures/package holds only `package.yaml`, so every gate is false.
+
+Scenario: absent modules and empty package skip clean
+  Given a stock image (no `install_pre`/`install_post` ship) on the test fixture package
+  When @run executes
+  Then both hooks, all buckets, tofu and init_from skip silently (debug logs only), the
+    backup section still runs `delete_backup`, and @set_status_ready is reached
+  Maps to @service_install_runs_without_error — which on the mock dies exactly at that close
+    (plain-map instance has no registered method) and whose catch-and-assert posture is weak
+    (Tasks).
+
+Scenario: init_from fires only during the very first install
+  Given a CR with `spec.initFrom` set whose `status.vitals` was just written by the vitals
+    bucket and whose `status.tag` is unset
+  When the `init_from` gate is evaluated over the refreshed instance
+  Then @import_run("init_from") runs — its return and any hook-merged context are discarded
+  But given the same CR after a successful close wrote `status.tag`
+  Then the gate is false and `init_from` never runs again
+
+Scenario: backup branch table
+  Given vitals applied and `context.namespace.use_backup` true and the `backup-settings` Secret
+    readable in `context.instance.namespace` → @schedule_backup runs, @delete_backup does not
+  Given the same with the Secret missing OR its read erroring (warned) → @delete_backup runs
+  Given `use_backup` false or no `status.vitals` → @delete_backup runs
+  And in every branch the module's return is discarded and the flow continues to `install_post`
+
+Scenario: stage throw aborts after its own marker
+  Given a bucket stage that fails — it writes its `set_status_*_failed` marker and re-throws
+  When the throw crosses @import_run
+  Then it is not one of the two skip markers, so it re-throws: no later bucket, no close, and
+    the Rust lane fails to exit(1) — a failure raised inside THIS file instead (refresh,
+    tofu predicate, close) leaves no failed-marker at all
+  No mapped test.
+
+Scenario: tofu context merge clobber
+  Given the crds/befores/vitals lanes returned maps (the shipped stages always do) and a tofu
+    gate that is true
+  When @run reaches the tofu exit
+  Then `context` first becomes install_tofu's return and is then OVERWRITTEN by the stale `ctx`
+    still holding the pre-tofu merge — tofu-lane context updates (e.g. `context.tofu`) reach
+    `install_post` and the close only when no earlier lane merged
+  No mapped test; recorded behavior, see Tasks.
+
+Tasks:
+  [ ] Map the Scenarios to /agent/tests/rhai_lifecycle.rs: add a fixture package with category
+      dirs and mocks for the refs, pin the order/refresh/gates above; today's
+      @service_install_runs_without_error asserts only that @eval returned Ok and its catch
+      accepts ANY error text, so it pins nothing about the failure channel.
+  [?] Tofu-lane double assignment: `context = import_run("install_tofu", ...)` plus the stale
+      `ctx` re-merge (Scenario "tofu context merge clobber") drops install_tofu's context on
+      every package that has an earlier merged lane. Decide whether `ctx` should be re-assigned
+      from the tofu call (the pattern every other bucket uses) — the tenant twin shares the
+      shape and the system twin dropped the guard block instead.
+  [?] `init_from`, `schedule_backup` and `delete_backup` returns are discarded while every
+      other hook result is merged — decide whether their `*_pre`/`*_post` hook context updates
+      are meant to propagate downstream (today: they do not).
+  [?] The backup-Secret probe funnels EVERY read error (Forbidden included) into "absent" →
+      `delete_backup`, which deletes backup CronJob/Jobs/RoleBinding/ConfigMap — a transient or
+      rbac error can therefore drop a schedule. Decide whether to narrow to NotFound like
+      ./delete_backup.rhai's own inner catches do.
+  [?] `install_pre`/`install_post` ship in no engine directory, so they exist only as
+      package-side hooks ({package_dir}/scripts). Confirm that is intentional (a shipped
+      no-op default, or documentation, is the alternative).
+  [?] A package shadowing `install_tofu` with a module whose `run` returns non-map leaves
+      `context` = `()` and the install dies on the next property read. Decide whether to guard
+      with the `type_of` pattern (like the buckets) or accept it as a documented
+      package-author contract a linter should catch.
+
+Done when:
+  Every Scenario carries a passing mapped test or a recorded decision, the bucket/hook order and
+    gate texts above still match the source, and `specdd lint` is green on this file.

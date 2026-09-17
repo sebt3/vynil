@@ -1,0 +1,345 @@
+# File spec for ./build.rhai — the packing lane the Rust side of
+# /agent/src/package/build.sdd evaluates: `import("build")` then `build::run(args)`.
+# Script semantics only: the clap surface, the `args` handoff JSON,
+# the exit ladder and the cosign subprocess itself are that spec's; the push/list/sign
+# cores are wynil-core `0.7.7`'s. Calibrated on the ./../boxes/scan.sdd and ./../lib/*.sdd
+# style. Everything observable after the snippet is here.
+
+Spec: PackagesBuild
+
+Platform: Rhai script (vynil-core 0.7.7 engine / locked rhai)
+
+Purpose:
+  Own the whole script side of `agent package build`: stage the package source tree into
+    `{args.temp}` (package.yaml double-gated, directories type-gated and extension-filtered
+    via the copied @dir_exts/@dir_all projections), resolve the pushed version (literal
+    `args.tag` verbatim, else the `args.build`-flavoured bump of the highest registry
+    semver, else a bump of the seed `0.1.0`), ALWAYS push `{args.temp}` to
+    `{registry}/{repository}:{version}` through core @push_image with the
+    `fr.solidite.vynil.*` annotations, cosign-sign only when `signing_key` is non-empty,
+    and print the one summary line. No Handlebars rendering, no `images` consumption, no
+    manifest generation here — the `.hbs`/`.tf` trees are staged as data; install-time
+    lanes render them.
+  Complete file structure: two top-level `import` lines (`import "copy_dir" as copy;`,
+    `import "package_yaml" as pck;`), then four @fn definitions (@security_filter,
+    @improve_package, @build, @run) and nothing else — importing the module runs the two
+    imports and defines the fns, with no other top-level effect.
+
+Exposes:
+  @run(args) — the module's entry, the only function the Rust snippet calls; its return
+    value is discarded upstream, its @print line is the whole lane's success output.
+  @build(args) — the staging leg @run calls first; returns the Rust-loaded @VynilPackage
+    object. Callable from an importing module (no test does).
+  @security_filter(v) — registry-tag hygiene gate, exact @./../boxes/scan.rhai twin; the
+    only function ./../../tests/rhai_build.rs calls directly (`b::security_filter`).
+  @improve_package(src, dest) — the package.yaml decode → @pck::validate → rewritten-file
+    gate; kept module-internal by convention (only @build calls it), reachable through the
+    import like the other @fns.
+  Import contract: `import "build" as build` (Rust side) / `import "build" as b` (tests),
+    resolved over the Rust lane's resolver dirs; the file's own `copy_dir` and
+    `package_yaml` imports resolve across the same collection, so a `{source}/scripts`
+    shadow can replace either — module-not-found aborts the whole lane as a rhai error
+    (the import happens at module evaluation, before @run is reached; the core
+    @import_run debug-skip posture belongs to those shims, not to these bare imports).
+
+Accepts:
+  @args — the scope map @/agent/src/package/build.sdd injects as JSON; keys read: `source`,
+    `temp`, `tag`, `registry`, `repository`, `username`, `password` (all into
+    @new_registry/staging paths), `build` (the @switch word), `signing_key`.
+    `script_dir` is in the JSON but never read here. A missing key reads as @() and shape
+    mistakes crash the reached @String signature as function-not-found, never a fallback.
+  @run — nothing beyond @args; no existence, emptiness or syntax preflight of source,
+    temp, registry, repository or the literal tag (the tag is judged only by @semver_from
+    at resolution time).
+  @security_filter — any @String tag text; reads `.len()` and `.sub_string(0, 1)` first.
+  @improve_package — `src` = `args.source + "/package.yaml"`, `dest` =
+    `args.temp + "/package.yaml"`; only a regular file is accepted (@is_file gate).
+
+Returns:
+  @run — `()` (the trailing @print is its last expression); side effects only.
+  @build — the @read_package_yaml result (registered type `VynilPackage`) after
+    @validate_options; @run keeps it for the annotation getters only.
+  @security_filter — `true` when the tag survives hygiene, `false` otherwise.
+  @improve_package — `()`; the patched manifest is observable in @dest only.
+
+Raises:
+  Exactly one literal @throw in the file: @improve_package's `src + " doesnt exist"` —
+    verbatim `{source}/package.yaml doesnt exist` (sic, space before `doesnt`), raised when
+    the path is not a regular file, including a `{source}/package.yaml` that is a
+    directory (see Tasks). It fires only after `args.temp` has already been created.
+  Unguarded propagations (every leg reaches Rust as `Rhai script error: …`, exit lane in
+    /agent/src/package/build.sdd): core @create_dir/@read_dir/@file_read/@file_write
+    errors; @yaml_decode/@yaml_encode texts; all eight @pck::validate throw texts and its
+    engine-raise legs (./../lib/package_yaml.sdd); @read_package_yaml/YAML-deser and
+    @validate_options/JSON-schema texts; @semver_from parse failures on a literal
+    `args.tag` (stringified core @Error::Semver text) and on `args.build = "beta"/"alpha"`
+    counters like `1.0.0-beta.rc` (`invalid beta counter`, @inc_beta/@inc_alpha errors —
+    OUTSIDE the listing @try, so they abort after staging and before any push).
+  Core @list_tags/@push_image (transport, @Error::OCIDistrib/@OCIParseError re-embedded as
+    rhai text) and @sign_image (@cosign spawn @Error::Stdio or the
+    `cosign sign failed for {registry}/{repository}:{version}@{digest}` text, core-owned).
+  Guarded, never propagating: the @list_tags leg @log_warns the failure and continues on
+    the seed; @security_filter @log_warns a `v`/digit-start parse failure and returns
+    `false`.
+
+Handles:
+  Type-gated staging table over @read_dir(`args.source`), each leg also requiring @is_dir;
+    unmatched entries fall through silently: `systems`/`crds` when the `metadata` `type` is
+    `"system"`, `crds` alone (`"service"`), `vitals`/`scalables`/`others`/`befores`/`posts`
+    and `pods` for `type in ["tenant", "service"]` — everything @copy::dir_exts with the
+    3-arg non-recursive form and exts `[".hbs", ".yaml", ".yml"]` (`pods` `[".hbs"]`
+    only), so those directories' subdirectories are never staged or created.
+  `handlebars` stages two named subdirs only, regardless of package type: `partials`
+    (`.hbs`) and `helpers` (`.rhai`), mirrored as `{temp}/handlebars/{subbase}`; any other
+    subdir of `handlebars` is skipped.
+  Shared dirs recursive: `scripts` `.rhai`/`.sh`, `tofu` `.tf`/`.tpl`/`.tftpl` (4-arg
+    @copy::dir_exts with @true), `files` @copy::dir_all with @true.
+  `metadata.type` outside `tenant`/`system`/`service` never reaches the fall-through it
+    would take: the @VynilPackageType enum rejects it at @read_package_yaml before staging
+    finishes — a `tenant` package simply stops copying `systems`/`crds`.
+  Warm `args.temp`: core @create_dir is @create_dir_all (idempotent) and @file_copy
+    overwrites same-name paths, while nothing prunes — a staged path the current source no
+    longer has ships in the pushed layer.
+  Tag hygiene, three classes (@security_filter): `""` and any tag whose first char is not
+    `v`/ASCII-digit → `false` with NO log (kills `sha256-*.sig`, `trivy-*`, `latest`);
+    digit/`v` start failing @semver_from → @log_warn `skipping non-semver tag ${v}` and
+    `false`; otherwise `true`.
+  Listing outage (unreachable registry, unknown repository, malformed `{registry}/{repo}`
+    reference): the @catch switches on @type_of(@e) — raw @log_warn(@e) for strings,
+    @log_warn(@json_encode(@e)) for anything else — and the seed bump pushes on (a listing
+    failure looks exactly like a first publish; the whether-should-it-fail decision lives
+    in /agent/src/package/build.sdd, not forked here).
+  Empty or fully-filtered tag answer → `tags.len() > 0` false → seed kept, same publish leg.
+  Unknown `args.build` word → the no-default @switch falls through and no bump is applied;
+    unreachable while the handoff comes from clap's five-word @BuildType, live for any
+    hand-crafted `args`.
+
+Must:
+  Run @run in this exact order: @build(@args) fully (staging + both Rust loads) BEFORE
+    @new_registry and before any registry network call; then version resolution; then
+    annotations; then @push_image; then the signing leg; then @print. A staging or
+    validation failure therefore never contacts the registry.
+  Stage via @improve_package in full: @is_file gate → @yaml_decode(@file_read(@src)) →
+    @pck::validate (script-side gate, patched map rebound from the return) →
+    @file_write(@dest, @yaml_encode(@yaml)); the patched bytes are the staged manifest,
+    and @read_package_yaml/@validate_options then validate the STAGED `{temp}/package.yaml`,
+    not the source file — what is validated is what is pushed.
+  Read exactly these getters on the loaded object: `metadata`, `requirements`, `options`,
+    `recommandations`, `value_script`; `images` and `resources` are never read — the
+    package `images` list is inert build-time data.
+  Compose the version as: seed @semver_from(`"0.1.0"`) always parsed; `args.tag != ""`
+    alone switches to @semver_from(`args.tag`) with NO @switch bump and no listing; else
+    `reg.list_tags(args.repository) @filter @security_filter @map @semver_from`, sorted
+    descending by the comparator `|a,b| if a==b {0} else if a<b {1} else {-1}`, highest at
+    `tags[0]`; then the @switch on the five clap words — `"major" => @inc_major`,
+    `"minor" => @inc_minor`, `"patch" => @inc_patch`, `"beta" => @inc_beta`,
+    `"alpha" => @inc_alpha` — in-place on `version`. The seed itself is never pushed: the
+    first auto-publish ships the bumped seed (`0.1.1-alpha.1` at default `alpha`).
+  Keep the @try scope exactly the list/filter/sort/assign leg: the bump @switch runs
+    identically after a listing failure and after an empty answer, and an @inc failure is
+    NOT swallowed by that catch.
+  Render the tag once as `str_ver = version.to_string()` and reuse it for push, sign and
+    the print; the core @Semver @Display round-trips a leading `v`, so a v-prefixed literal
+    tag or v-prefixed max tag pushes a v-prefixed tag while seed/first-publish paths push
+    the bare form.
+  Build @annotations as a rhai map with `fr.solidite.vynil.metadata` and
+    `fr.solidite.vynil.requirements` always, each the @json_encode of the getter value;
+    `fr.solidite.vynil.options` and `fr.solidite.vynil.recommandations` only when the
+    getter is `!= ()`; `fr.solidite.vynil.value_script` when `!= () && != ""` — and the
+    @get_value_script getter answers `""`, never `()`, so the `!= ""` leg alone is live and
+    the annotation value is the QUOTED JSON text @json_encode of a @String.
+  Push unconditionally after resolution — no dry-run or push-off leg exists in the file —
+    as `reg.push_image(args.temp, args.repository, str_ver, annotations)`: (source_dir,
+    repository, tag, annotations) in that order, one whole-`{temp}` gzip layer, digest is
+    core's @Registry::push_image return (the `sha256:` tail of the manifest URL,
+    core-owned).
+  Sign only on `args.signing_key != () && args.signing_key != ""` (both legs written), as
+    `reg.sign_image(args.repository, str_ver, digest, args.signing_key)` — repository, tag,
+    digest, key in that order; the digest is consumed by nothing else and never printed.
+  Keep @list_tags to ONE page of 100 tags (core cap) fed through @security_filter before
+    any @semver_from parse; an element that gets there is already semver-parsed once by
+    the filter (the pure re-parse cannot fail between the two legs).
+  Print exactly one line as the terminal side effect:
+    @print(`${args.repository} version ${str_ver} uploaded`) — repository only, NO
+    registry host, no digest, exit-0 signal upstream.
+  Keep @security_filter's silent-first-gate posture verbatim: `v.len() == 0` → `false`;
+    `c = v.sub_string(0, 1)`, `c != "v" && (c < "0" || c > "9")` → `false` with no log; the
+    @semver_from parse attempt returns `true` inside the @try; the @catch logs the warning
+    and the trailing bare `false` settles the fn. Never calls @log_error —
+    ./../../tests/rhai_build.rs throws on any @log_error call.
+  Stay pure-script: no gen_package/hbs/apps/tofu/install lib imports, no k8s/JukeBox names,
+    no @hbs calls, no @shell, no writing outside @args.temp; the engine surface consumed is
+    exactly: fs @create_dir/@read_dir/@basename/@is_file/@file_read/@file_write,
+    @yaml_decode/@yaml_encode, @json_encode, @log_warn, @print (the one stdout surface),
+    @type_of, rhai @Array @filter/@map/@sort/@len and `in`, @semver_from + @Semver
+    @inc_major/@inc_minor/@inc_patch/@inc_beta/@inc_alpha/@to_string + ordering,
+    @new_registry + the Registry members @list_tags/@push_image/@sign_image,
+    @read_package_yaml + @validate_options + the five section getters (all registrations
+    per /common/src/rhaihandler.sdd and /common/src/vynilpackage.sdd; auth promotion to
+    anonymous on a one-sided credential happens inside core @new_registry).
+
+Must not:
+  Touch the registry before staging completes — the version lane runs after @build, so an
+    invalid manifest never lists nor pushes, and an unparseable literal `--tag` aborts
+    AFTER `{temp}` and the staged tree already exist.
+  Purge or content-check `{args.temp}` before pushing — rebuilds merge into the previous
+    staging (the warm-temp stale-file freeze is also /agent/src/package/build.sdd's).
+  Bump, normalize or re-render `args.tag` beyond the @semver_from/@to_string round-trip.
+
+Depends on:
+  ./../lib/copy_dir.rhai (./../lib/copy_dir.sdd) — imported as `copy`; the non-recursive
+    3-arg @dir_exts legs, the 4-arg recursive `scripts`/`tofu` legs and the recursive
+    @dir_all `files` leg; its create-before-scan and silent-overwrite postures are this
+    staging's postures.
+  ./../lib/package_yaml.rhai (./../lib/package_yaml.sdd) — imported as `pck`; @validate is
+    the first gate in @improve_package and owns its eight throw texts and warnings.
+  wynil-core `0.7.7` @Registry — @push_image/@sign_image/@list_tags members and the
+    100-tag page, consumed as API; @semver @Semver bump/error semantics (`inc_major`/
+    `inc_minor`/`inc_patch` infallible, `inc_beta`/`inc_alpha` can fail on a malformed
+    counter).
+  @read_package_yaml + @package_rhai_register getters (./../../../common/src/vynilpackage.sdd)
+    — the second, authoritative manifest gate and the section getters' `()`-or-value shapes.
+  /agent/src/package/build.sdd — the caller and every surrounding Rust fact: clap surface,
+    `args` JSON, resolver-dir order (`{source}/scripts`, `{script_dir}/packages`,
+    `{script_dir}/lib`) whose first entry lets the package source shadow this module or
+    its imports, exit ladder; the listing-outage and shadowing DECISIONS live there.
+  /common/src/rhaihandler.sdd — the @Script::new assembly giving this file its engine names.
+
+References:
+  /agent/tests/rhai_build.rs — the mock-lane tests: six direct @security_filter cases, a
+    mock-digest @push_image return check, two guard-shape sign cases; none exercises
+    @run/@build/@improve_package.
+  ./../boxes/scan.rhai (./../boxes/scan.sdd) — the @security_filter twin whose silent-drop
+    posture this module copies test-for-test.
+
+Tasks:
+  [ ] Map every Scenario below to ./../../tests/rhai_build.rs names: nine tests exist
+      (@build_security_filter_cosign_tag_no_error_log,
+      @build_security_filter_trivy_tag_no_error_log,
+      @build_security_filter_latest_tag_no_error_log,
+      @build_security_filter_semver_tag_accepted,
+      @build_security_filter_v_prefixed_semver_accepted,
+      @build_security_filter_empty_string_rejected, @build_push_image_returns_digest,
+      @build_sign_image_skipped_when_no_key, @build_sign_image_called_when_key_provided);
+      the two sign tests and the digest test evaluate COPIED guard snippets, not this file
+      — a real extraction-change of @run would keep them green.
+  [ ] Add an end-to-end @run test on a temp source tree (staging table, type gates,
+      @improve_package throw text, print line) — @build and @improve_package have zero
+      coverage today; mock list_tags always answers `[]`, so the auto-max and
+      listing-outage legs are untestable without a mock that answers tags.
+  [?] @security_filter is a char-for-char twin of ./../boxes/scan.rhai's — decide whether
+      to extract it into a lib module (single hygiene contract) or freeze the duplication.
+  [?] @value_script annotation asymmetry: this writer stores @json_encode of the
+      @String getter (quoted JSON in the annotation) while the scan lane carries manifest
+      annotations as raw strings; the `!= ()` guard leg is dead code because that getter
+      answers `""`, never `()`. Decide writer-vs-reader posture once, paired with
+      /common/src/vynilpackage.sdd and ./../boxes/scan.sdd.
+  [?] `v`-prefix drift: the pushed tag inherits the `v` of the max/literal tag and the
+      seed path pushes bare — one repository can hold `0.1.1-alpha.1` and `v2.1.0` side by
+      side. Decide whether the lane must normalize tag form before publishing.
+  [?] Malformed-prerelease abort: an `args.build = "beta"/"alpha"` bump over a max tag
+      like `1.0.0-beta.rc` dies with `invalid beta counter` after staging, before push,
+      uncaught by the listing @try. Decide whether that error belongs inside the seed
+      fallback or stays fatal.
+  [ ] Misleading throw: `…/package.yaml doesnt exist` also fires when the path exists as a
+      directory (@is_file gate) — fix the text/condition or record the finding.
+  [?] Do-not-fork pointers, all decided in /agent/src/package/build.sdd: the
+      listing-outage downgrade (`[?]` there), the `{source}/scripts` shadow surface, push
+      digest determinism, the sync-over-async posture.
+
+Done when:
+  Every Scenario carries a mapped passing test or an explicit Task exemption, the `[?]`s
+    above are recorded, and `cargo test -p agent` with clippy, `cargo +nightly fmt --check`
+    and `specdd lint` stay green.
+
+Scenario: cosmetic tags drop silently
+  Given tags `sha256-deadbeef.sig`, `trivy--apps-auth`, `latest` and `""` through
+    @security_filter on an engine whose @log_error throws
+  Then each answers `false` with no error-level log and no warning
+  Maps to tests @build_security_filter_cosign_tag_no_error_log,
+    @build_security_filter_trivy_tag_no_error_log, @build_security_filter_latest_tag_no_error_log,
+    @build_security_filter_empty_string_rejected
+
+Scenario: semver tags accepted plain and v-prefixed
+  Given `1.2.3` and `v2.0.0`
+  Then @security_filter answers `true` for both, no log
+  Maps to tests @build_security_filter_semver_tag_accepted,
+    @build_security_filter_v_prefixed_semver_accepted
+
+Scenario: parseable-start non-semver warns once
+  Given `2.x` through @security_filter
+  Then the @semver_from failure yields the warning `skipping non-semver tag 2.x` and `false`
+  No mapped test exists.
+
+Scenario: literal tag bypasses listing and bump
+  Given `args.tag` `1.2.3` and a registry whose max tag is `9.9.9`
+  When @run resolves and pushes
+  Then @list_tags is never called, no bump runs, the pushed and printed tag is `1.2.3`
+  No mapped test exists.
+
+Scenario: auto lane bumps the highest surviving semver
+  Given listed tags `1.2.3`, `v2.0.0`, `sha256-deadbeef.sig`, `latest` with `args.build`
+    `minor`
+  When the auto lane resolves
+  Then the filter drops the last two, descending sort takes `v2.0.0` and the pushed tag is
+    `v2.1.0` — the `v` prefix from the max tag rides into the release
+  Mock @list_tags answers `[]` only; no mapped test exists.
+
+Scenario: first publish is the bumped seed
+  Given an empty or fully-rejected tag answer and `args.build` `alpha`
+  Then the pushed and printed version is `0.1.1-alpha.1` — the seed `0.1.0` itself never
+    ships
+  No mapped test exists.
+
+Scenario: listing outage still publishes the seed bump
+  Given @args.tag `""` and a @list_tags that raises
+  Then the error text is @log_warned (raw for a string, @json_encode otherwise) and the run
+    continues to push `0.1.1-<build>.1` anyway — exit 0 upstream
+  No mapped test exists.
+
+Scenario: malformed beta counter aborts after staging
+  Given max tag `1.0.0-beta.rc` and `args.build` `beta`
+  Then @inc_beta raises `invalid beta counter 'rc'`, NOT swallowed by the listing @try: the
+    `{temp}` tree exists and nothing is pushed
+  No mapped test exists.
+
+Scenario: missing package.yaml aborts with the verbatim throw
+  Given `args.source` without a `package.yaml` (or with one that is a directory)
+  Then @create_dir(`args.temp`) still happened, and the lane dies on
+    `{source}/package.yaml doesnt exist` as `Rhai script error:` — exit 1 upstream
+  No mapped test exists.
+
+Scenario: staging table gates by package type and extension
+  Given a `service` source holding `crds/`, `systems/`, `vitals/`, `pods/` (each with a
+    `.hbs` and a `.json`), `handlebars/partials/` + `helpers/` + `misc/`, `scripts/` with a
+    nested dir, `tofu/` and `files/` with a `.env`
+  Then `{temp}` gets `crds`/`vitals` (.hbs only, one level), `pods` (.hbs),
+    `handlebars/partials` (.hbs) and `handlebars/helpers` (.rhai) — never `misc` — while
+    `systems` is skipped for `service`; `scripts` recurses (.rhai/.sh), `tofu` recurses
+    (.tf/.tpl/.tftpl), `files` copies everything recursively; a `tenant` package also skips
+    `crds`, a `system` package takes `systems`+`crds` instead of the vitals/pods legs
+  No mapped test exists.
+
+Scenario: warm temp merges and stale files ship
+  Given a second @run over the same `args.temp` whose source lost `files/old.hbs`
+  Then same-name files are overwritten, `{temp}/files/old.hbs` survives and rides the
+    pushed layer — no purge exists in this file
+  No mapped test exists.
+
+Scenario: push always, sign only on a key
+  Given a successful push returning the mock digest `sha256:…`
+  Then @sign_image is not called at all with `args.signing_key` `""`, and IS called as
+    `(repository, str_ver, digest, key)` with a non-empty one; the print line
+    `<repository> version <str_ver> uploaded` follows either way
+  Maps guard-shape tests @build_sign_image_skipped_when_no_key and
+    @build_sign_image_called_when_key_provided (copied @if guards, not @run), and
+    @build_push_image_returns_digest pins the string digest return only.
+
+Example:
+  auto-lane shape: `list_tags(repository)` → `filter(security_filter)` → `map(semver_from)`
+    → sort desc → `tags[0]` → one `inc_*` call → `to_string()`
+  annotations always carry the `fr.solidite.vynil.metadata` and `fr.solidite.vynil.requirements`
+    keys with @json_encode values; the `fr.solidite.vynil.options`,
+    `fr.solidite.vynil.recommandations` and `fr.solidite.vynil.value_script` keys are
+    conditional (the latter a quoted JSON text)
+  summary line: `my-app version 1.0.0 uploaded` to stdout

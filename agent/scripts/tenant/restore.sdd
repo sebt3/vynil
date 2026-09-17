@@ -1,0 +1,293 @@
+Spec: TenantRestoreScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Orchestrate the immediate (no schedule branch exists here) restic restore of one tenant
+    package inside a dispatched restore Pod: decode the Pod's own process env into the args map
+    via @ctx::from_args, then walk a fixed @import_run stage sequence — pre-hook, the
+    maintenance-start, the restic restore itself, the optional prepare hook, the five engine
+    legs in secret → postgresql → mysql → mongodb → redis order, maintenance-stop, post-hook —
+    where one package script can replace the whole lane and each engine leg can be individually
+    replaced by its own package script. No CR is ever in hand: the instance is invisible at this
+    level (frozen by /agent/src/tenant/restore.sdd), no status/condition/tag is written here, and
+    the failure surface is exactly seven @throw strings over custom-script return codes plus
+    whatever the stages re-throw. Diff-verified twin of ./../service/restore.rhai (the real diff
+    is the single insert of the `restore_mongodb.sh` and `restore_redis.sh` gates with their
+    module fall-throughs, between the mysql leg and maintenance_stop, every other byte
+    identical): the only line of the twin's flow this file runs as SHIPPED modules — the tenant
+    directory carries ./restore_mongodb.rhai and ./restore_redis.rhai that the service lane has
+    no counterpart for — and thereby the only lane where the @ctx::from_args `mongo_list` /
+    `redis_list` decodes reach a consumer. Stage-shape sibling of ./backup.rhai (spec pending).
+
+Exposes:
+  @run(@args) — the module's sole @fn and entry point; invoked as `restore::run(args)` by the
+    Rust lane /agent/src/tenant/restore.sdd — the only module name its fixed snippet names is
+    `restore` — whose `let _ =` discards the returned @Dynamic.
+
+Accepts:
+  @args — the ten-key CLI `args` map injected by the Rust lane. Read directly by this file:
+    `package_dir` (all seven custom-script @is_file gates, spelled `${args.package_dir}`) plus,
+    through the merged map, `s3_url` and `package_dir` (restore.sh command interpolation).
+    @ctx::from_args mutates this SAME map in place and returns it as `context`, so the
+    `args.package_dir` / `context.package_dir` spellings name one value — the 19-key env
+    contract and `package_dir`'s untouched pass-through are owned by ./../lib/backup_context.sdd.
+  @context downstream consumers (this file never reads the lists — it only says which stage
+    runs): `snapshot` + `s3_url` + `restic_args` (consumed by ./restore_run.rhai — the
+    WHAT-restores decision, env `RESTIC_SNAPSHOT` copied verbatim), `secret_list` +
+    `namespace` + the CLI-passed-through `template_dir` (./restore_secret.rhai), `pg_list`
+    (./restore_postgresql.rhai), `mysql_list` (./restore_mysql.rhai), `mongo_list` plus its
+    `${name}_dbname`/`_host`/`_username`/`_password` env family (./restore_mongodb.rhai, stage
+    spec pending), `redis_list` + `namespace` plus the `${name}_sts`/`_password` envs
+    (./restore_redis.rhai, stage spec pending), `deployment_list` / `statefulset_list` /
+    `scale_target` (the maintenance pair's unwritten scale TO-DO only — read by no executed code
+    today), while `restic_tags`, the four `max_*` retention keys, `sub_path` and `base_path`
+    have no reader downstream in the tenant restore lane as wired (the latter two are consumed
+    inside @ctx::from_args itself).
+  Runtime inputs — seven optional package scripts under `${args.package_dir}/scripts/`:
+    `restore.sh` (replaces the whole lane), `restore_prepare.sh` (an additive hook with NO
+    shipped module and NO engine-bypass), `restore_secret.sh`, `restore_postgresql.sh`,
+    `restore_mysql.sh`, `restore_mongodb.sh`, `restore_redis.sh` (per-leg replacements; the last
+    two gates are tenant-only, twin-absent surface). Each gate is pure file existence; each
+    executed script is a shell entry, not a Rhai module.
+
+Returns:
+  Custom-script path: @run hits `return rc` after `restore.sh` succeeds — `rc` there is
+    necessarily 0 (a non-zero one threw first) — and the Rust lane discards it.
+  Normal path: the implicit value is the trailing `import_run("restore_post", ...)` result
+    (unit on a stock image, since `restore_post` ships nowhere); the Rust lane discards this
+    too (@common/src/rhaihandler.sdd skip semantics).
+  The observable result is entirely side-effect: a restic restore landing on `/` inside the
+    Pod, Secrets re-applied through the cluster bridge, psql/mysql re-seeds from SQL dumps
+    under `/backup`, a `mongorestore` archive load and a Redis `.rdb` pushed into the workload
+    by the two tenant-only legs, and the 0-or-throw completion channel the Rust exit-5 lane
+    reads.
+
+Raises:
+  Exactly seven @throw statements, all the same shape — template text
+    `${context.package_dir}/scripts/<name> FAILED returning ${rc}` — one per custom script
+    (`restore.sh`, `restore_prepare.sh`, `restore_secret.sh`, `restore_postgresql.sh`,
+    `restore_mysql.sh`, `restore_mongodb.sh`, `restore_redis.sh`) on a non-zero @shell_run code.
+    Throws from the restore.sh gate onward abort mid-lane; the thrown text reaches the process
+    through the Rust lane's `Rhai script error:` prefix and exit-5 (frozen by
+    /agent/src/tenant/restore.sdd — contrast backup's exit-4 — no condition, no
+    `set_status_*` marker is minted at this level or by any shipped tenant stage).
+  Stage re-throws propagate identically: @import_run swallows only the two skip markers
+    (`No ${name} module, skipping.` / `No ${name}::run function, skipping.`; owners
+    /common/src/rhaihandler.sdd + the wynil-core shim), so a stage throw aborts the run: a
+    `restic backup FAILED returning ${rc}` from ./restore_run.rhai (the verbatim misnomer: the
+    RESTORE stage throws "backup"), a `psql failed for ${pg}` from ./restore_postgresql.rhai,
+    a `mysql restoration failed for ${mysql}` from ./restore_mysql.rhai, a cluster-bridge raise
+    from ./restore_secret.rhai, a `mongorestore failed for ${mongo}` from
+    ./restore_mongodb.rhai, or one of the six `... for ${redis}` strings (scale down /
+    scale down wait / `No pod found for redis` / kubectl cp / rollout restart / rollout status)
+    from ./restore_redis.rhai — the redis leg being the only executed code in this lane that
+    touches workload replicas at all.
+  Import-time: the module body's sole top-level statement `import "backup_context" as ctx;`
+    resolves at module load; a resolution miss is a Rust-lane eval error before @run starts.
+    @ctx::from_args itself raises for nothing env-side (./../lib/backup_context.sdd), and
+    `context.s3_url` / `context.package_dir` are unguarded reads both always present (the
+    former possibly the degraded `s3:/`, which the lane neither detects nor reports — it rides
+    the restore.sh export and restic's own return codes downstream).
+
+Handles:
+  Total-lane custom restore — `restore.sh` present: run it with the repo export, then
+    `import_run("restore_post")` and return — skipping the maintenance pair, restore_run, the
+    prepare hook and all five engine legs. Absent (the stock case) falls through to the full
+    sequence; `restore_pre` still ran before this gate either way.
+  Snapshot choice — the env `RESTIC_SNAPSHOT` is the sole WHAT-decider: @ctx::from_args copies
+    it verbatim into `snapshot` and ./restore_run.rhai interpolates it straight into
+    `restic restore ${context.snapshot} --exclude-xattr security.selinux --target /`; no
+    latest-resolution, listing or filtering happens at this level, and an empty env still
+    ships an empty snapshot token on the command line, leaving resolution and failure to
+    restic's return code. The destination likewise arrives only as `BASE_REPO_URL` +
+    `SUB_PATH` normalized into `s3_url`.
+  Engine routing is file-existence ONLY, never list contents: each of the five legs takes its
+    own script-or-module branch independently and in the fixed secret → postgresql → mysql →
+    mongodb → redis order. The asymmetry against ./backup.rhai: the `restore_prepare.sh` gate
+    has no else-branch — passing it adds its run but never bypasses the five legs (backup's
+    twin gate DOES replace the block) — and no `restore_prepare` module ships to be shadowed.
+    Conversely ./restore_run.rhai has no `.sh` replacement gate, and this lane has no
+    backup_init / backup_check / backup_prune counterpart at all (nothing to init or verify:
+    the repository already exists at restore time). Against ./../service/restore.rhai the two
+    new gates are plain shape: the service twin simply has no mongodb/redis leg to replace.
+  Maintenance window positions: @import_run("maintenance_start") sits right before
+    restore_run and @import_run("maintenance_stop") after the redis leg — the window brackets
+    the whole restore plus every engine re-seed, mongorestore and the redis rollout restart
+    included. Both shipped modules are pass-through hook calls around a scale TO-DO comment —
+    byte-identical twins frozen by ./../service/maintenance_windows.sdd (deployment_list/
+    statefulset_list to 0 / back to `scale_target`): the window currently toggles nothing on
+    the cluster, and this file itself never touches scale anywhere — `SCALE_TARGET` decodes
+    into `scale_target` with no executed reader on either side of the TODO. The only real
+    scale movement is the redis leg's own internal kubectl scale-down/restart/scale-back.
+  Unshipped hook names: `restore_pre` and `restore_post` ship in no engine directory
+    (./, ./../service, ./../lib) — on a stock image both take the debug-log skip; they exist
+    as package `scripts/` slots. The two shipped tenant legs bracket further hook names of
+    their own (`restore_mongodb_pre`/`_post`, `restore_redis_pre`/`_post`) that likewise ship
+    nowhere — stage-side skip posture, owned by those pending stage specs.
+  RESTIC environment handling — this file exports ONLY on the restore.sh line, the inline
+    `export RESTIC_REPOSITORY="${context.s3_url}";` prefix; the other six custom scripts run
+    bare `${context.package_dir}/scripts/<name>` with no export. TLS rides `restic_args`
+    (`" --insecure-tls"`, appended by ./restore_run.rhai) and the Pod env; `RESTIC_HOST` and
+    `RESTIC_TAGS` are never read or written here.
+  No cron/schedule branch — scheduling lives in ./install.sdd and the ./schedule_backup.rhai
+    lane (spec pending); this module, reached by `agent tenant restore` inside a dispatched
+    restore Job or any process-env already shaped like one, always restores now.
+
+Must:
+  Execute exactly this order with nothing else interleaved: @ctx::from_args(args) →
+    @import_run("restore_pre") → `restore.sh` gate (run + `restore_post` + `return` on presence,
+    OR fall through) → @import_run("maintenance_start") → @import_run("restore_run") →
+    `restore_prepare.sh` gate (run or skip; flow always continues) → `restore_secret.sh` gate
+    (run, OR import the module) → `restore_postgresql.sh` gate (run, OR import) →
+    `restore_mysql.sh` gate (run, OR import) → `restore_mongodb.sh` gate (run, OR import) →
+    `restore_redis.sh` gate (run, OR import) → @import_run("maintenance_stop") →
+    @import_run("restore_post") → end.
+  Emit no log statement at this level (contrast ./backup.rhai's single
+    `Starting backup using target:` line) — every log line of a stock restore comes from a
+    stage module.
+  Ship the restore.sh command with the exact prefix `export RESTIC_REPOSITORY="${context.s3_url}";`
+    followed by `${context.package_dir}/scripts/restore.sh`, and ship the other six custom
+    scripts as the bare `${context.package_dir}/scripts/<name>` command with no export.
+  Treat any non-zero @shell_run code as fatal at its own throw site (never retried, never
+    collected; `restore.sh` rc 0 alone returning).
+  Pass the one `context` map to every @import_run and discard every return — the
+    `context = import_run(...)` merge discipline of ./install.sdd is absent here, so stages
+    communicate through their own side effects (restic, `/backup`, the cluster bridge, kubectl,
+    shell env), never through a returned map.
+  Resolve every stage name against the four resolver directories frozen by the Rust lane —
+    `{package_dir}/scripts` first, then `{config_dir}`, `{script_dir}/tenant` (hard-coded kind
+    segment), `{script_dir}/lib`, earlier entries winning an import — so a package or config
+    `scripts/restore_run.rhai` (or any other stage name) replaces the shipped lane wholesale
+    and the shipped `./restore_mongodb.rhai` / `./restore_redis.rhai` are the default legs no
+    other engine directory could answer.
+  Keep the gate presence check spelled `${args.package_dir}` while the command and throw text
+    spell `${context.package_dir}` — two spellings, one value through the in-place merge.
+  Keep the import-time surface at the single `import "backup_context" as ctx;` —
+    ./../lib/backup_context.rhai executes nothing on load, so module load touches no env,
+    filesystem or cluster.
+
+Must not:
+  Write any failure/success marker — no `set_status_*` call, no condition, no tag, no
+    `instance` binding, no kube call: the Rust lane froze this side as CR-blind and any status
+    write here would fabricate an object the restore Job never owns.
+  Branch on env to pick scheduled-vs-immediate or to skip a stage wholesale: the only env
+    influence on this lane is the DECODED env inside @from_args (destination, snapshot, engine
+    lists, TLS), never a schedule or feature switch.
+  Read `context.snapshot`, `mongo_list`, `redis_list` or any engine/scale list to route work —
+    routing here is @is_file only and the lists are consumed by the stage modules, which self-
+    no-op on empty ones.
+
+Depends on:
+  ./../lib/backup_context.rhai — the single import; @from_args half of the 19-key env→context
+    contract (spec ./../lib/backup_context.sdd, which names this file among its from_args
+    consumers).
+  The shipped stage modules of this directory, all specs pending and each self-throwing:
+    ./maintenance_start.rhai and ./maintenance_stop.rhai (no-op pair already frozen as twins
+    by ./../service/maintenance_windows.sdd), ./restore_run.rhai (restic restore
+    ${context.snapshot} --exclude-xattr security.selinux --target / ${context.restic_args}),
+    ./restore_secret.rhai (Secret apply from `/backup/${secret}` files, target name from the
+    `secret_${name}_target` env, hbs partials from `context.template_dir`),
+    ./restore_postgresql.rhai (psql from `/backup/postgresql_${pg}[_cleaned].sql`),
+    ./restore_mysql.rhai (mysql from `/backup/mysql_${mysql}[_cleaned].sql`),
+    ./restore_mongodb.rhai (`mongorestore --archive=/backup/mongodb_${mongo}.archive` per
+    `mongo_list` name, `--nsInclude` only for a non-`*` dbname), ./restore_redis.rhai
+    (kubectl-driven per `redis_list` name: sts/deployment detection, scale-to-1, `kubectl cp`
+    of `/backup/redis_${redis}.rdb`, rollout restart and wait, scale-back).
+  wynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file and
+    @shell_run (int return code); registrars per /common/src/rhaihandler.sdd. This level
+    calls no @log_info and no cluster function.
+
+References:
+  /agent/src/tenant/restore.sdd — the caller: the fixed `restore`-only snippet, ten-key
+    `args`, the four-dir resolver order and the exit-5 lane every throw here lands in.
+  ./../service/restore.rhai + ./../service/restore.sdd — the diff-verified twin: this flow
+    without the mongodb/redis legs; its Tasks hold the open decisions on the identical
+    surface, kept in lockstep here rather than re-decided.
+  ./backup.rhai — the same-directory backup-lane sibling (spec pending): the
+    block-replacing prepare gate, the export prefix on every custom script, the repo
+    init/check/prune trio, and the mongodb/redis prepare legs this restore lane answers.
+  /agent/tests/rhai_backup_redis.rs — the nearest test file (Tasks; mock engine points at
+    scripts/lib + scripts/tenant — the tenant resolver pair — but drives stage modules only).
+
+Scenario: custom restore.sh replaces the whole lane
+  Given `${args.package_dir}/scripts/restore.sh` exists in the mounted package scripts
+  When @run executes and the script exits 0
+  Then the RESTIC_REPOSITORY-exported copy ran, @import_run("restore_post") followed and @run
+    returned the rc — maintenance_start, restore_run, the prepare hook, all five engine legs
+    and maintenance_stop never ran
+  But given the script exits 3
+  Then the throw text is `${context.package_dir}/scripts/restore.sh FAILED returning 3` and no
+    restore_post import runs
+
+Scenario: snapshot env decides the restored snapshot verbatim
+  Given process env `RESTIC_SNAPSHOT` set to `abcd1234` with the repo envs present
+  When the stock flow reaches ./restore_run.rhai
+  Then `restic restore abcd1234 --exclude-xattr security.selinux --target /` runs with the
+    merged `restic_args` — this file never inspects, validates or latest-resolves the token
+  But given `RESTIC_SNAPSHOT` is unset
+  Then `snapshot` is `""`, the empty token still rides the command line, and restic's own
+    non-zero rc surfaces as the misnamed stage throw — no fail-fast at either level
+
+Scenario: five-leg engine ladder order and per-leg replacement
+  Given no `restore_prepare.sh` and no per-leg scripts
+  When @run passes the restore_run step
+  Then @import_run fires secret → postgresql → mysql → mongodb → redis in that fixed order on
+    the one context map, whatever the five lists hold (empty lists still import_run, each
+    stage's loop no-ops; a stock image SHIPS the last two legs, which the service twin lacks)
+  Given the same package ships `restore_redis.sh` only
+  Then the redis leg is the bare shell run and the other four legs stay module imports
+
+Scenario: restore_prepare.sh is additive, not a block replacement
+  Given `restore_prepare.sh` exists and exits 0
+  Then the five engine legs still run afterwards — the gate has no else-branch and no
+    `restore_prepare` module exists for it to shadow
+  But given it exits 5
+  Then the throw names `restore_prepare.sh FAILED returning 5` before any engine leg runs
+
+Scenario: stock image skips unshipped hooks and returns via the post-hook
+  Given a package with no custom scripts, empty engine lists and the stock engine directory set
+  When @run completes the normal path
+  Then `restore_pre` and `restore_post` hit the two debug-log skip markers (they ship nowhere),
+    the five stage modules import, run their own `_pre`/`_post` skips and no-op loops, and
+    @run returns that unit
+  And this module emitted no log of its own — every `Starting ... restore` line in the output
+    belongs to the stage modules (./restore_mongodb.rhai and ./restore_redis.rhai log per
+    non-empty list name)
+
+Scenario: stage throw aborts mid-window
+  Given the sequence reached ./restore_redis.rhai with one list entry, and its
+    `kubectl rollout restart` exits 1
+  Then the stage's own `rollout restart failed for ${redis}` propagates through @import_run —
+    the stage's scale-back, maintenance_stop and the restore_post hook never run and the Rust
+    lane exits 5 behind `Rhai script error: `
+
+Tasks:
+  [ ] Map the six Scenarios to tests: /agent/tests/rhai_backup_redis.rs runs a mock engine
+      over scripts/lib + scripts/tenant but names only stage modules — nine `restore_redis`
+      and five `backup_prepare_redis` tests calling `rs::run` directly — so the tenant
+      restore STAGE gets coverage while this orchestrator gets none (no test imports
+      `restore`), the `restore_mongodb` stage gets none either, and the stage specs the
+      existing tests pin are still pending. A mock over the full four-dir resolver list
+      (package scripts, config, tenant, lib) is what this orchestrator's Scenarios need.
+  [?] Twin-mirrored open questions — the restore_run misnomer (the
+      `restic backup FAILED returning ${rc}` text on a RESTORE), `restore_prepare.sh`
+      additive-vs-block, the export asymmetry (only
+      the restore.sh command carries `RESTIC_REPOSITORY`; the other six custom scripts run
+      bare), restore_pre/restore_post shipping nowhere, the restore.sh replacement skipping
+      maintenance_stop with the rc-0 return discarded, and an empty `RESTIC_SNAPSHOT` building a
+      live `restic restore ... --target /` — are all unresolved in ./../service/restore.sdd
+      Tasks over the diff-verified identical surface; decide them there in lockstep and copy
+      the verdicts here (each one now also covers the mongodb/redis leg custom scripts).
+  [?] The maintenance window toggles nothing while the redis leg scales its own workload up
+      and back down by itself via shell kubectl (stage spec pending): the bracket is decoration
+      for the other four engines, whose full-filesystem restore and DB re-seeds run against
+      live workloads. Decide whether the scale TO-DO frozen in
+      ./../service/maintenance_windows.sdd absorbs the redis self-scale pattern generically
+      (then the leg's internal scaling
+      retires) or per-leg self-scaling is the intended architecture (then the window retires).
+
+Done when:
+  Every Scenario carries a passing mock-engine test against ./restore.rhai (resolver list
+    including scripts/tenant), the frozen order and the seven throw texts still match the
+    source, and `specdd lint` is green on this file.

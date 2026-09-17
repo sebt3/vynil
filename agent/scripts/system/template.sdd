@@ -1,0 +1,197 @@
+Spec: SystemTemplateScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Orchestrate the offline render of `agent template system`: fire the `install_pre` hook through
+    @import_template, then emit the two category groups a system package owns — `crds` first,
+    `systems` second, each gated by @is_dir — through the shipped `template_<category>` emitters
+    via @import_run, so documents reach stdout solely from the emitters' render passes. The file
+    applies nothing, never touches the cluster and writes no status: it sequences two gates,
+    merges hook contexts and invokes emitters. Twin notes, real diffs: ./../service/template.rhai
+    and ./../tenant/template.rhai are byte-identical five-bucket twins (befores/vitals/others/
+    scalables/posts), two diff hunks swap those bodies for `crds`+`systems` here; system is the
+    only kind whose render lane emits CRDs. Unlike this directory's ./delete.rhai, the module
+    carries zero import-time surface. The Rust lane /agent/src/template/system.sdd froze this
+    emit order from its side first — its "render and emit" rule matches this file gate for gate.
+
+Exposes:
+  @run(@instance, @context) — the module's sole @fn and entry point; `template.rhai` is not in
+    @ENTRY_POINT_PATTERNS, so `run` is exempt from `rhai/unused-function` through
+    @ENTRY_POINT_FUNCTIONS (/agent/src/linting/rhai_checker.sdd); invoked as
+    `template::run(instance, context)` by the embedded snippet of /agent/src/template/system.sdd,
+    whose `let _ =` discards the returned value. The module is the default `template` of the
+    system resolver chain — a package `scripts/template.rhai` shadows the whole orchestrator.
+
+Accepts:
+  @instance — the synthesized offline `#{ metadata: { name, namespace } }` @Dynamic built by the
+    Rust snippet; never property-read here, forwarded verbatim into all three engine calls —
+    `.metadata` reads happen only downstream, if a hook or emitter wants them.
+  @context — the map ./context.rhai's @template lane produced. Read here: `package_dir`, the only
+    key, twice as unguarded interpolated property reads in the gate paths. Every other key is
+    consumed by the emitters and the resolved hooks.
+
+Returns:
+  No value channel of its own: the final statement is the `systems` gate block, so the implicit
+    value is the unit `()` on every branch, and the Rust snippet discards it regardless.
+  Rendered documents reach stdout inside the emitters' passes — a `---` line then one
+    @yaml_encode document per object, the `crds` block ahead of the `systems` block — this file
+    prints and captures nothing.
+
+Raises:
+  Zero @throw, zero @try of its own; nothing here is caught either:
+  - Module/hook/emitter throw: @import_template and @import_run swallow only the absent-module
+    and absent-`run` skip markers (@log_debug `No ${name} module, skipping.` / `No ${name}::run
+    function, skipping.`); any raise by a hook or emitter — a broken `.hbs` render, a YAML decode
+    failure — re-throws and aborts mid-stream: documents printed by the `crds` pass stay on
+    stdout and the Rust lane turns the failure into the system-template exit-3 — the lane's loud
+    cross-kind deviation, the service/tenant twins exit 1.
+  - Interpreter errors at this level: @is_dir erroring on a gate path past its own semantics, or a
+    `context` that stopped being a map — unreachable on the frozen flow, the ctx lane returns a
+    map and every merge here is guarded (see the `package_dir`-erasure Handle).
+
+Handles:
+  - `install_pre` ships nowhere under ./agent/scripts — stock renders open with its debug skip,
+    the @type_of guard sees the `()` and the ctx context stands. The category hooks
+    (`install_crds_pre`/`_post`, `install_systems_pre`) are package/config-provided too, skipped
+    inside the emitters the same way.
+  - Absent category dir: the @is_dir gate is false and the whole bucket is skipped — no import,
+    no hooks, no output — a system package may legitimately ship one of its two categories only.
+  - Hook or emitter returning a non-map (skip `()` included): the running context survives — all
+    three merge sites guard on @type_of == `map`; nothing here can bind `()` or a string to
+    `context`, so ./delete.rhai's guard-free tofu assign has no counterpart here.
+  - A hook-erased `package_dir`: the `()` interpolates into the gate strings, @is_dir answers
+    false and the run completes silently with an empty document stream (the twins' posture).
+  - Package-shadowed emitter without a `run` fn: the run shim is `run`-only — its skip marker
+    prints and the bucket silently contributes no documents (Tasks).
+
+Must:
+  Execute exactly once, in this order: @import_template("install_pre", @instance, @context) with
+    the map-guarded merge; then the @is_dir gates over `context.package_dir` + `/crds` and
+    `/systems` with their @import_run("template_crds") / @import_run("template_systems")
+    emissions in that order and no statement after the systems block (no close, no
+    `install_post`). Nothing in the file reads `instance`. The order is the ./install.rhai build
+    order (`crds → tofu → systems`) minus the unrenderable tofu category — not the ./delete.rhai
+    reverse.
+  Read each gate path off the CURRENT `context` — an `install_pre` replacement changes both probed
+    dirs and both emitters' render input — and rebind only through the @type_of == `map` guard at
+    all three sites, a non-map value dropped unlogged.
+  Split the shims as written: `install_pre` resolves with @import_template (module `template`
+    preferred, `run` fallback), the two emitters with @import_run (`run` only) — and the shipped
+    emitters define nothing but `run`.
+  Resolve every module name over the Rust lane's four resolver dirs, package `scripts` first: a
+    package copy of `template_crds` or `template_systems` shadows the shipped emitter; names
+    resolve against `scripts/system` only, never across kind directories.
+  Hold zero import-time surface: no import statement, the body is the single @fn declaration — as
+    in the service/tenant twins; the import-bearing orchestrator of the lane set is ./delete.rhai.
+  Keep this level free of cluster calls, file reads other than the two @is_dir probes, and
+    @print; fetching, rendering and emission are owned by ./template_crds.rhai (unspecified, role
+    frozen by /agent/src/template/system.sdd) and ./../lib/install_from_dir.sdd respectively.
+
+Must not:
+  Fire the per-category hooks at this level: `install_crds_pre`/`install_crds_post` and
+    `install_systems_pre` belong inside the emitters — duplicating them here would double-run
+    package hooks.
+  Grow befores/vitals/others/scalables/posts, tofu, init-from or backup lanes: the frozen lane
+    probes `crds` and `systems` only; the manifest buckets belong to the service/tenant render
+    twins and the tofu machinery to the live lanes.
+
+Depends on:
+  ./template_crds.rhai, ./template_systems.rhai — shipped here, both unspecified; roles as frozen
+    upstream: the crds emitter is bespoke (per-file decode-and-render, a kind filter keeping
+    `CustomResourceDefinition` documents, `install_crds_pre`/`_post` around it), the systems
+    emitter is the shared bucketed @template pass of ./../lib/install_from_dir.rhai with
+    `install_systems_pre` and no post slot. Roles quoted only; their contracts are theirs.
+  wynil-core 0.7.7 engine API — the 3-arg @import_run and @import_template shims behind @Script
+    @add_common (skip-vs-rethrow boundary, import_template's `run` fallback), @is_dir, @type_of.
+  ./context.rhai (./context.sdd) + ./../lib/build_context.rhai — producer of the incoming map;
+    key contract owned by ./../lib/build_context.sdd.
+  /agent/src/template/system.sdd — the Rust lane: engine, four resolver dirs, synthesized
+    instance, nine-key `args`, stdout channel and the exit-3 error lane all raises land in.
+
+References:
+  ./../service/template.sdd + ./../service/delete.sdd — calibration siblings: shared
+    gate/merge/hook idiom, skip-marker quotes, and the render-lane hook-pair and shared-hook-name
+    open points this file inherits.
+  ./../service/template.rhai (+ byte-identical ./../tenant/template.rhai, ./../tenant/template.sdd)
+    — the five-bucket, crds-void render lanes; their crds-omission open point is this lane's
+    crds-first flip side.
+  ./install.rhai (./install.sdd) + ./delete.rhai (./delete.sdd) — live-lane siblings of this
+    directory whose category set and order this render mirrors.
+  /agent/tests/rhai_lifecycle.rs — harness that never imports this module (Tasks).
+
+Scenario: full two-category render with both directories present
+  Given a package dir with `crds` and `systems` populated, no package hooks, on a live engine
+  When @run executes
+  Then the calls land in exactly install_pre-skip → template_crds → template_systems order
+  And stdout carries the `---`+documents CRD block first, in the emitter's file-iteration and
+    kind-filter order, then the `systems` documents in the shared pass's first/middle/last order
+  And `context` survives every merge site and the run ends on `()`
+  No mapped test: no harness imports this module.
+
+Scenario: single-category package renders one block
+  Given a package with only `systems` populated (or symmetrically only `crds`)
+  When @run executes
+  Then the absent category's gate skips its bucket whole — no import, no hooks — while the
+    present one renders normally and the run still ends cleanly
+  No mapped test.
+
+Scenario: bare package renders nothing but skip logs
+  Given a package tree with neither category dir and no hook module
+  When @run executes
+  Then the hook skips, both gates read false, stdout carries no documents and the run ends cleanly
+  No mapped test.
+
+Scenario: install_pre takes over the render
+  Given a package `install_pre` whose `run` returns a map carrying a rewritten `package_dir`
+  When the first guard accepts it
+  Then both gates probe the new dirs and the emitters render the installed map
+  But given the hook returning `()` or a string, the ctx context stands and the gates keep
+    probing the original `package_dir`
+  No mapped test.
+
+Scenario: run-only hook executes on the offline lane
+  Given a package `install_pre` defining only a cluster-touching `run`
+  When the first @import_template probes it during `agent template system`
+  Then the function-not-found leg re-imports and executes `run` — cluster reads and all — mid
+    render (Tasks)
+  No mapped test.
+
+Scenario: mid-render emitter throw loses systems and exits 3
+  Given a broken `.hbs` under `crds` and a populated `systems` dir
+  When the render error crosses @import_run — not a skip marker — and re-throws
+  Then `template_systems` never runs, the already-printed CRD documents stay on stdout, and the
+    Rust lane exits 3 — the only template leaf not exiting 1
+  No mapped test.
+
+Scenario: a bucket shadow lacking `run` renders silently empty
+  Given a package `template_crds.rhai` whose only fn is `template`, `crds` dir present
+  When @import_run resolves it
+  Then `No template_crds::run function, skipping.` is debug-logged and the bucket emits nothing —
+    the run shim never tries `template`
+  No mapped test.
+
+Tasks:
+  [ ] Map the Scenarios to /agent/tests/rhai_lifecycle.rs (or a sibling harness): nothing imports
+      system/`template` and the harness resolver dirs ship `scripts/service` + `scripts/lib` only;
+      add a `scripts/system` entry plus a fixture package with `crds`/`systems` dirs and pin at
+      least order, single-category, bare-package, rethrow and merge-guard.
+  [?] `install_pre` opens this lane while `install_post` never closes it — that hook fires only
+      on the live lane (./install.rhai). The same asymmetry is open in ./../service/template.sdd;
+      decide the render-lane hook-pair symmetry for all three lanes once.
+  [?] Hook names shared with the live install lane: `install_pre` here and the emitters'
+      `install_crds_pre`/`_post` and `install_systems_pre` are the live lane's names, and
+      @import_template's `run` fallback executes a run-only cluster-touching copy mid-render.
+      Decide whether the render lane gets its own hook names.
+  [?] Only kind rendering CRDs: the service/tenant render lanes are crds-void (their specs' open
+      point) while this lane emits `crds` first. Record the decision so the three-kind story is
+      either crds-in-render everywhere or a justified system special case.
+  [?] A gate-true bucket whose shadow lacks `run` loses the whole render to one debug line —
+      silent output loss indistinguishable from an empty dir. Decide whether the render lane
+      should hard-fail when a gated bucket fails to resolve an emitter.
+
+Done when:
+  Every Scenario carries a mapped test or a recorded decision, the gate/order/merge texts above
+    still match ./template.rhai, the emitter-role delegation still resolves in
+    /agent/src/template/system.sdd and ./../lib/install_from_dir.sdd, and `specdd lint` is green
+    on this file.

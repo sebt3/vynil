@@ -1,0 +1,183 @@
+Spec: LibTofu
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Low-level OpenTofu command wrapper shared by the tofu install/delete stage: map a package
+    option descriptor to an HCL type expression, render any value as an HCL literal through
+    `tofu console` itself, and drive one working directory of `.tf` sources through
+    init, plan, apply, destroy and outputs — throwing on tofu failure so callers can record
+    state instead. The generating layer that feeds these commands is ./tofu_gen.rhai.
+
+Exposes:
+  @get_tf_type(item, optional) — HCL type expression for one schema-like descriptor; consumed
+    by the gen layer to write `variable` blocks.
+  @to_tf(v) — HCL literal text for any serializable @rhai value, produced by piping
+    `jsondecode(<escaped>)` into `tofu console`.
+  @run_init(path) — seeds `${path}/.tofurc` then `tofu init`.
+  @run_plan(path) — `tofu plan` to the `tf.plan` plan file.
+  @run_apply(path) — applies the `tf.plan` plan file.
+  @run_destroy(path) — destroys the configuration (an `apply -destroy` re-plan, not a
+    plan-file reversal).
+  @get_output(path) — raw `tofu output -json` stdout text.
+  All six are reached as `tf::...` through `import "tofu" as tf` by the gen layer and by the
+    per-kind stage scripts (Depends on); nothing else in the crate imports this module.
+
+Accepts:
+  @path — @String tofu working directory; every caller passes `${package_dir}/tofu`. Checked
+    for nothing and interpolated unquoted into the `sh -c` line.
+  @item — descriptor @rhai map: @.type one of `string`, `integer`, `number`, `boolean`,
+    `object`, `array`, plus @.properties (object) or @.items (array). JSON-decoded shapes,
+    not validated.
+  @optional — @bool driving the `optional(...)` wrapper.
+  @v — any @rhai value reaching @json_encode_escape (maps, arrays, strings, numbers, bools,
+    unit — unit serializes to JSON `null`).
+
+Returns:
+  @run_init, @run_plan, @run_apply, @run_destroy return unit on success; @tofu's own stdout,
+    stderr and the @shell_run rc are all discarded beyond the zero test.
+  @get_output returns the verbatim `tofu output -json` stdout text — a JSON document on
+    success; this file decodes and trims nothing (callers @json_decode it themselves).
+  @to_tf returns the verbatim `tofu console` stdout — the HCL rendering of the decoded value,
+    trailing newline included; no trim happens in the binding or here.
+  @get_tf_type returns one expression, e.g. `optional(number)` or
+    `object({host = optional(string), port = optional(number)})`.
+
+Raises:
+  @throw with a fixed literal when @shell_run yields a non-zero exit: `tofu init failed`,
+    `tofu plan failed`, `tofu apply failed`, `tofu destroy failed`. The rc and the tofu text
+    are not in the message — they went to the process-inherited stdio only. Every message is
+    a bare string, so callers catch an interpreter error, not a typed result.
+  Engine-side raise, unhandled here, from the four host functions this file calls:
+    `sh` spawn failure; @shell_output non-zero exit (engine text embeds
+    `Command failed, rc=N`); @shell_output with exit zero but any stderr content
+    (`Command had stderr : ...`) — so a tofu warning or notice written on stderr fails
+    @get_output and @to_tf even when tofu succeeded; non-UTF-8 stdout; @file_write failing,
+    notably @run_init on a missing `${path}` since the binding never creates parent dirs.
+  @get_tf_type raises only on malformed descriptors: an `object` without @.properties dies on
+    the chained @.keys() over the missing-key read. A missing or unknown @.type raises
+    nothing — the switch has no default arm and the fn returns @rhai::Dynamic unit silently.
+
+Handles:
+  Exactly one decision shape in the run lane: exit code equal to zero or not. No `try`
+    catch, no retry, no stderr parsing, no partial-success grading; any non-zero rc collapses
+    to the same per-fn literal throw.
+  Descriptor shape branches in @get_tf_type: `integer` and `number` collapse to one `number`
+    answer; an `items` that is JSON `null` or absent answers `list(any)`; an empty
+    `.properties` answers `map(any)` — each with the `optional(...)` wrapper when @optional.
+  Unit values passed to @to_tf: they serialize as JSON `null` and round-trip through
+    `tofu console` as HCL `null`.
+
+Must:
+  Invoke the `tofu` binary through PATH inside `sh -c` lines fixed per fn: @to_tf runs
+    `echo 'jsondecode(<escaped>)'|tofu console`; @run_plan runs
+    `cd ${path};tofu plan -input=false -out=tf.plan -var-file=vynil.tfvars`; @run_apply runs
+    `cd ${path};tofu apply -input=false -auto-approve tf.plan`; @run_destroy runs
+    `cd ${path};tofu apply -destroy -input=false -auto-approve -var-file=vynil.tfvars`;
+    @get_output runs `cd ${path};tofu output -json`. Only @run_init sets any environment —
+    the inline `TF_CLI_CONFIG_FILE=.tofurc` prefix on the @tofu process itself; no
+    `TF_PLUGIN_CACHE_DIR` or other TF_* value appears anywhere (the engine @get_env is never
+    called). The `tofu` name resolves to the opentofu `1.11.6` pinned by the image.
+  Write `${path}/.tofurc` before starting @tofu in @run_init, overwriting on every call, with
+    a fixed CLI config: a `filesystem_mirror` at `/nonexistent/.terraform.d/plugins`
+    including `*/*` plus a `direct {}` fallback — mirror the provider tree the image seeds at
+    that path, with network download as fallback; the relative `.tofurc` reference pairs with
+    the leading `cd`, and the file is written even when tofu then fails.
+  Keep `@run_apply` a pure plan-file execution: it never re-reads `vynil.tfvars` and fails if
+    `tf.plan` is absent or stale. Keep @run_destroy independent of `tf.plan`: it re-plans the
+    configuration with `-destroy` and needs `vynil.tfvars` present; its throw label says
+    destroy while the verb is `tofu apply -destroy`.
+  Keep the plan-file and var-file names `tf.plan` and `vynil.tfvars` as the frozen pair with
+    the gen layer, whose @gen_tfvars writes `vynil.tfvars` into the same directory every
+    stage script passes as @path.
+  Let the @to_tf pipeline carry the value through three escape layers: @json_encode_escape
+    emits the serde JSON double-quoted one further level, the HCL string literal decodes back
+    to exactly that JSON text, @jsondecode parses it, and `tofu console` prints the HCL
+    form. The single quotes around the echoed word are a shell-layer fact: nothing here
+    escapes an apostrophe inside @v before splicing.
+  Freeze the @get_tf_type mapping: `string` to `string`, `integer` to `number`, `number` to
+    `number`, `boolean` to `bool`; an `object` recurses every @.properties entry with
+    @optional `true` regardless of any `required` list, joining `k = t` with `, `; an `array`
+    with a concrete `items` recurses with @optional `false`; @optional wraps the finished
+    expression as `optional(...)` for object and array only at the level asked. Property
+    order in the `object({...})` text is the @rhai map @ iteration order (BTreeMap-backed).
+  Touch no tfstate: no fn here reads, writes or moves any `.tfstate`; the state save and
+    restore around installs is the per-kind install_tofu scripts' contract.
+  Evaluate nothing at import: the file is seven @fn definitions and zero top-level statements,
+    so importing the module performs no I/O and defines no globals.
+
+Depends on:
+  wynil-core 0.7.7 engine API — @shell_run, @shell_output (`shell` registrar), @file_write
+    (`fs` registrar), @json_encode_escape (json helper); script surface installed by the
+    engine assembly behind ./../../../common/src/rhaihandler.sdd, including the fact that a
+    mock engine keeps these host powers live.
+  `tofu` CLI workflow contracts owned elsewhere: the plan-file exchange between
+    `plan -out` and bare `apply`, `apply -destroy`, `output -json`, console stdin evaluation,
+    and CLI-config `filesystem_mirror` semantics.
+  /agent/Dockerfile + /agent/providers.tf — the pinned @tofu build and the build-time
+    `tofu init` whose result the image seeds at `/nonexistent/.terraform.d/plugins`, the tree
+    @run_init's mirror line points at.
+  ./tofu_gen.rhai — sole @get_tf_type and @to_tf consumer; its spec ./tofu_gen.sdd is being
+    authored (pending reference target).
+  ../system/install_tofu.rhai, ../service/install_tofu.rhai, ../tenant/install_tofu.rhai,
+    ../system/delete_tofu.rhai, ../service/delete_tofu.rhai, ../tenant/delete_tofu.rhai —
+    the @run_init/@run_plan/@run_apply/@run_destroy/@get_output callers; installs catch this
+    module's throws and record status, which is why the message content may change freely but
+    the throw-vs-return polarity may not.
+
+Tasks:
+  [?] @to_tf quoting and @path interpolation: the echoed word breaks on the first apostrophe
+      inside @v (nothing escapes `'` before splicing into `echo '...'`), and unquoted
+      `${path}` splits on spaces — both feed caller package text straight into an `sh -c`
+      line. Decide whether to rebuild the commands quote-safely (e.g. printf with separate
+      quoted segments) or to record a caller-side charset limit.
+  [?] A @tofu killed by a signal is reported by @shell_run as exit `0` and therefore takes the
+      success branch; the compound also uses `;` after `cd`, so @tofu runs in the engine's
+      working directory even when `${path}` does not exist and only its rc decides. Decide
+      whether run_* must detect signal deaths and guard the `cd`.
+  [?] @get_tf_type has no catch-all @switch arm: a descriptor with a missing or unknown
+      @.type returns @rhai::Dynamic unit with no error, which the gen layer then interpolates
+      into generated `.tf` text. Decide whether the mapping edge must throw instead.
+  [ ] Map tests into /agent/tests/rhai_tofu_gen.rs — that file imports only `tofu_gen`
+      (@has_tofu_files, @gen_provider, @provider_constraint) and drives none of the six fns
+      here: add a pure @get_tf_type table case, and a fake-`tofu`-on-PATH case for
+      `@run_init` (asserting the written `.tofurc` and the throw text) and @get_output's
+      stderr trap.
+  [ ] Re-resolve the ./tofu_gen.sdd reference once the gen-layer spec lands.
+
+Done when:
+  The five scenarios have passing mapped tests or recorded decisions, the quoting and
+    signal-detection decisions are settled, and `specdd lint` is green on this file.
+
+Scenario: run_init writes the mirror config even when tofu fails
+  Given `${path}` exists and is writable, and `tofu` on PATH exits non-zero for `init`
+  When @run_init(path) runs
+  Then `${path}/.tofurc` exists and names `/nonexistent/.terraform.d/plugins` and `direct`
+  But the call raises with exactly the text `tofu init failed`
+
+Scenario: plan freezes vylin.tfvars by name
+  Given a tofu directory with valid `.tf` sources but no `vynil.tfvars`
+  When @run_plan(path) runs
+  Then the @tofu exit is non-zero for the unread var-file and the call raises `tofu plan failed`
+  And no case exists where @run_plan succeeds without `vynil.tfvars`
+
+Scenario: destroy re-plans instead of reversing the plan file
+  Given a directory where @run_plan succeeded and `tf.plan` was then deleted
+  When @run_apply(path) runs it raises `tofu apply failed`, unread plan file
+  But @run_destroy(path) succeeds when `vynil.tfvars` and the sources are still present
+  And @run_destroy never opens `tf.plan`
+
+Scenario: get_output rejects a zero-exit warning
+  Given a @tofu double (fake binary) that exits `0`, prints valid JSON on stdout and any
+    notice on stderr
+  When @get_output(path) runs through @shell_output
+  Then the call raises with the engine `Command had stderr` text rather than returning the JSON
+
+Scenario: descriptor table and recursion
+  Given the descriptors `#{type: "integer"}`, `#{type: "object", properties: #{host:
+    #{type: "string"}}}`, `#{type: "array", items: #{type: "boolean"}}` and
+    `#{type: "array", items: null}`
+  When @get_tf_type runs on each with @optional `true`
+  Then the answers are `optional(number)`, `object({host = optional(string)})`,
+    `optional(list(bool))` and `optional(list(any))`
+  But @get_tf_type on `#{type: "tuple"}` returns unit and raises nothing

@@ -1,0 +1,248 @@
+Spec: ServiceDeleteBackupScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Retire one `ServiceInstance`'s backup machinery from its namespace: run from the install lane's
+    backup branch whenever scheduling is OFF — `use_backup` false, no `status.vitals`, or the
+    `backup-settings` Secret probe absent-or-erroring (./install.rhai's arms, ./install.sdd branch
+    table) — and from the delete lane's `vitals` gate immediately before ./delete_vitals.rhai, this
+    file removes the schedule lane's objects by fixed name (CronJob, RoleBinding, ConfigMap) and the
+    backup/restore Jobs by label triple, issuing one delete per object and then waiting 300 s each
+    for the issued deletions to complete. It is the removal counterpart of ./schedule_backup.rhai:
+    the component label its sweep filters on is the one @selector_from_ctx emits into the cron Job
+    template (./schedule_backup.sdd). Zero @throw and zero `status` write: every failure inside a
+    sweep block is swallowed (`NotFound` on the by-name objects) or @log_warn'ed, and both call
+    lanes discard the return whole — a side-effect-only, inventory-free sweeper. Byte-identical
+    twin ./../tenant/delete_backup.rhai (diff-verified).
+
+Exposes:
+  @run(@instance, @context) — the module's sole @fn and entry point (`delete_backup.rhai` + `run`
+    match the entry-point patterns of /agent/src/linting/rhai_checker.sdd); reached ONLY through
+    @import_run("delete_backup", instance, context) at three code sites in two shipped lanes:
+    ./install.rhai's no-schedule arms (Secret probe failed, and gate-false else) and ./delete.rhai's
+    `vitals` gate before `delete_vitals` (./delete.sdd, ./install.sdd freeze the returns as
+    discarded whole at every site); no Rust lane names the module — install reaches it inside the
+    exit-1 error lane, delete inside the exit-3 one. A package `scripts/delete_backup.rhai`
+    shadowing the name replaces the whole lane on the four resolver directories those Rust lanes
+    freeze ({package_dir}/scripts winning).
+
+Accepts:
+  @instance — the injected @ServiceInstance @Dynamic, read for `.metadata.namespace` (the namespace
+    argument of all four @k8s_resource constructors and therefore of every touched object) and
+    `.metadata.name` (the `app.kubernetes.io/instance` value of both Job selectors) — nothing else;
+    `status` is NEVER read: unlike every sibling `delete_*.rhai`, this sweep walks names and labels,
+    not the recorded `status` lists.
+  @context — the caller-lane map, read ONLY inside guarded zones: `instance.appslug` (the
+    CronJob/RoleBinding/ConfigMap name interpolations, CR-side view built by
+    ./../lib/build_context.rhai, same value the schedule templates rendered with) and
+    `instance["package"].name` (the `app.kubernetes.io/name` selector value, equal by construction to
+    the label value @build_context's `selector` carries). Missing map/keys degrade per Handles; the
+    rest of the map is hook payload and the returned value.
+  Hooks — three optional @import_run module names, each called with the same (instance, context)
+    pair: `delete_backup_pre` (outside every try), `delete_backup_prepare` (its raise caught),
+    `delete_backup_post` (outside every try, last statement). None ships in any engine directory
+    (./, ./../tenant, ./../lib) — package `scripts/` slots only.
+
+Returns:
+  The `context` map as held at the end, plus a `delete_backup_post` map-merge — discarded whole by
+    all three call sites (./install.sdd, ./delete.sdd freeze the returns as dropped): the lane
+    communicates only by deletions it issues and lines it logs. Observable outcome: the named
+    CronJob/RoleBinding/ConfigMap in `instance.metadata.namespace` get-deleted when present, every
+    Job in that namespace matching either frozen selector get-deleted, then one @log_info +
+    @wait_deleted(`60*5` = `300` s) per actually-issued deletion in deletion order.
+
+Raises:
+  Zero @throw statement and zero re-`throw` in this file: each sweep block wraps its ENTIRE kind
+    work in an @try + @catch pair that finishes the block — @log_warn of the caught string verbatim, or of the
+    @json_encode text for non-strings, `_` switch arm of the sibling specs; the three by-name blocks
+    additionally swallow any string error containing `NotFound` from the get/delete pair with no log.
+  Escape paths to the caller lane: a raise from the `delete_backup_pre` or `delete_backup_post`
+    hook (outside every try, so @import_run's two skip markers aside they abort the lane with no log
+    here and no marker — the delete lane writes no `set_status_*` at all and this install-lane
+    module has none either); a raise from the final wait loop — @wait_deleted timeout or engine
+    error on `d` — aborts the remaining waits (their deletions are already issued) with the error
+    crossing to install exit-1 or delete exit-3; and @json_encode of an unserializable caught
+    payload in a `_` arm can itself raise out of the catch (same open point recorded by
+    ./schedule_backup.sdd and ./../lib/backup_context.sdd).
+  Import-time failure: the dead top-level import resolving to no module is an eval error before
+    @run exists, killing the caller lane (the imported body itself is pure, see Must).
+
+Handles:
+  Kind absent from discovery: each block's `api.exist()` false skips that kind ENTIRELY — no log, no
+    get/list attempted, no wait record — four independent gates (CronJob, Job, RoleBinding, ConfigMap).
+  Never-scheduled instance (the stock path — every stock service install runs this module):
+    `get_obj` answers NotFound on all three named kinds, each swallowed silently, the Job selectors
+    list empty, the wait loop idle.
+  Stock image hooks: all three names take the @import_run skip markers (`No ${name} module, skipping.`
+    and `No ${name}::run function, skipping.`, text frozen by ./install.sdd), each return `()` fails
+    the `@type_of` == `map` merge guard, lane runs on the untouched context.
+  `delete_backup_prepare` raise: warned string-verbatim or through @json_encode, then the sweep
+    CONTINUES on the unmerged context — the one hook whose failure this file survives by design.
+  Broken context (`()` after a tofu-lane clobber upstream, or missing `instance` sub-keys): the
+    name/selector interpolations raise property-on-`()` INSIDE the blocks' try, each block degrades
+    to @log_warn and the post hook still runs — the sweep cannot hard-fail on a bad context.
+  List race: the Job loops' inner catch keeps NO `NotFound` filter — an object disappearing between
+    list and get_obj/delete warns where the by-name blocks stay silent.
+
+Must:
+  Execute exactly: @import_run("delete_backup_pre") + map-merge guard → @try {
+    @import_run("delete_backup_prepare") + map-merge } + catch-warn → CronJob block → Job block (then
+    component `backup` selector loop, then component `restore` selector loop) → RoleBinding block →
+    ConfigMap block → for-each over `deleted`: @log_info + @wait_deleted(`60*5`) →
+    @import_run("delete_backup_post") + map-merge → return `context`; nothing else, in no other order.
+  Sweep exactly these five name/label targets, all scoped to `instance.metadata.namespace` via the
+    two-arg namespaced @k8s_resource(kind, ns) constructor:
+    by-name @get_obj + @delete — CronJob `${context.instance.appslug}-backups`, RoleBinding
+    `${context.instance.appslug}-backups`, ConfigMap `${context.instance.appslug}-backups-scripts`;
+    by-label list-then-delete-each over `.items`, each entry re-fetched by @get_obj(`job.metadata.name`)
+    before @delete (no collection-delete anywhere) with selector
+    `app.kubernetes.io/component=backup,app.kubernetes.io/instance=${instance.metadata.name},app.kubernetes.io/name=${context.instance["package"].name}`
+    and the same string with `component=restore` — the exact `instance.selector` + component triple
+    @selector_from_ctx emits, so matched Jobs include the cron-spawned backup Jobs, the
+    `{appslug}-init-restore` Job from ./init_from.rhai and any manual job carrying the triple, by
+    label whatever their names. No other kind is touched: the ServiceAccount the schedule lane
+    creates, Roles, PVCs, Secrets and the roleRef ClusterRole are out of this file's inventory.
+  Evaluate names and selectors from the CURRENT `context` at block time, so a map merged by
+    `delete_backup_prepare` redirects what the sweep deletes.
+  Defer all waiting: push each K8sObject whose @delete call returned normally onto `deleted` (objects
+    whose delete warned are never pushed nor waited) and wait them AFTER all five sweeps complete, in
+    deletion order, one @wait_deleted(`60*5`) each, logging the literal
+    `Waiting for ${d.original_kind} ${d.metadata.name} to be deleted` — the @original_kind K8sObject getter, matching the @remove and ./delete_vitals.rhai
+    idiom, and the only @log_info lines in the file; @log_warn is the only other log call.
+  Load ./../lib/install_from_dir.rhai as `dir` at import as the sole top-level statement besides the
+    @fn — the imported body is pure fn declarations, so module load itself touches no env, filesystem
+    or cluster; `dir` is never invoked (dead import, Tasks).
+  Treat success as silence: no `set_status_*` call, condition or tag exists here or is expected from
+    the caller's branch (install's close, ./install.sdd's @set_status_ready, is the only status event
+    around an install-side sweep).
+  Resolve the module and its three hook names against the four resolver directories frozen by the
+    install and delete Rust lanes, so packages can ship the hooks or shadow the whole lane.
+
+Must not:
+  Sweep from `instance.status` (a status-list walk à la ./delete_vitals.rhai or @remove): presence
+    is decided by names, labels and @exist alone, which is what lets an always-installed stock path
+    stay silent and lets labels catch Jobs no status ever recorded.
+  Apply, create, or re-render anything: schedule objects are only ever removed here — re-scheduling
+    is ./schedule_backup.rhai's lane, and pairing this sweep with an @install_obj pass would undo
+    the branch gate that invoked it.
+
+Depends on:
+  ./../lib/install_from_dir.rhai — imported as `dir`, NEVER called (dead-import Tasks); the
+    get-wait-delete/NotFound-swallow idiom it @remove freezes is the shape this file re-implements
+    inline (./../lib/install_from_dir.sdd).
+  wynil-core 0.7.7 engine API — the @import_run shim (@type_of + skip-marker pair), the
+    @k8s_resource(kind, ns) two-arg constructor with @exist + @get_obj + @list (iterating `.items`) and the
+    K8sObject @delete + @wait_deleted + @original_kind of the core k8sgeneric registrar (the apiVersion
+    constructor and the `k8sworkload`/`k8sraw` surface stay unused here), @type_of, @json_encode;
+    @log_warn + @log_info from the core-common helpers. The engine mounts them per
+    /common/src/rhaihandler.sdd.
+  The three `delete_backup_*` hook names are package-side slots only — no shipped provider.
+
+References:
+  ./install.rhai + ./install.sdd — caller half 1: the backup branch table (vitals + `use_backup` +
+    `backup-settings` probe) deciding "no schedule → sweep now", return discarded before
+    `install_post`.
+  ./delete.rhai + ./delete.sdd — caller half 2: `vitals`-directory gate, this module runs FIRST so
+    the backup machinery dies before the data stores; return discarded, and a package without
+    `vitals/` never sweeps (their Tasks [?]).
+  ./schedule_backup.sdd — the creating counterpart: applies ConfigMap `{appslug}-backups-scripts`
+    under `has_files`, CronJob `{appslug}-backups`, ServiceAccount and RoleBinding
+    `{appslug}-backup` (singular, its naming [?]) whose fact this file settles — see Tasks.
+  /agent/templates/cronbackup.yaml.hbs + /agent/templates/init_job.yaml.hbs (+ nested
+    backup.yaml.hbs) through @selector_from_ctx /common/src/handlebarshandler.sdd — producers of the
+    names and the triple this sweep matches by; @build_context (/agent/scripts/lib/build_context.rhai)
+    freezes `appslug`/`selector`/`package.name` value equality between the two sides.
+  ./../tenant/delete_backup.rhai — byte-identical twin (diff-verified); ./../tenant/schedule_backup.rhai
+    same producer posture.
+  /agent/tests/rhai_lifecycle.rs — nearest lane test file; no test names this module or its hooks
+    (Tasks).
+
+Scenario: stock install without backups sweeps silently
+  Given a service install whose backup branch flipped here (no vitals, `use_backup` false, or probe
+    failed), no `delete_backup_*` hook on the resolver path, all four kinds discoverable
+  When @run executes
+  Then all three `get_obj` NotFound answers are swallowed unlogged, both label lists come back
+    empty, zero warn/info lines print, the context returns unmerged, and @import_run's caller never
+    sees a raise
+  No mapped test.
+
+Scenario: disabling a live schedule removes what exists
+  Given `instance.appslug` `shop` on a namespace holding CronJob `shop-backups`, ConfigMap
+    `shop-backups-scripts`, two Jobs labeled component `backup` and `restore`, plus the
+    schedule-applied RoleBinding `shop-backup` and ServiceAccount `shop-backup`
+  When @run sweeps
+  Then the CronJob, both Jobs and the ConfigMap are get-deleted, the by-name RoleBinding get looks
+    for `shop-backups` and swallows its NotFound, and the wait loop logs and @wait_deleted(`60*5`)s
+    the four issued deletions in order
+  And the RoleBinding `shop-backup` and the ServiceAccount `shop-backup` stay applied — the
+    plural/singular seam and missing ServiceAccount sweep are Tasks findings, this Scenario pins
+    today's behavior
+  No mapped test.
+
+Scenario: delete-lane sweep precedes the vitals teardown
+  Given a package with a `vitals/` directory and a CR with backup objects scheduled
+  When ./delete.rhai passes its `vitals` gate
+  Then @import_run("delete_backup") completes — deletions issued, waits awaited — before
+    ./delete_vitals.rhai starts, and its merged-post return reaches no later lane (discarded),
+    leaving the ServiceAccount of Scenario 2 alive through the whole instance teardown
+  No mapped test.
+
+Scenario: prepare hook failure still sweeps
+  Given a package `delete_backup_prepare.rhai` whose run raises the string `prep failed`
+  When @run reaches the prepare try
+  Then @log_warn prints `prep failed`, `context` keeps the pre-hook value, and all five sweep
+    targets are still attempted
+  No mapped test.
+
+Scenario: a wait timeout aborts the caller lane late and unrecorded
+  Given deletions already issued for three objects and the second @wait_deleted times out
+  When the raise leaves the wait loop (outside every try) and crosses @import_run
+  Then the third object is never waited, `delete_backup_post` never runs (install side: no
+    `install_post`, no close, exit 1; delete side: no `delete_post`, exit 3, no marker anywhere) even
+    though its deletion was already issued
+  No mapped test.
+
+Scenario: bad context degrades to warned no-ops
+  Given `context` reached `()` upstream (tofu-lane clobber frozen in ./install.sdd / ./delete.sdd)
+  When @run's blocks interpolate `context.instance.appslug` / `instance["package"].name`
+  Then each raise lands in its block's catch and only @log_warn lines print — the sweep never
+    deletes a name-resolvable object but the post hook still runs and @run returns without raising
+  No mapped test.
+
+Example:
+  Swept names: `shop-backups` (CronJob), `shop-backups` (RoleBinding — searched, never matches the
+    applied `shop-backup`), `shop-backups-scripts` (ConfigMap)
+  Swept Job selector verbatim: `app.kubernetes.io/component=backup,app.kubernetes.io/instance=shop,app.kubernetes.io/name=shop-pkg`
+    (second loop identical with `restore`)
+  Wait line verbatim pattern: `Waiting for CronJob shop-backups to be deleted`
+
+Tasks:
+  [ ] Map the six Scenarios to tests in /agent/tests/rhai_lifecycle.rs or a rhai-delete.rs: no test
+      names delete_backup, its hooks, or the sweep at all today.
+  [ ] Drop or use the dead `import "install_from_dir" as dir;` — mirror of the same open work item
+      in ./../lib/install_from_dir.sdd Tasks naming both twins.
+  [?] RoleBinding/ServiceAccount seam, fact settled / fix open: the producers
+      (/agent/templates/cronbackup.yaml.hbs, manualbackup.yaml.hbs, init_job.yaml.hbs) always apply
+      SA + RoleBinding `{appslug}-backup` SINGULAR while this file deletes RoleBinding `{appslug}-backups`
+      PLURAL (always swallowed) and has no ServiceAccount block at all — so disabling or deleting
+      backup leaves both singular objects applied against ClusterRole `{vynil_namespace}:backups`.
+      Matches confirmed for CronJob `-backups` and ConfigMap `-backups-scripts`. Decide whether the
+      fix pluralizes the two template names or switches this file to singular + adds the
+      ServiceAccount sweep (closes the ./schedule_backup.sdd naming [?]).
+  [?] Error-posture split inside one file: by-name blocks swallow `NotFound`, Job-loop blocks warn it
+      (list/get race noise). Decide one posture.
+  [?] `delete_backup_prepare`'s caught-and-continued failure is visible only as a warn line, and
+      `delete_backup_pre`/`post` raises abort both caller lanes with no marker anywhere — decide
+      whether prepare failures should abort the sweep and whether either pair joins a marker path
+      (delete-side has zero `set_status_*` by .sdd freeze).
+  [?] Unguarded wait loop: one @wait_deleted timeout strands the rest of `deleted` unwated yet
+      deleted and fails the lane (Scenario 5), while @remove in ./../lib/install_from_dir.sdd holds
+      the same open shape — decide one posture for both.
+  [?] `delete_backup_post` merges its map and it feeds only the discarded return — hooks are
+      side-effect-only slots; confirm intended (mirrors ./install.sdd return-discarded open points).
+
+Done when:
+  Every Scenario carries a passing mock-engine test or a recorded decision, the sweep inventory,
+  selector text and wait posture above still match the source, the naming seam is fixed on whichever
+  side Tasks decides, and `specdd lint` is green on this file.

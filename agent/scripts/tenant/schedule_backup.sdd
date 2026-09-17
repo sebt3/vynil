@@ -1,0 +1,315 @@
+# Tenant-kind twin of ./../service/schedule_backup.rhai (../service/schedule_backup.sdd):
+# an actual `diff` shows one hunk, the per-document apply call on line 22. Twin claims below
+# were re-verified against both sources, not copied.
+
+Spec: TenantScheduleBackupScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Keep the periodic restic backup schedule of one `TenantInstance` applied: invoked from the
+    tenant install lane's backup branch, render the packaged `cronbackup.yaml` partial into the
+    instance's schedule objects (scripts ConfigMap, ServiceAccount, RoleBinding and a CronJob
+    whose Pod dispatches the package type's own `backup` lane) and apply them through the
+    tenant-single-object installer, so the tenant's namespaces act as the apply-namespace
+    router and backups ride the tenant maintenance-window cron (minted hour `1`). All
+    env/volume/schedule inputs come from @bctx::run(@instance, @context, `false`) — this file
+    computes no cron expression, reads no retention value and runs no restic itself. It is the
+    CR-side stage owning @set_status_schedule_backup_failed on @TenantInstance and re-throws
+    into the install lane's exit-1.
+
+Exposes:
+  @run(@instance, @context) — the module's sole @fn and entry point (`schedule_backup.rhai` +
+    `run` match the entry-point patterns of /agent/src/linting/rhai_checker.sdd); reached ONLY
+    through @import_run("schedule_backup", instance, context) in ./install.rhai's backup branch
+    — no Rust lane names the module, and the caller discards the return value whole
+    (./install.sdd). A package `scripts/schedule_backup.rhai` shadowing the name replaces this
+    whole lane on that install.
+
+Accepts:
+  @instance — the injected @TenantInstance @Dynamic (fetched by @TenantInstance::get in the
+    Rust lane, /agent/src/tenant/install.sdd), as last re-bound by ./install.rhai (a refreshed
+    @get_tenant_instance copy whenever an earlier bucket lane was taken — ./install.sdd).
+    Direct reads in this file: `.metadata.namespace` (the fallback apply-namespace argument)
+    and the @set_status_schedule_backup_failed method on failure. Everything else flows
+    through collaborators on the same object: @bctx::run requires `.status.vitals` (array,
+    unguarded) and `.status.scalables` (guarded); `spec.initFrom` is never read at this call
+    site (third arg `false`).
+  @context — the install-lane map (the same object ./install.rhai threads to every bucket;
+    producer ./context.rhai). Direct reads in this file: `template_dir` (unguarded
+    property-on-`()` if non-map; args default `./agent/templates` per
+    /agent/src/tenant/install.sdd), the `${context.package_dir}/pods` gate, and
+    `tenant.namespaces` — the @install_allowed_obj allow-list argument, read per document and
+    unguarded: `tenant` is minted by ./context.rhai but a `*_pre`/`*_prepare` whole-map hook
+    replacement can erase it, see Raises. The whole map is also @bctx::run's data source and
+    the Handlebars render data, so the shipped templates read `instance.appslug`/`.namespace`,
+    `cluster.vynil_namespace`, `agent_image`, `schedule` and the
+    `envs`/`envs_from`/`volumes`/`mounts`/`files`/`has_files`/`backup_affinity` set — that key
+    contract is owned by ./context.sdd + ./context_tenant.sdd + ./../lib/build_context.sdd +
+    ./../lib/backup_context.sdd, not here (the `namespace` map @bctx::run reads is the same
+    map aliased onto `tenant` by ./context_tenant.rhai). The map's `instance` key (built view)
+    is NOT the injected CR.
+  Hooks — three optional @import_run module names: `schedule_backup_pre`,
+    `schedule_backup_prepare`, `schedule_backup_post`, each called with the same
+    (instance, context) pair. None ships in either tenant resolver script directory (./,
+    ./../lib) — package `scripts/` slots only.
+
+Returns:
+  The `context` map as held after the try/catch, plus a `schedule_backup_post` merge on a map
+    return — a value ./install.rhai discards whole (./install.sdd); the lane communicates only
+    by side effects (each @install_allowed_obj applied-entry list is likewise dropped). The
+    observable outcomes: the rendered documents applied in decoded-document order — shipped
+    partials yield `{appslug}-backups-scripts` ConfigMap (only when `has_files`),
+    ServiceAccount `{appslug}-backup`, RoleBinding `{appslug}-backup` (roleRef ClusterRole
+    `${cluster.vynil_namespace}:backups`, subject SA in `instance.namespace`) and CronJob
+    `{appslug}-backups` with `spec.schedule` = the `schedule` context text. No shipped document
+    carries its own `metadata.namespace`, so all four resolve to and apply in
+    `instance.metadata.namespace` (@install_allowed_obj rewrites `metadata.namespace` into
+    every namespaced document); a document carrying its own namespace applies THERE when it is
+    in `tenant.namespaces`, else silently into the instance namespace, and a cluster-scoped
+    document is only warn-ignored (unlike the service twin). Job-template labels are
+    `instance.selector` plus `app.kubernetes.io/component=backup` emitted by
+    @selector_from_ctx (/common/src/handlebarshandler.sdd) — the component label is what
+    ./delete_backup.rhai's Job sweep later filters on; and the `ScheduleBackup` failure
+    condition on error.
+
+Raises:
+  Zero error-fabricating @throw statement: the file's one throw is the bare `throw;` re-throw
+    after the failure marker. @import_run swallows only the absent-module and absent-function
+    skip markers (`No ${name} module, skipping.` / `No ${name}::run function, skipping.`) —
+    everything else propagates.
+  Inside the @try (marker path): a raw raise from @bctx::run (dead/absent `status.vitals`,
+    missing `instance` context key, the Cluster-branch Secrets @list_meta read — its spec's
+    Raises), from either @register_partial_dir call on a broken/unreadable partial directory,
+    from @render_from or @yaml_decode_multi, from the `context.tenant.namespaces` argument
+    read once the `tenant` key is gone (property-on-`()`), the engine error of a non-map
+    document reaching @install_allowed_obj's `.metadata.namespace` dot (no
+    @get_objects-style qualification filter runs on this stream), @install_allowed_obj's
+    `kind: ${obj.kind} is unknown from the apiServer.` throw, or an apply KubeError — becomes
+    @set_status_schedule_backup_failed(reason) (verbatim string; non-string through
+    @json_encode) then `throw;`: the install lane reaches no later bucket and exits 1
+    (/agent/src/tenant/install.sdd), condition `ScheduleBackup`/`Warning`
+    `ScheduleBackupFailed` with truncated note (/common/src/instance_macros.sdd,
+    /common/src/instancetenant.sdd).
+  A failure on the N-th document leaves documents 1..N-1 applied and the rest never applied —
+    no rollback, the marker alone records it.
+  Outside the @try: @set_status_schedule_backup_failed's own KubeError replaces the original
+    error; a raise inside the `schedule_backup_pre` hook kills the lane with no marker at all;
+    a raise inside the `schedule_backup_post` hook (the only statement after the try) likewise
+    leaves no marker even though the full schedule already applied (Tasks).
+  @json_encode of an unserializable caught payload in the `_` switch arm can itself raise out
+    of the catch, replacing the reason (same open point as ./../lib/backup_context.sdd).
+
+Handles:
+  Stock image: all three hook names take the debug-log @import_run skip, the @type_of guard
+    sees no map, and the lane runs on the unchanged `context`. A hook returning a non-map
+    leaves the previous `context` in force (same merge discipline as ./install.sdd's buckets).
+  Partial precedence: `template_dir` registers first, then `${package_dir}/pods` (only under
+    @is_dir) registers second, so a package `pods/cronbackup.yaml.hbs` or `pods/backup.yaml.hbs`
+    silently overwrites the shipped same-name partial (partial name = filename minus `.hbs`).
+  The optional scripts ConfigMap is gated INSIDE the template (`{{#if has_files}}`), not by
+    this file: the loop blindly applies whatever documents the stream holds.
+  Allow-list degeneracy: `tenant.namespaces` is passed as the raw context value — per
+    ./context.sdd Raises the upstream getter can land it as the plain string `""`; what the
+    allow check then does with a non-array is unpinned (irrelevant to the shipped,
+    namespace-less documents — Tasks).
+  No dedup probe, no wait, no inventory — unlike ./../service/init_from.sdd (Job-exist gate +
+    @wait::all; this directory's ./init_from.rhai carries the same posture), every document is
+    unconditionally re-applied on every qualifying install and every @install_allowed_obj
+    return is dropped; nothing is recorded into `status`.
+  Failure text shape: the marker reason is the caught engine error's own text — verbatim for
+    thrown strings, @json_encode text otherwise — no wrapper or file/line prefix at this level.
+
+Must:
+  Execute exactly: @import_run("schedule_backup_pre") + map-merge guard → @try { @bctx::run
+    (@instance, @context, `false`) → @import_run("schedule_backup_prepare") + map-merge →
+    @new_hbs → @register_partial_dir(`context.template_dir`) → @is_dir-gated
+    @register_partial_dir(`${context.package_dir}/pods`) → @yaml_decode_multi of @render_from
+    (`"{{> cronbackup.yaml }}"`, @context) → @dir::install_allowed_obj(`obj`,
+    `context.tenant.namespaces`, `instance.metadata.namespace`) per document in stream order }
+    → on raise @set_status_schedule_backup_failed + `throw;` →
+    @import_run("schedule_backup_post") + map-merge → return `context`; nothing else, in no
+    other order. This is the twin's whole chain with only the apply call swapped.
+  Call @bctx::run with @use_init_from `false` — the schedule-lane posture per
+    ./../lib/backup_context.sdd: `RESTIC_SNAPSHOT` never emitted, `envs_from` stays the
+    `backup-settings` Secret, per-Secret `/secrets/` volumes mounted, and `schedule` set to the
+    cron text `${namespace.maintenance_start_minut} ${namespace.maintenance_start_hour} * * *`
+    — on this lane the pair comes from the tenant mint (`0`/`1`, ./context.sdd), so the default
+    schedule is `0 1 * * *`; that @bctx::run call also takes the tenant `RESTIC_TAGS` branch
+    because `["package"].type` is `tenant` (owner ./../lib/backup_context.sdd). NO arithmetic,
+    no `RESTIC_MAX_*` retention and no cron-expression building happens in this file or by
+    this call site (retention defaults only later, inside the dispatched Pod's ./backup.sdd
+    @from_args half).
+  Keep the apply posture of ./../lib/install_from_dir.sdd's single-object tenant lane: exactly
+    the object-namespace-if-`in`-allow-list-else-instance-namespace resolution (silent
+    remap), `metadata.namespace` rewritten on every namespaced apply, cluster-scoped kinds
+    warn-ignored and NEVER applied (the twin's `allow_cluster` `true` has no counterpart
+    here), one bare apply per document with no readiness wait, no first/middle/last
+    bucket-ordering pass — decoded stream order is apply order — and the 0/1-entry applied
+    lists dropped.
+  Treat idempotence as bare full replay: there is no prior-schedule read, diff or prune; each
+    qualifying install re-renders from the fresh `context` (so maintenance-window changes flow
+    to the next install's CronJob) and re-applies the same fixed names. Removal lives only in
+    ./delete_backup.rhai when ./install.sdd's backup gate flips.
+  Write the failure marker with the two switched arms exactly as written (thrown string
+    verbatim / other error `json_encode`d) and re-throw; success is never marked — no
+    `set_status_*` success call, condition or tag exists for this lane; the install close in
+    ./install.sdd stamps `Ready`/`tag` later.
+  Emit no @log_info, @log_debug, @log_warn or @log_error line at this level (the file contains
+    zero log calls; only imported collaborators log).
+  Keep the import-time surface at the two top-level imports — `"backup_context"` as `bctx`,
+    `"install_from_dir"` as `dir`, both import-pure per their specs — so module load touches no
+    env, filesystem or cluster; a resolver miss on either is an eval error in the install lane
+    before @run starts.
+  Resolve the module and its three hook names against the four resolver directories frozen by
+    the tenant Rust lane (`{package_dir}/scripts`, `{config_dir}`, `{script_dir}/tenant`,
+    `{script_dir}/lib` — /agent/src/tenant/install.sdd), so packages can ship the hooks or
+    shadow the whole lane.
+
+Must not:
+  Open or close a maintenance/scale window: no `maintenance_start`/`maintenance_stop`
+    @import_run here (unlike ./backup.sdd and ./restore.sdd) — installing a schedule perturbs
+    no workload; only the cron-fired Pod quiesces.
+  Read `instance.spec.initFrom` or default any restic env: the `false` third arg is the only
+    lever this lane takes on the env contract that ./../lib/backup_context.sdd owns; a second
+    reader (or the init lane's `true` posture leaking here) would fork source selection.
+  Persist a schedule inventory into `status` (no applied-object list, no success condition):
+    the counterpart stage lanes store their buckets — this lane deliberately does not, and
+    removal matches by fixed name/labels instead.
+
+Depends on:
+  ./../lib/backup_context.rhai — the @run(..., `false`) half of the env/context contract
+    (./../lib/backup_context.sdd, which freezes this file as one of its two schedule-lane
+    callers).
+  ./../lib/install_from_dir.rhai — @install_allowed_obj single-object apply, its raise surface
+    and the never-apply-cluster posture (./../lib/install_from_dir.sdd, which names this file
+    as one of its two @install_allowed_obj callers); no other function of the module is used.
+  /agent/templates/cronbackup.yaml.hbs (+ nested /agent/templates/backup.yaml.hbs Pod template)
+    resolved through `context.template_dir` — the rendered manifest shape and the fixed
+    `{appslug}-backup`/`-backups` object names are template-owned, not frozen here.
+  wynil-core 0.7.7 engine API — the @import_run shim, @new_hbs + @register_partial_dir +
+    @render_from of the `"HandleBars"` type (/common/src/handlebarshandler.sdd, helpers
+    `json_to_str`/`selector_from_ctx`/`to_json` riding the same engine), @is_dir,
+    @yaml_decode_multi, @type_of, @json_encode; the `switch type_of(e)` arms are plain rhai.
+  /common/src/instancetenant.sdd + /common/src/instance_macros.sdd — the
+    @set_status_schedule_backup_failed bridge on @TenantInstance and the
+    `ScheduleBackup`/`ScheduleBackupFailed` condition it patches; /common/src/rhaihandler.sdd —
+    the @Script constructor mounting all of the above.
+
+References:
+  ./install.rhai + ./install.sdd — the sole caller: the backup branch gate (status vitals +
+    `context.namespace.use_backup` + readable `backup-settings` Secret in
+    `context.instance.namespace`), the (instance, context) injection, the scalables-before-
+    schedule comment dependency and the returned-context discard frozen there;
+    /agent/src/tenant/install.sdd — the exit-1 error lane every raise here lands in, and the
+    `args`/resolver-directory setup behind `context`.
+  ./backup.sdd — the Pod-side lane the rendered cron dispatches (`agent <package.type> backup`
+    on the tenant kind): it consumes, via @from_args, the envs @bctx::run baked into the Pod
+    spec here.
+  ./delete_backup.rhai — the cleanup lane matching these objects by fixed name/labels (spec
+    pending); see Tasks for the name-mismatch finding at that seam (twin-shared).
+  ../service/schedule_backup.sdd + ./../service/schedule_backup.rhai — the calibration twin:
+    `diff` shows exactly one hunk (line 22, @install_obj → @install_allowed_obj); its
+    RBAC-name `[?]` re-confirmed here as real.
+  ./context.sdd + ./context_tenant.sdd — producers of the `tenant` mint, the `namespace`
+    alias, the maintenance pair and the swallow-to-`""` failure mode of `tenant.namespaces`.
+  ./../service/init_from.sdd — sibling stage with the opposite posture (dedup + wait + its own
+    marker); this directory's ./init_from.rhai carries that shape for the tenant kind (no spec
+    yet). Contrast only.
+  /agent/tests/rhai_lifecycle.rs — service engines only; /agent/tests/rhai_backup_redis.rs —
+    a tenant mock engine that never imports this module (Tasks).
+
+Scenario: qualifying install re-applies the whole schedule
+  Given the tenant install backup branch fired (vitals present, `use_backup` annotation true,
+    `backup-settings` Secret readable), a context with `instance.appslug` `acme`, one scripts
+    file under `${package_dir}/scripts` (`has_files` true), the minted tenant maintenance pair
+    and no `pods/` dir
+  When @run executes
+  Then the four documents apply through @install_allowed_obj into
+    `instance.metadata.namespace` in stream order with `metadata.namespace` rewritten:
+    ConfigMap `acme-backups-scripts`, ServiceAccount `acme-backup`, RoleBinding `acme-backup`,
+    CronJob `acme-backups` with `spec.schedule` `0 1 * * *`
+  And @run returns `context`, which the caller discards, and no `status` write happens
+  No mapped test.
+
+Scenario: an own namespace routes, an out-of-list one remaps
+  Given a `pods/cronbackup.yaml.hbs` shadow whose documents carry
+    `.metadata: {namespace: ...}` — `team-a` (in `tenant.namespaces`) and `other-ns` (absent)
+  When @run applies them
+  Then the `team-a` document applies in `team-a` keeping its namespace, the `other-ns`
+    document applies silently in `instance.metadata.namespace` rewritten, and a cluster-scoped
+    kind in the same stream is warn-`Ignoring`ed with nothing applied (the service twin would
+    have applied it under `allow_cluster` `true`)
+  No mapped test.
+
+Scenario: any raise becomes the marker and aborts the install
+  Given @bctx::run dies on absent `status.vitals`, OR a document's kind is unknown to
+    discovery, OR the CronJob apply hits a Forbidden
+  When the raise enters the @catch
+  Then the reason string is the error's own text (or its @json_encode) and
+    @set_status_schedule_backup_failed patches `ScheduleBackup`/`Warning`
+    `ScheduleBackupFailed` on the TenantInstance
+  And the bare `throw;` crosses @import_run (not a skip marker), so no `install_post`, no
+    `Ready`-close and exit 1; documents applied before a mid-loop failure stay applied
+  No mapped test.
+
+Scenario: package pods partial shadows the shipped one
+  Given `${package_dir}/pods/cronbackup.yaml.hbs` ships a rewritten schedule section
+  When @run registers partial directories
+  Then the second registration wins, the package text renders instead of
+    /agent/templates/cronbackup.yaml.hbs, and the loop applies whatever it yields — same
+    posture for `pods/backup.yaml.hbs` replacing the Pod template
+  No mapped test.
+
+Scenario: hooks merge or skip without touching the schedule
+  Given no hook module exists anywhere on the tenant resolver path
+  When @run executes
+  Then all three names debug-log their skip, no @type_of guard ever merges, and the lane runs
+    on the untouched `context`
+  But given a package `schedule_backup_prepare.rhai` whose run returns a map, a `pods`-style
+    context tweak reaches the render
+  And given that hook instead raises, the marker path writes `ScheduleBackupFailed` and
+    re-throws
+  No mapped test.
+
+Example:
+  Marker posture: thrown string `boom` → reason `boom`; thrown map → reason `{"k":"v"}` json
+    text
+  Schedule text: minted `maintenance_start_minut: "0"` + `..._hour: "1"` (./context.sdd) →
+    CronJob `schedule: 0 1 * * *` (composed in @bctx::run, not here)
+
+Tasks:
+  [ ] Map the five Scenarios to tests: no test names this module —
+      /agent/tests/rhai_lifecycle.rs is service-only and /agent/tests/rhai_backup_redis.rs
+      builds a tenant mock engine but imports only the backup-prepare/restore modules; add the
+      install/schedule harness (vitals-bearing mock tenant, template-dir fixtures, mock
+      applies) before the TTD green gate (same harness task as ./context.sdd and
+      ./install.sdd).
+  [?] RBAC name seam — RE-CONFIRMED for the tenant lane (shared template, same names): this
+      lane creates ServiceAccount AND RoleBinding `{appslug}-backup` (singular), while
+      ./delete_backup.rhai deletes a RoleBinding named `{appslug}-backups` (plural,
+      NotFound-swallowed) and never sweeps the ServiceAccount — disabling tenant backup leaves
+      both behind. One decision for the twin pair: fix the shared template names or both
+      delete lanes (mirrors ../service/schedule_backup.sdd).
+  [?] Allow-list degeneracy: `context.tenant.namespaces` reaches @install_allowed_obj raw, and
+      ./context.sdd shows it can land as the string `""` when the namespaces getter swallows a
+      cluster failure — pin with a test what the allow check does with a non-array @allowed
+      before deciding whether this file (or @install_allowed_obj) must guard the type.
+  [?] Hook raises outside the @try (`schedule_backup_pre`, `schedule_backup_post`) abort with
+      no marker — pre means "nothing scheduled, nothing recorded", post means "schedule
+      applied, unrecorded, install failed". Decide whether the hooks join the guarded body
+      (twin-shared: ../service/schedule_backup.sdd and ./../service/init_from.sdd carry the
+      same open point).
+  [?] The hook-merged context (and the final `context`) reaches no consumer: ./install.sdd
+      discards this lane's return whole — confirm the hooks are intended as side-effect-only
+      slots (twin-shared with ../service/schedule_backup.sdd).
+  [?] `ScheduleBackup` has no success twin on @TenantInstance either: a correctly scheduled
+      tenant never carries a positive condition, and reruns cannot distinguish "applied by a
+      prior install" from an operator-edit of the same-named objects. Confirm the no-inventory
+      posture is intended or add a success stamp (twin-shared).
+
+Done when:
+  Every Scenario carries a passing mock-engine test or a recorded decision, the render→apply
+    order, the tenant allow-list routing, the `false` @bctx::run posture and the single marker
+    call still match the source, the single-line twin diff against
+    ./../service/schedule_backup.rhai still holds, and `specdd lint` is green on this file.

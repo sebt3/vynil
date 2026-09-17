@@ -1,0 +1,93 @@
+Spec: ContextSystemScript
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  The shipped system-kind default of the `context_system` hook slot: a three-line
+    placeholder defining only an identity @run. The system contract completes nothing
+    — unlike ./../service/context_service.rhai and ./../tenant/context_tenant.rhai,
+    which both define a `template` and a `run` that fill the kind block (the
+    `namespace`/`tenant` map), this slot adds no key and changes no value. The file
+    exists so the slot named in ./context.rhai resolves to an explicit no-op a system
+    package can shadow, and it is the built-in witness of the @import_template
+    absent-`template` run-fallback: offline, that fallback is the only thing reaching
+    `run` at all.
+
+Exposes:
+  @run(@instance, @context) — the module's sole @fn (Rhai script modules expose every
+    top-level `fn`): returns its second argument unchanged. Reached from exactly one
+    site, the `context_system` slot of ./context.rhai — live lane through the
+    three-arg @import_run, offline lane through @import_template falling back to
+    `run` because this module defines no `template`.
+  No `template` @fn, no other @fn, no top-level statement.
+
+Accepts:
+  @instance — ignored, never read: any @Dynamic the caller passes (typed
+    @SystemInstance, synthesized template map, or mock sink).
+  @context — the running context map from ./context.rhai; any value actually, since
+    neither the parameter's type nor its contents are inspected.
+
+Returns:
+  The caller's own map, unmodified: the last expression is `context`, so the slot's
+    `type_of(ctx) == "map"` guard passes trivially and the guarded replacement
+    rebinds the identical content — a net no-op for both lanes, stock packages
+    included.
+
+Raises:
+  No @throw, no @try, no fallible statement exists — this file cannot fail.
+
+Must:
+  Keep the source exactly one `fn run(instance, context)` whose body is the single
+    final expression `context` — zero imports, zero top-level statements, zero logs.
+  Stay the resolver-last default: the slot callers resolve `context_system` through
+    the package `{package_dir}/scripts` then `{config_dir}` first
+    (/agent/src/system/install.sdd, /agent/src/template/system.sdd), so a package
+    copy shadows this identity wholesale before it is ever reached.
+
+Depends on:
+  ./context.rhai — the only importer and slot owner (call sites frozen in
+    ./context.sdd; the live/offline seam is that spec's contract, not this one's).
+  wynil-core 0.7.7 script surface behind /common/src/rhaihandler.sdd — the
+    @import_template fallback onto `run`, owned and frozen there, restated as relied
+    on by /agent/src/template/system.sdd.
+
+References:
+  /agent/src/template/system.sdd — the Rust lane that freezes this file's pass-
+    through behaviour and its "identity reached via run-fallback" wording.
+  ./../service/context_service.rhai and ./../tenant/context_tenant.rhai — the twin
+    kind slots this default deliberately differs from (both fill a kind block; only
+    this one ships as a no-op, because the system contract has no kind block —
+    ./context.sdd Returns).
+
+Scenario: live-lane slot keeps the context identical
+  Given the ./context.rhai `run` lane at the `context_system` slot with context C
+  When the three-arg @import_run resolves this module
+  Then `run` answers C itself, the `type_of` guard passes, and the context after the
+    slot equals the context before it, key for key
+  No mapped test
+
+Scenario: offline lane reaches the identity through the run-fallback
+  Given the ./context.rhai `template` lane at the same slot
+  When @import_template looks for `template`, does not find it, and falls back to
+    `run`
+  Then the same identity executes, the slot skips nothing and logs nothing, and the
+    returned template context is unchanged
+  No mapped test
+
+Tasks:
+  [ ] Cover the two scenarios — no test resolves a `scripts/system` engine at all
+      (/agent/tests/rhai_lifecycle.rs is service-only); fold into the lane test
+      builder task of ./context.sdd.
+  [?] Fate of the stub (open decision mirrored from
+      /agent/src/template/system.sdd Tasks): keep the identity, delete the file
+      (absent-module skips to `()` and the guard keeps the context — net-equivalent
+      for the default, but silences the explicit-slot signal to package authors), or
+      give it a real default. Decide with the expectation that system packages
+      shadow this slot.
+  [?] Consistency question: add a `template` twin so the identity is reached
+      directly instead of through the run-fallback — decide once with the
+      run-only-hook fallback semantics shared across all slot modules.
+
+Done when:
+  Both Scenarios have a mapped test or a decided Task, and the slot claim still
+    cross-checks ./context.sdd and /agent/src/template/system.sdd.

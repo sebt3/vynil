@@ -1,0 +1,177 @@
+Spec: LibWait
+
+Platform: Rhai script library (vynil-core 0.7.7 engine)
+
+Purpose:
+  Block the calling install/restore lane until freshly applied objects are actually usable:
+    given an array of `{kind, namespace, name}` maps, wait every recognised kind to its
+    ready/available/completed state through the registered core wait primitives, or die
+    raising and abort the calling script. Pure wiring — no wait logic of its own.
+
+Exposes:
+  Five overloaded fns, reached through the frozen `import "wait" as wait` convention
+  (@wait::all from the install and init_from lanes — all those sibling specs are pending):
+    @installs(lst, duration) / @installs(lst) — the three instance kinds, `"Ready"` condition.
+    @workload(lst, duration) / @workload(lst) — Deployment/DaemonSet/StatefulSet available.
+    @job(lst, duration) / @job(lst) — batch Job completion.
+    @vital(lst, duration) / @vital(lst) — per-data-store kind lanes (condition table in `Example`).
+    @all(lst, duration) / @all(lst) — the four lanes chained installs → vital → job → workload.
+  Rhai resolves two-arg versus one-arg by arity; every one-arg form only re-dispatches with
+    its literal default — `5*60` (installs), `2*60` (workload), `5*60` (job), `3*60` (vital)
+    seconds; @all/one-arg therefore mixes 300/180/300/120 lane budgets while @all/two-args
+    passes one shared duration to all four lanes.
+
+Accepts:
+  @lst — array of object maps dot-fielded for `kind`, `namespace`, `name`; kind matching is
+    exact, case-sensitive string `contains`. The @installs/@workload/@job filter lambdas read
+    `kind` on every element and @vital reads it on every element unfiltered — an element
+    without that property raises the engine's property lookup before any kind skip happens.
+  @duration — integer seconds forwarded verbatim to the registered waits; this file does no
+    arithmetic on it; a negative value clamps to zero (immediate timeout) inside the core
+    @timeout_duration, and all callers so far pass positive literals or `20*60`.
+
+Returns:
+  Nothing observable: every fn returns the unit value of its trailing for-loop or call and
+    the waits themselves are unit-on-success per core contract. Callers treat a clean return
+    as "everything is ready"; no per-object status is reported.
+
+Raises:
+  Zero `throw` and zero `try`/`catch` statements in this file: every failure is the engine
+    error of a wrapped core function and it aborts the whole calling script, so remaining
+    objects and remaining lanes never get their waits:
+      - generic lanes: `kind` unresolved in the core discovery cache makes @get_obj raise the
+        unsupported-method error before any watch starts; a missing object fails the fetch.
+      - workload lanes: @get_deployment/@get_deamonset/@get_statefulset/@get_job fetch errors,
+        not-found included, raise before any watch starts.
+      - waits: budget elapsed raises the core Elapsed error; a dead watch raises the core
+        KubeWaitError. Timeout posture is throw-never-return — no wait ever reports "timed
+        out" to the script as a value, and this file never converts an Elapsed into a warning.
+
+Handles:
+  Unrecognised kinds are silently skipped in both postures: @installs keeps only
+    `"ServiceInstance"`, `"SystemInstance"`, `"TenantInstance"`; @workload only `"Deployment"`,
+    `"DaemonSet"`, `"StatefulSet"`; @job only `"Job"`; @vital walks its if/else-if chain and
+    simply falls through the end with no else branch — unlogged, unwaited.
+  One wait in flight at a time: waiting is inline and sequential per element, so a lane's
+    worst-case wall time is (matched objects × per-object waits) × duration, with the two
+    BucketClaim/BucketAccess objects doubling their per-object budget.
+
+Must:
+  Freeze the kind→wait protocol: every entry of the `Example` table is the literal wait
+    primitive and predicate argument the lane runs, with the timeout constant above.
+  Reach `"ServiceInstance"`/`"SystemInstance"`/`"TenantInstance"`/`"Cluster"`/`"MariaDB"`/
+    `"RabbitmqCluster"`/`"BucketClaim"`/`"BucketAccess"`/`"NdbCluster"` through
+    @k8s_resource(kind, namespace) + @get_obj then the @K8sObject wait family; the generic
+    resolution hits the wynil-core discovery cache and this file never calls
+    `update_k8s_crd_cache`, so kinds a caller just applied are only waitable once the caller
+    lane refreshed the cache (owner: ./install_from_dir.sdd).
+  Use the core-registered misspelled @get_deamonset verbatim — the correctly spelled daemonset
+    getter is not registered under that name and would raise function-not-found.
+  Wait derived workloads for the Redis operator CRs: `"RedisSentinel"` on the StatefulSet
+    `<name>-sentinel` and `"RedisCluster"` on `<name>-leader` in the same namespace, never on
+    the CR object itself; the other Redis-family kinds, `"MongoDBCommunity"` and `"Dragonfly"`
+    wait the same-name StatefulSet.
+  Pair the bucket waits sharing one duration: `"BucketClaim"` waits `"bucketReady"` true then
+    `"bucketName"` non-null; `"BucketAccess"` waits `"accessGranted"` true then `"accountID"`
+    non-null — two sequential watches per object.
+  Log one @log_info line (core tracing global) immediately before every wait, text
+    `Waiting for ${kind} ${namespace}/${name}` plus the posture word (`to be available`,
+    `to be ready`, `to be granted`, `to have a name`, `to have an id`, `to finish`); for the
+    derived-STS Redis lanes the line still names the CR, not the StatefulSet waited on.
+  Import side-effect-free: the file is only fn declarations, so a lane can `import "wait"`
+    and never call it (see Tasks).
+
+Depends on:
+  The wynil-core 0.7.7 script surface mounted by `/common/src/rhaihandler.sdd`
+    @Script::new / @Script::new_mock: @k8s_resource + @get_obj, the @K8sObject waits
+    @wait_condition/@wait_status/@wait_status_prop, the typed workload getters and their
+    @wait_available/@wait_done waits, and @log_info — this file adds no state and no timeout
+    of its own.
+  Same core names under @Script::new_mock resolve to the no-op substitutes: every mock wait
+    ignores the timeout and returns success immediately (pinned as a coverage problem in
+    `Tasks`).
+  `/agent/scripts/service/init_from.rhai` + `/agent/scripts/tenant/init_from.rhai` drive
+    @wait::all with `20*60`, and `/agent/scripts/{service,tenant,system}/install_*.rhai`
+    drive the one-arg defaults — both arities and the `Example` mapping are the contract
+    those lanes consume (their specs pending).
+
+Scenario: default install gate chains the four lanes
+  Given an @lst holding a ServiceInstance, a Cluster, a Job, a Deployment and an unrelated kind
+  When @all(lst) runs with no duration
+  Then installs(300) → vital(180) → job(300) → workload(120) run in exactly that order, each
+    with its literal default budget
+  And the unrelated kind produces no log line and no wait
+  Maps to @wait_all_chains_functions in `/agent/tests/rhai_lib.rs` — which pins only "no raise
+    on mocks", see Tasks
+
+Scenario: one duration for every lane
+  Given the init_from lane calls @wait::all(applied_objs, 1200)
+  When the chain runs
+  Then all four lanes get `1200` and no per-lane default applies
+
+Scenario: a timeout kills the rest of the script
+  Given an object whose `"Ready"` condition never flips
+  When its lane's first wait burns its budget
+  Then the core Elapsed error propagates uncaught — the script dies mid-lane, and objects or
+    lanes queued behind it never wait
+  No mapped test: the mock substitutes make timeout unreachable (Tasks)
+
+Scenario: RedisSentinel waits the derived StatefulSet
+  Given `#{ kind: "RedisSentinel", namespace: "ns", name: "cache" }`
+  When @vital(lst, n) runs
+  Then the wait is @get_statefulset("ns", `cache-sentinel`) + @wait_available(n) — the CR
+    object is never fetched
+  And the log line still reads `Waiting for RedisSentinel ns/cache to be available`
+
+Scenario: a BucketClaim can eat two budgets
+  Given a BucketClaim whose `"bucketReady"` arrives at the very end of the first window
+  When @vital runs with duration N
+  Then `status."bucketName"` is granted another full N seconds — one object may raise having
+    already waited N seconds
+
+Example:
+  @installs — `"ServiceInstance"`, `"SystemInstance"`, `"TenantInstance"`: @k8s_resource +
+    @get_obj then `@wait_condition("Ready", duration)`
+  @workload — `"Deployment"`: `@get_deployment(ns, name)` + `@wait_available(duration)` on the
+    `Available` condition; `"DaemonSet"`: @get_deamonset + @wait_available on
+    number-available==desired; `"StatefulSet"`: @get_statefulset + @wait_available on
+    available-replicas==spec-replicas
+  @job — `"Job"`: `@get_job(ns, name)` + `@wait_done(duration)` on the Completed condition
+  @vital — `"Cluster"`/`"MariaDB"`: `@wait_condition("Ready", duration)`; `"RabbitmqCluster"`:
+    `@wait_condition("ClusterAvailable", duration)`; `"NdbCluster"`:
+    `@wait_condition("UpToDate", duration)`; `"RedisSentinel"`: sts `<name>-sentinel`;
+    `"RedisCluster"`: sts `<name>-leader`; `"Redis"`, `"RedisReplication"`,
+    `"MongoDBCommunity"`, `"Dragonfly"`: same-name sts, all four via @get_statefulset +
+    @wait_available; `"BucketClaim"`: `@wait_status("bucketReady", duration)` then
+    `@wait_status_prop("bucketName", duration)`; `"BucketAccess"`:
+    `@wait_status("accessGranted", duration)` then `@wait_status_prop("accountID", duration)`
+  @all — ordered chain: @installs → @vital → @job → @workload, shared or default durations
+
+Tasks:
+  [ ] Extend `/agent/tests/rhai_lib.rs`: the five @wait_* tests are happy-path only (mocked
+      objects present, duration `1`, the final assert is `true`) and pin no raise, no chosen
+      wait and no durations; add missing-object raises, the one-arg default arity re-dispatch,
+      the @get_deamonset lane, the RedisSentinel/RedisCluster derived-STS lanes and the bucket
+      double waits.
+  [?] Mock waits consume zero time and always succeed (timeout argument ignored by the core
+      mock), so the Elapsed/KubeWaitError throw posture is untestable on @Script::new_mock.
+      Decide how to pin it: a failing-mock variant, or a documented real-cluster check.
+      Maps to `/agent/tests/rhai_lib.rs`.
+  [?] An element map without `kind` raises the engine property lookup inside every filter
+      lambda — today's freeze, untested. Decide guard-with-skip versus raise-keep-current,
+      then pin it with a test in `/agent/tests/rhai_lib.rs`.
+  [?] Both bucket lanes reuse the same full duration for their two sequential waits (worst
+      case 2N per object). Decide whether that is intended or the budget must split N/N.
+  [?] @all/one-arg mixes per-lane defaults (300/180/300/120 s) while @all/two-args is uniform
+      — freeze whether the divergence is intended semantics or a foot-gun callers rely on by
+      accident.
+  [?] `/agent/scripts/service/delete_vitals.rhai`, `/agent/scripts/tenant/delete_vitals.rhai`,
+      `/agent/scripts/service/template_vitals.rhai` and `/agent/scripts/tenant/template_vitals.rhai`
+      `import "wait"` but never call one fn of it (their waits go through the object-method
+      @wait_deleted directly). Decide whether the dormant imports get removed once those
+      pending sibling specs are authored.
+
+Done when:
+  Every raise/timeout scenario above has a mapped test or a recorded decision, the install
+    and init_from caller contracts (both arities plus the `Example` mapping) still hold, and
+    the existing @wait_* tests stay green.
