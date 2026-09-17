@@ -144,7 +144,7 @@ Depends on:
     instance namespace; ./delete_crds.rhai — deletes recorded CRDs but warns away any whose
     kind still lists children (that CRD survives silently). Their internal contracts are
     theirs, quoted here only as lane roles.
-  wynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
+  vynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
     `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises),
     @is_dir and @type_of.
   /common/src/rhaihandler.sdd — the @Script constructor that mounts the above for the agent

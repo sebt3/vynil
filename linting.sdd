@@ -1,6 +1,6 @@
 # Static-analysis and formatting harness. This spec describes the contract; the machine-
 # readable settings live in /Cargo.toml and ./rustfmt.toml. Crate and file specs inherit this
-# harness through the root wynil spec and never restate its rule levels.
+# harness through the root vynil spec and never restate its rule levels.
 
 Spec: linting
 

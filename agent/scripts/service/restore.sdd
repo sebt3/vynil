@@ -64,7 +64,7 @@ Raises:
     or by any shipped service stage).
   Stage re-throws propagate identically: @import_run swallows only the two skip markers
     (`No ${name} module, skipping.` / `No ${name}::run function, skipping.`; owners
-    /common/src/rhaihandler.sdd + the wynil-core shim), so a `restic backup FAILED returning ${rc}`
+    /common/src/rhaihandler.sdd + the vynil-core shim), so a `restic backup FAILED returning ${rc}`
     from ./restore_run.rhai (the verbatim misnomer: the RESTORE stage throws "backup"), a
     `psql failed for ${pg}` from ./restore_postgresql.rhai, a `mysql restoration failed for ${mysql}`
     from ./restore_mysql.rhai or a cluster-bridge raise from ./restore_secret.rhai aborts the run.
@@ -166,7 +166,7 @@ Depends on:
     ./restore_postgresql.rhai (psql from `/backup/postgresql_${pg}[_cleaned].sql`),
     ./restore_mysql.rhai (mysql from `/backup/mysql_${mysql}[_cleaned].sql`),
     ./maintenance_stop.rhai.
-  wynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file and
+  vynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file and
     @shell_run (int return code); registrars per /common/src/rhaihandler.sdd. This level
     calls no @log_info and no cluster function.
 

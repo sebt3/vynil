@@ -159,7 +159,7 @@ Must:
     non-string values, arrays' non-map elements) is filtered out by the importers, not coerced.
 
 Depends on:
-  wynil-core 0.7.7 engine API — @k8s_resource/@exist/@scope/@apply/@get_obj and the K8sObject
+  vynil-core 0.7.7 engine API — @k8s_resource/@exist/@scope/@apply/@get_obj and the K8sObject
     @delete/@wait_deleted/@original_kind half of the core `k8sgeneric` registrar; @read_dir and
     @file_read from the core `fs` helper set; @yaml_decode_multi/@yaml_encode from the `yaml`
     registrar; @log_debug/@log_info/@log_warn/@log_error and @json_encode from the core-common

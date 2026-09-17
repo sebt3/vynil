@@ -126,7 +126,7 @@ Depends on:
     ./install_others.rhai, ./install_scalables.rhai, ./install_posts.rhai,
     ./schedule_backup.rhai, ./delete_backup.rhai — each writes its own `set_status_*` /
     `set_status_*_failed` marker and re-throws, and each returns the (maybe hook-merged) context.
-  wynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
+  vynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
     `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises), @is_dir,
     @log_info/@log_debug/@log_warn, @json_encode, @k8s_resource(...).@get and
     @update_k8s_crd_cache.

@@ -50,7 +50,7 @@ Handles:
   Entries that are neither file nor dir (broken symlinks, sockets, fifos) — the @is_file / @is_dir
     test-pair answers `false` for both, and the entry is dropped with no signal.
   Non-UTF-8 entry names — @read_dir yields them as the empty string, @is_file and @is_dir answer
-    `false` on it, and the entry is silently skipped (engine behavior owned by wynil-core fs and
+    `false` on it, and the entry is silently skipped (engine behavior owned by vynil-core fs and
     documented through ./../../../common/src/rhaihandler.sdd).
 
 Must:
@@ -68,7 +68,7 @@ Must:
     a directory-symlink cycle under @recursiv) stops only at the engine's `512` call-level cap.
 
 Depends on:
-  wynil-core 0.7.7 engine API — @create_dir, @read_dir, @basename, @is_file, @is_dir, @file_copy
+  vynil-core 0.7.7 engine API — @create_dir, @read_dir, @basename, @is_file, @is_dir, @file_copy
     (the `fs`-feature registrar, script surface assembled behind
     ./../../../common/src/rhaihandler.sdd); file_read, file_write and the shell_* names are NOT
     used by this file.

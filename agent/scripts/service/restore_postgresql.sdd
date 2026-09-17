@@ -1,0 +1,134 @@
+Spec: ServiceRestorePostgresqlScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Jambe postgresql du ladder d'engines (ordre gelé secret → postgresql → mysql par
+    ./restore.sdd) : ré-injecter dans chaque serveur cible le dump SQL
+    `/backup/postgresql_<nom>` déversé au backup, via `psql` en lecture shell (pas
+    `pg_restore` : les dumps sont du SQL en texte pur), avec le gate wildcard
+    `dbname != "*"`, le choix `_cleaned` par @is_file et une garde rc fatale par target.
+    Soeur de ./restore_mysql.rhai (diff jambes/tenant : les quatre variantes service sont
+    toutes byte-identiques à leur jumeau tenant, aucun delta) : les deltas avec la jambe
+    mysql sont l'outillage, les flags courts et le transport du mot de passe par env.
+
+Owns:
+  ./restore_postgresql.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("restore_postgresql", context) de
+    ./restore.sdd, seulement quand `${package_dir}/scripts/restore_postgresql.sh` est absent ;
+    un module éponyme package le remplace. Aucun @import au chargement.
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification). SEULE `context.pg_list` (env `PG_LIST`) est lue en Rhai, avec
+    l'env `${pg}_dbname` relue par @get_env pour le gate wildcard.
+  Les env process `${<pg>_host}`, `${<pg>_username}`, `${<pg>_password}` ne passent PAS par
+    Rhai : la commande les embarque en variables shell `${...}` que le `sh -c` de @shell_run
+    déploie depuis l'environnement du Pod (posées par @run de ./../lib/backup_context.rhai
+    depuis des secretKeyRef Cluster `-app`/`-superuser`).
+  Les dumps `/backup/postgresql_${pg}.sql` — producers ./backup_prepare_postgresql.rhai
+    (`pg_dumpall --clean` pour `*`, `pg_dump --clean` sinon, avec sed d'assainissement des
+    rôles systèmes en mode `*`) — redéposés sous `/backup` par l'étage
+    @import_run("restore_run").
+
+Returns:
+  Unité — aucun `return` ; ./restore.sdd jette la valeur d'@import_run. Canal de succès :
+    boucle terminée + hook post atteint.
+
+Raises:
+  Un @throw par target, texte verbatim `psql failed for ${pg}` — comme la jambe mysql, le rc
+    n'apparaît JAMAIS dans le texte. Garde unique `if rc != 0` : @shell_run n'est pas
+    @shell_output (celui-là jetterait sur rc et stderr et ne sert pas ici), donc ce throw est
+    le seul gestionnaire de codes ; @shell_run ne lève que si le `sh -c` ne peut être lancé.
+  La redirection `< file` est faite par sh : dump absent → rc non nul de sh → même texte,
+    muet sur le rc.
+  Ces levées traversent @import_run (deux skip-markers seulement avalés) → exit-5 Rust
+    (/agent/src/service/restore.sdd).
+  Absences sans throw propre : `${pg}_dbname` absente = `""` ≠ `"*"` → ` -d "" ` part et le rc
+    de psql décide ; host/user absents → sh déploie vide, l'échec de connexion remonte par
+    le rc ; mot de passe absent → `PGPASSWORD=""`, le refus du serveur remonte par le rc.
+
+Handles:
+  `pg_list` vide → boucle no-op silencieuse : aucun log, aucun shell, aucun throw ; les hooks
+    pre/post skip-markés restent les seuls gestes.
+  Slots @import_run("restore_postgresql_pre", context) / @import_run("restore_postgresql_post",
+    context) — non livrés dans ./, ./../tenant, ./../lib → skip-markers debug.
+  Wildcard : `dbname == "*"` = pas de `-d`, l'import de dump cluster (pg_dumpall) se joue des
+    connexions `\connect` internes au dump.
+  Variante `_cleaned` : @is_file vrai → le dump nettoyé écrase le chemin du dump brut ; faux
+    → dump brut. Un seul des deux fichiers est lu.
+  Gate amont `restore_postgresql.sh` : le script package remplace la jambe entière, rc et
+    throw déménagent dans ./restore.sdd.
+
+Must:
+  Dérouler par target, dans cet ordre : @log_info(`Starting postgreSQL restore for ${pg}`)
+    (casographie gelée) → lecture env du `dbname` via @get_env → choix du fichier dump →
+    @shell_run de l'import → garde `rc != 0` → throw ; rien d'autre entre les targets.
+  Invoquer verbatim, avec les `${...}` déployés par sh depuis l'env du Pod :
+    `export PGPASSWORD="${<pg>_password}";psql -h "${<pg>_host}" -U "${<pg>_username}"`
+    (+ ` -d "${<pg>_dbname}"` ajouté aux args quand le gate Rhai `dbname != "*"` passe)
+    suivi de ` < /backup/postgresql_<pg>.sql` — aucun flag TLS exporté ni interdit (delta
+    avec le `--skip-ssl` constant de ./restore_mysql.rhai).
+  Transit du mot de passe uniquement par `export PGPASSWORD` dans le sous-shell lancé :
+    aucune valeur de mot de passe n'entre dans l'argv de psql.
+  Préférer `/backup/postgresql_${pg}_cleaned.sql` au dump brut dès qu'il existe (@is_file).
+  Traiter tout rc non nul comme fatal pour la target courante : la boucle s'arrête au
+    premier échec, les targets suivantes ne sont pas jouées, aucune liste de codes tolérés.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur de `pg_list` et des env par base.
+  ./backup_prepare_postgresql.rhai — producteur du format de dump consommé (`--clean`, SQL
+    texte, rôles systèmes filtrés en mode `*`).
+  ./restore.sdd — appelant, ordre du ladder, sémantique exit-5 du throw.
+  ./restore_run.rhai — l'étage qui redépose les dumps sous `/backup`.
+  API moteur vynil-core 0.7.7 — @import_run, @shell_run (`src/shell.rs` : sortie héritée,
+    rc `code().unwrap_or(0)`), @get_env, @is_file, @log_info (registrars
+    /common/src/rhaihandler.sdd).
+
+References:
+  ./../tenant/restore_postgresql.rhai — jumeau byte-identique (diff vérifié), sans spec à ce jour.
+  ./restore_mysql.rhai — soeur de structure (spec ./restore_mysql.sdd) : mêmes gates wildcard
+    et `_cleaned`, delta outillage/flags/transport du secret.
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine résolvant scripts/service :
+      /agent/tests/rhai_backup_redis.rs est le mock TENANT et ne nomme que `restore_redis` —
+      cette jambe service n'est testée nulle part.
+  [?] Aucun producteur livré ne crée `postgresql_${pg}_cleaned.sql` (grep du dépôt ; le sed
+      du prepare edit file le fichier brut en place) : la branche @is_file n'est jouée que
+      par des dumps déposés par des scripts package — contract à geler ou branche à retirer ?
+  [?] Restaure à chaud : le ladder tourne sans scale-down (fenêtre maintenance fictive,
+      ./maintenance_windows.sdd, décision portée par ./restore.sdd) et les dumps
+      `--clean` tentent des DROP pendant que l'application écrit en base.
+
+Done when:
+  Les Scenario tiennent sur un mock résolvant scripts/service, les deux [?] sont tranchés,
+    et le verbatim de la commande reste égal au fichier comme au jumeau tenant.
+
+Scenario: base nommée, wildcard éteint
+  Given `pg_list` = `["app"]`, env `app_dbname` = `"appdb"`, @is_file faux sur le `_cleaned`,
+    @shell_run répondant `0`
+  When @run(context) s'exécute
+  Then la commande, porteuse de l'export PGPASSWORD, contient ` -d "${app_dbname}"` avant la
+    redirection, un seul log `Starting postgreSQL restore for app`, et l'unité est rendue
+    après le hook post
+
+Scenario: wildcard *
+  Given `pg_list` = `["app"]` et env `app_dbname` = `"*"`
+  When @run s'exécute
+  Then aucun `-d` n'apparaît : psql démarre sans base ciblée et le dump pg_dumpall se joue
+    de ses `\connect` internes — pas de sélection par ce script
+
+Scenario: rc non nul, texte sans rc
+  Given @shell_run rendant `3` sur le premier target
+  When @run s'exécute
+  Then la chaîne levée est exactement `psql failed for app` — sans le rc — et les targets
+    suivantes de la liste ne sont pas tentées
+
+Scenario: variante cleaned
+  Given `/backup/postgresql_app_cleaned.sql` existant à côté du dump brut
+  When @run s'exécute
+  Then la redirection cible le chemin `_cleaned`, et seul l'un des deux fichiers est pipé

@@ -184,7 +184,7 @@ Depends on:
     /agent/scripts/packages/test.rhai, the embedded snippets of
     /agent/src/template/{system,service,tenant}.rs and
     /agent/src/{system,service,tenant}/install.rs.
-  wynil-core `0.7.7` script surface (registrars behind /common/src/rhaihandler.sdd):
+  vynil-core `0.7.7` script surface (registrars behind /common/src/rhaihandler.sdd):
     @file_read, @is_file, @yaml_decode, @json_decode, @json_encode, @log_warn,
     @k8s_resource(...).@list/@list_meta.
   /common/src/vynilpackage.sdd — @read_package_yaml typed load on the @run lane.

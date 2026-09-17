@@ -1,0 +1,218 @@
+Spec: TenantBackupPrepareMongodbScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Dumper chaque cible du `context.mongo_list` dans SON archive unique
+    `/backup/mongodb_<mongo>.archive` via `mongodump --archive` — l'archive est écrite par
+    l'outil lui-même, pas par redirection shell (contraste avec le jumeau mysql dont la
+    sortie part par `>`) — en mode wildcard quand `dbname` vaut l'exact `"*"` : une première
+    tentative `--oplog` puis, sur rc non nul, un retry sans oplog avec
+    `--numParallelCollections=1` (le commentaire source indique « backup role may be
+    missing ») ; sinon mode base nommée `--db="<dbname>"` avec la même option de
+    parallelisme, `--authenticationDatabase=admin` au tripode d'identification et jamais de
+    scale du workload. Étage prepare mongodb de la lane, appelé par
+    @import_run("backup_prepare_mongodb", context) de ./backup.sdd, 4e de la ladder fixée
+    secret → postgresql → mysql → mongodb → redis. Jambe tenant-only : ./../service n'a
+    aucun module mongodb (le seul delta twin gelé par ./backup.sdd ajoute ces deux jambes).
+    Un seul @throw par cible, au même template quel que soit le chemin suivi, fatal dès le rc final. Le
+    `backup_prepare_mongodb.sh` du package le remplace en bloc côté appelant : gate
+    d'existence de fichier uniquement, jamais sur le contenu de la liste.
+
+Owns:
+  ./backup_prepare_mongodb.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("backup_prepare_mongodb", context) de
+    ./backup.sdd ; remplaçable sans toucher l'appelant par un module éponyme sous
+    `${package_dir}/scripts` (première priorité du résolveur, gelée ./backup.sdd et
+    /agent/src/tenant/backup.sdd).
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification) : seule `context.mongo_list` y est lue (`MONGO_LIST` décodé là-bas).
+  Les paramètres de cible hors carte : @get_env du quatuor `${mongo}_dbname`,
+    `${mongo}_host`, `${mongo}_username`, `${mongo}_password` — motifs littéraux, clés
+    réelles formées par concaténation Rhai. Seul `dbname` entre dans une variable Rhai
+    (chaîne, pour le gate) ; host/username/password ne sont jamais lus côté Rhai : la
+    commande les embarque en `${...}` que le `sh -c` de @shell_run déploie depuis l'env du
+    Pod. Producteur et décodage secret→env : ./../lib/backup_context.sdd — cible
+    @MongoDBCommunity, hôte `${v.name}-svc.<ns>.svc`, `dbname` littéral `"*"` d'office, donc
+    sur CR stock c'est le mode wildcard qui tourne toujours et le mode nommé n'atteint que
+    des env posés à la main.
+  `dbname` choisit le mode : la valeur exacte `"*"` → toutes les bases avec oplog d'abord ;
+    toute autre valeur, `""` d'absence compris → mode nommé sur la valeur expansionnée.
+
+Returns:
+  Unité — aucun `return` ; rend la valeur du dernier @import_run("backup_prepare_mongodb_post",
+    context) (`()` sur image stock, branche du skip-marker debug), fondue par ./backup.sdd qui
+    ne merge aucun résultat d'étage. Canal unique 0-ou-@throw : archive(s) parue(s) = hook post
+    atteint ; la valeur est jetée par l'orchestrateur puis par la lane Rust.
+
+Raises:
+  Un seul @throw par cible, texte verbatim `mongodump failed for ${mongo}` (nom de cible
+    interpolé), MÊME dans les trois chemins (oplog réussi d'office, retry après échec
+    oplog, mode nommé) : la garde `if rc != 0` ne porte que sur le rc final, le rc de la
+    première tentative oplog n'est que @log_warn'éd. Cette garde accuse aussi @shell_run
+    lui-même côté `sh`. Le @throw traverse @import_run (qui n'avale que ses deux
+    skip-markers) et tue la lane : exit-4 côté Rust (./backup.sdd,
+    /agent/src/tenant/backup.sdd).
+  Levées engine non gardées : @shell_run ne lève que si le `sh -c` ne peut être lancé, mais
+    rend `0` à un process tué par signal (vynil-core 0.7.7 `src/shell.rs`,
+    `code().unwrap_or(0)`) ; `context` non-map lève au premier `context.` ; @get_env ne lève
+    jamais (`""` si absent). Aucun @shell_output ici : contrairement à la jambe redis,
+    aucune sortie n'est capturée ni jetée.
+
+Handles:
+  Deux destins par rc final, comparaison exclusive à `0` : `0` → cible suivante ; tout autre
+    rc → @throw. Pas de retry au-delà du fallback oplog, aucun tri, aucune sortie lue.
+  Fallback oplog : rc≠0 de la tentative `--oplog` → @log_warn du texte verbatim
+    `mongodump --oplog failed for ${mongo}, retrying without (backup role may be missing)`
+    puis retry — serveur standalone sans repliset ou user sans la role, les deux
+    débouchent sur le même second essai ; si le second échoue aussi, le rc du second seul
+    verse au @throw.
+  Absence de `dbname` : @get_env rend `""`, `""` n'est pas `"*"`, le mode nommé part avec la
+    valeur expansionnée VIDE mais entre guillemets dans la commande — `--db=""` arrive à
+    mongodump (contrairement au jumeau mysql où le token non quoté disparaissait) : la
+    commande échoue, son rc verse au @throw au message unique — l'absence d'env n'a ni
+    branche ni message propres.
+  `mongo_list` vide (`MONGO_LIST` absent) : le module est quand même import_run — ./backup.sdd
+    ne route que sur l'existence des `.sh`, jamais sur les listes — la boucle `for` itère
+    zero, aucun shell ne tourne, les deux hooks sautent en markers debug, l'unité sort sans
+    erreur.
+  Slots @import_run("backup_prepare_mongodb_pre", context) / @import_run("backup_prepare_mongodb_post",
+    context) — non livrés dans ./, ./../service, ./../lib → skip-markers debug ; un hook qui
+    lève remonte (seuls les deux markers sont avalés).
+  Pas de gate `.sh` propre ici : ./backup.sdd teste `backup_prepare_mongodb.sh` AVANT ce
+    module et l'exécute à sa place s'il existe (@throw `<script-path> FAILED returning <rc>`
+    sur rc non nul, export `RESTIC_REPOSITORY` en préfixe — les scripts d'étage de la lane
+    backup portent tous l'export) — ce fichier n'est alors jamais import_run ;
+    `backup_prepare.sh` court-circuiterait même les cinq engines.
+
+Must:
+  Dérouler exactement : hook pre → boucle, par cible dans l'ordre de la liste :
+    @log_info(`Dumping mongodb target: ${mongo}`) → une ou deux tentatives de dump selon le
+    mode → garde `rc != 0` → @throw → cible suivante → hook post. Ces @log_info et le
+    @log_warn du fallback sont les seules lignes de log de l'étage.
+  Invoquer verbatim, archive rendue par mongodump lui-même via `--archive=` ; exemples
+    cible `shop` :
+      mode `"*"` tentative 1 : `mongodump --host="${shop_host}" --username="${shop_username}" --password="${shop_password}" --authenticationDatabase=admin --oplog --archive=/backup/mongodb_shop.archive`
+      fallback du mode `"*"` : `mongodump --host="${shop_host}" --username="${shop_username}" --password="${shop_password}" --authenticationDatabase=admin --numParallelCollections=1 --archive=/backup/mongodb_shop.archive`
+      mode nommé : `mongodump --host="${shop_host}" --username="${shop_username}" --password="${shop_password}" --authenticationDatabase=admin --numParallelCollections=1 --db="${shop_dbname}" --archive=/backup/mongodb_shop.archive`
+      — toutes les interpolations y sont entre guillemets `"` (aucune ne disparaît à l'env
+      absent, elles deviennent vides).
+  Écrire exactement `/backup/mongodb_<mongo>.archive` par cible, sans variante : les deux
+    tentatives du mode wildcard visent le même chemin unique, le second essai écrase la
+    partielle du premier ; ./restore_mongodb.rhai ne lit que ce nom-là.
+  Laisser stdout/stderr hérités vers le log du Job (@shell_run ne capture rien) ;
+    l'étage ne vérifie ni taille, ni contenu, ni existence de l'archive : archive vide avec
+    rc `0` passe telle quelle.
+  Ne rien toucher d'autre : aucun kube call, aucun scale du workload source (verdict de
+    l'inventaire « self-scaling des legs redis » de ./restore.sdd : la jambe mongodb, ici
+    comme côté ./restore_mongodb.rhai, ne scale JAMAIS rien — seule la jambe redis du
+    restore le fait), aucune écriture de status — la fenêtre maintenance qui encadre la
+    ladder ne scale rien (./maintenance_windows.sdd) : les dumps partent sur un replica set
+    vivant.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur de `mongo_list` et du quatuor d'envs par cible.
+  ./backup.sdd — appelant, gate `.sh` de remplacement, sémantique exit-4 du @throw.
+  ./maintenance_windows.sdd — fenêtre figée no-op autour de la ladder.
+  vynil-core 0.7.7 engine API — @import_run (shim 2 args), @shell_run, @get_env, @log_info,
+    @log_warn (registrars /common/src/rhaihandler.sdd).
+
+References:
+  ./restore_mongodb.sdd — consommatrice aval de `/backup/mongodb_${mongo}.archive`, redéposée
+    sous `/backup` par ./restore_run.rhai.
+  ./backup.sdd — orchestrateur qui gèle la position de la jambe (4e, après mysql, avant
+    redis) et le scenario d'abort de lane.
+  ./../service/backup_prepare_mysql.sdd et ./../service/restore_mysql.sdd — calibrage
+    structurel (mêmes patrons de gates/env/throw) ; ./../service/backup_prepare_postgresql.sdd
+    — frère de ladder service.
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche (mock tenant scripts/lib +
+    scripts/tenant), zéro test ne nomme cette jambe (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur le mock tenant déjà en place : /agent/tests/rhai_backup_redis.rs
+      résout scripts/lib + scripts/tenant mais ses 14 tests ne nomment que
+      `backup_prepare_redis`/`restore_redis` — coverage nulle pour cette jambe et sa soeur
+      ./restore_mongodb.rhai ; driver `import "backup_prepare_mongodb"` avec overrides
+      get_env/shell_run comme les tests redis existants.
+  [?] Dump cohérent vs replica set vivant : la jambe ne scale rien, la fenêtre maintenance
+      ne scale rien (./maintenance_windows.sdd) et ./backup.sdd Tasks porte la même question
+      — `--oplog` compense en partie (point-in-time) mais le retry sans oplog retombe sur un
+      dump hot non transactionnel MongoDB. Assumer, ou brancher un vraisnapshot par cible ?
+  [?] Fallback oplog silencieux : quand le retry passe, la lane valide un dump SANS oplog
+      (recovery point-in-time impossible), sans autre trace qu'un unique @log_warn dont le texte
+      ne porte même pas le rc de la tentative 1.
+      Garder le fallback muet-promouvable ou conditionner le succès ?
+  [?] Process mongodump tué par signal : @shell_run rend `0` (`src/shell.rs`) et l'archive
+      `--archive=` est déjà partielle : un mongodump OOM-killed est compté réussi et part au
+      snapshot backup_run (même décision ouverte que le jumeau mysql). Trancher si le rc suffit.
+  [?] Mot de passe en ARGV (`--password="${..._password}"` développé par `sh`) : la valeur en
+      clair atterrit dans la ligne de commande du process mongodump, lisible dans la table des
+      processus du Pod. Passer à une URI/`--password` depuis stdin/fichier ou figer la fuite
+      comme acceptable ?
+  [?] `--authenticationDatabase=admin` en dur avec les username/password des CR @MongoDBCommunity :
+      auth externes (LDAP/OIDC) ou authDb non-`admin` imdumpables. Généraliser l'env ou geler
+      l'hypothèse admin ?
+  [?] `context` non-map ou `mongo_list` absent → levée engine au premier accès (non @throw) :
+      fige-t-on la garantie @from_args (toujours en amont, ./../lib/backup_context.sdd) ou
+      garde-t-on une branche explicite ici ?
+
+Done when:
+  Les Scenario tiennent sur le mock tenant (résolveur scripts/lib + scripts/tenant), les
+    texts verbatims des commandes et du @throw restent égaux au fichier, les [?] sont
+    tranchés, `specdd lint` vert sur ce fichier.
+
+Scenario: wildcard avec oplog, premier essai passant
+  Given `mongo_list` = `["shop"]`, @get_env de `shop_dbname` = `"*"`, @shell_run rendant `0`
+  When @run(context) s'exécute
+  Then la seule commande `mongodump` qui tourne est la tentative `--oplog` (aucun
+    `--numParallelCollections`, aucun `--db`), le seul log est `Dumping mongodb target: shop`,
+    aucun @log_warn, @import_run("backup_prepare_mongodb_post", context) ensuite s'exécute et
+    l'unité est rendue
+
+Scenario: oplog refusé, retry sans oplog gelé
+  Given `shop_dbname` = `"*"`, @shell_run rendant `1` sur la commande contenant `--oplog` puis
+    `0` au second appel
+  When @run(context) s'exécute
+  Then le @log_warn verbatim `mongodump --oplog failed for shop, retrying without (backup role may be missing)`
+    précédé le retry, la seconde commande porte `--numParallelCollections=1` et le même
+    `--archive=/backup/mongodb_shop.archive`, et l'étage rend l'unité : le rc de la tentative 1
+    n'apparaît nulle part ailleurs
+
+Scenario: cible nommée, --db entre guillemets
+  Given `shop_dbname` = `"orders"`, @shell_run rendant `0`
+  When @run(context) s'exécute
+  Then la commande verbatim du mode nommé de `Must` tourne, `--db="${shop_dbname}"` expansionné
+    entre guillemets dans le texte passé au `sh`, une seule tentative, hook post atteint
+
+Scenario: rc final non nul, message unique quel que soit le chemin
+  Given mongodump rendant tout rc non nul — échec des DEUX tentatives du mode `"*"` ou rc du mode
+    nommé
+  When @run(context) s'exécute sur `shop`
+  Then la chaîne levée est verbatim `mongodump failed for ${mongo}` avec `shop` interpolé, dans
+    les deux modes, le hook post n'est jamais appelé, @import_run ne filtre pas : la lane Rust
+    sort en exit-4 (./backup.sdd)
+
+Scenario: cible sans dbname, le --db vide quand même
+  Given @get_env de `shop_dbname` renvoie `""` (non `"*"`)
+  When @run(context) s'exécute
+  Then la commande du mode nommé part avec `--db=""` expansionné (valeur vide mais argument
+    présent, contrairement au jumeau mysql), mongodump échoue et verse son rc au @throw
+    habituel : l'absence d'env n'a ni branche propre ni message distinct
+
+Scenario: liste vide, la jambe quand même traversée
+  Given `mongo_list` = `[]` (env `MONGO_LIST` absent — ./backup.sdd route sur l'existence des
+    fichiers, jamais sur les listes)
+  When @run(context) s'exécute
+  Then zero @get_env de cible, zero @shell_run, les deux hooks sautent en markers debug et
+    l'unité est rendue sans erreur : RIEN n'est écrit sous `/backup` par cet étage
+
+Scenario: process de dump tué, faux succès
+  Given un mongodump tué par signal (rc rendu `0` par @shell_run) avec son archive
+    `--archive=` déjà partielle
+  When @run(context) s'exécute
+  Then l'étage atteint le hook post et rend l'unité : backup_run snapshottera l'archive
+    tronquée comme si le dump avait réussi (aucun test ne fige ce destin, cf. Tasks)

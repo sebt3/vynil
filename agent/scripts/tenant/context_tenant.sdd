@@ -83,7 +83,7 @@ Must not:
 
 Depends on:
   ./context.rhai — sole caller (slot contract in ./context.sdd).
-  wynil-core 0.7.7 script surface (registrars behind /common/src/rhaihandler.sdd):
+  vynil-core 0.7.7 script surface (registrars behind /common/src/rhaihandler.sdd):
     @k8s_resource("Namespace").@get, @json_decode, @json_encode, @log_warn,
     @type_of, string @keys()/@starts_with/@remove.
 

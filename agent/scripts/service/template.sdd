@@ -106,7 +106,7 @@ Depends on:
     @template(instance, context, `${package_dir}/<category>`) pass and returns `context`.
   ./../lib/install_from_dir.rhai — reached only via those emitters, owning the bucket ordering
     and the `---` plus @yaml_encode stdout (./../lib/install_from_dir.sdd).
-  wynil-core 0.7.7 engine API — the 3-arg @import_run and @import_template shims behind @Script
+  vynil-core 0.7.7 engine API — the 3-arg @import_run and @import_template shims behind @Script
     @add_common (skip-vs-rethrow boundary and import_template's `run` fallback), @is_dir,
     @type_of.
   ./context.rhai + ./context.sdd — producer of the incoming map.

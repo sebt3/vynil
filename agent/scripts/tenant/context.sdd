@@ -87,7 +87,7 @@ Raises:
       or @json_encode of anything else — that namespace stops, the next keeps
       going, entries already pushed in `tenant.services` stay.
     - Hook errors: @import_run/@import_template swallow ONLY absent-module /
-      absent-function (skip with @log_debug, semantics owned by wynil-core
+      absent-function (skip with @log_debug, semantics owned by vynil-core
       @add_common); anything a hook throws for real propagates and aborts the lane.
 
 Handles:
@@ -171,7 +171,7 @@ Depends on:
   /common/src/instancetenant.sdd — the registered `get_tenant_name` /
     `get_tenant_namespaces` bridges this file calls on @instance (including the
     raise-vs-`""` asymmetry frozen in its Tasks).
-  wynil-core 0.7.7 script surface (@Script `add_common` behind
+  vynil-core 0.7.7 script surface (@Script `add_common` behind
     /common/src/rhaihandler.sdd): three-arg @import_run/@import_template,
     @type_of, @k8s_resource(...).@list, @json_encode, @log_warn, plain module
     `import` name resolution.

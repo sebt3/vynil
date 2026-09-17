@@ -73,7 +73,7 @@ Must:
 Depends on:
   ./secret_dockerconfigjson.sdd — imported at line 1 as `secret`; @secret::get_auth_from is
     the whole secret branch and its raise propagates untouched.
-  wynil-core 0.7.7 engine API — @new_http_client, @add_header_basic, @add_header_bearer,
+  vynil-core 0.7.7 engine API — @new_http_client, @add_header_basic, @add_header_bearer,
     @get (the client's `#{code, headers, body, json}` result, `code` an INT) and the free
     @headers_get (case-insensitive, `()` when absent), real @http_rhai_register on scan
     engines and the mock twin on mock engines, both wired per

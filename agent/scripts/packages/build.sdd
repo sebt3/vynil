@@ -2,7 +2,7 @@
 # /agent/src/package/build.sdd evaluates: `import("build")` then `build::run(args)`.
 # Script semantics only: the clap surface, the `args` handoff JSON,
 # the exit ladder and the cosign subprocess itself are that spec's; the push/list/sign
-# cores are wynil-core `0.7.7`'s. Calibrated on the ./../boxes/scan.sdd and ./../lib/*.sdd
+# cores are vynil-core `0.7.7`'s. Calibrated on the ./../boxes/scan.sdd and ./../lib/*.sdd
 # style. Everything observable after the snippet is here.
 
 Spec: PackagesBuild
@@ -193,7 +193,7 @@ Depends on:
     staging's postures.
   ./../lib/package_yaml.rhai (./../lib/package_yaml.sdd) — imported as `pck`; @validate is
     the first gate in @improve_package and owns its eight throw texts and warnings.
-  wynil-core `0.7.7` @Registry — @push_image/@sign_image/@list_tags members and the
+  vynil-core `0.7.7` @Registry — @push_image/@sign_image/@list_tags members and the
     100-tag page, consumed as API; @semver @Semver bump/error semantics (`inc_major`/
     `inc_minor`/`inc_patch` infallible, `inc_beta`/`inc_alpha` can fail on a malformed
     counter).

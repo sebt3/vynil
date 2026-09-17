@@ -122,7 +122,7 @@ Must not:
     other `.tf` names.
 
 Depends on:
-  wynil-core 0.7.7 engine API — @is_dir, @read_dir (full-path entries, OS order), @basename,
+  vynil-core 0.7.7 engine API — @is_dir, @read_dir (full-path entries, OS order), @basename,
     @file_write (`fs`), @glob (wildmatch, case-sensitive), and the @vynil_owner global; the
     script surface assembled behind /common/src/rhaihandler.sdd, live on mock engines too.
   ./tofu.rhai + ./tofu.sdd — @get_tf_type and @to_tf contracts, incl. the trailing-newline

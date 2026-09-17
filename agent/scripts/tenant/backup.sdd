@@ -78,7 +78,7 @@ Raises:
     shipped tenant stage).
   Stage re-throws propagate identically: @import_run swallows only the two skip markers
     (`No ${name} module, skipping.` / `No ${name}::run function, skipping.`; owners
-    /common/src/rhaihandler.sdd + the wynil-core shim), so a throw escaping a stage aborts
+    /common/src/rhaihandler.sdd + the vynil-core shim), so a throw escaping a stage aborts
     the run — e.g. `restic check FAILED returning ${rc}` from ./backup_check.rhai,
     `mongodump failed for ${mongo}` from ./backup_prepare_mongodb.rhai, or
     `No running pod found for ${redis} (sts: ${sts})`, `redis SAVE failed for ${redis}`,
@@ -179,7 +179,7 @@ Depends on:
     (redis-cli SAVE + kubectl cp `dump.rdb` per `redis_list` entry), ./backup_run.rhai
     (restic backup /backup with --tag ${context.restic_tags}), ./maintenance_stop.rhai,
     ./backup_check.rhai (+ ./backup_prune.rhai, shipped and unwired).
-  wynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file,
+  vynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file,
     @shell_run (int return code), @log_info (registrars per /common/src/rhaihandler.sdd).
 
 References:

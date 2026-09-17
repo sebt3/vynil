@@ -63,7 +63,7 @@ Raises:
     marker is minted at this level or by any shipped service stage).
   Stage re-throws propagate identically: @import_run swallows only the two skip markers
     (`No ${name} module, skipping.` / `No ${name}::run function, skipping.`; owners
-    /common/src/rhaihandler.sdd + the wynil-core shim), so a `restic check FAILED returning
+    /common/src/rhaihandler.sdd + the vynil-core shim), so a `restic check FAILED returning
     ${rc}` from ./backup_check.rhai or a dump throw from a prepare stage aborts the run.
   Import-time: the module body's sole top-level statement `import "backup_context" as ctx;`
     resolves at module load; a resolution miss is a Rust-lane eval error before @run starts.
@@ -151,7 +151,7 @@ Depends on:
     ./backup_prepare_mysql.rhai, ./backup_run.rhai (restic backup /backup with
     --tag ${context.restic_tags}), ./maintenance_stop.rhai, ./backup_check.rhai
     (+ ./backup_prune.rhai, shipped and unwired).
-  wynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file,
+  vynil-core 0.7.7 engine API — the @import_run shim with its two skip markers, @is_file,
     @shell_run (int return code), @log_info (registrars per /common/src/rhaihandler.sdd).
 
 References:

@@ -1,0 +1,264 @@
+Spec: TenantRestoreRedisScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Ré-injecter le RDB `/backup/redis_<redis>.rdb` dans le workload de chaque nom du
+    `context.redis_list` et le faire recharger par redémarrage, en SCALANT LUI-MÊME le
+    workload : détection du type par sonde `kubectl get statefulset <sts>` (sinon
+    `deployment`), lecture du compte de répliques, scale-down à `1` + attente si `>1` (« avoid
+    cross-replica corruption during restore » — commentaire source), localisation du pod
+    dernier debout par le label `app=<sts>` (SANS le filtre Running de la jambe backup),
+    désactivation runtime de l'auto-save (`CONFIG SET save ""`) pour que le pod ne
+    réécrive pas le dump copié à l'arrêt, copie `kubectl cp`, `rollout restart` + attente
+    5 min, puis scale-back au compte d'origine. 5e et dernière jambe du ladder gelé secret →
+    postgresql → mysql → mongodb → redis par ./restore.sdd. C'est le SEUL code exécuté de la
+    lane locataire qui bouge des replicas : le [?] « window-fiction / self-scaling des legs
+    redis » de ./restore.sdd trouve ici son VERDICT FACTUEL — la fenêtre maintenance est
+    décorative (./maintenance_windows.sdd no-op) et c'est la jambe qui se self-scale,
+    down avant la copie et back-up après le reload ; la décision d'architecture (qui du
+    window ou de la jambe doit porter le scale) reste tranchable, gelée en Tasks. Six @throw
+    nommés, deux rc volontairement ignorés (cf. Must). Jambe tenant-only, soeur amont
+    ./backup_prepare_redis.rhai qui, elle, ne scale rien.
+
+Owns:
+  ./restore_redis.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("restore_redis", context) de
+    ./restore.sdd, seulement quand `${package_dir}/scripts/restore_redis.sh` est absent ;
+    un module éponyme package le remplace. Aucun @import au chargement.
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification) : `context.redis_list` (`REDIS_LIST`) et `context.namespace` — ce
+    dernier lu AVANT la boucle, une fois, même liste vide (divergence avec la jambe backup
+    qui ne le lit qu'in-boucle ; Tasks).
+  @get_env du duo `${redis}_sts` (nom du workload — le même nom sert de nom de statefulset,
+    de deployment et de valeur du label `app=`) et `${redis}_password` — production et
+    décodage : ./../lib/backup_context.sdd ; comme côté backup, ces deux valeurs entrent
+    interpolationnées RHAII dans le texte des commandes (mot de passe en clair dans la
+    ligne passés au `sh` et dans l'argv de redis-cli).
+  Le RDB `/backup/redis_${redis}.rdb` — producteur ./backup_prepare_redis.rhai (SAVE + cp),
+    redéposé sous `/backup` par ./restore_run.rhai ; aucune @is_file ne le précède.
+
+Returns:
+  Unité — aucun `return` ; rend la valeur du dernier @import_run("restore_redis_post",
+    context) (`()` sur image stock, branche du skip-marker debug), jetée par ./restore.sdd qui
+    ne merge rien, puis par la lane Rust. Canal de succès : chaque cible menée jusqu'au
+    scale-back (ou directement au-delà du rollout-status quand 1 réplique) + hook post.
+
+Raises:
+  Six @throw par cible, chacun fatal immédiat (cible suivante jamais tentée), texts verbatims :
+    `scale down failed for ${redis}` (rc≠0 du scale→1) ; `scale down wait failed for ${redis}`
+    (rc≠0 du rollout status qui suit) ; `No pod found for redis ${redis} (${resource}: ${sts})`
+    (sonde pod vide, avec le type de ressource interpolé) ; `kubectl cp failed for ${redis}` ;
+    `rollout restart failed for ${redis}` ; `rollout status failed for ${redis}` (le wait
+    d'après restart). Le rc n'apparaît dans aucun texte. Chacun traverse @import_run
+    (skip-markers seuls avalés) → exit-5 Rust (/agent/src/tenant/restore.sdd, ./restore.sdd).
+  Levées engine NON gardées, antérieures aux @throw (les DEUX sondes @shell_output —
+    replicas et pod —). @shell_output jette si kubectl rend rc≠0 (`Command failed, rc=...`) ou si son stderr est non vide
+    (`Command had stderr : ...`, vynil-core 0.7.7 `src/shell.rs`) ; @parse_int d'une sortie vide ou non
+    numérique jette (jamais de @throw à la place) ; @shell_run ne lève que si le `sh -c`
+    n'est pas lançable, rend `0` à un process tué par signal. `context` non-map lève au
+    premier `context.` — sur la ligne `let ns` déjà, liste vide comprise.
+
+Handles:
+  `redis_list` vide (`REDIS_LIST` absent) → boucle no-op : le seul geste est la lecture de
+    `context.namespace` avant la boucle (clé absente ⇒ levée engine même avec liste vide,
+    question gelée en Tasks) + les deux hooks skip-markés ; aucun shell, aucun log. GELÉ par
+    @restore_redis_empty_list_completes (fixture avec `namespace` présent).
+  Détection de ressource : rc `0` de `kubectl -n ${ns} get statefulset ${sts} 2>/dev/null` →
+    `resource = "statefulset"`, tout autre rc, stderr compris et caché par la redirection, →
+    `"deployment"` ; la sonde EST un @shell_run, donc le tableau `kubectl get` d'un STS
+    existant s'échappe en stdout dans le log du Job. Le `${redis}_kind` posé par
+    ./../lib/backup_context.sdd (valeur `"Dragonfly"`) n'est PAS consulté : détection live
+    par sonde. GELÉ par @restore_redis_deployment_detected et
+    @restore_redis_resource_type_detection_uses_deployment.
+  Seuils de scale : `replicas > 1` gouverne LES DEUX branches (down et back-up) — à `1` ou
+    moins, aucun `kubectl scale` ne tourne, la copie se fait sur le pod tel quel.
+  Désactivation auto-save : `CONFIG SET save ""` est runtime-only, le commentaire source
+    gèle le mécanisme — le pod relit sa config statique au restart, l'auto-save se
+    ré-active seul après le `rollout restart` ; son rc à LUI est ignorable (Tasks [?]).
+  Slots @import_run("restore_redis_pre", context) / @import_run("restore_redis_post",
+    context) — non livrés dans ./, ./../service, ./../lib → skip-markers debug ; un hook qui
+    lève remonte.
+  Gate amont `restore_redis.sh` : le script package remplace la jambe entière, commande BARE
+    sans export (lane restore, ./restore.sdd), rc et throw déménagent dans ./restore.sdd.
+
+Must:
+  Dérouler, par cible dans l'ordre de la liste : @log_info(`Starting Redis restore for ${redis}`)
+    → @get_env sts → @get_env password → sonde de type → lecture @parse_int(@shell_output
+    `{.spec.replicas}`) → SI >1 : scale→1 + rollout status (gardés) → sonde pod `.items[0]`
+    (garde `""`) → @shell_run `CONFIG SET save ""` NON gardé → @shell_run cp (gardé) →
+    @shell_run rollout restart (gardé) → @shell_run rollout status (gardé) → SI le compte
+    d'origine était >1 : scale-back @shell_run + rollout status @shell_run TOUS DEUX NON
+    GARDÉS → cible suivante. Les @log_info par cible sont les seules lignes de log de la jambe.
+  Geler le self-scale dans cet ordre exact : le down-scaling précède la copie (le pod copié
+    est la dernière réplique survivante du scale-down) et le back-up ne s'émet qu'APRÈS restart+wait réussis —
+    toute mort entre les deux laisse le workload à 1 réplique, volontairement sans garde.
+  Propager `${resource}` détecté dans TOUTES les lignes d'échelle et de rollout —
+    `scale ${resource}/${sts}` et `rollout status --timeout=5m ${resource}/${sts}` (l'ancien
+    code codait statefulset en dur ; gelé par
+    @restore_redis_resource_type_detection_uses_deployment.
+  Invoquer verbatim ; exemples cible `dragonfly` sts `my-dragonfly` ns `test-ns`, pod
+    `my-dragonfly-0`, resource statefulset :
+      sonde type : `kubectl -n test-ns get statefulset my-dragonfly 2>/dev/null`
+      replicas : `kubectl -n test-ns get statefulset my-dragonfly -o jsonpath='{.spec.replicas}'`
+      scale down : `kubectl -n test-ns scale statefulset/my-dragonfly --replicas=1`
+      attente : `kubectl -n test-ns rollout status --timeout=5m statefulset/my-dragonfly`
+      sonde pod : `kubectl -n test-ns get pods -l app=my-dragonfly -o jsonpath='{.items[0].metadata.name}'` — AUCUN `--field-selector` ici, contrairement à la jambe backup
+      auto-save off : `kubectl -n test-ns exec my-dragonfly-0 -- redis-cli --no-auth-warning -a "secret" CONFIG SET save ""`
+      copie : `kubectl -n test-ns cp /backup/redis_dragonfly.rdb my-dragonfly-0:/data/dump.rdb` — sens INVERSE du cp backup (hôte → pod)
+      restart : `kubectl -n test-ns rollout restart statefulset/my-dragonfly`
+      scale back : `kubectl -n test-ns scale statefulset/my-dragonfly --replicas=2` (compte d'origine interpolé)
+  Copier dans `/data/dump.rdb` (même chemin dur que la jambe backup) puis redémarrer : la
+    relecture du rdb est l'effet de bord du restart, aucune commande de chargement runtime
+    (pas de `DEBUG RELOAD`, pas de SAVE) n'est émise.
+  Traiter les rc gardés comme fatals pour la cible courante : premier échec = boucle arrêtée,
+    targets suivantes jamais tentées ; les deux rc non gardés (CONFIG SET, scale-back +
+    son wait) coulent silencieusement.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur de `redis_list`, `namespace` et du duo d'envs.
+  ./backup_prepare_redis.rhai — productrice du RDB consommé, même chemin dur `/data/dump.rdb`
+    (spec ./backup_prepare_redis.sdd).
+  ./restore.sdd — appelante, ordre du ladder, gate `.sh` bare, sémantique exit-5 du @throw.
+  ./restore_run.rhai — l'étage qui redépose `/backup` depuis le snapshot.
+  ./maintenance_windows.sdd — fenêtre no-op que cette jambe contourne par son self-scale.
+  API moteur vynil-core 0.7.7 — @import_run, @shell_run (rc, sortie héritée), @shell_output
+    (rc≠0/stderr ⇒ jeté), @get_env, @parse_int, @log_info (registrars
+    /common/src/rhaihandler.sdd).
+
+References:
+  ./restore.sdd — orchestrateur : position 5e/dernière, gate `restore_redis.sh`, scénarios
+    d'abort reprenant `rollout restart failed for ${redis}`, et le [?] window-fiction dont
+    cette spec livre le verdict factuel sans trancher l'architecture.
+  ./backup_prepare_redis.sdd — soeur amont (même label `app=<sts>`, RDB produit là, cp de
+    sens inverse ici, filtre Running là mais pas ici, aucun scale là).
+  ./../service/restore_mysql.sdd et ./../service/backup_prepare_mysql.sdd — calibrage
+    structurel (patrons raises/handles/tasks) ; aucune jambe redis côté service.
+  /agent/tests/rhai_backup_redis.rs — harnais GELANT cette jambe : @Script::new_mock sur les
+    DEUX SEULS répertoires scripts/lib + scripts/tenant ; hooks `_pre`/`_post` absents du
+    résolveur → skip-markers ; @add_code shadowe les vraies @get_env/@shell_run/@shell_output
+    (mock non hermétique, /common/src/rhaihandler.sdd) avec dispatch par sous-chaînes de
+    commande (`" get pods"`, `"replicas"`, `"get statefulset"`, `"statefulset/"`, `" cp "`,
+    `"scale"`, `"rollout restart"`) ; assertions @is_ok/@is_err + sous-chaîne du texte levé.
+    Les 9 tests `restore_redis_*` sont mappés un-à-un dans les Scenario ci-dessous ; le vrai
+    kubectl, le vrai cluster, le vrai redis JAMAIS touchés.
+
+Tasks:
+  [ ] Geler les deux @throw jamais déclenchés par les mocks : `scale down wait failed for ${redis}`
+      et `rollout status failed for ${redis}` — les fixtures actuelles rendent `0` sur les
+      `rollout status`, aucun test ne les fait lever.
+  [ ] Geler par tests les rc volontairement ignorés : CONFIG SET en échec (le restore passe
+      quand même), scale-back en échec (le workload reste à 1 sans bruit), @parse_int sur
+      sortie vide — les 9 tests existants ne jouent aucune de ces branches.
+  [ ] Pinne les commandes exactes et l'ordre : les mocks ne dispatchent que sur sous-chaînes
+      et les tests is_ok (statefulset_single/multiple_replicas, deployment_detected) n'épingle
+      ni les textes, ni le nombre d'appels, ni l'absence de scale à 1 réplique ; la sonde
+      type, le scale-back au compte d'origine et le `--timeout=5m` ne sont nommés par PERSONNE.
+  [ ] Vérifier sur cluster réel les comportements que les mocks inventent : `.items[0]` sur
+      pods absents (rc `0`-vide vs jet @shell_output — le @throw verbatim n'est garanti que
+      dans le premier cas), persistance API de `.spec.replicas` (jsonpath vide si jamais
+      defaulted), stderr kubectl sur les sondes qui fait jeter @shell_output en amont de tout
+      @throw, effet réel du scale-down STS sur l'ordinal survivant.
+  [?] Self-scale vs fenêtre — décision d'architecture OPEN, verdict factuel gelé ici : la
+      jambe SE scale elle-même (1 avant copie, N après reload) ; ./restore.sdd Tasks demande
+      si la fenêtre maintenance (TO-DO gelé ./maintenance_windows.sdd) doit absorber ce
+      pattern generic ou si le self-scale par-jambe est l'architecture voulue — trancher LÀ-BAS
+      et venir retirer/déplacer ces [?] ici. mongo/mysql/pg restent sans scale de leur côté.
+  [?] `CONFIG SET save ""` non gardé : si le redis refuse (instance gérée, auth qui a tourné),
+      l'auto-save reste armé et le pod peut réécrire le dump surchargé à l'arrêt du restart —
+      le restore se croit réussi. Garder best-effort ou garder le rc ?
+  [?] Scale-back non gardé (scale + wait) : workload laissé muet à 1 réplique après un
+      restore pourtant « réussi » — acceptable, ou à garder comme ses grande soeurs ?
+  [?] @parse_int sans garde sur le jsonpath replicas : `.spec.replicas` jamais absent du
+      objet persisté côté API, mais un objet exotique ou un vieux client kubectl à sortie vide
+      lève une erreur engine sans @throw — fallback `1` explicite à décider.
+  [?] Mot de passe en ARGV ET en clair dans le texte Rhai de la commande `-a "<pass>"` —
+      même question que ./backup_prepare_redis.sdd, à trancher en famille.
+  [?] Label `app=${sts}` + double usage du nom (resource ET label) et sonde-live au lieu du
+      `${redis}_kind` fourni : opérateurs réels posent-ils ces labels ? La sonde statefulset
+      doit-elle primer sur l'env `_kind`, ou `_kind` reste-t-il une env morte de ce côté ?
+
+Done when:
+  Les neuf Scenario mappés aux tests restent verts sur le mock tenant, les deux @throw
+    orphelins et les rc ignorés ont des tests ou des tranchés, le verbatim des commandes
+    égale le fichier, `specdd lint` vert.
+
+Scenario: liste vide, geste unique la lecture du namespace
+  Given `redis_list` = `[]`, moteur mock sans override, fixture `#{ namespace: "test-ns", redis_list: [] }`
+  When @run(context) s'exécute
+  Then le seul geste du run est la lecture `context.namespace` avant boucle, les deux hooks
+    sautent en markers debug, zero shell et l'unité sort sans erreur —
+    @restore_redis_empty_list_completes le gèle
+
+Scenario: statefulset simple réplique, aucun scale
+  Given `redis_list` = `["dragonfly"]`, mocks : sts `my-dragonfly`, password `secret`,
+    @shell_output sur `{.spec.replicas}` rend `"1"` et sur `get pods` rend
+    `"my-dragonfly-0"`, @shell_run rend `0` partout
+  When @run(context) s'exécute
+  Then AUCUN `kubectl scale` ne tourne (seuil `replicas > 1` franchi pas), la jambe enchaîne
+    sonde type → replicas → pod → CONFIG SET → cp → restart → wait et rend l'unité —
+    @restore_redis_statefulset_single_replica le gèle
+
+Scenario: multi-répliques, cycle de self-scale complet
+  Given même fixture mais @shell_output `replicas` rend `"2"`, @shell_run rend `0` partout
+  When @run(context) s'exécute
+  Then le couple `--replicas=1`+`rollout status` précède la copie et le couple
+    `--replicas=<compte initial>`+wait la succède après le restart, dans l'ordre de `Must`,
+    et l'unité est rendue — @restore_redis_statefulset_multiple_replicas le gèle (les rc de
+    scale-back passeraient inaperçus, cf. Tasks)
+
+Scenario: pas de statefulset, la jambe bascule sur deployment
+  Given cible `myredis` sts `my-redis`, @shell_run rend `1` SUR LA SEULE SONDE `get statefulset`,
+    replicas `"1"`, pod `"my-redis-0"`
+  When @run(context) s'exécute
+  Then `${resource}` devient `"deployment"`, le throw pod (s'il arrivait) nommerait
+    `(deployment: my-redis)`, et le run complet passe — @restore_redis_deployment_detected le gèle
+
+Scenario: le type détecté coule dans toutes les lignes rollout
+  Given cible `myredis`, mocks : `get statefulset` rend `1` ET TOUTE commande contenant
+    `statefulset/` rend `1`, le reste `0`
+  When @run(context) s'exécute
+  Then l'unité est rendue précisément parce que scale/restart/wait ont utilisé
+    `deployment/my-redis` — si la jambe codait statefulset en dur elle lèverait
+    `rollout status failed for myredis` — @restore_redis_resource_type_detection_uses_deployment
+    le gèle (c'est l'anti-régression du vieux code rollout-en-dur)
+
+Scenario: pod introuvable, throw nommé avec la ressource
+  Given fixture simple-réplique : replicas `"1"`, @shell_output de `get pods` rend `""`
+    (cas simulé rc `0`-vide, pas le kubectl-qui-jette, réservés non testés)
+  When @run(context) s'exécute
+  Then la chaîne levée est exactement `No pod found for redis dragonfly (statefulset: my-dragonfly)`
+    (sonde STS rc `0` ⇒ ressource statefulset), ni CONFIG SET, ni cp, ni restart ne tournent —
+    @restore_redis_pod_not_found_throws, sous-chaîne `No pod found`, le gèle
+
+Scenario: kubectl cp en échec, rien après
+  Given fixture simple-réplique avec @shell_run rendant `1` sur la commande contenant `" cp "`
+  When @run(context) s'exécute
+  Then la chaîne levée contient `kubectl cp failed for dragonfly` et le `rollout restart`
+    n'est jamais tenté — @restore_redis_cp_failure_throws le gèle
+
+Scenario: le scale-owné échoue, la jambe le propage
+  Given replicas `"2"` et @shell_run rendant `1` sur toute commande contenant `scale`
+    (la sonde `get statefulset` et les `rollout status`, elles, `0`)
+  When @run(context) s'exécute
+  Then la chaîne levée contient `scale down failed for dragonfly` : pod, CONFIG SET, cp et
+    restart ne tournent pas — anti-régression du vieux code sans scale, gelé par
+    @restore_redis_scale_down_required_for_multiple_replicas
+
+Scenario: rollout restart en échec, scale-back jamais émis
+  Given fixture simple-réplique, @shell_run rend `1` sur `rollout restart`
+  When @run(context) s'exécute
+  Then la chaîne levée contient `rollout restart failed for dragonfly` et le wait d'après
+    restart ne tourne pas ; sur une cible multi-répliques le scale-back ne tournerait pas non
+    plus — @restore_redis_rollout_restart_failure_throws le gèle
+
+Scenario: waits en échec, textes orphelins de test
+  Given `scale down wait failed for ${redis}` et `rollout status failed for ${redis}` — les
+    deux @throw que les fixtures mock actuelles (rollout → `0`) ne déclenchent jamais
+  When @run(context) s'exécute sous un kubectl dont `rollout status` rend non nul
+  Then chacun lève immédiatement son texte nommé, la cible suivante est abandonnée ; AUCUN
+    des 14 tests du harnais ne joue ce destin (à câbler, cf. Tasks)

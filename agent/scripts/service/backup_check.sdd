@@ -1,0 +1,103 @@
+Spec: ServiceBackupCheckScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Vérifier l'intégrité du dépôt après le snapshot : `restic check` sans aucun flag ajout,
+    étage appelé par @import_run("backup_check", context) de ./backup.sdd APRÈS
+    @import_run("maintenance_stop") et avant `backup_post` ; rc non nul fatal. Squelette
+    jumeau de ./backup_run.sdd (mêmes hooks, même garde rc, mêmes levées engine), seule
+    la commande diffère. Fichier identique à l'octet près à
+    ./../tenant/backup_check.rhai (diff vérifié, jumeau sans spec) : lockstep obligatoire.
+
+Owns:
+  ./backup_check.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("backup_check", context) ; remplaçable
+    par un module éponyme sous `${package_dir}/scripts` (première priorité du résolveur,
+    ./backup.sdd).
+
+Accepts:
+  @context — la carte de @ctx::from_args (./../lib/backup_context.sdd, cité). DEUX clés
+    lues seulement : `context.s3_url` (export inline) et `context.restic_args` (flags,
+    position APRÈS le sous-ordre `check`). `context.snapshot` n'est pas lu : ce check ne
+    sélectionne aucun snapshot, par aucun moyen.
+
+Returns:
+  Unité — aucun `return` ; ./backup.rhai jette la valeur. Succès = hook post atteint ;
+    échec = le @throw ci-dessous, ni plus ni moins. Échouer ici ne défait rien : le
+    snapshot est déjà dans le dépôt quand le check parle (position après ./backup_run.rhai).
+
+Raises:
+  Le @throw du fichier, texte verbatim `restic check FAILED returning ${rc}` (rc interpolé),
+    gardé par `if rc != 0`. @import_run ne filtre que ses deux skip-markers : le throw
+    traverse ./backup.sdd jusqu'à l'exit-4 Rust (./backup.sdd, /agent/src/service/backup.sdd).
+  Levées engine non gardées : @shell_run ne lève que si le `sh -c` ne peut être lancé et
+    rend `0` à un process tué par signal (vynil-core 0.7.7 `src/shell.rs`) ; `context`
+    non-map lève au premier `context.` ; clé scalaire absente = `()` interpolé littéral,
+    sans throw ici.
+
+Handles:
+  Deux destins : rc `0` → hook post, unité ; rc non nul → throw, hook post jamais appelé.
+    La vérification restic elle-même — profondeur, ce qu'un rc non nul révèle — appartient
+    à restic et à ses defaults, ce fichier n'en change rien par ses flags.
+  Slots @import_run("backup_check_pre", context) / @import_run("backup_check_post", context)
+    — non livrés dans ./, ./../tenant, ./../lib → skip-markers debug ; un hook qui lève
+    remonte.
+  Pas de gate `.sh` d'étage dans ./backup.sdd : `backup.sh` remplace la lane entière
+    (et saute ce check), l'ombre de module éponyme remplace cet étage seul.
+
+Must:
+  Dérouler exactement : hook pre → @log_info("Checking restic repository") → commande →
+    garde `rc != 0` → hook post.
+  Invoquer verbatim :
+    `export RESTIC_REPOSITORY="${context.s3_url}";restic check ${context.restic_args}`
+    — aucun autre flag que `restic_args` : pas de sélection de snapshot, pas de
+    `--read-data*`, rien codé en dur d'autre.
+  Traiter tout rc non nul comme fatal sur ce site, sans retry ni lecture de la sortie
+    (stdout/stderr hérités du Job via @shell_run).
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur des deux clés lues.
+  ./backup.sdd — appelant, position après maintenance_stop, sémantique exit-4.
+  API moteur vynil-core 0.7.7 — @import_run (version 2 args), @shell_run, @log_info
+    (registrars /common/src/rhaihandler.sdd).
+
+References:
+  ./backup_run.sdd — le squelette partagé (hooks, garde, levées engine).
+  ./../tenant/backup_check.rhai — jumeau byte-identique, sans spec à ce jour.
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine résolvant scripts/service :
+      /agent/tests/rhai_backup_redis.rs est le mock TENANT et ne nomme que
+      `backup_prepare_redis`/`restore_redis` — coverage nulle pour cet étage et son jumeau.
+  [?] Posture « check à chaque backup » : ./backup_run.rhai a déjà rendu son verdict et ce
+    check tourne au default depth de restic (aucun flag de lecture de données ici) —
+    décider profondeur de vérification et position dans la séquence (lane backup vs
+    schedule dédiée).
+
+Done when:
+  Les Scenario tiennent sur un mock service et la posture du [?] est tranchée, les deux
+    copies restant verrouillées.
+
+Scenario: dépôt sain, check passe
+  Given un @shell_run répondant `0` à la commande check
+  When @run(context) s'exécute
+  Then `backup_check_post` est import_run, l'unité est rendue, et `Checking restic repository`
+    reste le seul log de cet étage
+
+Scenario: dépôt vérolé en fin de lane
+  Given @shell_run renvoyant `1` sur le check
+  When @run s'exécute
+  Then la chaîne levée est exactement `restic check FAILED returning 1` et
+    `backup_check_post` n'est jamais appelé
+  And le snapshot de ./backup_run.rhai reste dans le dépôt : c'est l'exit-4 de la lane
+    entière qui décide du sort du Job (./backup.sdd)
+
+Scenario: process tué, check cru passé
+  Given un restic check tué par signal (rc remonté `0` par @shell_run)
+  When @run s'exécute
+  Then le module atteint le hook post et rend l'unité, l'intégrité du dépôt jamais réellement
+    évaluée

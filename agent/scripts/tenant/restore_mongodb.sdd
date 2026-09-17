@@ -1,0 +1,182 @@
+Spec: TenantRestoreMongodbScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Ré-injecter dans MongoDB, pour chaque nom du `context.mongo_list`, l'archive `mongodump`
+    `/backup/mongodb_<mongo>.archive` redéposée sous `/backup` par l'étage
+    @import_run("restore_run"), via `mongorestore --archive` avec `--drop` CONSTANT et
+    `--authenticationDatabase=admin`, plus un gate wildcard rhai `dbname != "*"` qui insère
+    `--nsInclude="<dbname>.*"` : jambe mongodb (4e) du ladder d'engines gelé secret →
+    postgresql → mysql → mongodb → redis par ./restore.sdd. Ce ladder tourne sous une fenêtre
+    maintenance fictive et la jambe NE SCALE ELLE-MÊME RIEN : verdict côté mongo de
+    l'inventaire « self-scaling des legs redis » de ./restore.sdd — à la différence de sa
+    voisine ./restore_redis.rhai (la seule à scaler), mongo ne bouge aucun replica et la
+    restauration `mongorestore --drop` s'applique telle quelle à un cluster vivant. Jambe
+    tenant-only : ./../service n'a aucune jambe mongodb (delta twin gelé par ./restore.sdd).
+    Un seul @throw par cible. Même patron que ./../service/restore_mysql.sdd, deltas
+    uniquement sur l'outillage (archive ouverte par `--archive=`, pas par redirection shell)
+    et les flags de sélection.
+
+Owns:
+  ./restore_mongodb.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("restore_mongodb", context) de
+    ./restore.sdd, seulement quand `${package_dir}/scripts/restore_mongodb.sh` est absent ;
+    un module éponyme package le remplace. Aucun @import au chargement.
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification) : seule `context.mongo_list` (env `MONGO_LIST`) est lue en Rhai, avec
+    l'env `${mongo}_dbname` relue par @get_env pour le gate wildcard.
+  Les env process `${<mongo>_host}`, `${<mongo>_username}`, `${<mongo>_password}` (posées
+    par @run de ./../lib/backup_context.rhai — clés `username`/`password` en secretKeyRef,
+    hôte littéral de service selon ./../lib/backup_context.sdd) ne passent PAS par Rhai : la
+    commande les embarque en variables shell `${...}` que le `sh -c` de @shell_run déploie
+    depuis l'environnement du Pod — même transport que le jumeau mysql, avec
+    `--authenticationDatabase=admin` en dur en plus.
+  L'archive `/backup/mongodb_${mongo}.archive` — productrice ./backup_prepare_mongodb.rhai
+    (oplog-first ou retry `--numParallelCollections=1`, mode `"*"` ou `--db="<dbname>"`) —
+    absente du snapshot restored : c'est le rc de mongorestore qui décide, aucune @is_file ne
+    la précède (contrairement au `_cleaned` du jumeau mysql).
+
+Returns:
+  Unité — aucun `return` ; rend la valeur du dernier @import_run("restore_mongodb_post",
+    context) (`()` sur image stock, skip-marker debug), jetée par ./restore.sdd qui ne merge
+    rien, puis par la lane Rust. Canal de succès : boucle terminée + hook post atteint.
+
+Raises:
+  Un @throw par target, texte verbatim `mongorestore failed for ${mongo}` — le rc n'apparaît
+    JAMAIS dans le texte, unique gestionnaire de codes (garde `if rc != 0` sur l'unique
+    @shell_run de la cible ; pas de @shell_output ici). La garde accuse aussi bien le rc de
+    mongorestore que celui du `sh` quand celui-ci lance mal la commande — même texte quel que
+    soit le mode, archive absente comprise.
+  Ce @throw traverse @import_run (deux skip-markers seulement avalés) → exit-5 Rust
+    (/agent/src/tenant/restore.sdd, ./restore.sdd le compte dans Raises).
+  @shell_run ne lève que si le `sh -c` ne peut être lancé et rend `0` à un process tué par
+    signal (vynil-core 0.7.7 `src/shell.rs`) ; `context` non-map lève au premier `context.` ;
+    @get_env ne lève jamais (`""` si absent).
+  Absences sans throw propre : `${mongo}_dbname` absente = `""` ≠ `"*"` → le gate passe et
+    `--nsInclude=".*"` part en regex universel (cf. Handles et Tasks) ; host/user/password
+    absents → sh déploie des chaînes vides entre guillemets, l'erreur de connexion remonte
+    par le rc.
+
+Handles:
+  `mongo_list` vide (`MONGO_LIST` absent) → boucle no-op silencieuse : aucun log, aucun
+    shell, aucun throw ; ./restore.sdd import_run quand même la jambe (routing par existence
+    de fichier, jamais par les listes) et les hooks pre/post skip-markés restent les seuls
+    gestes.
+  Slots @import_run("restore_mongodb_pre", context) / @import_run("restore_mongodb_post",
+    context) — non livrés dans ./, ./../service, ./../lib → skip-markers debug ; un hook qui
+    lève remonte.
+  Wildcard : `dbname == "*"` = restore de TOUTES les namespaces de l'archive, `--nsInclude`
+    absent, la sélection venant de l'archive elle-même — chaque collection visée est DROPée
+    avant rechargement (`--drop` constant).
+  `dbname` absent (env non posée) : comme chez le jumeau mysql, la valeur expansionnée entre
+    guillemets ne disparaît pas, elle se vide — `--nsInclude=".*"` est un regex matchant
+    toute namespace avec `--drop` actif : la jambe ne distingue pas « cible multi-bases » de
+    « cible mal configurée » (décision ouverte en Tasks, asymétrie avec
+    ./backup_prepare_mongodb.rhai où le même `""` faisait échouer la commande).
+  Gate amont `restore_mongodb.sh` : le script package remplace la jambe entière — lane
+    restore, commande bare sans export `RESTIC_REPOSITORY` (asymétrie avec la lane backup,
+    gelée ./restore.sdd) — rc et throw déménagent dans ./restore.sdd.
+
+Must:
+  Dérouler par target, dans cet ordre : @log_info(`Starting MongoDB restore for ${mongo}`) →
+    @get_env du `dbname` → composition des args → un @shell_run de restore → garde `rc != 0`
+    → @throw → cible suivante → hook post après la boucle ; rien d'autre entre les targets ;
+    premier échec fatal (la boucle s'arrête, les targets suivantes ne sont pas tentées).
+  Invoquer verbatim, avec les `${...}` déployés par sh depuis l'env du Pod, archive ouverte
+    par l'outil via `--archive=` (pas de redirection shell) :
+      base constante : `mongorestore --host="${<mongo>_host}" --username="${<mongo>_username}" --password="${<mongo>_password}" --authenticationDatabase=admin --drop --archive=/backup/mongodb_<mongo>.archive`
+      et l'insert ` --nsInclude="${<mongo>_dbname}.*"` entre `--drop` et `--archive=` quand
+      le gate rhai `dbname != "*"` passe ; toutes les interpolations entre guillemets dans
+      le texte passé au `sh`.
+  Traiter tout rc non nul comme fatal pour la target courante : aucun retry, aucune liste de
+    codes tolérés, aucune vérification d'archive (@is_file/@file_read) avant l'appel.
+  Ne rien toucher d'autre : aucun kube call, aucun scale-down — la restauration `--drop`
+    s'applique aux workloads vivants sous la fenêtre fictive (./maintenance_windows.sdd),
+    décision miroir de ./../service/restore_mysql.sdd ; le self-scale n'existe que dans la
+    jambe voisine ./restore_redis.rhai.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur de `mongo_list` et du quatuor d'envs par base.
+  ./backup_prepare_mongodb.rhai — productrice du FORMAT consommé (--archive mongodump ;
+    spec ./backup_prepare_mongodb.sdd).
+  ./restore.sdd — appelante, ordre du ladder, sémantique exit-5 du @throw, gate `.sh` bare.
+  ./restore_run.rhai — l'étage qui redépose `/backup` depuis le snapshot restic.
+  API moteur vynil-core 0.7.7 — @import_run, @shell_run (`src/shell.rs` : sortie héritée, rc
+    `code().unwrap_or(0)`), @get_env, @log_info (registrars /common/src/rhaihandler.sdd).
+
+References:
+  ./backup_prepare_mongodb.sdd — spec de la jambe productrice (même nom d'archive de part en
+    part, `/backup/mongodb_<mongo>.archive`).
+  ./restore.sdd — orchestrateur, gate `restore_mongodb.sh` bare, et l'inventaire de la
+    fenêtre maintenance où ce fichier est nommé parmi les jambes qui ne scalent rien.
+  ./../service/restore_mysql.sdd — jumeau structurel (calibrage de cette spec : mêmes gates
+    wildcard, même transport env, throw au message nommé) ; ./../service/restore_postgresql.sdd
+    — frère de ladder service.
+  /agent/tests/rhai_backup_redis.rs — harnais mock tenant le plus proche (résolveur
+    scripts/lib + scripts/tenant, overrides @get_env/@shell_run par @add_code) : ses 14 tests
+    ne nomment AUCUNE jambe mongodb — coverage nulle pour cette spec (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario en important `restore_mongodb` et en appelant @run sur la fixture,
+      comme les 9 tests `restore_redis_*` de /agent/tests/rhai_backup_redis.rs (mêmes
+      helpers) — aucun test n'existe pour cette jambe.
+  [?] Restauration à chaud : `--drop` + restore complet sous une fenêtre qui ne scale rien
+      et sans scale-down interne (verdict self-scaling : mongo ne scale JAMAIS, contrairement
+      à redis) — l'application écrit pendant que ses collections sont dropées, puis la
+      réplication mongo propage le chaos. Fenêtre réelle portée par la jambe comme redis, ou
+      posture assumée comme ./../service/restore_mysql.sdd ?
+  [?] `dbname` absent → `--nsInclude=".*"` avec `--drop` actif : le `""` d'absence est un
+      regex universel silencieux (quand ./backup_prepare_mongodb.rhai, lui, échouait sur
+      `--db=""`) — borner le contrat à « nom exact ou `"*"` », traiter le `""` en erreur, ou
+      assumer le multi-bases par défaut ?
+  [?] Mot de passe en ARGV (`--password="${..._password}"` développé par `sh`, lisible dans
+      `/proc`) : l'homologue pg voyage en PGPASSWORD, mysql en argv (décision twin ouverte) —
+      aligner la famille mongo sur une décision unique ?
+  [?] mongorestore tué par signal → @shell_run rend `0` : base dropée puis rechargée à
+      moitié, cible suivante tentée comme si de rien n'était — le `--drop` rend ce faux-succès
+      DESTRUCTEUR, contrairement à un dump tronqué côté backup. Trancher si le rc suffit.
+  [?] `context` non-map ou `mongo_list` absent → levée engine au premier accès (non @throw),
+      même question `[?]` gelée chez les twins : figer @from_args ou branche explicite ici ?
+
+Done when:
+  Les Scenario tiennent sur un mock tenant (résolveur scripts/lib + scripts/tenant), les
+    textes verbatims restent égaux au fichier, les [?] sont tranchés, `specdd lint` vert.
+
+Scenario: base nommée, nsInclude inséré
+  Given `mongo_list` = `["shop"]`, @get_env de `shop_dbname` = `"orders"`, @shell_run rendant `0`
+  When @run(context) s'exécute
+  Then la commande porte ` --nsInclude="${shop_dbname}.*"` entre `--drop` et `--archive=`, la
+    valeur expansionnée étant prise entre guillemets par le `sh`, un seul log
+    `Starting MongoDB restore for shop`, le hook post s'exécute et l'unité est rendue
+
+Scenario: wildcard *, archive entière sans sélection
+  Given `shop_dbname` = `"*"`, @shell_run rendant `0`
+  When @run(context) s'exécute
+  Then aucun `--nsInclude` n'apparaît, l'archive entière est rejouée avec `--drop`, la
+    sélection des namespaces venant de l'archive produite par ./backup_prepare_mongodb.rhai
+
+Scenario: rc non nul, texte sans rc, boucle coupée
+  Given @shell_run rendant `1` sur la première des deux targets de `mongo_list`
+  When @run(context) s'exécute
+  Then la chaîne levée est exactement `mongorestore failed for shop` — sans le rc — la seconde
+    target n'est pas tentée, le hook post ne s'exécute pas, la lane Rust sort en exit-5
+
+Scenario: cible sans dbname, regex universel avec drop
+  Given @get_env de `shop_dbname` renvoie `""` (non `"*"`, gate passant)
+  When @run(context) s'exécute
+  Then la commande part avec `--nsInclude=".*"` expansionné (valeur vide, guillemets présents)
+    et `--drop` actif : l'absence d'env n'a ni branche propre ni message distinct, le rc de
+    mongorestore décide du @throw au texte unique
+
+Scenario: liste vide, la jambe quand même traversée
+  Given `mongo_list` = `[]` (env `MONGO_LIST` absent — ./restore.sdd route sur l'existence des
+    fichiers, jamais sur les listes)
+  When @run(context) s'exécute
+  Then zero @get_env de cible, zero @shell_run, zéro log, les hooks sautent en markers debug
+    et l'unité est rendue sans erreur : aucune écriture, aucune lecture, aucun cluster touché
+    par cet étage

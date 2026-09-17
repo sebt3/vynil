@@ -75,7 +75,7 @@ Raises:
     - Delegation errors land whole (package.yaml read, agent.yaml YAML, unguarded
       cluster reads per ./../lib/build_context.sdd Raises).
     - Hook errors: @import_run/@import_template swallow ONLY absent-module /
-      absent-function (skip with @log_debug, semantics owned by wynil-core
+      absent-function (skip with @log_debug, semantics owned by vynil-core
       @add_common); anything a hook throws for real propagates through `throw ;` and
       aborts the lane run — surfaced per lane as @common::Error::Core exiting
       install `1`, delete `3`, template `3` (/agent/src/system/install.sdd,
@@ -112,7 +112,7 @@ Must:
     `context_post`; then [run lane only] slot `context_after`; then return `context`.
   Hand the hook the running context as third argument: @import_run("context_pre",
     @instance, @context) on the live lane, @import_template("context_pre", @instance,
-    @context) on the offline lane — always the three-arg shims, so wynil-core resolves
+    @context) on the offline lane — always the three-arg shims, so vynil-core resolves
     the 3-arg overloads.
   Replace the context on the pre/system/post/after slots through the
     `type_of(ctx) == "map"` guard, whole map, no key merge; write `extra` unguarded
@@ -140,7 +140,7 @@ Depends on:
     file's contract).
   ./context_system.rhai — the one shipped hook slot; slot placement only here, the
     identity itself in ./context_system.sdd.
-  wynil-core 0.7.7 script surface (@Script `add_common` behind
+  vynil-core 0.7.7 script surface (@Script `add_common` behind
     /common/src/rhaihandler.sdd): three-arg @import_run and @import_template with the
     four-overload family and the absent-`template` run-fallback, @type_of, plain module
     `import` name resolution.

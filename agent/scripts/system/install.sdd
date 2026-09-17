@@ -118,10 +118,11 @@ Must not:
 Depends on:
   ./../lib/tofu_gen.rhai — the only import; @has_tofu_files answers the `tofu` gate (its spec
     ./../lib/tofu_gen.sdd).
-  The shipped stage modules of this directory, all specs pending: ./install_crds.rhai,
-    ./install_tofu.rhai, ./install_systems.rhai — each writes its own `set_status_*` marker,
+  The shipped stage modules of this directory: ./install_crds.rhai (byte-identical twin of
+    the service stage, frozen by ./../service/install_crds.sdd), ./install_tofu.rhai and
+    ./install_systems.rhai (./system_stages.sdd) — each writes its own `set_status_*` marker,
     re-throws after its failure marker, and returns the (maybe hook-merged) context map.
-  wynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
+  vynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
     `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises), @is_dir,
     @log_info/@log_debug and @update_k8s_crd_cache.
   /common/src/instancesystem.sdd — the registered bridges used as method/global:

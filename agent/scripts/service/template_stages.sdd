@@ -1,0 +1,208 @@
+Spec: EtapesTemplateService
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Un seul contrat, cinq instances, pour les stages « émission » du rendu hors-sol
+    `agent template service`. Regroupement justifié (option C de la famille template_*) :
+    ./template_befores.rhai, ./template_others.rhai, ./template_posts.rhai,
+    ./template_scalables.rhai et ./template_vitals.rhai sont des squelettes de 9 à 14 lignes
+    dont toute différence se réduit au nom du bucket, plus deux écarts vérifiés par diff
+    fichier à fichier : ./template_vitals.rhai porte un `import "wait" as wait;` que rien
+    n'appelle, et ./template_scalables.rhai (9 lignes, delta dédié sous `Example`) n'appelle
+    aucun hook `_post`. Chacun entoure une passe @dir::template d'une à deux fusions de hooks
+    et rend `context` ; rien n'est appliqué, attendu, écrit au cluster ni posé en status.
+    Les cousins ./../tenant/template_{befores,vitals,others,scalables,posts}.rhai sont
+    byte-identiques à ces cinq fichiers (diff vérifié fichier à fichier) et n'ont aucune spec
+    à ce jour ; leur spec twin viendra (Tasks).
+
+Owns:
+  ./template_befores.rhai
+  ./template_others.rhai
+  ./template_posts.rhai
+  ./template_scalables.rhai
+  ./template_vitals.rhai
+
+Exposes:
+  `@run(instance, context)` — le seul @fn de chacun des cinq modules, atteint par
+    l'orchestrateur ./template.sdd via `import_run("template_befores", instance, context)`
+    (et `template_vitals`, `template_others`, `template_scalables`, `template_posts` de même),
+    chacun derrière son gate `is_dir(`${context.package_dir}/<bucket>`)` — gates, ordre des
+    buckets et fusions downstream gelés dans ./template.sdd, pas ici.
+
+Accepts:
+  @instance — la carte `#{metadata: {name, namespace}}` synthétisée par la lane hors-sol ;
+    ZÉRO lecture de propriété dans ces cinq fichiers, l'objet est transmis verbatim aux trois
+    ou quatre appels (hooks et @dir::template). La lecture `.metadata.namespace` se fait en
+    aval dans ./../lib/install_from_dir.sdd (défaut de namespace des documents).
+  @context — la carte construite par ./context.sdd. Lu directement : `package_dir`, seule
+    interpolation de ces fichiers, évaluée après la fusion `_pre`. Le `_pre` comme le `_post`
+    peuvent REMPLACER `context` par une carte retournée, et tout ce qui suit lit la carte de
+    remplacement. Transmis entier aux hooks et à @dir::template (qui n'en lit que
+    `config_dir` et `package_dir` et le transmet intégralement aux Handlebars — gelé
+    ./../lib/install_from_dir.sdd).
+
+Returns:
+  La valeur terminale `context` — la carte éventuellement remplacée par les hooks ; en
+    l'absence de hook livré, la carte reçue inchangée. ./template.sdd ne fusionne cette
+    valeur que si @type_of est `map`. La passe @dir::template ne rapporte rien ici : elle ne
+    renvoie pas de valeur et ses documents partent seuls par @print (gelé
+    ./../lib/install_from_dir.sdd) ; ce que le bucket a rendu ne voyage pas par la valeur de
+    retour.
+
+Raises:
+  Zéro @throw et zéro @try dans les cinq fichiers — contrairement aux jumeaux vivants
+    ./../service/install_stages.sdd, aucun rattrapage, aucun marqueur d'échec conceivable ici.
+  - Toute levée d'un hook livré (son `template` ou son `run` de fallback qui lève) ou de la
+    passe @dir::template (lecture de fichier, @yaml_decode_multi, rendu `.hbs` cassé — le lib
+    loggue `While parsing <file> :` puis relance, gelé ./../lib/install_from_dir.sdd) traverse
+    ce niveau sans conversion, ressort par @import_run et aborte le rendu en cours de stream
+    (documents déjà imprimés perdus pour l'ordre, sortie 1 côté Rust — tout cela gelé dans
+    ./template.sdd, cite).
+  - Lecture non gardée : `context.package_dir` est interpolé sans test d'absence entre les
+    deux appels de hooks.
+
+Handles:
+  - Les hooks de catégorie ne sont livrés nulle part dans l'atelier : slots côté paquet
+    seulement. Absents, @import_template les skippe avec son debug `No ${name} module,
+    skipping.` ; `ctx` vaut alors `()`, le test `map` échoue et `context` survive (posture
+    stock gelée ./template.sdd).
+  - Hook renvoyant un non-`map` (skip `()` inclus) : la fusion est ignorée en silence, le
+    contexte courant est conservé — un site de garde par hook appelé.
+  - Hook livré qui ne définit que `run` : @import_template retombe sur l'exécution du `run`
+    (fallback du shim vynil-core, frontière gelée ./template.sdd) — lecture de cluster
+    comprise en pleine rendu hors-sol, décision de nommage partagé portée en [?] là-bas,
+    dépendance notée ici sans la re-trancher.
+  - Bucket `scalables` : seul des cinq sans second hook — `install_scalables_post`, pourtant
+    appelé par la lane vivante ./install_scalables.rhai, n'est jamais invoqué ici
+    (Tasks [?]).
+  - Hooks `install_<bucket>_add` de la lane vivante : aucun pendant ici, les objets injectés
+    par hook à l'install ne peuvent jamais paraître dans le stream rendu (Tasks [?]).
+  - `_pre` retournant une carte sans `package_dir` : `()` s'interpole dans le chemin passé à
+    @dir::template ; le sort du chemin inexistant (no-op ou levée côté core) est la frontière
+    de ./../lib/install_from_dir.sdd, non tranchée là-bas.
+  - Perte silencieuse du bucket dont le script shadow n'a pas de `run` : c'est @import_run de
+    l'orchestrateur qui skippe, la décision ouverte est le [?] « gate-true shadow » de
+    ./template.sdd — cette famille en dépend sans la re-porter.
+
+Must:
+  Les cinq @run déroulent exactement le même squelette, dans cet ordre gelé et avec aucun
+    @import_run à ce niveau : @import_template du hook `install_<bucket>_pre` et fusion
+    seulement si @type_of de son retour est `map` — puis @dir::template(instance, context,
+    chemin interpolé `package_dir` + bucket), — puis, hors `scalables`, @import_template du hook
+    `install_<bucket>_post` avec la même fusion `map`, — puis la valeur terminale `context`.
+  Résoudre les hooks de catégorie par @import_template (le `template` du module résolu est
+    préféré, son `run` sert de fallback), et non par @import_run comme la lane vivante : la
+    frontière skip-absent/relance-erreur appartient au shim vynil-core (cite ./template.sdd,
+    ne re-gèle pas le nommage partagé avec la lane live).
+  Lire `package_dir` une seule fois par fichier, après la fusion `_pre`, donc dans la carte
+    qu'un hook remplacé a laissée.
+  Rendre hors-sol : zéro appel de cluster, zéro @wait, zéro méthode `set_status_*`, zéro
+    @print, zéro appel de log à ce niveau — la récupération, le rendu, la qualification et la
+    sortie `---` plus @yaml_encode de chaque document sont la passe @template dont
+    ./../lib/install_from_dir.sdd est seule propriétaire, ordre interne des buckets de
+    catégories compris.
+  Rester byte-identique aux cinq jumeaux ./../tenant/template_{befores,vitals,others,scalables,posts}.rhai
+    (diff vérifié) ; toute modification franchit les deux kinds en lockstep.
+  Import au chargement limité à `install_from_dir` (alias `dir`) dans les cinq fichiers, plus
+    `wait` (alias `wait`) dans ./template_vitals.rhai seulement — tous deux à corps sans
+    effet de bord (gelé ./../lib/install_from_dir.sdd et ./../lib/wait.sdd) ; aucun import au
+    niveau de l'orchestrateur (fait gelé ./template.sdd).
+
+Must not:
+  Recopier le squelette vivant ./../service/install_stages.sdd dans un de ces stages :
+    apply, try/catch, marqueur d'échec, purge @dir::remove et attente @wait::all n'ont pas de
+    pendant hors-sol — le nom de famille se partage, la posture est l'inverse ; le silence
+    sur cluster et status est déjà gelé pour toute la lane par « applies nothing, writes no
+    status » de ./template.sdd.
+
+Depends on:
+  ./../lib/install_from_dir.rhai (import sous `dir`) — @dir::template, unique moteur
+    d'émission : documents rendus écrits sur le stream @print (`---` avant chaque document,
+    @yaml_encode ensuite), zéro contact cluster ; contrat et ordre de buckets gelés
+    ./../lib/install_from_dir.sdd (cite, ne re-spécifie pas).
+  ./../lib/wait.rhai (import sous `wait`, ./template_vitals.rhai seulement) — importé,
+    jamais appelé ; la décision de suppression de cet import dormant est portée en [?] par
+    ./../lib/wait.sdd (cite, ne re-tranche pas).
+  ./context.sdd — producteur du `context` entrant, contrat amont non re-décrit.
+  L'API du moteur vynil-core 0.7.7 et les globaux montés par @Script
+    (/common/src/rhaihandler.sdd) : @import_template avec fallback `run` et @type_of ; la
+    frontière skip-vs-relance est gelée ./template.sdd.
+
+References:
+  ./template.sdd — l'orchestrateur : gates `is_dir`, ordre befores → vitals → others →
+    scalables → posts, imports des cinq stages par @import_run, fusions `map` downstream,
+    rethrow et sortie 1. Cette spec est l'aval de ses lignes « specs pending » ; ses deux [?]
+    (nommage partagé des hooks avec fallback `run`, shadow gate-true sans `run`) sont les
+    décisions amont dont cette famille hérite.
+  ./install_stages.sdd — les jumeaux vivants du même nom de famille : signature et hooks de
+    catégorie communs, mais @import_run là-bas contre @import_template ici, et apply/try/
+    status/wait en plus.
+  ./../tenant/template_{befores,vitals,others,scalables,posts}.rhai — copies byte-identiques,
+    sans spec à ce jour (Tasks).
+  /agent/tests/rhai_lifecycle.rs — harnais mock des lanes ; aucun test ne nomme ces cinq
+    modules (Tasks).
+
+Example:
+  (tableau des deltas complets entre les cinq fichiers — tout le reste est commun ; les
+    chemins `./template_*.rhai` sont les fichiers Owns ci-dessus)
+  `befores` : 13 lignes, dossier `befores`, hooks `install_befores_pre`/`install_befores_post`, deux fusions
+  `others` : 13 lignes, même forme avec le nom `others` — pur renommage de `befores` (diff vérifié)
+  `posts` : 13 lignes, même forme avec le nom `posts` — pur renommage de `befores` (diff vérifié)
+  `vitals` : 14 lignes, même forme avec le nom `vitals`, plus la ligne 2 `import "wait" as wait;` que rien n'appelle — l'import dormant est la décision ouverte de ./../lib/wait.sdd
+  `scalables` : 9 lignes, le seul delta structurel du groupe — après la fusion `_pre`, @dir::template puis la valeur `context` ; point de bloc `_post` (voir le delta de nommage live en Tasks [?])
+  commun aux cinq : signature `run(instance, context)`, @import_template des hooks, fusion sous test @type_of == `map` seul, @dir::template arity-trois, valeur terminale `context`, zéro status, zéro cluster, zéro try
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs : les cinq `template_*` ne
+      sont jamais nommés dans le harnais (les deux seules correspondances `template` sont la
+      clé d'argument `template_dir`) et la fixture ne livre que `package.yaml` — ajouter
+      la fixture category-dirs et des mocks pour épingler squelette, fusions, scalables sans
+      `_post` et traversée d'erreur.
+  [ ] Écrire la spec twin ./../tenant/template_*.rhai (ou une spec familiale jumelle) : les
+      cinq copies byte-identiques sont gelées par lockstep depuis ici jusqu'à son existence.
+  [ ] Signaler à ./../lib/wait.sdd que la spec de ./template_vitals.rhai existe : son [?]
+      d'import dormant attendait ce moment.
+  [ ] Rejoindre l'harmonisation d'orthographe du moteur (« vynil-core » écrit ici comme en
+      famille, alors que /Cargo.toml et /vynil.sdd épinglent `vynil-core`) portée par la
+      tâche de ./delete_stages.sdd.
+  [?] `install_scalables_post` : la lane vivante l'appelle (@import_run dans
+      ./install_scalables.rhai), ce stage ne l'appelle jamais et rien dans le nom ne le dit —
+      un paquet qui le livre le voit silencieusement ignoré au rendu. Trancher : asymétrie
+      voulue (gelée) ou block `_post` manquant.
+  [?] Aucun hook `_add` n'a de pendant ici : les objets synthétiques ajoutés par hook à
+      l'install ne sont jamais rendus, le stream de `agent template service` n'est donc pas
+      exhaustif par rapport à l'install. Décider si le rendu doit rester « dossiers seuls ».
+
+Done when:
+  Chaque Scenario a un test mappé ou une tâche [?] tranchée, le tableau `Example` recolle au
+    diff réel des cinq fichiers lors de toute révision, et le lockstep byte-à-byte avec les
+    jumeaux tenant est soit rompu explicitement, soit maintenu.
+
+Scenario: bucket émis sans aucun hook livré
+  Given un paquet dont `package_dir` contient le dossier du bucket et dont les répertoires
+    résolveurs ne livrent aucun hook `install_<bucket>_*`
+  When @run s'exécute sur le module du bucket
+  Then les deux (ou un seul pour `scalables`) import_template répondent `()` et sont ignorés
+    par le test `map`, @dir::template imprime `---` plus un document @yaml_encode par objet,
+    et la valeur retournée est le `context` reçu intact
+
+Scenario: le hook pre remplace le contexte de rendu
+  Given un paquet livrant `install_others_pre` dont le `template` retourne une carte avec un
+    `package_dir` réécrit
+  When la fusion `map` l'accepte
+  Then @dir::template reçoit le chemin interpolé de la carte de remplacement
+  But given le même hook retournant `()` ou une string, la carte d'origine survit et le
+    chemin rendu garde le `package_dir` d'entrée
+
+Scenario: scalables ignore son hook post
+  Given un paquet livrant `install_scalables_pre` et `install_scalables_post`
+  When le stage scalables s'exécute sur un dossier `scalables` présent
+  Then seul le `_pre` est importé et fusionné, le `_post` n'est jamais résolu, et le stream
+    comme la valeur retour sont conformes au squelette à neuf lignes
+
+Scenario: une casse de rendu traverse sans marqueur
+  Given un `.hbs` cassé sous le dossier du bucket
+  When l'erreur de rendu remonte de @dir::template
+  Then aucun try de ce niveau ne la convertit : elle traverse @import_run, le stream s'arrête
+    là (./template.sdd gèle abort et sortie 1) et rien n'est loggé ni marqué ici

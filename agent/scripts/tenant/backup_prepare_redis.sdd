@@ -1,0 +1,221 @@
+Spec: TenantBackupPrepareRedisScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Snapshooter puis exfiltrer, par cible du `context.redis_list` (@Dragonfly / @RedisCluster /
+    @RedisSentinel), le RDB du workload : localiser un pod par SELECTEUR DE LABELS
+    `-l app=<sts> --field-selector=status.phase=Running` dans le `context.namespace` (jamais
+    un get direct du workload — seul le .rhai frère ./restore_redis.rhai sondait le type de
+    workload), forcer un flush synchrone `SAVE` via `redis-cli` dans un `kubectl exec`,
+    puis copier `/data/dump.rdb` du pod vers `/backup/redis_<redis>.rdb` par `kubectl cp`.
+    La jambe ne scale et ne redémarre RIEN (verdict de l'inventaire « self-scaling des legs
+    redis » de ./restore.sdd : le self-scale n'existe que côté ./restore_redis.rhai,
+    jamais ici) — le SAVE et la copie visent le premier pod Running que `.items[0]` a
+    désigné, sans aucune garantie de maître ni de choix de réplique.
+    Étage prepare redis de la lane, appelé par @import_run("backup_prepare_redis", context)
+    de ./backup.sdd, 5e et dernière de la ladder secret → postgresql → mysql → mongodb →
+    redis. Jambe tenant-only, avec sa soeur restore. Trois @throw, un par étape de cible,
+    chaque message nommé. Le `backup_prepare_redis.sh` du package la remplace en bloc côté
+    appelant : gate d'existence de fichier uniquement.
+
+Owns:
+  ./backup_prepare_redis.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("backup_prepare_redis", context) de
+    ./backup.sdd ; remplaçable sans toucher l'appelant par un module éponyme sous
+    `${package_dir}/scripts` (première priorité du résolveur, gelée ./backup.sdd et
+    /agent/src/tenant/backup.sdd).
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification) : `context.redis_list` (`REDIS_LIST` décodé là-bas) et
+    `context.namespace` (`NAMESPACE`), ce dernier LU DANS LE CORPS DE BOUCLE seulement —
+    liste vide = aucune lecture de `namespace` du tout.
+  @get_env du duo `${redis}_sts` (nom du workload) et `${redis}_password` — producteur et
+    décodage secret→env : ./../lib/backup_context.sdd (`_sts` = nom vital brut pour
+    Dragonfly, suffixé `-leader`/`-master` pour @RedisCluster/@RedisSentinel ; engins redis =
+    password-only, PAS de `${redis}_host/_username/_dbname/_kind` lus ici — `_kind`
+    n'existe que pour Dragonfly et n'est pas consulté). Contrairement aux jambes mongo/mysql,
+    ces DEUX valeurs entrent dans la commande côté RHAII (interpolation de la variable
+    déjà résolue) : le texte passé au `sh -c` contient le sts et le mot de passe en clair,
+    aucun `${redis_...}` shell ne subsiste.
+  Le chemin de dump cible `/data/dump.rdb` — convention dure de save-path redis, non
+    configurable ici.
+
+Returns:
+  Unité — aucun `return` ; rend la valeur du dernier @import_run("backup_prepare_redis_post",
+    context) (`()` sur image stock, branche du skip-marker debug), fondue par ./backup.sdd qui
+    ne merge aucun résultat d'étage. Canal unique 0-ou-@throw : `.rdb` paru = hook post atteint ;
+    valeur jetée par l'orchestrateur puis par la lane Rust.
+
+Raises:
+  Trois @throw distincts par cible, texts verbatims et chacun fatal immédiat (la cible
+    suivante n'est jamais tentée, le hook post non plus) : `No running pod found for ${redis} (sts: ${sts})`
+    quand la sonde @shell_output rend la chaîne vide ; `redis SAVE failed for ${redis}` sur
+    rc≠0 du exec-SAVE ; `kubectl cp failed for ${redis}` sur rc≠0 de la copie. Chacun
+    traverse @import_run (deux skip-markers seulement avalés) → exit-4 côté Rust (./backup.sdd,
+    /agent/src/tenant/backup.sdd) — ./backup.sdd gèle déjà la propagation du premier.
+  Levées engine NON gardées sur la sonde : @shell_output jette AVANT la garde `pod == ""`
+    dès que kubectl rend rc≠0 (`Command failed, rc=...`) ou un stderr non vide
+    (`Command had stderr : ...`, vynil-core 0.7.7 `src/shell.rs`) — namespace absent, RBAC
+    refusé, jsonpath en erreur : le message verbatim `No running pod found...` ne remonte
+    alors pas. La garde ne couvre que le kubectl silencieux à rc `0` et sortie vide ; quel
+    destin un vrai kubectl rend pour `.items[0]` sur liste vide n'est pas décidé par ce code
+    (Tasks).
+  @shell_run ne lève que si le `sh -c` ne peut être lancé, rend `0` à un process tué par
+    signal (`code().unwrap_or(0)`) ; `context` non-map lève au premier `context.` ; @get_env
+    ne lève jamais (`""` si absent).
+
+Handles:
+  Deux destins par étape, comparaison exclusive à `0` (rc) ou à `""` (sonde) : passe → étape
+    suivante ; échoue → @throw. Pas de retry, aucun tri, aucune sortie de kubectl cp lue.
+  `redis_list` vide (`REDIS_LIST` absent) : le module est quand même import_run — ./backup.sdd
+    ne route que sur l'existence des `.sh` — la boucle `for` itère zero, AUCUNE lecture de
+    `context.namespace`, zero @get_env, zero shell, les deux hooks sautent en markers debug,
+    l'unité sort sans erreur. GELÉ par @backup_redis_empty_list_completes.
+  `sts` absent : @get_env rend `""`, le sélecteur part `-l app=` (valeur vide) et le throw
+    nommé affiche `(sts: )` ; `password` absent : `-a ""` part, l'erreur d'auth redis remonte
+    par le rc du exec-SAVE. Deux absances sans branche propre.
+  Slots @import_run("backup_prepare_redis_pre", context) / @import_run("backup_prepare_redis_post",
+    context) — non livrés dans ./, ./../service, ./../lib → skip-markers debug ; un hook qui
+    lève remonte (seuls les deux markers sont avalés).
+  Pas de gate `.sh` propre ici : ./backup.sdd teste `backup_prepare_redis.sh` AVANT ce module
+    et l'exécute à sa place s'il existe (@throw `<script-path> FAILED returning <rc>` sur rc
+    non nul, export `RESTIC_REPOSITORY` en préfixe) — ce fichier n'est alors jamais import_run ;
+    `backup_prepare.sh` court-circuiterait même les cinq engines.
+
+Must:
+  Dérouler exactement : hook pre → boucle, par cible dans l'ordre de la liste :
+    @log_info(`Dumping redis target: ${redis}`) → lecture `context.namespace` → @get_env sts →
+    @get_env password → sonde pod @shell_output → garde vide → @shell_run SAVE + garde rc →
+    @shell_run cp + garde rc → cible suivante → hook post. Ces @log_info sont les seules
+    lignes de log de l'étage.
+  Localiser le pod par LABELS et non par le workload : `-l app=<sts>` (+
+    `--field-selector=status.phase=Running`, premier item `.items[0]`) — le label `app` doit
+    exister sur les pods des opérateurs, hypothèse jamais vérifiée par les mocks (Tasks
+    [?]).
+  Invoquer verbatim, sts et password interpolationnés Rhai dans le texte même de la commande,
+    ns et pod interpolationnés aussi ; exemples cible `dragonfly` sts `my-dragonfly` :
+      sonde : `kubectl -n test-ns get pods -l app=my-dragonfly --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}'`
+      save : `kubectl -n test-ns exec my-dragonfly-0 -- redis-cli --no-auth-warning -a "secret" SAVE`
+      copie : `kubectl -n test-ns cp my-dragonfly-0:/data/dump.rdb /backup/redis_dragonfly.rdb`
+  Préférer `SAVE` synchrone (le serveur BLOQUE pendant le fork+write) à `BGSAVE`, choisi
+    code figé ici et discuté en Tasks : le `kubectl cp` qui suit lit un RDB déjà flushé, au
+    prix de l'arrêt du pod choisi, sans aucun scale-down préalable.
+  Garder l'ordre save → cp par cible : la copie ne part que si le flush a rendu rc `0` ; un
+    pod dont le SAVE échoue ne voit jamais son RDB copié.
+  Écrire exactement `/backup/redis_<redis>.rdb` par cible, lu côté restore par
+    ./restore_redis.rhai ; l'étage ne vérifie ni taille, ni contenu du `.rdb` rendu : fichier
+    vide avec rc `0` passe tel quel.
+  N'utiliser que ces trois shells kubectl par cible — aucun mongodump/redis-cli hors du exec,
+    aucun scale, aucun restart, aucune lecture de `${redis}_kind`, aucun contact kube par une
+    API : toute la surface cluster est du shell kubectl héritant stdout/stderr dans le log
+    du Job (@shell_run) ou capturés (@shell_output).
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur de `redis_list`, `namespace` et du duo d'envs par cible.
+  ./backup.sdd — appelant, gate `.sh` de remplacement, sémantique exit-4 du @throw.
+  ./maintenance_windows.sdd — fenêtre figée no-op autour de la ladder (le SAVE bloquant part
+    sous une fenêtre qui ne scale rien).
+  vynil-core 0.7.7 engine API — @import_run (shim 2 args), @shell_run (rc, sortie héritée),
+    @shell_output (rc≠0 ou stderr ⇒ jeté, sinon stdout), @get_env, @log_info (registrars
+    /common/src/rhaihandler.sdd).
+
+References:
+  ./backup.sdd — orchestrateur qui gèle la position de la jambe (5e, dernière) et un scenario
+    d'abort lane reprenant le @throw `No running pod found...` de ce fichier.
+  ./restore_redis.sdd — consommatrice aval de `/backup/redis_${redis}.rdb` (redéposé par
+    ./restore_run.rhai), celle-là self-scalante, l'inverse de cette jambe.
+  ./../service/backup_prepare_mysql.sdd et ./../service/restore_mysql.sdd — calibrage
+    structurel (mêmes patrons gates/env/throw) ; delta : aucune jambe redis côté service.
+  /agent/tests/rhai_backup_redis.rs — harnais GELANT cette jambe : @Script::new_mock sur les
+    DEUX SEULS répertoires scripts/lib + scripts/tenant (pas de scripts package, pas de
+    config), hooks `_pre`/`_post` donc jamais résolus → skip-markers ; chaque test non-vide
+    shadowe les vraies fonctions @get_env/@shell_run/@shell_output (le mock @Script::new_mock
+    n'est pas hermétique, /common/src/rhaihandler.sdd) par des @fn script injectés via
+    @add_code ; assertions = @is_ok/@is_err + sous-chaîne du texte levé. Le vrai kubectl, le
+    vrai cluster et le vrai redis ne sont JAMAIS touchés par les 5 tests `backup_redis_*` :
+    la sonde `pod == ""` y est simulée par un shell_output.mock rendant `""`, pas par kubectl.
+
+Tasks:
+  [ ] Geler les commandes exactes dans les tests : les mocks ne dispatchent que sur
+      sous-chaînes (`"SAVE"`, `" cp "`) et @backup_redis_nominal n'assert que @is_ok — aucun
+      test ne pinne le texte verbatim des trois commandes, l'ordre save→cp, ni le nombre
+      d'appels ; ajouter un collecteur de commandes dans les overrides mock.
+  [ ] Couvrir le destin réel de « pod absent » sur cluster vrai : le mock force `""` côté
+      shell_output ; selon la version de kubectl, `.items[0]` sur liste vide peut rendre
+      rc≠0/stderr → levée engine `Command failed`/`Command had stderr` au lieu du @throw
+      verbatim `No running pod found...`. Fixer le comportement observé et aligner.
+  [?] Quel réplica est dumpé : `.items[0]` des pods Running au sens de l'ordre kubectl, pas
+      le maître garanti — la convention vient de l'inventaire « self-scaling des legs redis »
+      (./restore.sdd) : verdict factuel gelé ici, la jambe BACKUP ne scale rien et ne
+      promeut rien ; sur @RedisCluster multi-réplicas un `.items[0]` esclave peut dumper un
+      RDB en retard de réplication asynchrone (le suffixe `_sts` `-leader` n'est qu'une
+      convention de nommage). Décider : cible maître explicite, ou posture assumée.
+  [?] `SAVE` bloquant sur pod vivant : pas de scale-down ni de fenêtre réelle
+      (./maintenance_windows.sdd no-op, ./backup.sdd Tasks), un gros RDB stoppe le serveur
+      tout le flush. Passer à `BGSAVE` + attente de `rdb_last_bgsave_status`, ou assumer le
+      blocage ?
+  [?] Le label `-l app=<sts>` est une hypothèse non testée : les opérateurs réels
+      (Dragonfly/redis-stack) posent-ils `app=` exactement égal au nom `${redis}_sts` ? Une
+      absence = fausse alerte « No running pod found » (ou jet d'@shell_output), jamais
+      détectée par les mocks. Vérifier sur cluster et geler le label contractuel.
+  [?] Mot de passe en ARGV ET en clair dans la commande Rhai : `-a "<pass>"` — interpolation
+      Rhai, donc visible dans toute journalisation de la commande du Job en plus de la table des
+      processus. `REDISCLI_AUTH` via env du exec, ou fuite assumée ?
+  [?] `SAVE`/`cp` tués par signal → rc rendu `0` (@shell_run `code().unwrap_or(0)`) : exec
+    killé après RDB partiel = copie d'un `.rdb` tronqué comptée réussie, snapshotée par
+    ./backup_run.rhai. Trancher si le rc suffit (décision miroir du jumeau mysql).
+  [?] `context` non-map, `namespace` ou `redis_list` absents → levées engine au premier accès
+      (non @throw) : figer la garantie @from_args (./../lib/backup_context.sdd) ou branche
+      explicite ici ?
+
+Done when:
+  Les Scenario titrés par les noms de tests tiennent sur le mock tenant existant, les [?]
+    sont tranchés, les textes verbatims @throw restent égaux au fichier, `specdd lint` vert.
+
+Scenario: liste vide, la jambe traversée sans rien toucher
+  Given `redis_list` = `[]` et un moteur mock sans aucun override (vrais @get_env/@shell_run
+    @shell_output du host, jamais appelés)
+  When @run(context) s'exécute
+  Then zero shell, zéro lecture de `context.namespace`, les hooks _pre/_post sautent en
+    markers debug et l'unité sort sans erreur — @backup_redis_empty_list_completes le gèle
+
+Scenario: nominal, sonde → SAVE → cp dans l'ordre
+  Given `redis_list` = `["dragonfly"]`, overrides mock : @get_env de `dragonfly_sts` =
+    `"my-dragonfly"` et `dragonfly_password` = `"secret"`, @shell_output rendant
+    `"my-dragonfly-0"`, @shell_run rendant `0`
+  When @run(context) s'exécute
+  Then les trois commandes verbatim de `Must` tournent dans l'ordre sonde → SAVE → cp, le
+    seul log est `Dumping redis target: dragonfly`, le hook post s'exécute et l'unité est
+    rendue — @backup_redis_nominal le gèle sur @is_ok, sans pinner les textes (cf. Tasks)
+
+Scenario: pas de pod Running, throw nommé
+  Given même fixture que nominal mais @shell_output rendant `""` (kubectl silencieux à rc `0`,
+    cas simulé — pas le cas kubectl-qui-jette, réservé non testé)
+  When @run(context) s'exécute
+  Then la chaîne levée est exactement `No running pod found for dragonfly (sts: my-dragonfly)`,
+    SAVE et cp ne tournent jamais, le hook post est mort — le test
+    @backup_redis_pod_not_found_throws, qui assert la sous-chaîne `No running pod found`, le gèle
+
+Scenario: SAVE en échec, cp bloqué
+  Given fixture nominale avec @shell_run rendant `1` sur la commande contenant `SAVE`
+  When @run(context) s'exécute
+  Then la chaîne levée contient `redis SAVE failed for dragonfly`, le `kubectl cp` n'est
+    jamais tenté — @backup_redis_save_failure_throws le gèle
+
+Scenario: kubectl cp en échec
+  Given fixture nominale avec @shell_run rendant `1` sur la commande contenant `" cp "`
+  When @run(context) s'exécute
+  Then la chaîne levée contient `kubectl cp failed for dragonfly` et rien d'autre ne tourne
+    après — @backup_redis_cp_failure_throws le gèle
+
+Scenario: sts absent, sélecteur vide et message qui l'avoue
+  Given un mock @get_env qui ne nomme que `dragonfly_password` (`dragonfly_sts` répond `""`)
+    et un @shell_output rendant `""`
+  When @run(context) s'exécute
+  Then la sonde part avec `-l app=` (label à valeur vide, destin kubectl réel hors frontière
+    du mock) et la chaîne levée affiche `(sts: )` : l'absence d'env n'a ni branche propre ni
+    message distinct (aucun test ne joue ce destin, cf. Tasks)

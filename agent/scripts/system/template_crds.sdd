@@ -1,0 +1,220 @@
+Spec: RenduCrdsSysteme
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Spec propre de ./template_crds.rhai, l'émetteur `crds` du rendu `agent template
+    system` : le SEUL kind dont la lane de rendu émet des CRDs (posture gelée par
+    ./template.sdd, les lanes service/tenant étant crds-vides). Double hors-sol de
+    ./../service/install_crds.rhai sur le même dossier `crds` : mêmes décodages par
+    suffixe, même trio handlebars — mais il REND au lieu de poser : `---` plus
+    @yaml_encode sur stdout pour chaque document de `kind`
+    `CustomResourceDefinition`, les autres étant ignorés avec warn. N'est pas un bucket
+    de ./../lib/install_from_dir.sdd (jamais @dir::template), zéro cluster, zéro status,
+    zéro import. Rôle gelé en amont côté Rust : /agent/src/template/system.sdd a écrit
+    la règle « render and emit » de cet émetteur avant toute spec script ; la présente
+    spec retrouve le comportement du fichier côté script, orphelin `---` compris, et
+    cite le [?] ouvert là-bas sans le re-décider.
+
+Owns:
+  ./template_crds.rhai
+
+Exposes:
+  @run(instance, context) — seul @fn du module, zéro import au chargement, atteint par
+    ./template.sdd via `import_run("template_crds", instance, context)` derrière le PREMIER
+    gate `is_dir(${context.package_dir}/crds)`, avant ./template_systems.rhai — gate,
+    place, fusion `map` downstream et abort gelés dans ./template.sdd, pas ici.
+
+Accepts:
+  @instance — la carte `#{ metadata: { name, namespace } }` synthétisée par la lane
+    hors-sol ; JAMAIS lue ici, transmise verbatim aux deux seuls appels de hooks.
+  @context — la carte construite par ./context.sdd. Lues, en accès de propriété non
+    gardé après la fusion `_pre` : `config_dir` (1er @register_partial_dir) et
+    `package_dir` (dossier `crds`, plus `handlebars/partials` et `handlebars/helpers`).
+    La carte entière, en l'état après `_pre`, sert de data à chaque rendu `.hbs`.
+    `cluster.crds` n'est JAMAIS lu : l'oracle create-vs-replace de la lane vivante
+    n'a pas de pendant hors-sol.
+
+Returns:
+  La valeur terminale `context`, carte éventuellement remplacée par `_pre`/`_post`, que
+    ./template.sdd ne fusionne que sous son propre test @type_of.
+  Le vrai produit n'est pas la valeur mais stdout : une ligne `---` AVANT chaque
+    document, y compris le premier et y compris pour un document ignoré, puis pour les
+    CRDs seuls l'@yaml_encode du document ; aucun séparateur de fermeture, aucun ordre
+    garanti — l'itération de @read_dir commande. Logs et warns partent sur le canal de
+    log, jamais sur stdout.
+  Voie d'échec : rien n'est retourné, la levée traverse l'@import_run de l'orchestrateur.
+
+Raises:
+  Zéro @throw, zéro try dans tout le fichier — delta majeur avec
+    ./../service/install_crds.rhai dont le try/catch et le marqueur @set_status_crd_failed
+    encadrent les poses. Ici toute levée sort à cru et aborte le stream en cours :
+    hooks livrés dont le `template` ou le `run` de repli lève, @new_hbs,
+    @register_partial_dir/@register_helper_dir, @read_dir d'un dossier disparu après le
+    gate, @file_read d'une entrée-dossier à suffixe manifeste, @yaml_decode_multi d'un
+    YAML cassé, @render_named d'un `.hbs` cassé, et la lecture de la propriété `kind`
+    sur un document décodé non-map (scalaire ou string). Les documents déjà imprimés
+    restent sur stdout ; la lane Rust system tombe en sortie 3, déviation gelée par
+    ./template.sdd et /agent/src/template/system.sdd (citées).
+
+Handles:
+  - Deux slots seulement, `install_crds_pre` et `install_crds_post`, noms PARTAGÉS avec
+    la lane vivante et résolus ici par @import_template : ce stage, lui, n'est atteint que
+    pour son `run` (par @import_run de l'orchestrateur), mais un hook livré ne définissant
+    que `run` est exécuté tel quel, lectures de cluster comprises, en plein rendu
+    hors-sol (fallback du shim vynil-core, point
+    ouvert de ./template.sdd, hérité sans re-tranche). Zéro slot `_add`. Absents, le skip
+    renvoie `()` non fusionné ; tout retour non-`map` n'est pas fusionné.
+  - Fichiers triés par suffixe sur le chemin complet rendu par @read_dir :
+    `.yaml`/`.yml` décodés bruts par @yaml_decode_multi ; `.yaml.hbs`/`.yml.hbs` rendus
+    d'abord puis décodés ; tout le reste devient le tableau vide `[]` sans log — la
+    boucle de documents ne court pas.
+  - Document de `kind` absent (map sans la propriété, se lisant `()`) ou différent de
+    `CustomResourceDefinition` : séparateur `---` quand même imprimé, @log_warn du
+    littéral `# Ignoring an item as it is not a CRD` et @log_debug du @yaml_encode,
+    aucun document émis. Un document non-map ne tombe pas dans ce bras : il lève (Raises).
+  - Aucun `metadata`, aucun nom, aucune liste d'inventaire lus : la classification ne
+    porte que sur `kind`.
+
+Must:
+  Dérouler l'ordre exact, gelé aussi côté Rust : fusion gardée de `install_crds_pre` —
+    @new_hbs puis @register_partial_dir de `context.config_dir` PUIS de
+    `package_dir/handlebars/partials` (écrasement par même nom : sémantique de
+    réenregistrement de /common/src/handlebarshandler.sdd, citée) puis
+    @register_helper_dir de `package_dir/handlebars/helpers` — boucle @read_dir sur
+    `${package_dir}/crds` avec décodage par suffixe — pour chaque document, test de
+    `kind` puis émission — fusion gardée de `install_crds_post` — valeur terminale
+    `context`.
+  Rendre par FICHIER : @render_named du chemin du fichier comme name, de son contenu cru
+    comme template, de la carte `context` d'après `_pre` comme data (même motif que
+    l'@get_objects de ./../lib/install_from_dir.sdd, exécuté ici en direct faute de
+    catégorie `crds` connue de la lib) ; un moteur handlebars FRAIS à chaque @run.
+  Imprimer le `---` AVANT le test de `kind`, donc sur les deux branches du switch :
+    comportement actuel gelé — un document ignoré laisse un séparateur orphelin, sans
+    document suiveur, dans le flux stdout, son warn n'existe que sur le canal de log. La
+    décision de l'ordre séparateur/filtre appartient au [?] de
+    /agent/src/template/system.sdd (cross-ref en Tasks, non re-décidée ici).
+  Filtrer par comparaison exacte de la chaîne `kind` à `CustomResourceDefinition`,
+    exclusive : aucun autre kind ne sort en document, le document retenu part seul en
+    @yaml_encode verbatim.
+  Rester sans aucun contact cluster : zéro @k8s_resource, zéro create/replace/delete,
+    zéro lecture de `cluster.crds`, zéro écrit de status (ni @set_status_crds ni
+    @set_status_crd_failed, méthodes de la lane vivante), au-delà des deux seuls @print
+    du switch.
+  Rester sans aucun import de module ni effet de bord au chargement : tous les globaux
+    (@read_dir, @file_read, @yaml_decode_multi, @yaml_encode, @new_hbs et consorts
+    handlebars, @import_template, @type_of, @log_warn, @log_debug, @print) appelés en direct.
+  Garder l'émission non triée : ordre des fichiers de @read_dir, puis ordre de
+    décodage dans le fichier ; la reproductibilité octet-pour-octet repose sur l'ordre
+    d'itération du filesystem (déterminisme ouvert côté Rust, cité).
+
+Must not:
+  Poser, purger ou inventorier au cluster : la moitié création/purge du dossier `crds`
+    est ./../service/install_crds.rhai ; ce fichier ne connaît ni resourceVersion, ni
+    carry-forward, ni status.
+  Passer par @dir::template de ./../lib/install_from_dir.sdd : la lib ne connaît pas la
+    catégorie `crds` (gelé là-bas) et son parcours bucketisé first/middle/last
+    réordonnerait le rendu.
+
+Depends on:
+  /common/src/handlebarshandler.sdd — @new_hbs, @register_partial_dir,
+    @register_helper_dir, @render_named et leurs sémantiques de rendu (strict mode,
+    no-escape, réenregistrement) qui ne sont pas re-décrites ici.
+  L'API d'engine vynil-core 0.7.7 montée par @Script (/common/src/rhaihandler.sdd) :
+    @import_template avec fallback `run`, @read_dir, @file_read, @yaml_decode_multi,
+    @yaml_encode, @type_of, @log_warn, @log_debug et le print hook vers stdout ; la
+    frontière skip-absent contre relance-erreur est gelée dans ./template.sdd.
+  ./context.sdd (+ ./../lib/build_context.rhai) — producteur de `config_dir` et
+    `package_dir` ; contrat amont non re-décrit.
+
+References:
+  ./template.sdd — l'orchestrateur : le gate `crds` en PREMIER, l'appel @import_run, la
+    fusion `map` du retour, l'ordre crds-avant-systems et l'abort mid-stream vers la
+    sortie 3 amont — tout cela gelé là-bas, cité.
+  /agent/src/template/system.sdd — la lane Rust, première autrice du rôle de cet
+    émetteur (sa règle « Run the CRD emitter as » recolle ligne à ligne) et DÉTENTRICE
+    du [?] de l'orphelin `---` que cette spec retrouve côté script et cross-référence,
+    sans le re-décider.
+  ./../service/install_crds.sdd — le double de la lane vivante sur le même dossier :
+    décodages par suffixe et trio handlebars identiques en substance, le tableau
+    `Example` fige les écarts ; ses questions ouvertes (non-map qui lève, dossier
+    disparu après le gate) sont les mêmes, portées là-bas.
+  ./system_stages.sdd — la spec-sœur des stages bucket des trois lanes ; ./template_systems.rhai
+    y est owné, ses écarts avec le rendu service y sont gelés.
+  ./../service/template_stages.sdd et ./../service/template.rhai — les lanes de rendu
+    crds-vides : le nommage partagé des hooks `install_*` avec repli `run`, l'absence de
+    `_add` et la dissymétrie pre/post sont leurs points ouverts, hérités ici sans
+    re-tranche.
+  /agent/tests/rhai_lifecycle.rs — harnais mock service-only, zéro cas system (Tasks).
+
+Example:
+  (écarts entre ./template_crds.rhai et ./../service/install_crds.rhai — sont communs le
+    dossier `crds`, les décodages par suffixe, le trio handlebars `config_dir` +
+    partials + helpers, la paire de hooks `install_crds_pre`/`install_crds_post` en
+    fusion `map`, la valeur terminale `context`, zéro `_add`, zéro import, zéro wait)
+  Rendu seul — sortie `---` plus @yaml_encode sur stdout, hooks résolus par @import_template, zéro try ; le document ignoré émet son `---` quand même et un warn préfixé `# ` vers le canal de log ; aucun posé, aucun status
+  Vivant seul — hooks par @import_run, oracle `cluster.crds`, @create/@replace avec resourceVersion copié, purge gardée aux enfants, écriture @set_status_crds, try/catch plus marqueur @set_status_crd_failed plus `throw;` ; l'ignoré n'émet rien et son warn est `Ignoring an item as it is not a CRD` sans préfixe
+  stdout d'un fichier tenant un CRD et un ConfigMap : `---`, document encodé du CRD, puis un second `---` suivi de rien — l'orphelin du [?] Rust
+
+Tasks:
+  [ ] Mapper les Scenarios sur un harnais : le system n'est JAMAIS testé —
+      /agent/tests/rhai_lifecycle.rs est service-only (résolveurs sans `scripts/system`,
+      fixture sans dossier `crds`, sa seule occurrence `system` est la valeur
+      `vynil-system`) ; il faudra une entrée `scripts/system`, une fixture `crds/`
+      mélangeant `.yaml`, `.yaml.hbs` et documents étrangers, et la capture stdout plus
+      canal de log pour épingler le frame `---`, le filtre de kind et la fusion `_pre`.
+  [?] Cross-ref du séparateur orphelin : le [?] de /agent/src/template/system.sdd tient
+      la décision « le filtre doit-il courir avant le `---` ? » (et, corrélé, la place
+      du préfixe `# ` du warn, qui sent le commentaire de flux mais ne tombe que dans
+      les logs). Le comportement actuel est gelé en Must du côté script ; la tranche se
+      prend là-bas, ici on la cite.
+  [?] Document non-map levant (@kind sur un scalaire) quand la lib de la lane bucketisée
+      warn-and-drop ses invalides : le double vivant porte le même point ouvert
+      (./../service/install_crds.sdd) ; trancher une fois la garde symétrique pour les
+      deux moitiés du dossier `crds`.
+  [?] Le `crds` rendu reste l'apanage du seul system (dissymétrie des trois kinds,
+      cross-ref le [?] de ./template.sdd) : cette spec ne vit que si la décision
+      crds-in-render-everywhere-or-system-special-case tombe en faveur de l'ordre
+      actuel ; à réviser depuis ici le jour où elle se tranche.
+  [ ] Signaler à /common/src/instancesystem.sdd, si une mise à jour de spec y passe, que
+      la lane de rendu n'appelle aucune de ses méthodes d'état : seule la spec système
+      Rust les nomme hors lane vivante.
+
+Done when:
+  Chaque Scenario porte un test mappé ou un [?] tranché ailleurs et cité ici, la
+    séquence figée recolle au texte du fichier à toute révision, et le cross-ref du [?]
+    Rust est fermé ou assumé — avec `specdd lint` vert sur ce fichier.
+
+Scenario: le CRD sort, l'étranger ne laisse qu'un séparateur
+  Given un fichier de `crds/` tenant un document `CustomResourceDefinition` et un
+    document `ConfigMap`
+  When @run(instance, context) déroule l'émetteur
+  Then stdout porte `---` puis l'@yaml_encode du CRD, puis un second `---` sans document
+  And le @log_warn `# Ignoring an item as it is not a CRD` et le @log_debug de
+    l'encodé du ConfigMap partent sur le canal de log, et `context` revient
+  Aucun test mappé (Tasks)
+
+Scenario: le hook pre pilote les données de rendu
+  Given un paquet livrant `install_crds_pre` dont le `template` retourne une carte au
+    `package_dir` et aux valeurs réécrits
+  When la fusion `map` l'accepte
+  Then le helper dir, le partial dir et les rendus @render_named de ce run utilisent la
+    carte de remplacement, et `_post` reçoit cette carte
+  But given le même hook renvoyant `()`, la carte d'entrée survit intégralement
+  Aucun test mappé (Tasks)
+
+Scenario: suffixe hors manifeste et YAML cassé
+  Given le dossier `crds` tenant un fichier sans suffixe manifeste et un `.yaml` dont le
+    contenu décode en erreur
+  When @run atteint le premier puis le second
+  Then le premier ne produit ni log ni émission — tableau vide — et la levée de
+    @yaml_decode_multi du second traverse sans rattrapage : stream coupé, documents déjà
+    imprimés laissés sur stdout, ./template.sdd avorte vers la sortie 3
+  Aucun test mappé (Tasks)
+
+Scenario: document scalaire aborte le rendu
+  Given un `.yaml` décodant en un document scalaire non-map
+  When la boucle lit sa propriété `kind`
+  Then la levée de lecture de propriété sort à cru (aucun try, aucun warn, aucun
+    séparateur de plus) et avorte le run comme une casse de rendu
+  Aucun test mappé (Tasks) ; cross-ref le [?] de garde symétrique (Tasks)

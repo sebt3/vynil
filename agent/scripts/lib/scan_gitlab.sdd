@@ -41,7 +41,7 @@ Depends on:
   ./secret_dockerconfigjson.rhai (./secret_dockerconfigjson.sdd) — @get_auth_from decoder;
     this lane consumes only its `pass` field and inherits the first-colon split posture frozen
     open over there.
-  wynil-core 0.7.7 http surface — @new_http_client, @add_header_bearer, @RestClient.@get
+  vynil-core 0.7.7 http surface — @new_http_client, @add_header_bearer, @RestClient.@get
     (result map `code`/`headers`/`body`/`json`, `json` an empty object on a non-JSON body),
     @headers_get (case-insensitive, `()` when absent), reached as script names through
     @http_rhai_register in the /common/src/rhaihandler.sdd assembly; plus the @rhai builtins

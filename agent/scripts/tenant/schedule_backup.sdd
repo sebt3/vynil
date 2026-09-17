@@ -187,7 +187,7 @@ Depends on:
   /agent/templates/cronbackup.yaml.hbs (+ nested /agent/templates/backup.yaml.hbs Pod template)
     resolved through `context.template_dir` — the rendered manifest shape and the fixed
     `{appslug}-backup`/`-backups` object names are template-owned, not frozen here.
-  wynil-core 0.7.7 engine API — the @import_run shim, @new_hbs + @register_partial_dir +
+  vynil-core 0.7.7 engine API — the @import_run shim, @new_hbs + @register_partial_dir +
     @render_from of the `"HandleBars"` type (/common/src/handlebarshandler.sdd, helpers
     `json_to_str`/`selector_from_ctx`/`to_json` riding the same engine), @is_dir,
     @yaml_decode_multi, @type_of, @json_encode; the `switch type_of(e)` arms are plain rhai.

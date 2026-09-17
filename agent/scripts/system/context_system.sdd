@@ -47,7 +47,7 @@ Must:
 Depends on:
   ./context.rhai — the only importer and slot owner (call sites frozen in
     ./context.sdd; the live/offline seam is that spec's contract, not this one's).
-  wynil-core 0.7.7 script surface behind /common/src/rhaihandler.sdd — the
+  vynil-core 0.7.7 script surface behind /common/src/rhaihandler.sdd — the
     @import_template fallback onto `run`, owned and frozen there, restated as relied
     on by /agent/src/template/system.sdd.
 

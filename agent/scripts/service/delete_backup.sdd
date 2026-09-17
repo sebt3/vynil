@@ -131,7 +131,7 @@ Depends on:
   ./../lib/install_from_dir.rhai — imported as `dir`, NEVER called (dead-import Tasks); the
     get-wait-delete/NotFound-swallow idiom it @remove freezes is the shape this file re-implements
     inline (./../lib/install_from_dir.sdd).
-  wynil-core 0.7.7 engine API — the @import_run shim (@type_of + skip-marker pair), the
+  vynil-core 0.7.7 engine API — the @import_run shim (@type_of + skip-marker pair), the
     @k8s_resource(kind, ns) two-arg constructor with @exist + @get_obj + @list (iterating `.items`) and the
     K8sObject @delete + @wait_deleted + @original_kind of the core k8sgeneric registrar (the apiVersion
     constructor and the `k8sworkload`/`k8sraw` surface stay unused here), @type_of, @json_encode;

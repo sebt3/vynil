@@ -1,7 +1,7 @@
 # File spec for ./update.rhai — the scan-and-rewrite lane the Rust side of
 # /agent/src/package/update.sdd evaluates: `import("update")` then `update::run(args)`.
 # Script semantics only: the clap surface, the `args` JSON, the resolver-dir order and the
-# exit-2 trap are that spec's; the yaml/semver/registry/fs cores are wynil-core 0.7.7's and
+# exit-2 trap are that spec's; the yaml/semver/registry/fs cores are vynil-core 0.7.7's and
 # the @YamlDoc indexer legs /common/src/yamlhandler.sdd's. Calibrated on ./build.sdd and
 # ./../lib/package_yaml.sdd. Behaviour below was exercised end-to-end over the real
 # @YamlDoc and locked rhai with a stub registry (see Tasks).
@@ -174,7 +174,7 @@ Depends on:
   /common/src/yamlhandler.sdd — @YamlDoc + the registered indexer pair + the ordered
     encode/decode this lane's persistence rides on; carries the stale `idx_get`-clone
     never-writes-through wording this spec's execution contradicts (Tasks).
-  wynil-core 0.7.7 — @Registry anonymous auth + 100-tag page, @Semver parse/compare/
+  vynil-core 0.7.7 — @Registry anonymous auth + 100-tag page, @Semver parse/compare/
     @to_string, `fs` @file_read/@file_write, @json_encode, the @import_run/@assert common
     shims, tracing-backed @log_*; locked rhai 1.25.1's chain re-set propagation and
     dot→indexer fallback are the mechanics the persistence posture relies on.
@@ -218,7 +218,7 @@ Tasks:
       drift `[?]`; normalize-or-freeze must be decided for both lanes together.
   [?] @list_tags one-page-100 cap can miss an untagged or tagged image's true newest on
       busy repositories (core-owned posture, already frozen in ./build.sdd) — confirm
-      acceptance for the update lane or fix in wynil-core.
+      acceptance for the update lane or fix in vynil-core.
   [?] `update_pre`/`update_post` ship nowhere (/docs/cli.md advertises the post hook;
       only shadow trees can supply them) — decision owned by
       /agent/src/package/update.sdd; this spec only freezes the call sites.

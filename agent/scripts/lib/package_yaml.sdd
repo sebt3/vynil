@@ -99,7 +99,7 @@ Must:
     surface the file calls.
 
 Depends on:
-  wynil-core 0.7.7 engine API — @log_warn from the core engine registrar, the script-side
+  vynil-core 0.7.7 engine API — @log_warn from the core engine registrar, the script-side
     helpers installed by @Script::new_core's base
     (./../../../common/src/rhaihandler.sdd); rhai builtins (@type_of, `switch`, map/array
     indexing, `in`) arrive with the engine and nothing else is reached.

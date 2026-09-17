@@ -62,7 +62,7 @@ Must:
   Reach `"ServiceInstance"`/`"SystemInstance"`/`"TenantInstance"`/`"Cluster"`/`"MariaDB"`/
     `"RabbitmqCluster"`/`"BucketClaim"`/`"BucketAccess"`/`"NdbCluster"` through
     @k8s_resource(kind, namespace) + @get_obj then the @K8sObject wait family; the generic
-    resolution hits the wynil-core discovery cache and this file never calls
+    resolution hits the vynil-core discovery cache and this file never calls
     `update_k8s_crd_cache`, so kinds a caller just applied are only waitable once the caller
     lane refreshed the cache (owner: ./install_from_dir.sdd).
   Use the core-registered misspelled @get_deamonset verbatim — the correctly spelled daemonset
@@ -82,7 +82,7 @@ Must:
     and never call it (see Tasks).
 
 Depends on:
-  The wynil-core 0.7.7 script surface mounted by `/common/src/rhaihandler.sdd`
+  The vynil-core 0.7.7 script surface mounted by `/common/src/rhaihandler.sdd`
     @Script::new / @Script::new_mock: @k8s_resource + @get_obj, the @K8sObject waits
     @wait_condition/@wait_status/@wait_status_prop, the typed workload getters and their
     @wait_available/@wait_done waits, and @log_info — this file adds no state and no timeout

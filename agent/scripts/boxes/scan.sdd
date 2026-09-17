@@ -163,7 +163,7 @@ Must not:
     their YAML documents; only the registry lanes mint maps, from manifest annotations.
 
 Depends on:
-  wynil-core 0.7.7 engine surface consumed as script globals/members (nothing here
+  vynil-core 0.7.7 engine surface consumed as script globals/members (nothing here
     registers anything): @new_registry(host, user, pass) plus the `Registry` members
     `list_tags(repository)` and `get_manifest(repository, tag).annotations` (real clients on
     @Script::new / @Script::new_file_scan, the `OciRegistryMock` substitutions under

@@ -1,0 +1,214 @@
+Spec: InstallationCrdsService
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Spec propre du stage `crds` de l'install service, ./install_crds.rhai — seul stage du
+    répertoire qui ne soit pas un bucket de ./../lib/install_from_dir.sdd : il rend lui-même
+    les HBS et pose les `CustomResourceDefinition` de `${context.package_dir}/crds` en
+    @create/@replace, puise l'inventaire à purger dans `status.crds` (refus de suppression
+    tant que le kind pose des enfants), puis écrit la liste des noms posés par
+    @set_status_crds. La posture familiale (hooks, try/catch, marqueur singulier +
+    `throw;` nu, fusions `map`, valeur terminale `context`) est gelée dans
+    ./install_stages.sdd ; cette spec n'en porte que les DELTAS de logique propre.
+    Jumeau octet-pour-octet côté system : ./../../system/install_crds.rhai (diff vérifié) ;
+    le kind tenant n'a pas de crds (gelé ./../tenant/install.sdd).
+
+Owns:
+  ./install_crds.rhai
+
+Exposes:
+  @run(instance, context) — seul @fn du module, atteint par ./install.sdd via
+    `import_run("install_crds", instance, context)` derrière le gate
+    `is_dir(`${context.package_dir}/crds`)`. Les trois gestes d'à côté, pas d'ici : la
+    ligne @log_info qui précède l'import, le @update_k8s_crd_cache et le
+    @get_service_instance qui suivent aussitôt — ce fichier ne rafraîchit ni discovery,
+    ni instance ; le stage d'à côté ne voit les nouveaux kinds que grâce à ce refresh.
+
+Accepts:
+  @instance — gardes de lecture `instance.status` et `instance.status.crds` (les deux
+    différents de `()` avant la purge) ; l'inventaire antérieur n'est pas une liste de
+    maps comme les buckets mais un tableau de @String, les noms `plural.group` des CRD ;
+    l'objet n'est pas muté par affectation, seules les méthodes de status posent.
+  @context — lus hors try, après la fusion `_pre` : `config_dir` (1re
+    `register_partial_dir`) et `package_dir` (dossier `crds`, plus
+    `handlebars/partials` et `handlebars/helpers`) ; la carte entière sert de données de
+    rendu à chaque document `.hbs`. Lu dans le try : `cluster.crds`, le snapshot des noms
+    de CRD pris au build du contexte par ./../lib/build_context.rhai — oracle
+    d'appartenance create-vs-replace, jamais réécrit par les poses du présent run.
+
+Returns:
+  La valeur terminale `context`, carte éventuellement remplacée par `_pre`/`_post` —
+    comme la famille (./install_stages.sdd). Le produit réel ne voyage pas là : il est dans
+    le cluster (CRD créés/remplacés) et dans `status.crds` (liste de noms). Voie d'échec :
+    rien de retourné, le `throw;` nu remonte à ./install.sdd qui aborte.
+
+Raises:
+  Zéro @throw à payload ; la seule énonciation est le `throw;` nu du catch.
+  - Hors try, donc sans marqueur : levée du hook `_pre`, de @new_hbs, des
+    @register_partial_dir/@register_helper_dir, ou de la construction du handle
+    `api = @k8s_resource("CustomResourceDefinition")` — delta avec la famille dont
+    seules les levées de hooks sortent du try.
+  - Dans le try — toute levée (@read_dir d'un dossier disparu après le gate, @file_read
+    d'une entrée-dossier à suffixe manifeste, @yaml_decode_multi, rendu HBS, @get_meta
+    NotFound si le CRD a disparu depuis le snapshot, @replace en conflit, @create
+    already_exists, conversion de la liste par @set_status_crds, @delete d'un CRD
+    déjà absent → NotFound NON toléré) passe par le catch : @set_status_crd_failed
+    (string verbatim, sinon texte @json_encode), puis relance à cru.
+  - La non-tolérance du NotFound au `api.delete(old)` est un delta avec la tolérance
+    NotFound du @dir::remove de la lib (famille).
+  - Document non-map : la lecture `crd.kind` lève et tombe dans le même catch. CRD sans
+    `metadata` : `.metadata.name` lève aussi (le rend non-posé, jamais warn-and-drop
+    comme la lib). Voir Tasks.
+
+Handles:
+  - Deux hooks seulement, `install_crds_pre`/`install_crds_post`, fusion `map` seulement ;
+    aucun slot `_add` — l'appel `install_crds_add` n'existe nulle part (diff famille).
+    Hook absent : @import_run le skippe (`return ()`).
+  - Fichiers triés par suffixe sur le chemin complet rendu par @read_dir : `.yaml`/`.yml`
+    décodés bruts ; `.yaml.hbs`/`.yml.hbs` rendus puis décodés ; tout le reste devient le
+    tableau vide `[]`, sans log — dossiers intermédiaires non suffixés exclus.
+  - Document dont `kind` diffère de `CustomResourceDefinition` : @log_warn
+    `Ignoring an item as it is not a CRD` + @log_debug du @yaml_encode, zéro entrée.
+  - `status` absent ou clé `crds` à `()` : aucune purge.
+  - Périmé aux enfants : carry-forward dans la liste. Périmé sans enfants : supprimé,
+    disparaît du nouveau status. Périmé dont le kind d'instances ne résout plus
+    (@exist répond faux) : oublié sans delete, sans log ni carry — le CRD peut rester au
+    cluster en sortant de l'inventaire. Voir Tasks.
+
+Must:
+  Dérouler exactement : fusion `_pre` → @new_hbs + @register_partial_dir de
+    `context.config_dir` puis de `package_dir/handlebars/partials` +
+    @register_helper_dir de `package_dir/handlebars/helpers` → creation du handle CRD
+    `api` — ces quatre pas avant le try, hors marqueur — puis dans le try : boucle
+    @read_dir sur `${context.package_dir}/crds` avec décodage par suffixe → tri par
+    `kind` → pose → purge → @set_status_crds(applied_crds) → catch (marqueur singulier
+    @set_status_crd_failed + relance) → fusion `_post` → valeur terminale `context`.
+  Rendre les `.hbs` du motif de @get_objects de ./../lib/install_from_dir.sdd :
+    @render_named du fichier avec le chemin comme name, le contenu cru comme template et la
+    carte `context` courante comme data ; la différence est que la lib ne transporte jamais
+    la catégorie `crds` (gelé là-bas) — le présent fichier est cette application soi.
+  Choisir create-vs-replace par `context.cluster.crds.contains(crd.metadata.name)` :
+    connu → copier `api.get_meta(name).metadata.resourceVersion` dans le document puis
+    `api.replace(name, crd)` (le commentaire source lie l'égalité de resourceVersion au
+    ticket argo-cd 3657 — @replace exige le RV tenu par le serveur) ; inconnu →
+    `api.create(crd)`. Chaque branche pousse le nom dans `applied_crds`.
+  Purger les noms périmés via un handle du kind d'instances construit sur le premier
+    segment `old.split(".")[0]` (argument unique @k8s_resource, portée cluster) :
+    @exist vrai → @list_meta → nombre d'enfants `items.len()`, tous namespaces confondus
+    ; > 0 → @log_warn `Ignoring to delete ${old} as it still have ${cnt} children` et
+    carry dans la liste ; 0 → `api.delete(old)` sur le handle CRD `api`. Aucun wait de
+    suppression, aucun NotFound-tolerance.
+  Écrire au status une liste de nomsstrings : @set_status_crds consomme un @Vec de
+    @String — seul bucket de cette forme, les autres écrivent des maps (macros gelées
+    /common/src/instance_macros.sdd).
+  N'appeler aucune wait : le kind CRD est absent du registre ./../lib/wait.sdd ; la
+    visibilité des nouveaux kinds pour les buckets suivants est acquise par le
+    @update_k8s_crd_cache que l'orchestrateur enchaîne après ce stage (./install.sdd),
+    jamais par une attente d'ici.
+  Rester sans aucun import de module : seul stage du répertoire à n'appeler ni `dir` ni
+    `wait`, tous les globaux (@read_dir, @file_read, @yaml_decode_multi, @yaml_encode,
+    @k8s_resource, @type_of, @import_run, @json_encode) étant utilisés en direct.
+
+Must not:
+  Passer un CRD par @dir::install ou purger par @dir::remove : ./../lib/install_from_dir.sdd
+    ne connaît pas la catégorie `crds` ; le carry-forward des périmés enfants n'est pas un
+    @dir::remove (enfants comptés ici, delete seulement à zéro enfant, sans namespace
+    par défaut ni wait).
+  Appeler @update_k8s_crd_cache ou relire le cluster pour actualiser `cluster.crds` :
+    refresh discovery et instance sont la prérogative de ./install.sdd juste après ce
+    stage ; l'oracle d'appartenance appartient au build_context, pas au post-apply.
+
+Depends on:
+  L'API d'engine vynil-core 0.7.7 montée par @Script (/common/src/rhaihandler.sdd) :
+    @k8s_resource argument unique (cluster-scope) et les méthodes K8sGeneric
+    @get_meta/@replace/@create/@exist/@list_meta/@delete du registrar `k8s` core ;
+    @read_dir/@file_read, @yaml_decode_multi/@yaml_encode, @log_warn/@log_debug ;
+    @import_run (frontière skip-absent vs rethrow gelée ./install.sdd), @type_of,
+    @json_encode.
+  /common/src/handlebarshandler.sdd — @new_hbs, @register_partial_dir,
+    @register_helper_dir, @render_named.
+  /common/src/instanceservice.sdd et /common/src/instance_macros.sdd — @set_status_crds
+    (liste de @String) et @set_status_crd_failed.
+  ./../lib/build_context.rhai (+ ./../lib/build_context.sdd) — fournisseur de
+    `cluster.crds`, `config_dir` et `package_dir` ; contrat amont non re-décrit.
+
+References:
+  ./install_stages.sdd — squelette familial partagé (hooks `_pre`/`_post`, statut
+    pluriel/marqueur singulier, fusions `map`, `let tmp` jamais relu, valeur terminale) :
+    cité, non re-spécifié ici.
+  ./install.sdd — orchestrateur : gate, ligne de log amont, refresh cache+instance
+    aval — l'autre moitié de la frontière.
+  ./../../system/install_crds.rhai — twin byte-identique (diff vérifié), rendu viable par
+    les mêmes méthodes @set_status_crds/@set_status_crd_failed enregistrées sur
+    SystemInstance (/common/src/instancesystem.sdd, spec pending).
+  ./../tenant/install.sdd — le kind tenant n'a pas de lane crds : aucun twin tenant de ce
+    stage n'existe ni n'est dû.
+  ./delete_crds.rhai — lane de désinstallation, contrat hors de ce fichier.
+  /agent/tests/rhai_lifecycle.rs — harnais mock des lanes service, aucun test
+    n'importe ce module (Tasks).
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs (service-only) : la fixture
+      ./../../tests/fixtures/package ne ship que `package.yaml`, le gate `crds` de
+      ./install.sdd y est faux et ce module n'est jamais importé ; il faudra une fixture
+      avec dossier `crds/` plus des mocks @get_meta/@replace/@create/@exist/@list_meta/@delete
+      — les set_status_* no-op de /common/src/k8smock.sdd ne suffisent pas à observer les poses.
+  [ ] Écrire la spec twin ./../../system/install_crds.sdd en lockstep de celle-ci (fichiers
+      byte-identiques ; revérifier le diff à chaque révision et décider la divergence si
+      un kind dérive).
+  [?] `contains` lit le snapshot `cluster.crds` figé au build du contexte, jamais réécrit
+      par les poses du run : le même nom défini dans deux fichiers ou deux documents du
+      même dossier double-@create (already_exists → marqueur → abort). Décider si la liste
+      appliquée doit servir d'oracle secondaire.
+  [?] La branche périmé dont @exist répond faux l'oublie sans log ni delete — le CRD peut
+      survivre au cluster et disparaître de l'inventaire. Trancher logger ou purger
+      autrement.
+  [?] Le NotFound du `api.delete(old)` d'un CRD déjà retiré à la main aborte l'install via
+      marqueur, quand @dir::remove familial tolère NotFound. Décider la tolérance
+      symétrique.
+  [?] Documents non-map (levée sur @kind) et CRD sans `metadata` (levée sur
+      `.metadata.name`) abortent le stage quand la lib warn-and-drop leurs équivalents.
+      Décider un garde de drop symétrique.
+  [?] @read_dir d'un dossier disparu entre le gate @is_dir et l'import : levée ou liste
+      vide — même question ouverte que ./install_stages.sdd, à trancher dans
+      ./../lib/install_from_dir.sdd puis citer ici.
+
+Done when:
+  Chaque Scenario porte un test mappé ou un [?] tranché, la séquence create/replace/purge
+    recolle au texte du fichier à toute révision, et l'identité byte avec le twin system
+    est tenue ou sa divergence actée.
+
+Scenario: créer le CRD neuf, remplacer le CRD connu
+  Given le snapshot `cluster.crds` contient `foos.example.com` et le dossier `crds/` un
+    `.yaml` le définissant plus un `.yaml.hbs` définissant `bars.example.com`
+  When @run(instance, context) s'exécute
+  Then `foos` reçoit le `resourceVersion` lu par @get_meta puis passe par @replace, `bars`
+    passe par @create, et @set_status_crds reçoit les deux noms
+  And le document `.hbs` est rendu avec la carte entière vivante après fusion `_pre`
+  Aucun test mappé (Tasks)
+
+Scenario: non-CRD ignorés avec warn
+  Given un fichier du dossier contient aussi un document `ConfigMap`
+  When la boucle l'atteint
+  Then @log_warn `Ignoring an item as it is not a CRD` et @log_debug du @yaml_encode partent,
+    aucune entrée n'est poussée, ni create ni replace ne le touche
+  Aucun test mappé
+
+Scenario: purge qui refuse, supprime ou oublie
+  Given `status.crds` tient `a.example.com` (2 enfants cluster-wide), `b.example.com`
+    (0 enfant) et `c.example.com` (kind d'instances ne résolvant plus, @exist faux)
+  When le bloc de purge passe la double garde
+  Then `a` déclenche le @log_warn texte `Ignoring to delete a.example.com as it still have 2 children`
+    puis est reporté dans la liste, `b` est supprimé par `api.delete` et sort de
+    l'inventaire, `c` sort sans delete ni log
+  Aucun test mappé (Tasks)
+
+Scenario: échec interne marque et relance à cru
+  Given @create, @replace ou le @delete d'un absent lève en plein try
+  When le catch reçoit l'erreur
+  Then @set_status_crd_failed écrit la raison (string verbatim, sinon @json_encode),
+    l'erreur est relancée à cru et le hook `_post` ne tourne pas
+  But given une levée de @new_hbs, des registrations ou du handle `api`
+  Then aucun marqueur n'est posé — ces pas vivent hors du try, delta avec la famille
+  Aucun test mappé

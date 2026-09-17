@@ -1,0 +1,285 @@
+Spec: EtapesSysteme
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Un seul contrat, trois instances, pour le pattern « bucket `systems` » des trois
+    lanes du kind system : ./install_systems.rhai (lane vivante), ./delete_systems.rhai
+    (teardown) et ./template_systems.rhai (rendu hors-sol). Regroupement justifié : les
+    trois vies d'un même bucket, même nom, même inventaire à la clé unique `systems` ;
+    diff vérifié fichier à fichier contre le trio service, l'install est un renommage pur
+    de 7 lignes de ./../service/install_befores.rhai, le template un renommage de 2 lignes
+    de ./../service/template_scalables.rhai, et seule la delete porte un vrai delta
+    structurel (85 lignes contre 40, parcours en deux passes sous liste de kinds figée).
+    Cette spec ne gèle que les DELTAS system ; le corps commun de chaque lane reste gelé
+    dans ses références service ./../service/install_stages.sdd,
+    ./../service/delete_stages.sdd et ./../service/template_stages.sdd (citées, jamais
+    re-gelées). Hors couverture : ./template_crds.rhai (sa spec propre
+    ./template_crds.sdd) et les jumeaux crds/tofu sous la note « Jumeaux couverts
+    ailleurs » en References.
+
+Owns:
+  ./install_systems.rhai
+  ./delete_systems.rhai
+  ./template_systems.rhai
+
+Exposes:
+  `@run(instance, context)` — seul @fn des modules install et template, et @fn d'entrée
+    du module delete, atteint par `import_run("install_systems", instance, context)`
+    derrière le gate `is_dir(${context.package_dir}/systems)` (3e et dernier bucket), par
+    `import_run("delete_systems", instance, context)` derrière le même gate (1re lane du
+    teardown) et par `import_run("template_systems", instance, context)` derrière le même
+    gate (2e gate du rendu, après ./template_crds.rhai) — gates, ordres, fusions et
+    refresh downstream gelés dans ./install.sdd, ./delete.sdd et ./template.sdd, pas ici.
+  @get_last — @fn de portée module de ./delete_systems.rhai seulement, appelé deux fois
+    par course par son @run ; rien d'autre dans l'atelier ne le résout.
+
+Accepts:
+  @instance — le @SystemInstance injecté par l'orchestrateur, jamais rafraîchi ici : le
+    @get_system_instance post-bucket est la prérogative de ./install.sdd et le delete
+    n'en a aucun. Lus : la double garde `instance.status` puis `instance.status.systems`
+    (clé PLURIELLE — garde de purge de l'install et source du parcours delete), et
+    `instance.metadata.namespace` seule propriété d'instance lue (namespace par défaut
+    des entrées sans namespace, au delete comme à la purge). Écrit, par l'install seul :
+    les deux méthodes enregistrées sur @SystemInstance, @set_status_systems (succès,
+    pluriel) et @set_status_system_failed (échec, singulier) — contrat d'enregistrement
+    /common/src/instancesystem.sdd. L'objet n'est jamais muté par affectation. Les
+    entrées de `status.systems` sont des maps aux champs `kind` et `name`, `namespace`
+    optionnel, et l'une ou l'autre graphie `api_version`/`apiVersion` ; la chaîne de
+    `kind` se compare exactement (sensible à la casse) aux 12 littéraux de @get_last.
+  @context — la carte construite par ./context.sdd. Seule clé lue directement :
+    `package_dir` — cible d'apply de l'install et cible de rendu du template, évaluée
+    après la fusion `_pre` ; ./delete_systems.rhai ne lit AUCUNE clé (posture du
+    squelette service) et ne fait que traverser. Les hooks `_pre`/`_post` peuvent
+    REMPLACER la carte entière ; tout ce qui suit lit la carte de remplacement. La carte
+    entière est transmise aux hooks et aux appels de la lib.
+
+Returns:
+  La valeur terminale `context` dans les trois lanes — carte éventuellement remplacée
+    par les hooks, que les orchestrateurs ne remontent que sous leur propre test
+    @type_of (règle de double garde, famille). Ce que le bucket a fait voyage par le
+    status (lane vivante seule) et par stdout (lane rendu), jamais par la valeur.
+  Voie d'échec : l'install relance après marqueur, delete et template propagent à cru —
+    abortion vers sortie 1 (install) ou sortie 3 (delete et rendu system), gelées dans
+    les orchestrateurs et leurs lanes Rust, citées.
+
+Raises:
+  install, posture familiale : la seule énonciation est le `throw;` nu du catch ; le
+    marqueur @set_status_system_failed reçoit la string verbatim sinon le texte
+    @json_encode ; une levée de l'écriture du marqueur (conversion Rhai de la liste,
+    patch, event @KubeError) masque l'erreur d'origine ; les levées des hooks
+    `_pre`/`_post`, hors try, sortent sans marqueur.
+  delete : zéro @throw, zéro relance — les seules failures observables sont des
+    propagations à cru (levée d'un hook, de @k8s_resource ou @api.exist hors des zones
+    gardées, timeout @wait_deleted après `300` s sans catch possible, @json_encode du
+    switch levant lui-même) et des @log_warn ; aucun écrit de secours n'existant sur la
+    lane delete (posture ./delete.sdd).
+  template : zéro @throw, zéro try — levée de hook livré ou de @dir::template traverse
+    et aborte le stream en cours ; les documents déjà imprimés restent sur stdout.
+
+Handles:
+  - Les slots de hooks ne shipent nulle part dans l'atelier : trois pour la lane vivante
+    (`install_systems_pre`/`install_systems_add`/`install_systems_post`), deux pour la
+    delete (`delete_systems_pre`/`delete_systems_post`), un pour le rendu
+    (`install_systems_pre`, résolu par @import_template). Absents, le skip
+    @import_run/@import_template renvoie `()`, non `map`, jamais fusionné ; un `_add`
+    renvoyant `()` n'ajoute aucune entrée.
+  - `status.systems` absent ou `()` (instance importée jamais installée) : l'install
+    saute la purge et applique normalement, le delete se réduits à sa lane de hooks
+    retournant `context` sans aucun appel cluster.
+  - delete : @api.exist faux passe l'entrée en silence (kind disparu de la discovery),
+    string contenant `NotFound` muette au get/delete, autre string warnée verbatim,
+    non-string warnée via @json_encode — même discipline que le squelette
+    ./../service/delete_stages.sdd.
+  - Le rendu ne résout ni `install_systems_add` ni `install_systems_post` alors que la
+    lane vivante appelle les deux : la forme `scalables` sans `_post`, importée du
+    service, devient le seul shape de bucket rendu du system ; le slot mort et le
+    nommage partagé des hooks sont portés par /agent/src/template/system.sdd et
+    ./template.sdd (Tasks, héritage sans re-tranche).
+  - Type du retour `_add` à l'install : `map` acceptée seulement si
+    @dir::validate_add_item répond vrai, `array` filtrée par le même garde, tout autre
+    type ignoré en silence (famille).
+
+Must:
+  L'install déroule l'ordre exact du squelette ./../service/install_stages.sdd en
+    renommage pur : fusion gardée de `install_systems_pre` — puis dans le try
+    @dir::install(instance, context, `${package_dir}/systems`, `true`, `false`) — switch
+    de fusion du retour `_add` — purge @dir::remove sous la double garde
+    `instance.status`/`instance.status.systems` — écriture @set_status_systems de la
+    liste appliquée AVANT @wait::all arity-une sur la même liste — catch posant le
+    marqueur singulier @set_status_system_failed puis `throw;` — fusion gardée de
+    `_post` — valeur terminale `context`. `let tmp` reçoit le retour du setter sans
+    jamais être relu ; zéro log à ce niveau ; la lane attend avec budgets du registre
+    ./../lib/wait.sdd, comme les buckets service, sans particularité system.
+  Le delete déroule le squelette service en DEUX passes sous l'obligation d'ordre du
+    commentaire source `// Do not delete these at first, and only in this order` :
+    passe 1 = entrées enregistrées dont `kind` n'est PAS dans @get_last, dans l'ordre
+    d'enregistrement ; puis boucle d'attente propre à la pile de la passe 1 ; puis
+    réinitialisation de la pile par affectation et passe 2 = un parcours par kind de
+    @get_last dans l'ordre listé, filtrant `o.kind==k`, le kind listé étant détruit
+    après toutes les entrées hors liste et les kinds de tête entre eux dans l'ordre de
+    la liste (`Namespace` en dernier) ; puis seconde boucle d'attente propre à la pile
+    de la passe 2. Par passe et par entrée, les mécaniques restent celles du squelette
+    (namespace par défaut, graphies `api_version`/`apiVersion`, garde @api.exist,
+    tolérance `NotFound`, try intérieur) avec le littéral
+    `Waiting for ${d.original_kind} ${d.metadata.name} to be deleted` et @wait_deleted
+    de `60*5` `300` s. Zéro écrit de status : aucun @set_status_*, aucun pendant du
+    marqueur singulier.
+  Le template déroule @import_template du hook `install_systems_pre` (le `template` du
+    module résolu est préféré, son `run` sert de fallback) et fusion seulement si
+    @type_of est `map` — puis @dir::template(instance, context,
+    `${package_dir}/systems`) — puis la valeur terminale `context` : zéro `_post`, zéro
+    cluster, zéro wait, zéro try, zéro @print et zéro log à ce niveau, l'émission
+    `---` plus @yaml_encode appartenant à la passe de la lib.
+  Garder la fidélité des noms enregistrés du system : relecture de la clé plurielle
+    `status.systems`, écriture de succès plurielle @set_status_systems, marqueur d'échec
+    singulier @set_status_system_failed — asymétrie pluriel/singulier transposée de
+    /common/src/instanceservice.sdd vers /common/src/instancesystem.sdd, côté install
+    seulement.
+  S'en remettre au seul gate `is_dir` des orchestrateurs pour l'existence du dossier
+    `systems` (zéro test de dossier dans ces trois fichiers), et ne rafraîchir ni
+    l'instance ni la discovery
+    (@get_system_instance, @update_k8s_crd_cache absents de ces trois fichiers).
+  Charger au strict minimum : `install_from_dir` sous alias `dir` dans install et
+    template, `wait` sous alias `wait` dans install seul ; ./delete_systems.rhai
+    n'importe rien, sa seule surface de chargement est la déclaration de @get_last.
+
+Must not:
+  Appeler @dir::remove depuis ./delete_systems.rhai : le remove de la lib est le DIFF
+    install-temps entre un rendu frais et le status ; ici la liste consignée est vidée
+    intégralement — les confondre double-supprimerait ou épargnerait des orphelins
+    (règle familiale, inchangée pour le system).
+  Écrire quoi que ce soit au status, succès ou échec, dans les lanes delete et template
+    : @set_status_systems et @set_status_system_failed vivent sur la lane vivante seule.
+
+Depends on:
+  ./../lib/install_from_dir.rhai (alias `dir`) — @dir::install, @dir::remove,
+    @dir::validate_add_item (install), @dir::template (rendu) ; contrat
+    ./../lib/install_from_dir.sdd (cite, ne re-spécifie pas).
+  ./../lib/wait.rhai (alias `wait`, install seul) — @wait::all arity-une, lane
+    post-apply ; ./../lib/wait.sdd. Le delete attend via la méthode d'objet
+    @wait_deleted, pas via cette lib (posture familiale).
+  /common/src/instancesystem.sdd et /common/src/instance_macros.sdd — enregistrement et
+    corps de @set_status_systems/@set_status_system_failed (conditions, events,
+    troncature de raison).
+  L'API d'engine vynil-core 0.7.7 et les globaux montés par @Script
+    (/common/src/rhaihandler.sdd) : @import_run, @import_template (lane rendu seule),
+    @k8s_resource et les méthodes d'objet @get_obj, @delete, @original_kind,
+    @wait_deleted, @type_of, @json_encode, @log_info, @log_warn ; la frontière
+    skip-absent contre relance-erreur est gelée dans les trois orchestrations.
+  ./context.sdd (+ ./../lib/build_context.rhai) — producteur de `package_dir` ; contrat
+    amont non re-décrit.
+
+References:
+  ./install.sdd, ./delete.sdd, ./template.sdd — les orchestrateurs qui posent les gates,
+    fusionnent et rafraîchissent : 3e bucket avec ligne de log et refresh aval pour
+    l'install, 1re
+    lane suivie de l'assign tofu sans garde pour la delete, 2e gate après
+    ./template_crds.rhai pour le rendu.
+  ./../service/install_stages.sdd, ./../service/delete_stages.sdd,
+    ./../service/template_stages.sdd — le trio service dont chaque lane est le jumeau :
+    corps communs et points ouverts familiaux (wait après écriture, orphelins
+    pré-status, `tmp` mort, `_add` non remonté au rendu, nommage partagé des hooks) y
+    restent portés — hérités tels quels, cette spec ne les re-liste ni ne les re-tranche,
+    sauf ce que le system aggrave (Tasks).
+  /agent/src/template/system.sdd — la lane Rust qui a gelé en amont le rôle de
+    l'émetteur `systems` à un seul hook `_pre` et porte le [?] du slot `install_systems_post`
+    mort (cité, non re-décidé).
+  Jumeaux couverts ailleurs — diff re-vérifié fichier à fichier pour les quatre fichiers
+    crds/tofu de ce dossier, non ownés ici : ./install_crds.rhai est byte-identique à
+    ./../service/install_crds.rhai et couvert par ./../service/install_crds.sdd ;
+    ./delete_crds.rhai byte-identique, couvert par ./../service/delete_crds.sdd ;
+    ./delete_tofu.rhai byte-identique, rôle gelé dans ./../service/tofu_stages.sdd ;
+    ./install_tofu.rhai porte un diff de deux hunks — ligne blanche après les imports et
+    le premier hook sans `let` (`ctx = import_run("install_tofu_pre", ...)` ligne 5) —
+    levée `Variable not found: ctx` prouvée sur le moteur verrouillé par
+    ./../service/tofu_stages.sdd qui en gèle le [?] (lane tofu du system semblant morte) ;
+    rien n'est re-décidé ici.
+  /agent/tests/rhai_lifecycle.rs — harnais mock service-only, zéro cas system (Tasks).
+
+Example:
+  (tableau des deltas complets — tout le reste est commun aux références service désignées)
+  `./install_systems.rhai` (38 lignes) : 7 lignes renommées de ./../service/install_befores.rhai — dossier et clé `systems`, hooks `install_systems_pre`/`_add`/`_post`, écriture @set_status_systems, marqueur @set_status_system_failed ; mêmes arguments `true`/`false`, même @wait::all après écriture, même `let tmp` jamais relu
+  `./delete_systems.rhai` (85 lignes) : le seul vrai delta structurel — commentaire `// Do not delete these at first, and only in this order`, @get_last (`Service`, `Deployment`, `ServiceAccount`, `ClusterRole`, `ClusterRoleBinding`, `Role`, `RoleBinding`, `Secret`, `ConfigMap`, `PersistentVolume`, `PersistentVolumeClaim`, `Namespace`) et parcours en deux passes, kinds hors liste d'abord, kinds de tête en dernier dans l'ordre listé, chaque passe terminant sur sa propre pile réinitialisée
+  `./template_systems.rhai` (9 lignes) : 2 lignes renommées de ./../service/template_scalables.rhai — hook `install_systems_pre` et dossier `systems` ; scalables étant la forme sans `_post`, l'unique bucket rendu du system est sans `_post` : `install_systems_post` n'est jamais résolu au rendu (slot mort [?] porté par /agent/src/template/system.sdd)
+  commun aux trois — fusions `map` gardées des retours de hooks, valeur terminale `context`, zéro gate propre, zéro refresh, zéro écrit de status hors les deux setters pluriel/singulier de l'install
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs ou un harnais frère : le
+      system n'est JAMAIS testé — le harnais ne ship que @make_service_script,
+      @build_service_instance_mock et quatre tests service_*, ses répertoires résolveurs
+      ne présentent pas `scripts/system` (ces modules y sont même irresolubles) et
+      /agent/tests/fixtures/package ne contient aucun dossier de bucket ; il faudra une
+      entrée `scripts/system`, une fixture `systems/` peuplée sur un status peuplé, et de
+      vraie observation des poses — les set_status_* no-op de
+      /common/src/k8smock.sdd ne suffisent pas à épingler l'ordre des passes ni les marqueurs.
+  [ ] Re-vérifier au diff, à chaque révision, les trois byte-identities et le diff à deux
+      hunks de la note « Jumeaux couverts ailleurs », et rejoindre l'harmonisation
+      d'orthographe du moteur (« vynil-core » écrit ici comme en famille, /Cargo.toml
+      épingle `vynil-core`) portée par ./../service/delete_stages.sdd.
+  [?] Asymétrie pluriel/singulier côté delete : la lane vivante écrit la clé plurielle
+      `status.systems` via @set_status_systems et le marqueur singulier
+      @set_status_system_failed, ./delete_systems.rhai ne lit que la clé plurielle et
+      n'écrit AUCUN pendant `system_failed` — ./delete.sdd gèle le zéro marqueur.
+      Confirmer que la règle du marqueur singulier ne vaut que pour la lane vivante du
+      system (question sœur de celle que ./../service/delete_stages.sdd tient pour les
+      buckets service).
+  [?] La liste de @get_last est codée en dur et comparée exactement à la chaîne `kind`
+      enregistrée : tout kind hors liste, y compris une entrée dont la propriété `kind`
+      absente se lit `()`, part en passe 1. Le commentaire source pose une obligation
+      d'ordre sans attester la liste exhaustive. Confirmer que 12 kinds couvrent l'intention
+      de teardown système, ou extérioriser/étendre la liste.
+  [?] Les orphelins muets du squelette delete, ouverts par ./../service/delete_stages.sdd,
+      sont aggravés par la double passe du system : levée de construction @k8s_resource,
+      @exist faux ou erreur warnée sur un kind de tête en passe 2 laisse en place, après
+      la destruction du gros œuvre et run revenu propre, les resources que l'ordre voulait
+      protéger en dernier (`Namespace`, `PersistentVolume`, RBAC) — hériter de
+      la tâche service et l'étendre, sans re-trancher ici.
+
+Done when:
+  Chaque Scenario porte un test mappé ou un [?] tranché, le re-diff contre les trois
+    références service ne laisse subsister que les deltas de l'`Example`, les jumeaux de
+    la note restent identiques ou leur divergence actée, et `specdd lint` est vert sur
+    ce fichier.
+
+Scenario: bucket appliqué puis attendu comme au service
+  Given un paquet dont le dossier `systems` de `package_dir` est peuplé et un mock k8s vivant
+  When @run est appelé par l'import du gate `systems` de ./install.sdd
+  Then @dir::install applique le dossier, les entrées valides du hook `_add` s'ajoutent à
+    la liste, la purge ne court que sous la double garde `status`/`status.systems`,
+    @set_status_systems pose la liste AVANT le @wait::all arity-une, et la valeur
+    terminale est `context`
+  And un `_pre` renvoyant une carte avec `package_dir` réécrit change la cible d'apply
+  Aucun test mappé (Tasks)
+
+Scenario: échec rattrapé marque au singulier puis relance
+  Given une levée de @dir::install, d'un hook `_add` livré, de la purge ou du wait dans le try
+  When le catch la reçoit
+  Then @set_status_system_failed reçoit la string verbatim ou le texte @json_encode,
+    l'erreur est relancée à cru, `install_systems_post` ne tourne pas et ./install.sdd
+    avorte sans marqueur d'aucune autre lane
+  Aucun test mappé (Tasks)
+
+Scenario: la double passe garde les kinds de tête pour la fin
+  Given `status.systems` enregistrant dans le désordre `ConfigMap/cm`, `Service/svc` et `Namespace/ns`
+  When @run de ./delete_systems.rhai vide l'inventaire
+  Then la passe 1 ne supprime que `cm`, et sa boucle d'attente n'attend que `cm` à `300` s
+  And la passe 2 suit l'ordre de @get_last : la suppression de `svc` est émise avant
+    celle de `ns`, toutes deux une fois la passe 1 entièrement terminée ; la seconde boucle
+    d'attente couvre la pile de la passe 2 seule, dans le même ordre
+  And zéro écrit de status, zéro marqueur, et `context` revient
+  Aucun test mappé (Tasks)
+
+Scenario: un status sans la clé systems tourne au vent
+  Given `instance.status` à `()` ou sans clé `systems` (instance importée jamais installée)
+  When @run du delete s'exécute derrière un gate vrai
+  Then aucune construction de handle, aucun get, aucun delete, aucune attente : seuls les
+    deux hooks tournent et `context` revient sans lever, `()` de skip non fusionné
+  Aucun test mappé (Tasks)
+
+Scenario: le rendu ne sonne que le hook pre
+  Given un paquet livrant `install_systems_pre` et `install_systems_post` sous ses scripts
+  When @run de ./template_systems.rhai s'exécute derrière le gate `systems` de ./template.sdd
+  Then `_pre` est résolu par @import_template, sa carte fusionnée, @dir::template rend le
+    dossier, et `_post` n'est jamais résolu — sa carte n'atteint jamais l'orchestrateur
+  Aucun test mappé (Tasks) ; le slot mort est tranché côté /agent/src/template/system.sdd

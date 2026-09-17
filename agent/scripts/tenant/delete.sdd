@@ -58,7 +58,7 @@ Raises:
     the Rust exit(`3`) lane (/agent/src/tenant/mod.sdd text `Deleting a package failed with:`).
   - Stage/hook module throw: @import_run swallows only the absent-module and absent-`run`
     markers (`log_debug` with text `No ${name} module, skipping.` /
-    `No ${name}::run function, skipping.`, wynil-core shim semantics); any other error
+    `No ${name}::run function, skipping.`, vynil-core shim semantics); any other error
     re-throws and aborts. Unlike the install lanes (their `set_status_*_failed` markers), the
     shipped tenant delete stages carry no `set_status_` call at all — none in any `delete_*.rhai`
     of this directory — so a stage raise leaves no delete-side failure marker on the CR; the
@@ -165,7 +165,7 @@ Depends on:
     instance namespace. Six are byte-identical copies of the service twins;
     ./delete_vitals.rhai adds only a commented-out final-backup block. Their internal contracts
     are theirs, quoted here only as lane roles.
-  wynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
+  vynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
     `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises),
     @is_dir and @type_of.
   /common/src/rhaihandler.sdd — the @Script constructor that mounts the above for the agent

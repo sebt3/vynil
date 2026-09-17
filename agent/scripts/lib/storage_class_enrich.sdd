@@ -101,7 +101,7 @@ Must:
 
 Depends on:
   rhai std library only (@find/@filter/@keys/@contains/@push, Array/Map equality, unit-vs-value
-    compare) — zero wynil-core registrations are called here (no @k8s_resource, no @throw, no
+    compare) — zero vynil-core registrations are called here (no @k8s_resource, no @throw, no
     JSON/HTTP helpers); cluster data arrives pre-shaped by the caller:
     ./build_context.rhai maps `k8s_resource("StorageClass").list().items` to
     `#{name, provisioner, is_default}` (annotation

@@ -33,7 +33,7 @@ Returns:
 Raises:
   Zero @throw sites. Failure lanes: a hook module whose FILE exists but whose
     `maintenance_start_pre`/`_post` (resp. stop) `run` raises propagates out of
-    @import_run (wynil-core skips only absent-module/absent-run per
+    @import_run (vynil-core skips only absent-module/absent-run per
     ./../service/context.sdd shim freeze) and the surrounding backup/restore try/catch
     turns it into a FAILED throw + exit 4/5. An absent hook file skips silently.
   Engine property errors are impossible here: no property access at all.
@@ -53,7 +53,7 @@ Must:
     this contract verbatim.
 
 Depends on:
-  ./context.sdd — wynil-core @import_run skip/raise shim.
+  ./context.sdd — vynil-core @import_run skip/raise shim.
   ./backup.sdd, ./restore.sdd — the only callers (window brackets both lanes; restore
     brackets the whole engine ladder, and NEITHER scales anything while these are TODO).
 

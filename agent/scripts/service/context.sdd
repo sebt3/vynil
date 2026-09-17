@@ -69,7 +69,7 @@ Raises:
       reads per ./../lib/build_context.sdd Raises).
     - Hook errors: @import_run/@import_template swallow ONLY absent-module /
       absent-function (skip, return `()`, @log_debug `No ${name} module, skipping.` /
-      `No ${name}::run function, skipping.` — shim semantics owned by wynil-core
+      `No ${name}::run function, skipping.` — shim semantics owned by vynil-core
       @add_common); anything a hook throws for real propagates through `throw ;` and
       aborts the lane run before the orchestrator module is even imported.
     - A hook that returns a map lacking a later-read key is NOT an error here — the
@@ -105,7 +105,7 @@ Must:
   Hand the hook the running context as third argument: @import_run("context_pre",
     @instance, @context) on the live lane, @import_template("context_pre", @instance,
     @context) on the
-    offline lane — always the three-arg shims, so wynil-core resolves the 3-arg overloads.
+    offline lane — always the three-arg shims, so vynil-core resolves the 3-arg overloads.
   Replace the context on slot returns through the `type_of(ctx) == "map"` guard for
     pre/service/post/after; write `extra` unguarded from the slot result (any value,
     including `()`, becomes the stored value).
@@ -135,7 +135,7 @@ Must not:
 Depends on:
   ./../lib/build_context.rhai — the whole delegation (frozen in ./../lib/build_context.sdd;
     only the seam — call once, per lane, first — is this file's contract).
-  wynil-core 0.7.7 script surface (@Script `add_common` behind /common/src/rhaihandler.sdd):
+  vynil-core 0.7.7 script surface (@Script `add_common` behind /common/src/rhaihandler.sdd):
     three-arg @import_run and @import_template with the four-overload family (2/3/4-arg;
     this file always binds the 3-arg), @type_of, plain module `import` name resolution.
   ./context_service.rhai — the one shipped hook slot; slot ownership only, its internals

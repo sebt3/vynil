@@ -171,7 +171,7 @@ Depends on:
   /agent/templates/init_job.yaml.hbs (+ nested /agent/templates/restore.yaml.hbs pod template)
     resolved through `context.template_dir` — the rendered shape itself is template-owned, not
     frozen here.
-  wynil-core 0.7.7 engine API — @import_run shim, @new_hbs, @register_partial_dir, @render_from
+  vynil-core 0.7.7 engine API — @import_run shim, @new_hbs, @register_partial_dir, @render_from
     (partial-name = filename minus `.hbs`, silent same-name overwrite; /common/src/handlebarshandler.sdd),
     @is_dir, @yaml_decode_multi, @k8s_resource(kind, ns) + @exist, @list, @log_warn, @json_encode,
     @type_of.

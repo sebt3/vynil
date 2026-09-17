@@ -1,0 +1,120 @@
+Spec: ServiceRestoreRunScript
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Le restic-restore lui-même : snapshot `context.snapshot` restauré sous `/` du Pod de
+    restore, étape appelée par @import_run("restore_run", context) de ./restore.sdd entre
+    @import_run("maintenance_start") et la gate `restore_prepare.sh`. Un seul @throw, fatal
+    dès que restic ne rend pas `0`, gelé avec son misnomer : l'étage restaure mais jette
+    `restic backup FAILED` (décision portée par les Tasks de ./restore.sdd, pas tranchée
+    ici). Identique à l'octet près à ./../tenant/restore_run.rhai (diff vérifié) : jumeau
+    sans spec, lockstep obligatoire.
+
+Owns:
+  ./restore_run.rhai
+
+Exposes:
+  @run(context) — seul @fn, appelé par @import_run("restore_run", context) ; remplaçable
+    sans toucher l'appelant par un module éponyme sous `${package_dir}/scripts` (première
+    priorité du résolveur, gelée dans ./restore.sdd). Aucun @import au chargement : les clés
+    arrivent par la carte, la gate `.sh` que subissent les autres jambes n'existe pas ici.
+
+Accepts:
+  @context — la carte de @ctx::from_args (producteur ./../lib/backup_context.sdd, cité sans
+    re-spécification). Trois clés lues :
+      `context.snapshot` — copie verbatim de l'env `RESTIC_SNAPSHOT`, interpolée telle quelle
+        après `restic restore` ;
+      `context.s3_url` — destination, `export`ée inline en `RESTIC_REPOSITORY` avant la commande ;
+      `context.restic_args` — flags `""` ou `" --insecure-tls"`, interpolés en dernière position.
+  La cible `/` et l'exclusion `security.selinux` sont codées en dur ; aucun `cd` : le `sh -c`
+    tourne dans le cwd du processus agent et la commande n'emploie que des chemins absolus.
+
+Returns:
+  Unité — aucun `return` ; ./restore.sdd jette la valeur d'@import_run et ne lit qu'un canal
+    0-ou-throw : snapshot restauré = hook post atteint, rien d'autre ne remonte d'ici.
+
+Raises:
+  Le @throw du fichier, texte verbatim `restic backup FAILED returning ${rc}` (rc interpolé),
+    gardé par `if rc != 0` et rien d'autre : @shell_run ne jette jamais sur le rc — c'est la
+    même recette que ./backup_run.sdd, @shell_output (celui-là jetterait) n'est pas utilisé.
+    Le throw traverse @import_run (qui n'avale que ses deux skip-markers,
+    /common/src/rhaihandler.sdd) et tue la lane : exit-5 côté Rust
+    (/agent/src/service/restore.sdd ; backup rend exit-4, restore exit-5).
+  Levées engine non gardées : @shell_run ne lève que si le `sh -c` ne peut être lancé ;
+    `context` non-map lève au premier `context.`.
+  Absence de clé sans throw locale : même posture que ./backup_run.sdd (`()` interpolé),
+    mais @ctx::from_args pose toujours les trois clés.
+
+Handles:
+  Exactement deux destins : rc `0` → hook post, unité ; rc non nul → throw, hook post jamais
+    atteint. Aucun code toléré, aucun retry, aucune lecture de la sortie.
+  Slots @import_run("restore_run_pre", context) / @import_run("restore_run_post", context) —
+    non livrés dans ./, ./../tenant, ./../lib → skip-markers debug ; un hook qui lève remonte.
+  Pas de gate `.sh` d'étage : ./restore.sdd ne gate en shell que `restore_prepare.sh` et les
+    jambes secret/postgresql/mysql ; restore_run ne se remplace que par l'ombre de module
+    éponyme ou par le `restore.sh` global.
+  Snapshot vide : rien n'est vérifié ici, le jeton vide part sur la ligne de commande et le
+    rc de restic décide (posture gelée par ./restore.sdd).
+
+Must:
+  Dérouler exactement : hook pre → @log_info(`Starting restic restore for ${context.snapshot}`)
+    → commande → garde `rc != 0` → hook post ; aucun autre log, aucune autre branche.
+  Invoquer verbatim :
+    `export RESTIC_REPOSITORY="${context.s3_url}";restic restore ${context.snapshot} --exclude-xattr security.selinux --target / ${context.restic_args}`
+    — snapshot juste après `restore`, exclusion avant `--target`, cible `/` littérale,
+    `restic_args` en fin de ligne.
+  Traiter tout rc non nul comme fatal sur ce site (comparaison exclusive à `0`).
+  Laisser stdout/stderr de restic hérités vers le log du Job (@shell_run) : pas de capture,
+    pas de listing du dépôt, aucune vérification que l'arbre restauré est complet.
+
+Depends on:
+  ./../lib/backup_context.sdd — producteur des trois clés lues.
+  ./restore.sdd — appelant, position dans l'ordre gelé, sémantique exit-5 du throw.
+  API moteur vynil-core 0.7.7 — @import_run (version 2 args), @shell_run, @log_info
+    (registrars /common/src/rhaihandler.sdd ; sémantique rc dans le `src/shell.rs` du crate).
+
+References:
+  ./../tenant/restore_run.rhai — jumeau byte-identique (diff vérifié), sans spec à ce jour.
+  ./backup_run.sdd — jumeau structurel et calibrage de cette spec (miroir backup).
+  /agent/tests/rhai_backup_redis.rs — harnais le plus proche, zéro coverage (cf. Tasks).
+
+Tasks:
+  [ ] Tester les Scenario sur un mock engine résolvant scripts/service :
+      /agent/tests/rhai_backup_redis.rs est le mock TENANT (scripts/lib + scripts/tenant) et
+      ne nomme que `backup_prepare_redis`/`restore_redis` — coverage nulle pour cet étage et
+      son jumeau octet-pour-octet.
+  [?] `--target /` écrit sur le rootfs du Pod : les chemins du snapshot qui tombent sous un
+      mount (`/backup` emptyDir, `/package/scripts`, `/secrets`) atterrissent sur le mount —
+      confirmer que c'est l'effet voulu plutôt qu'un filtre d'arbre à poser.
+  [?] Restaure contre workloads vivants : la fenêtre maintenance ne bascule rien
+      (TO-DO de scale, ./maintenance_windows.sdd) et ./restore.sdd porte déjà le [?] du
+      scale-down — trancher une fois pour toute la ladder, ce module inclus.
+  [?] Un restic tué par signal rend rc `0` à @shell_run (`code().unwrap_or(0)`,
+      `src/shell.rs`) : un restore tranché par OOM compte comme réussi. Même decision ouverte
+      que ./backup_run.sdd.
+
+Done when:
+  Les Scenario tiennent sur un mock résolvant scripts/service, les trois [?] sont tranchés,
+    et les deux copies restent verrouillées en lockstep.
+
+Scenario: restore nominal
+  Given un contexte avec `context.snapshot` = `"abcd1234"` et un @shell_run répondant `0`
+  When @run(context) s'exécute
+  Then la commande verbatim de `Must` tourne avec `abcd1234` après `restore`,
+    `restore_run_post` est import_run après, l'unité est rendue, et
+    `Starting restic restore for abcd1234` reste le seul log
+
+Scenario: rc non nul, throw misnommé
+  Given @shell_run rendant `2`
+  When @run s'exécute
+  Then la chaîne levée est exactement `restic backup FAILED returning 2` — misnomer backup
+    sur un restore, texte gelé — et `restore_run_post` n'est jamais appelé
+  And @import_run ne filtre pas ce throw : la lane Rust sort en exit-5 derrière le préfixe
+    `Rhai script error: `
+
+Scenario: snapshot vide
+  Given l'env `RESTIC_SNAPSHOT` non posée (@ctx::from_args copie `""`)
+  When @run s'exécute
+  Then la commande exécutée porte le jeton vide entre `restore` et `--exclude-xattr`, et
+    c'est le rc seul de restic qui décide de l'unité ou du throw — pas de fail-fast ici

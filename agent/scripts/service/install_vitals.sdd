@@ -1,0 +1,154 @@
+Spec: InstallationVitalsService
+
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
+
+Purpose:
+  Spec propre du stage `vitals` de l'install service, ./install_vitals.rhai : même
+    squelette que les quatre buckets de ./install_stages.sdd, à un seul delta de logique —
+    la purge. Le fichier (43 lignes) ne supprime jamais les vitals périmés : il refuse de
+    les supprimer, @log_warn le refus et les reporte dans l'inventaire. Sur les 23 lignes
+    qu'emporte le diff intra-famille (14 ici contre 9 chez le jumeau renommé), seul le bloc
+    de purge (lignes 21 à 27 du fichier) n'est pas un renommage. Le stage applique donc du
+    stockage de données dont l'install ne détruit rien : la suppression vitals est l'apanage
+    de ./delete_vitals.rhai à l'uninstall.
+
+Owns:
+  ./install_vitals.rhai
+
+Exposes:
+  @run(instance, context) — seul @fn du module, atteint par ./install.sdd via
+    `import_run("install_vitals", instance, context)` derrière le gate
+    `is_dir(`${context.package_dir}/vitals`)`. Position dans l'ordre (après `befores`, avant
+    tofu) et refresh post-bucket : gelés là-bas, pas ici.
+
+Accepts:
+  @instance — delta du contrat familial : les gardes relisent `instance.status` et
+    `instance.status.vitals`, inventaire de maps `kind`/`namespace`/`name` produites par
+    @dir::install ; la fidélité des périmés se juge sur les trois champs lus en direct,
+    sans repli de namespace — un périmé sans clé `namespace` (posé cluster-scope) ne peut
+    matcher qu'un appliqué cluster-scope pareil, delta avec le 3e argument namespace par
+    défaut du @dir::remove familial. L'objet n'est pas muté par affectation.
+  @context — comme la famille : seule lecture directe l'interpolation de `package_dir` pour
+    le dossier `vitals`, évaluée après la fusion `_pre` ; la carte entière repart telle
+    quelle dans @dir::install et les hooks.
+
+Returns:
+  Même valeur terminale `context` que la famille (./install_stages.sdd), fusion `_add`
+    jamais remontée. Le produit réel est au status — et `status.vitals` posé ici est le
+    déclencheur en aval des gardes `init_from` et backup de ./install.sdd : consommé
+    là-bas, produit ici.
+
+Raises:
+  Zéro @throw à payload, `throw;` nu du catch seulement ; levées des hooks `_pre`/`_post`
+    hors try sans marqueur. Delta famille : le marqueur d'échec est @set_status_vital_failed
+    (singulier de vitals), string verbatim sinon @json_encode, relance à cru ensuite.
+    Aucun @delete n'étant appelé, la voie NotFound/suppression des buckets n'existe pas
+    ici ; les levées possibles restent celles de @dir::install (kind inconnu, parsing), du
+    hook `_add`, du filtre @dir::validate_add_item sur le retour `_add`, de la méthode de
+    status et de @wait::all (Elapsed, watch morte), toutes logées dans la même lane marqueur.
+
+Handles:
+  - Trois hooks `install_vitals_pre`/`install_vitals_add`/`install_vitals_post`, switch
+    `map`/`array` du retour `_add` filtré par @dir::validate_add_item — posture gelée dans
+    ./install_stages.sdd ; hooks absents n'ajoutent rien.
+  - `status` absent ou clé `vitals` à `()` : aucun warn, aucun carry-forward.
+  - Entrée périmée — absente du triplet `kind`+`namespace`+`name` des appliquées du run :
+    warn verbatim puis report, jamais de suppression. Un vitals sorti du paquet est ainsi
+    re-warné et re-reporté à chaque course tant qu'il n'y revient pas (Tasks).
+
+Must:
+  Remplacer exactement, dans le try et sous la double garde « `instance.status` et
+    `instance.status.vitals` tous deux différents de `()` », le @dir::remove familial par le
+    bloc suivant : pour chaque `old` de `instance.status.vitals` que ne retient pas le
+    test `applied_objs.some(|n| n.kind == old.kind && n.namespace == old.namespace && n.name == old.name)` :
+    @log_warn du texte `Not deleting vitals ${old.kind} ${old.name} !` (verbatim, espace
+    avant le `!` inclus) puis `applied_objs.push(old)`.
+  Ne jamais mentionner @dir::remove ailleurs : le report des périmés est le seul effet de
+    purge — les entrées reportées ressortent dans la liste écrite par @set_status_vitals et
+    dans celle passée à @wait::all (les vieux objets reportés sont donc re-waités à chaque
+    course, lanes d'arity une de ./../lib/wait.sdd).
+  Garder le reste du squelette familial tel quel, cité sans re-spécification :
+    @dir::install(instance, context, du `${context.package_dir}/vitals`,
+    allow_cluster `true`, force_ns `false`), switch de fusion `_add`, @set_status_vitals
+    AVANT @wait::all (timeout marque le bucket alors que liste et reports sont écrits —
+    même posture que les buckets), catch marqueur singulier puis relance à cru, fusion
+    `_post`, valeur terminale `context`, `let tmp` jamais relu, imports `dir` et `wait`
+    sans effet de bord au chargement.
+
+Must not:
+  Supprimer un objet vitals du cluster pendant l'install, sous quelque forme que ce soit :
+    le report des entrées périmées n'est pas une suppression et le fichier ne connaît aucun
+    chemin de delete — l'anti-design assumé des buckets, qui purgent par @dir::remove. À
+    l'uninstall seul (./delete_vitals.rhai) de détruire les datastore.
+
+Depends on:
+  ./../lib/install_from_dir.rhai (import sous `dir`) — @dir::install et
+    @dir::validate_add_item sont seuls appelés, @dir::remove est l'appel exclu : contrat
+    gelé ./../lib/install_from_dir.sdd (cite, ne re-spécifie pas).
+  ./../lib/wait.rhai (import sous `wait`) — @wait::all arity-une après le status ; contrat
+    ./../lib/wait.sdd.
+  /common/src/instanceservice.sdd et /common/src/instance_macros.sdd — @set_status_vitals
+    (pluriel) et @set_status_vital_failed (singulier), patch de conditions et events.
+  L'API d'engine vynil-core 0.7.7 montée par @Script (/common/src/rhaihandler.sdd) :
+    @import_run (frontière skip-absent gelée ./install.sdd), @type_of, @json_encode,
+    @log_warn.
+  ./context.rhai (+ ./../lib/build_context.rhai) — producteur de `package_dir` ; amont
+    non re-décrit.
+
+References:
+  ./install_stages.sdd — contrat familial complet (hooks, statuts pluriels/marqueurs
+    singuliers, fusions `map`, wait après status, valeur terminale) : cette spec n'en porte
+    que le delta de purge.
+  ./install.sdd — orchestrateur : gate, ordre, refresh, et consommation downstream de
+    `status.vitals` par les gardes `init_from` et backup.
+  ./../tenant/install_vitals.rhai — twin tenant à écart unique vérifié :
+    `dir::install(..., true, false)` devient `dir::install_allowed(..., context.tenant.namespaces)` ;
+    le carry-forward des périmés y est identique, spec pending.
+  /agent/tests/rhai_lifecycle.rs — harnais mock des lanes service ; aucun test n'importe
+    ce module (Tasks).
+
+Tasks:
+  [ ] Mapper les Scenarios sur /agent/tests/rhai_lifecycle.rs (service-only) : la fixture
+      ./../../tests/fixtures/package ne ship que `package.yaml`, le gate `vitals` de
+      ./install.sdd y est faux et ce module n'est jamais importé par les tests actuels ;
+      ajouter une fixture avec dossier `vitals/` et un status pré-posé, les mocks
+      set_status_* no-op de /common/src/k8smock.sdd seuls ne montrant ni le warn ni les
+      poses.
+  [?] Le refus de supprimer est inconditionnel : un vitals sorti ou renommé dans le paquet
+      est warné et re-reporté au status à chaque course suivante, indéfiniment, sans aucune
+      voie de convergence hors retour du manifeste ou ./delete_vitals.rhai à l'uninstall.
+      Confirmer l'intention (protéger les datastore) et décider si un avertissement cumulé
+      ou un marquage du status s'impose.
+  [?] Les entrées reportées passent au @wait::all de chaque course : attendre des objets que
+      ce run n'a pas touchés consomme un budget d'attente par install. Décider wait des
+      reportés ou liste de wait restreinte aux appliquées, le status gardant tout.
+
+Done when:
+  Le bloc de purge ci-dessus recolle encore aux lignes 21 à 27 du fichier, chaque Scenario a
+    son test mappé ou son [?] tranché, et l'écart d'une ligne avec le twin tenant tient
+    lorsqu'on le cite.
+
+Scenario: vieux vital périmé reporté, jamais supprimé
+  Given `status.vitals` tient `#{kind: "Cluster", namespace: "team-a", name: "old-db"}`
+    que le paquet n'applique plus, aucun autre périmé
+  When @run(instance, context) atteint le bloc de purge sous sa double garde
+  Then le warn texte `Not deleting vitals Cluster old-db !` part, l'entrée est repoussée
+    dans la liste, @set_status_vitals la réécrit telle quelle et @wait::all la re-attend
+  And aucun appel @dir::remove ni @delete n'a lieu dans tout le run
+  Aucun test mappé (Tasks)
+
+Scenario: premier install sans purge ni warn
+  Given `instance.status` vaut `()` et @dir::install appliqué une entrée
+  When @run s'exécute
+  Then la garde bloque warn et carry-forward, @set_status_vitals reçoit la seule entrée
+    appliquée et @wait::all attend la même liste unique
+  Aucun test mappé (Tasks)
+
+Scenario: timeout du wait après l'écriture ok
+  Given l'apply, les reports et @set_status_vitals terminés, liste avec reports écrite
+  When @wait::all lève un Elapsed
+  Then le catch pose @set_status_vital_failed en plus : le status garde liste et reports
+    sans la condition ok et gagne les conditions ko, l'erreur relancée à cru aborte
+    ./install.sdd en exit 1
+  Aucun test mappé : les waits mock sont des no-op toujours verts
+    (/common/src/k8smock.sdd)

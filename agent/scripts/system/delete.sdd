@@ -124,7 +124,7 @@ Depends on:
     ./../lib/tofu.rhai init+destroy lane; ./delete_crds.rhai — byte-identical to
     ./../service/delete_crds.rhai: delete recorded CRDs, warn-skip kinds that still list
     children. Roles quoted only; their contracts are theirs.
-  wynil-core 0.7.7 engine API — the 3-arg @import_run global shim injected by @Script @add_common
+  vynil-core 0.7.7 engine API — the 3-arg @import_run global shim injected by @Script @add_common
     (the skip-vs-rethrow boundary quoted in Raises), @is_dir, @type_of; mounted by the
     constructor of /common/src/rhaihandler.sdd.
   ./context.rhai (./context.sdd) + ./../lib/build_context.rhai — producer of every `context` key;

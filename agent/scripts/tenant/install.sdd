@@ -155,7 +155,7 @@ Depends on:
     ./delete_backup.rhai — each writes its own `set_status_*` / `set_status_*_failed` marker and
     re-throws, and each returns the (maybe hook-merged) context. Tenant stage markers include the
     tenant-carried `InitFrom` and `ScheduleBackup` stages.
-  wynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
+  vynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
     `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises), @is_dir,
     @log_debug/@log_warn, @json_encode and @k8s_resource(...).@get.
   /common/src/instancetenant.sdd — the registered bridges used as methods/globals:

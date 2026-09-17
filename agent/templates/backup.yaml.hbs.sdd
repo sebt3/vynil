@@ -1,0 +1,200 @@
+Spec: GabaritPodBackup
+
+Platform: Handlebars (moteur vynil-core 0.7.7 / hbs du crate `agent` via @new_hbs, partials via @register_partial_dir)
+
+Purpose:
+  Rendre le pod template des jobs de backup : partial `backup.yaml` injecté après la ligne
+    `template:` des docs hôtes — `CronJob` périodique ./cronbackup.yaml.hbs ou `Job` manuel
+    ./manualbackup.yaml.hbs — dans les lanes tenant et service. Décrit le conteneur unique
+    `backup` qui court `agent <type du package> backup` comme root au strict minimum de
+    capacités (restic + dumps), avec co-localisation optionnelle sur le nœud du composant
+    choisi par le package.
+
+Owns:
+  ./backup.yaml.hbs
+
+Exposes:
+  Le partial enregistré sous le nom `backup.yaml` (nom de fichier moins le suffixe `.hbs` selon
+    @register_partial_dir) : seule surface d'appel `{{> backup.yaml}}` collé inline après
+    `template:` dans ./cronbackup.yaml.hbs (ligne 56) et ./manualbackup.yaml.hbs (ligne 46).
+    Le partial ne produit jamais un document k8s complet : uniquement les clés `metadata` et
+    `spec` du pod template.
+
+Accepts:
+  La carte de rendu des deux lanes `schedule_backup` — celle mutée par @bctx::run(@instance,
+    @context, `false`) et passée comme data @render_from — surface exacte des clés lues :
+  `agent_image` — image ligne 10 ; mintée en tête de lane par les scripts de contexte
+    `./../scripts/tenant/context.rhai` et `./../scripts/service/context.rhai`.
+  `instance.package.type` — premier élément de `args` (ligne 13) ; mot du type package
+    (`tenant` ou `service` — la lane system n'a pas de backup), issu de @VynilPackageMeta.type
+    via `./../scripts/lib/build_context.rhai` ; sous-commande consommée par le binaire via
+    `./../src/tenant/backup.rs` / `./../src/service/backup.rs`.
+  `envs`, `envs_from`, `mounts`, `volumes` — les quatre collections @json_to_str des lignes
+    15-17 et 38 ; posées clé par clé par @run de ./../scripts/lib/backup_context.sdd (emptyDir
+    + Script ConfigMap conditionnel, PVC et Secret des vitals).
+  `service_account` — `serviceAccountName` ligne 39 ; même nom que le `ServiceAccount` créé
+    par le doc hôte (`<appslug>-backup`).
+  `backup_affinity` — gate du bloc affinity (ligne 46) ; value @Option<@String> du package,
+    @VynilPackageMeta.backup_affinity.
+  `instance.selector` — carte de base des labels, relue deux fois par @selector_from_ctx(`this`)
+    (lignes 6 et 51) ; vue construite par `./../scripts/lib/build_context.rhai`, pas le CR.
+
+Returns:
+  Un nœud `metadata` (labels + annotation figée) + `spec` (pod au conteneur `backup`)
+    restitué en texte JSON pretty d'un seul document commençant par `{` : block @to_json
+    ligne 1 parse le YAML interne et resérialise en JSON ; le consommateur retrouve le nœud
+    après re-incorporation hôte via @yaml_decode_multi, car JSON est un sous-ensemble de YAML.
+
+Raises:
+  Le moteur tourne en mode strict (@set_strict_mode(`true`) monté par @new_hbs via les helpers
+    vendus vynil-core) : l'absence TOTALE d'une clé consommée (jamais mintée) avorte tout le
+    rendu du doc hôte — cas de `envs` et consœurs dans le rendu commenté de delete_vitals,
+    gelé en Tasks. Une clé présente à `()` n'est PAS un échec (voir Handles).
+  @to_json avorte le doc hôte si le rendu interne n'est pas un YAML strictement parseable :
+    l'erreur de parse se propage, aucun nœud n'est produit.
+  @selector_from_ctx dont le paramètre hash `comp` est typé string : un `backup_affinity` truthy
+    non string ferait échouer le rendu ligne 51 — inatteignable via les lanes (@Option<@String>),
+    atteignable par mutation de la carte de contexte.
+
+Handles:
+  `backup_affinity` = `()`/null ou chaîne vide ⇒ falsy @if (lignes 46-53) ⇒ AUCUNE clé
+    `affinity` dans le pod spec ; les deux lanes mintent toujours la clé (@bctx::run de
+    ./../scripts/lib/backup_context.sdd), donc en pratique `#if` ne voit jamais une clé
+    absente sous strict mode — la voie absente est propre, pas dégradée.
+  Clé présente à `()`/null : substitution vide — `image:` vide pour un `agent_image` null,
+    `args` réduit à un seul élément `- backup` pour un `instance.package.type` null, et une
+    collection @json_to_str null ne rend rien après son `:` (même posture que le Scenario
+    sans appslug de ./init_job.yaml.hbs.sdd).
+  Absence de `instance.selector` : tolérée par @selector_from_ctx qui retombe sur `{}` ;
+    `metadata.labels` se réduit à `app.kubernetes.io/component: backup` seul — build_context
+    le fournit toujours, fall-back réservé aux cartes mutées.
+  Collections vides rendues en flux en ligne (`[]`, `{}`) : `volumes:`, `env:`, `envFrom:`,
+    `volumeMounts:`, `labels:` restent mono-ligne, jamais de bloc multiligne.
+
+Must:
+  Garder le corps comme UN seul document YAML, séparateur `---` initial en ligne 2, parseable
+    par le block @to_json `format="yaml"` : ce `---` marque la limite du document unique, ce
+    n'est PAS un marqueur multi-documents ; le résultat est injecté comme nœud par l'hôte
+    après `template:`.
+  Garder `metadata.labels` = @selector_from_ctx(`this`, `comp="backup"`) sérialisé @json_to_str
+    — soit `instance.selector` fusionné avec `app.kubernetes.io/component` à la LITTÉRALE
+    `backup`, distincte du slot component de l'affinity qui prend la VALUE du package (Tasks).
+  Figer les constantes du rendu : `name` `backup`, `imagePullPolicy` `IfNotPresent`,
+    `args` à deux éléments (valeur de `instance.package.type` puis littéral `backup`),
+    sans `command` (l'entrypoint du binaire agent fait le reste), sans `initContainers`,
+    annotation `mayfly.cloud.namecheap.com/expire: 120h`, `restartPolicy` `OnFailure`,
+    `priorityClassName` `vynil-backup`, `topologyKey` `kubernetes.io/hostname`.
+  Figer les resources tels quels : limits `cpu: 2000m` / `memory: 2Gi`, requests `cpu: 50m` /
+    `memory: 512Mi` — les envs `GOMAXPROCS` `2` et `GOMEMLIMIT` `1560MiB` injectés amont par
+    ./../scripts/lib/backup_context.sdd sont calibrés sur ces limites ; tout changement se
+    fait en lockstep.
+  Figer la posture de sécurité à deux niveaux : uid/gid `0` (pod : `runAsUser`/`runAsGroup`,
+    `runAsNonRoot: false` ; conteneur : mêmes uid/gid, `privileged: false`,
+    `allowPrivilegeEscalation: false`), capabilities strictement `drop: [ALL]` plus
+    `add: [CHOWN, FOWNER, DAC_OVERRIDE, DAC_READ_SEARCH]` — la raison (restic CHOWN/FOWNER)
+    est portée par l'annotation `ignore-check.kube-linter.io/run-as-non-root` de l'hôte.
+  Rendre le bloc podAffinity SEULEMENT quand `backup_affinity` est truthy : une unique règle
+    `requiredDuringSchedulingIgnoredDuringExecution` dont `matchLabels` est
+    @selector_from_ctx avec la VALUE de `backup_affinity` dans le slot component.
+
+Must not:
+  Ajouter un second document `---` dans le block @to_json : le block parse UN document YAML,
+    le second avorte tout le rendu du doc hôte.
+  Lire `schedule`, `has_files`, `files`, `cluster.*` ou `tenant.*` : ces clés appartiennent
+    aux hôtes — le partial partage la même carte de contexte sans les consommer.
+
+Depends on:
+  ./cronbackup.yaml.hbs et ./manualbackup.yaml.hbs — les deux hôtes ; leur position inline
+    après `template:` fixe la forme de sortie (aucune re-indentation parente sur le texte du
+    partial). Seule la voie CronJob est vivante.
+  ./../scripts/lib/backup_context.sdd — fournisseur des six clés dynamiques (`envs`,
+    `envs_from`, `mounts`, `volumes`, `service_account`, `backup_affinity`) et des envs
+    GOMAXPROCS/GOMEMLIMIT couplés aux resources.
+  ./../scripts/lib/build_context.rhai — vue `instance` (`instance.selector`,
+    `instance.package.type`) que lisent le gabarit et @selector_from_ctx.
+  ../../common/src/handlebarshandler.sdd — enregistrement @selector_from_ctx (fusionne
+    `instance.selector` et le hash `comp`) et factory @new_hbs qui monte @json_to_str et
+    @to_json depuis les helpers vynil-core ; mode strict et no-escape y sont hérités.
+
+References:
+  ./../scripts/tenant/schedule_backup.sdd et ./../scripts/service/schedule_backup.sdd —
+    seules consommatrices vivantes : @render_from de `"{{> cronbackup.yaml }}"` (ligne 20 des
+    jumeaux), partial dirs enregistrés lignes 16-18 — un package qui livre
+    `pods/backup.yaml.hbs` MASQUE silencieusement ce fichier (posture consignée à leurs lignes
+    236/260 et 207).
+  ./../scripts/tenant/delete_vitals.sdd — seul caller de ./manualbackup.yaml.hbs (ligne 14),
+    dans un bloc entièrement commenté (lignes 8-18) qui de plus n'appelle pas @bctx::run.
+  ./init_job.yaml.hbs.sdd — hôte frère (init-restore) portant la même ligne `mayfly` via
+    ./restore.yaml.hbs ; référence de style pour la dégradation à `()`.
+  ./../Dockerfile.sdd — packaging de ce dossier dans `/usr/lib/vynil/templates`, lu par les
+    lanes comme `template_dir` puis monté par @register_partial_dir.
+
+Tasks:
+  [?] Annotation `mayfly.cloud.namecheap.com/expire: 120h` (ligne 5) : domaine tiers codé en
+      dur sur chaque pod backup rendu ; trois autres fichiers le portent
+      (./restore.yaml.hbs, /operator/templates/package.yaml.hbs, /deploy/bootstrap/bootstrap.yaml)
+      sans producteur ni consommateur identifiés dans le dépôt. Garder, paramétrer ou retirer,
+      décider plus tard.
+  [?] `comp=backup_affinity` (ligne 51) est un PATH DE CONTEXTE, pas la littérale `comp="backup"`
+      de la ligne 6 : la value du package entre dans le slot component des matchLabels, donc
+      l'affinity ne co-localise jamais ce pod avec d'autres pods backup sauf si le champ vaut
+      littéralement "backup". Intention littérale `backup` ou value du package ? décider plus tard.
+  [?] Le `format="yaml"` du block @to_json ne pilote que le format d'ENTRÉE parsé du bloc
+      interne ; le texte RESTITUÉ est du JSON pretty (@JsonPretty des helpers vendus), jamais le
+      YAML annoncé. Nom trompeur, le re-décodage JSON par @yaml_decode_multi portant le
+      contrat. Garder ou nommer explicitement, décider plus tard.
+  [?] securityContext dupliqué pod/conteneur : uid/gid `0` écrits aux deux niveaux
+      (lignes 26-27 et 43-44) et `runAsNonRoot: false` redondant avec un uid `0`.
+      Factoriser ou assumer, décider plus tard.
+  [?] Le bloc commenté de delete_vitals, s'il est réveillé en l'état, rendrait ce partial sur
+      une lane sans @bctx::run : `envs`/`envs_from`/`mounts`/`volumes`/`service_account`/
+      `backup_affinity` jamais mintées ⇒ échec de rendu en strict mode AVANT toute création
+      d'objet. Solidaire de la décision backup-final-avant-teardown de
+      ./../scripts/tenant/delete_vitals.sdd, décider plus tard.
+  [?] Écart de formulation avec le Scenario « sans appslug » de ./init_job.yaml.hbs.sdd : la
+      dégradation silencieuse est vraie pour une clé PRÉSENTE à `()` ; une clé vraiment absente
+      lève en strict mode. Harmoniser les deux specs, décider plus tard.
+  [ ] Tests : aucun fichier de ./../tests/ ne rend ce partial ni ses hôtes (les tests autour de
+      @selector_from_ctx dans /agent/tests/rhai_lib.rs, vers sa ligne 2742, vérifient des gabarits
+      que @gen_package génère, pas le rendu des lanes) — mapper les trois Scenarios sur un test
+      de rendu avec carte mock (TTD).
+
+Done when:
+  Chaque Scenario porte un test de rendu vert sur le nœud `template:` décodé (labels avec
+    component `backup`, affinity on/off avec la value du champ dans le slot component, échec
+    strict sur clé absente), chaque [?] porte une décision écrite, et `specdd lint` est vert
+    sur ce fichier.
+
+Scenario: Rendu standard sans backup_affinity
+  Given une carte de lane `schedule_backup` complète dont `backup_affinity` est `()` (le
+    @Option<@String> du package absent)
+  When @render_from rend l'hôte ./cronbackup.yaml.hbs sur un instance de type `service`
+  Then le nœud `template:` du jobTemplate porte `metadata` (labels de `instance.selector` plus
+    `app.kubernetes.io/component` à `backup`) et un `spec` SANS clé `affinity`
+  And le conteneur court les args de deux éléments (`service`, `backup`), l'image `agent_image`,
+    le `serviceAccountName` de la clé `service_account`, `restartPolicy` à `OnFailure` et la
+    priorité `vynil-backup`
+
+Scenario: backup_affinity co-localise sur le composant du package
+  Given la même carte avec `backup_affinity` à `database`
+  When le partial est rendu
+  Then le pod spec gagne `affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution`
+    avec `topologyKey` `kubernetes.io/hostname`
+  And les matchLabels portent `instance.selector` plus `app.kubernetes.io/component` à
+    `database` — la value entre dans le slot, pas la littérale `backup` des labels conteneur
+    (écart gelé en Tasks)
+
+Scenario: La sortie hôte est du JSON, pas du YAML
+  Given un rendu complet qui atteint la fin du block @to_json ligne 54
+  When le texte quitte le partial
+  Then le fragment recollé après `template:` est un JSON pretty commençant par `{`, sans
+    indentation relative à l'hôte
+  And @yaml_decode_multi de la lane consommatrice retrouve le nœud sans erreur car JSON est
+    un YAML valide — `format="yaml"` ne s'applique qu'au parsing d'entrée du bloc
+
+Scenario: Lane étrangère au backup avorte le rendu
+  Given une carte où `envs` n'a jamais été mintée (le contexte du rendu commenté de
+    ./../scripts/tenant/delete_vitals.rhai menant à ./manualbackup.yaml.hbs)
+  When @render_from passe par ./manualbackup.yaml.hbs puis ce partial
+  Then le rendu échoue en strict mode sur la première clé jamais mintée
+  And ni @yaml_decode_multi ni l'installation d'objet ne sont atteints — zéro objet posé

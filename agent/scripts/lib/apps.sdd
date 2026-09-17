@@ -42,7 +42,7 @@ Accepts:
 Returns:
   The three getters return an un-fired @RestClient: header priming is set up, no request happens
     at construction, and the caller's first send sees exactly the primed headers.
-  Client sends (including @gitea_list_orgs) answer the wynil-core @RestClient.get map: `code`
+  Client sends (including @gitea_list_orgs) answer the vynil-core @RestClient.get map: `code`
     (int), `json` (parsed body, falling back to the empty map `#{}` on non-JSON), `headers`,
     `body` (raw text).
 
@@ -95,7 +95,7 @@ Must:
     client per call.
 
 Depends on:
-  wynil-core 0.7.7 registered APIs, by registrar: `k8s` @k8sgeneric_rhai_register
+  vynil-core 0.7.7 registered APIs, by registrar: `k8s` @k8sgeneric_rhai_register
     (@k8s_resource constructors, @K8sGeneric.get — k8s.rs), `http` @http_rhai_register
     (@new_http_client, the five @RestClient mutators used here, the @RestClient.get response map —
     http.rs), and the engine @base64_decode helper (engine.rs).

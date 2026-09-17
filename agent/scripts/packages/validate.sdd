@@ -123,7 +123,7 @@ Depends on:
   /agent/src/package/validate.sdd — sole caller: resolver dirs, `args`
     injection, discard of the snippet result, and the error-text/exit-4
     conversion; this file decides nothing CLI-side.
-  wynil-core `0.7.7` @file_read + @yaml_decode — text read and
+  vynil-core `0.7.7` @file_read + @yaml_decode — text read and
     single-document YAML parse.
   @read_package_yaml + @validate_options (/common/src/vynilpackage.sdd) —
     the strict re-read and the options shape gate; effectively the real

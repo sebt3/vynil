@@ -328,7 +328,7 @@ Must:
     `{{json_to_str (labels_from_ctx this comp="<comp>")}}` and the
     `{{#if (ctx_have_crd this "<plural.group>")}}` wrapper, and only ever call them — helper
     behaviour is owned by ./../../../common/src/handlebarshandler.sdd (`json_to_str` by
-    wynil-core `hbs_json`).
+    vynil-core `hbs_json`).
   Bucket per flavour exactly: system → `get_crds` + `get_systems` only (workloads included,
     no `-envs` ConfigMap); tenant → `get_vitals` (PVC) + `get_scalables` (workloads, env
     extraction ON) + `get_systems` (the cluster-scoped list incl. `Namespace` and CRDs) +
@@ -363,7 +363,7 @@ Must:
     engine are simply unused here.
 
 Depends on:
-  wynil-core 0.7.7 registered APIs, by registrar: `fs` (@file_read, @file_write, @create_dir,
+  vynil-core 0.7.7 registered APIs, by registrar: `fs` (@file_read, @file_write, @create_dir,
     @read_dir, @is_file, @is_dir — engine.rs), `yaml` (@yaml_encode, @yaml_decode — yaml.rs;
     NOT the ordered-YamlDoc surface of ./../../../common/src/yamlhandler.sdd, which only the
     outer update flow uses), and `shell` (@shell_output — shell.rs); everything else is

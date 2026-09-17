@@ -102,7 +102,7 @@ Depends on:
     `CustomResourceDefinition` documents, `install_crds_pre`/`_post` around it), the systems
     emitter is the shared bucketed @template pass of ./../lib/install_from_dir.rhai with
     `install_systems_pre` and no post slot. Roles quoted only; their contracts are theirs.
-  wynil-core 0.7.7 engine API — the 3-arg @import_run and @import_template shims behind @Script
+  vynil-core 0.7.7 engine API — the 3-arg @import_run and @import_template shims behind @Script
     @add_common (skip-vs-rethrow boundary, import_template's `run` fallback), @is_dir, @type_of.
   ./context.rhai (./context.sdd) + ./../lib/build_context.rhai — producer of the incoming map;
     key contract owned by ./../lib/build_context.sdd.

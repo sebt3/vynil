@@ -107,7 +107,7 @@ Must:
     so importing the module performs no I/O and defines no globals.
 
 Depends on:
-  wynil-core 0.7.7 engine API — @shell_run, @shell_output (`shell` registrar), @file_write
+  vynil-core 0.7.7 engine API — @shell_run, @shell_output (`shell` registrar), @file_write
     (`fs` registrar), @json_encode_escape (json helper); script surface installed by the
     engine assembly behind ./../../../common/src/rhaihandler.sdd, including the fact that a
     mock engine keeps these host powers live.

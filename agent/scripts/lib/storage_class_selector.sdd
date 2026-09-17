@@ -91,7 +91,7 @@ Must:
 
 Depends on:
   rhai std only — @find, `==`, and the tolerant map-miss-to-unit semantics frozen in
-    ./build_context.sdd; zero wynil-core registrations are reached.
+    ./build_context.sdd; zero vynil-core registrations are reached.
   ./storage_class_enrich.sdd — upstream producer of the entry shape (@volumeMode,
     @is_default) and of the preference map; its never-written cheap/fast slots define this
     file's dead arms.

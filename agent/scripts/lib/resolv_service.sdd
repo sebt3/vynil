@@ -98,7 +98,7 @@ Must:
     coexisting as distinct signatures (rhai dispatches by arity).
 
 Depends on:
-  wynil-core `0.7.7` engine API — @k8s_resource(kind, ns)`@get` on the `K8sGeneric` lane of
+  vynil-core `0.7.7` engine API — @k8s_resource(kind, ns)`@get` on the `K8sGeneric` lane of
     @k8sgeneric_rhai_register, @glob (./glob.rs-style `glob(text, pattern)` helper), @log_warn,
     @json_encode, @base64_decode: the string-error conversion is @rhai_err / @error_chain; host
     ownership behind the @/common/src/rhaihandler.sdd assembly.
