@@ -1,271 +1,287 @@
 Spec: TenantInstallScript
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: librairie de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Orchestrate the install of one `TenantInstance`: run the package's category buckets in a fixed
-    order through `@import_run` — `install_pre` hook, `befores`, `vitals`, tofu, first-run
-    `init_from`, `others`, `scalables`, `posts` — then pick between backup scheduling and backup
-    cleanup, run `install_post`, and close by writing the CR `Ready`/`Installed` status with the
-    requested tag. This file applies no manifests and waits on nothing itself: per-lane cluster
-    work and per-lane failure markers live in the stage modules it imports; its own only status
-    write is the success close. There is no `crds` lane: the tenant CRD family carries no
-    CRD-stage surface at all (no `CrdApplied` condition, no crd bridge — /common/src/instancetenant.sdd).
-  Twin: near-clone of ./../service/install.rhai — an actual `diff -u` shows exactly two hunks: the
-    tenant copy drops the whole taken-`crds` block (the `is_dir` gate, its `@log_info` line,
-    `@import_run("install_crds")`, the @update_k8s_crd_cache call and its refresh) and renames
-    every instance refresh from @get_service_instance to @get_tenant_instance (six sites instead
-    of seven). Hook posture, the five remaining `is_dir` gates, the tofu lane merge posture, the
-    `init_from` and backup gate texts, the `backup-settings` Secret probe with its @try/@catch,
-    and the status close are byte-identical. Tenant-only surface (the `context.tenant`
-    maintenance window fields, tenant-wide namespaces and services) is assembled upstream in
-    ./context_tenant.rhai and read nowhere here; the tenant backup flow this lane schedules stays
-    behind ./schedule_backup.rhai, which applies backup objects over `context.tenant.namespaces`
-    and records failures under the `ScheduleBackup` condition. ./../system/install.rhai is the
-    different shape (single `systems` bucket, no vitals, no `init_from`, no backup section).
+  Orchestrate l'install d'une `TenantInstance` : exécuter les buckets de catégorie du package dans un
+    ordre fixe via `@import_run` — hook `install_pre`, `befores`, `vitals`, tofu, `init_from` de
+    premier run, `others`, `scalables`, `posts` — puis trancher entre planification backup et
+    nettoyage backup, exécuter `install_post`, et fermer en écrivant le statut `Ready`/`Installed`
+    du CR avec le tag demandé. Ce fichier n'applique aucun manifest et n'attend rien lui-même : le
+    travail cluster par lane et les marqueurs d'échec par lane vivent dans les modules d'étape qu'il
+    importe ; sa seule écriture de statut qui soit sienne est la close de succès. Il n'y a pas de
+    lane `crds` : la famille de CRD tenant ne porte aucune surface d'étape CRD du tout (pas de
+    condition `CrdApplied`, pas de bridge crd — /common/src/instancetenant.sdd).
+  Twin : quasi-clone de ./../service/install.rhai — un vrai `diff -u` ne montre exactement que deux
+    hunks : la copie tenant SUPPRIME le bloc `crds` entier pendant qu'il était pris (le gate `is_dir`,
+    sa ligne `@log_info`, `@import_run("install_crds")`, l'appel @update_k8s_crd_cache et son refresh)
+    et renomme chaque refresh d'instance de @get_service_instance en @get_tenant_instance (six
+    sites au lieu de sept). Posture des hooks, les cinq gates `is_dir` restants, la posture de
+    fusion de la lane tofu, les textes des gates `init_from` et backup, la sonde du Secret
+    `backup-settings` avec son @try/@catch, et la close de statut sont byte-identiques. La surface
+    tenant-only (les champs de maintenance window `context.tenant`, les namespaces et services
+    tenant-wide) est assemblée en amont dans ./context_tenant.rhai et lue nulle part ici ; le flow
+    backup tenant que cette lane planifie reste derrière ./schedule_backup.rhai, qui applique les
+    backup objects sur `context.tenant.namespaces` et consigne les échecs sous la condition
+    `ScheduleBackup`. ./../system/install.rhai est la forme différente (bucket `systems` unique,
+    pas de vitals, pas de `init_from`, pas de section backup).
 
 Exposes:
-  @run(@instance, @context) — the module's sole @fn and entry point (`install.rhai` + `run` match
-    the entry-point patterns of /agent/src/linting/rhai_checker.sdd); invoked as
-    `install::run(instance, context)` by the Rust lane /agent/src/tenant/install.sdd, whose
-    snippet discards the returned value.
+  @run(@instance, @context) — le seul @fn du module et son point d'entrée (`install.rhai` + `run`
+    matchent les patterns de point d'entrée de /agent/src/linting/rhai_checker.sdd) ; invoqué comme
+    `install::run(instance, context)` par la lane Rust /agent/src/tenant/install.sdd, dont le
+    snippet jette la valeur retournée.
 
 Accepts:
-  @instance — the injected @TenantInstance @Dynamic. Read: `.metadata.namespace`/`.metadata.name`
-    (every refresh argument), the guards `.status != ()`, `.status.vitals != ()`, @type_of of
-    `.status.tag`, and `.spec.initFrom` (the @InitFrom restore source, wire key `initFrom`).
-    Re-bound after most taken buckets (Must).
-  @context — map built by ./context.rhai @run for this lane: ./../lib/build_context.rhai core
-    keys merged with the tenant additions of ./context_tenant.rhai. Keys read, all unguarded
-    property access: `package_dir` (six gate paths), `namespace.use_backup` (backup gate; the
-    `context.namespace` map is the `context.tenant` map aliased by ./context_tenant.rhai, seeded
-    `false`, overridable only by a `vynil.solidite.fr/use_backup` namespace annotation decoding
-    to a bool), `instance.requested` (the tag of the final close) and `instance.namespace` (the
-    backup-Secret lookup namespace — the tenant instance's own namespace, not the tenant-wide
-    list).
+  @instance — le @Dynamic @TenantInstance injecté. Lus : `.metadata.namespace`/`.metadata.name`
+    (chaque argument de refresh), les gardes `.status != ()`, `.status.vitals != ()`, @type_of de
+    `.status.tag`, et `.spec.initFrom` (la source de restauration @InitFrom, clé wire `initFrom`).
+    Re-bound après la plupart des buckets pris (Must).
+  @context — carte construite par ./context.rhai @run pour cette lane : les clés core de
+    ./../lib/build_context.rhai fusionnées aux ajouts tenant de ./context_tenant.rhai. Clés lues,
+    toutes en accès de propriété non gardé : `package_dir` (les six chemins de gates),
+    `namespace.use_backup` (le gate backup ; la carte `context.namespace` est la carte
+    `context.tenant` aliasée par ./context_tenant.rhai, seedée `false`, surchargeable seulement par
+    une annotation de namespace `vynil.solidite.fr/use_backup` se décodant en booléen),
+    `instance.requested` (le tag de la close finale) et `instance.namespace` (le namespace de
+    lookup du Secret backup — le namespace propre de l'instance tenant, pas la liste tenant-wide).
 
 Returns:
-  No value channel of its own: the function's implicit value is the trailing
-    `@set_status_ready` call result (the patched CR) and the caller discards it. The observable
-    outcome is the final `status` patch on the TenantInstance — the children-variant close evicts
-    prior `AgentStarted`, `BeforeApplied`, `Ready`, `Installed`, `InitFrom` and `ScheduleBackup`
-    records and appends fresh `Ready`/`Installed` at the current generation, sets `tag` to
-    `instance.requested` and `digest` to the options digest, and publishes a Normal
-    `InstallSucceed`/`Install` event (bridge and macro semantics in
-    /common/src/instancetenant.sdd and /common/src/instance_macros.sdd).
+  Pas de canal de valeur qui lui appartienne : la valeur implicite de la fonction est le résultat de
+    l'appel `@set_status_ready` final (le CR patché) et l'appelant le jette. Le résultat observable
+    est le patch final de `status` sur le TenantInstance — la close variante children évince les
+    enregistrements `AgentStarted`, `BeforeApplied`, `Ready`, `Installed`, `InitFrom` et
+    `ScheduleBackup` antérieurs et append des `Ready`/`Installed` frais à la génération courante,
+    pose `tag` sur `instance.requested` et `digest` sur le digest des options, et publie un
+    événement Normal `InstallSucceed`/`Install` (sémantique bridge et macro dans
+    /common/src/instancetenant.sdd et /common/src/instance_macros.sdd).
 
 Raises:
-  Zero @throw statement in this file: failure is always a propagated engine raise.
-  - Stage/hook module throw: @import_run swallows only the absent-module and absent-`run`
-    markers (`log_debug` with text `No ${name} module, skipping.` /
-    `No ${name}::run function, skipping.`); any other error — including everything a stage
-    re-throws after writing its own marker (e.g. @set_status_init_failed,
-    @set_status_schedule_backup_failed) — is re-thrown and aborts the install.
-  - `@get_tenant_instance` raise (CR deleted, forbidden or unreachable) at a bucket refresh —
-    the abort lands with no failed-status write from this lane.
-  - @has_tofu_files raise: the gate runs on an unreadable existing `${package_dir}/tofu` past its
-    `@is_dir` guard (raise rules in ./../lib/tofu_gen.sdd).
-  - Property-on-`()` raises at the `context.namespace.use_backup` /
-    `context.instance.requested` reads once `context` stops being a map (see Tasks — the tofu
-    lane can set it to `()`).
-  - `@set_status_ready` raise: a @KubeError from the merge-patch/event, or a non-string
-    `instance.requested`, fails an otherwise-complete install with no marker written.
-  - The one @try/@catch: the `backup-settings` Secret probe — every error from its @get is
-    caught (string warned verbatim, other errors as @json_encode text) and treated as "absent",
-    never re-thrown.
+  Zéro instruction @throw dans ce fichier : l'échec est toujours une levée d'engine propagée.
+  - Levée d'un module d'étape/hook : @import_run n'avale que les marqueurs module-absent et
+    `run`-absent (`log_debug` avec les textes `No ${name} module, skipping.` /
+    `No ${name}::run function, skipping.`) ; toute autre erreur — y compris tout ce qu'une étape
+    re-lève après avoir posé son propre marqueur (p. ex. @set_status_init_failed,
+    @set_status_schedule_backup_failed) — est re-levée et avorte l'install.
+  - Levée de `@get_tenant_instance` (CR supprimé, interdit ou injoignable) à un refresh de bucket —
+    l'abort tombe sans aucune écriture de statut failed depuis cette lane.
+  - Levée de @has_tofu_files : le gate s'exécute sur un `${package_dir}/tofu` existant illisible,
+    passé sa garde `@is_dir` (règles de levée dans ./../lib/tofu_gen.sdd).
+  - Levées de propriété sur `()` aux lectures `context.namespace.use_backup` /
+    `context.instance.requested` dès que `context` cesse d'être une carte (voir Tasks — la lane
+    tofu peut le poser à `()`).
+  - Levée de `@set_status_ready` : un @KubeError du merge-patch/événement, ou un
+    `instance.requested` non-string, font échouer une install par ailleurs complète sans marqueur
+    posé.
+  - Le seul @try/@catch : la sonde du Secret `backup-settings` — toute erreur de son @get est
+    attrapée (string warnée verbatim, autres erreurs en texte @json_encode) et traitée comme
+    "absent", jamais re-levée.
 
 Handles:
-  - Bucket-directory absent: the `@is_dir` gate (`@has_tofu_files` for tofu) skips the whole lane
-    including its instance refresh — skipped buckets never call `@get_tenant_instance`.
-  - `install_pre` / `install_post` ship nowhere under ./../scripts — on a stock image both hooks
-    take the @import_run skip path, return `()`, and the `type_of` merge guard sees no map.
-  - Package carrying a `crds/` directory: ignored entirely by this lane — there is no crd bucket
-    or crd bridge on the tenant kind (see Purpose); package CRD management needs another actor.
-  - First run: `status` is `()` at entry, so the `init_from` gate is false until the `vitals`
-    bucket has written `status.vitals` and the refresh re-read it — that is the exact
-    "initial installation" moment the code comment names.
-  - Backup gate false (no status, no vitals, or `use_backup` false — the shipped default from
-    ./context_tenant.rhai): still runs `delete_backup` — every stock tenant install sweeps
-    stale backup objects.
-  - Backup-Secret probe error: warned, `found` stays false, the lane degrades to
-    `delete_backup` — a permission or transient API error reads as "no backup configured"
-    (see Tasks).
+  - Répertoire de bucket absent : le gate `@is_dir` (`@has_tofu_files` pour tofu) saute la lane
+    entière, refresh d'instance inclus — les buckets sautés n'appellent jamais
+    `@get_tenant_instance`.
+  - `install_pre` / `install_post` ne sont livrés nulle part sous ./../scripts — sur une image stock
+    les deux hooks prennent le chemin de skip @import_run, retournent `()`, et la garde de fusion
+    `type_of` ne voit aucune carte.
+  - Package portant un répertoire `crds/` : entièrement ignoré par cette lane — il n'y a ni bucket
+    crd ni bridge crd sur le kind tenant (voir Purpose) ; la gestion des CRD de package exige un
+    autre acteur.
+  - Premier run : `status` est `()` à l'entrée, donc le gate `init_from` est faux tant que le bucket
+    `vitals` n'a pas écrit `status.vitals` et que le refresh ne l'a pas relu — c'est exactement le
+    moment "initial installation" que nomme le commentaire de code.
+  - Gate backup faux (pas de statut, pas de vitals, ou `use_backup` false — le défaut livré de
+    ./context_tenant.rhai) : exécute quand même `delete_backup` — chaque install tenant stock
+    balaye les backup objects périmés.
+  - Erreur de la sonde du Secret backup : warnée, `found` reste false, et la lane dégrade vers
+    `delete_backup` — une erreur de permission ou une erreur API transitoire se lit comme "pas de
+    backup configuré" (voir Tasks).
 
 Must:
-  Run exactly these lanes, once each, in this order: `import_run("install_pre")`;
-    `is_dir(`${context.package_dir}/befores`)` gate → `install_befores`; `vitals` gate →
-    `install_vitals`; `tfg::has_tofu_files(`${context.package_dir}/tofu`)` gate →
-    `install_tofu`;
-    `instance.status != () && instance.status.vitals != () && type_of(instance.status.tag) == "()"
-    && instance.spec.initFrom != ()` gate → `init_from`; `others` gate → `install_others`;
-    `scalables` gate → `install_scalables`; `posts` gate → `install_posts`; backup section;
-    `import_run("install_post")`; `instance.set_status_ready(context.instance.requested)` —
-    then return, with nothing after the close.
-  Gate the first install exactly as written: `init_from` runs only when the CR already reports
-    `status.vitals`, its `status.tag` is still unset (`type_of` == `"()"`) and `spec.initFrom` is
-    set — so a completed install (tag written by the close) never runs it again even though the
-    tenant spec's `initFrom` stays set.
-  Decide backups on `instance.status != () && instance.status.vitals != () &&
-    context.namespace.use_backup`: when true, schedule only if
-    `@k8s_resource("Secret", context.instance.namespace).@get("backup-settings")` succeeds —
-    `schedule_backup` — and `delete_backup` on probe-absent-or-any-error; when false,
-    unconditionally `delete_backup`. Exactly one of the two runs per install, and the code
-    comment pins `schedule_backup` behind the `scalables` lane ("this need the scalables objects
+  Exécuter exactement ces lanes, une fois chacune, dans cet ordre : `import_run("install_pre")` ;
+    gate `is_dir(`${context.package_dir}/befores`)` → `install_befores` ; gate `vitals` →
+    `install_vitals` ; gate `tfg::has_tofu_files(`${context.package_dir}/tofu`)` →
+    `install_tofu` ;
+    gate `instance.status != () && instance.status.vitals != () && type_of(instance.status.tag) == "()"
+    && instance.spec.initFrom != ()` → `init_from` ; gate `others` → `install_others` ;
+    gate `scalables` → `install_scalables` ; gate `posts` → `install_posts` ; section backup ;
+    `import_run("install_post")` ; `instance.set_status_ready(context.instance.requested)` —
+    puis retourner, sans rien après la close.
+  Gater le premier install exactement comme écrit : `init_from` ne s'exécute que quand le CR
+    rapporte déjà `status.vitals`, que son `status.tag` est encore non posé (`type_of` == `"()"`) et
+    que `spec.initFrom` est posé — donc un install terminé (tag écrit par la close) ne le relance
+    jamais même si `initFrom` du spec tenant reste posé.
+  Trancher les backups sur `instance.status != () && instance.status.vitals != () &&
+    context.namespace.use_backup` : quand vrai, planifier seulement si
+    `@k8s_resource("Secret", context.instance.namespace).@get("backup-settings")` réussit —
+    `schedule_backup` — et `delete_backup` si la sonde est absente ou lève ; quand faux,
+    `delete_backup` sans condition. Exactement l'une des deux s'exécute par install, et le
+    commentaire de code épingle `schedule_backup` derrière la lane `scalables` ("this need the scalables objects
     to be set").
-  Thread the context through a map merge only on `@type_of` == `map` of each hook/bucket return —
-    `install_pre`, the five `is_dir` buckets and `install_post` use the guard; the `install_tofu`
-    lane instead assigns the return unconditionally and then re-applies the stale `ctx` variable
-    when that is a map (Tasks); `init_from`, `schedule_backup` and `delete_backup` have their
-    returns discarded whole.
-  Refresh the instance after each taken bucket with
-    `@get_tenant_instance(instance.metadata.namespace, instance.metadata.name)` — the tenant
-    bridge registered onto @TenantInstance::rhai_get (six call sites; service's seventh crds
-    refresh has no counterpart). The refreshed copy is what the `init_from`/backup guards and the
-    close read; the `init_from` and backup lanes themselves never refresh.
-  Keep the two @log_warn calls inside the probe catch the only log statements at this level —
-    unlike the service twin, this file issues no @log_info (its crds-lane log line does not
-    exist here); `install_pre`-style debug text comes from the @import_run shim only.
-  Close successfully through @set_status_ready with the requested tag (build_context's
-    `instance.requested` = `args.tag`), which also stamps the options digest and can fail the
-    whole install per Raises.
-  Load ./../lib/tofu_gen.rhai (and transitively ./../lib/tofu.rhai) at import time via the single
-    top-level `import "tofu_gen" as tfg` — before any `run` call, package without `.tf` files
-    included.
-  Resolve every stage/hook module against the four resolver directories frozen by the Rust lane
-    (`{package_dir}/scripts`, `{config_dir}`, `{script_dir}/tenant`, `{script_dir}/lib`), so a
-    package `scripts/` directory shadows the shipped lanes: a package shadowing `install_tofu`
-    must return the context map or `context` becomes `()` mid-run (Tasks).
+  Faire avancer le contexte par fusion de carte seulement sur `@type_of` == `map` du retour de
+    chaque hook/bucket — `install_pre`, les cinq buckets `is_dir` et `install_post` utilisent la
+    garde ; la lane `install_tofu` assigne au contraire le retour sans condition puis ré-applique la
+    variable `ctx` périmée quand c'est une carte (Tasks) ; les retours de `init_from`,
+    `schedule_backup` et `delete_backup` sont jetés entiers.
+  Rafraîchir l'instance après chaque bucket pris avec
+    `@get_tenant_instance(instance.metadata.namespace, instance.metadata.name)` — le bridge tenant
+    enregistré sur @TenantInstance::rhai_get (six sites d'appel ; le septième refresh crds de
+    service n'a pas d'équivalent). La copie rafraîchie est ce que lisent les gardes
+    `init_from`/backup et la close ; les lanes `init_from` et backup ne se rafraîchissent jamais
+    elles-mêmes.
+  Garder les deux appels @log_warn dans le catch de la sonde comme seules instructions de log de ce
+    niveau — contrairement au jumeau service, ce fichier n'émet aucun @log_info (sa ligne de log de
+    lane crds n'existe pas ici) ; les textes debug façon `install_pre` viennent du seul shim
+    @import_run.
+  Fermer en succès via @set_status_ready avec le tag demandé (`instance.requested` de
+    build_context = `args.tag`), ce qui timbre aussi le digest des options et peut faire échouer
+    l'install entière selon Raises.
+  Charger ./../lib/tofu_gen.rhai (et transitivement ./../lib/tofu.rhai) à l'import via l'unique
+    `import "tofu_gen" as tfg` de premier niveau — avant tout appel `run`, package sans fichiers
+    `.tf` inclus.
+  Résoudre chaque module d'étape/hook contre les quatre répertoires de résolution gelés par la lane
+    Rust (`{package_dir}/scripts`, `{config_dir}`, `{script_dir}/tenant`, `{script_dir}/lib`), donc
+    un répertoire `scripts/` de package éclipse les lanes livrées : un package qui éclipse
+    `install_tofu` doit retourner la carte de contexte sinon `context` devient `()` en cours de
+    run (Tasks).
 
 Must not:
-  Apply manifests, render templates or wait on workloads from this file: apply ordering lives in
-    ./../lib/install_from_dir.sdd and readiness in ./../lib/wait.sdd, both reached only through
-    the stage modules — importing either here would duplicate the lane contract.
-  Read or honor the tenant maintenance window (`context.tenant.maintenance_start_hour`/
-    `maintenance_start_minut`, `maintenance_start`/`maintenance_stop` modules): maintenance
-    belongs to the backup/restore lanes; the install closes without any maintenance signal.
-  Gate on the current `status.tag` to skip a rerun: replays are total; only the `init_from` and
-    backup guards read prior status.
+  Ne pas appliquer de manifests, rendre de templates ni attendre de workloads depuis ce fichier :
+    l'ordre d'apply vit dans ./../lib/install_from_dir.sdd et le readiness dans ./../lib/wait.sdd,
+    tous deux atteints uniquement via les modules d'étape — importer l'un ici dupliquerait le
+    contrat de lane.
+  Ne pas lire ni honorer la maintenance window tenant (`context.tenant.maintenance_start_hour`/
+    `maintenance_start_minut`, modules `maintenance_start`/`maintenance_stop`) : la maintenance
+    appartient aux lanes backup/restore ; l'install ferme sans aucun signal de maintenance.
+  Ne pas gater sur le `status.tag` courant pour sauter un re-run : tout re-run est total ; seules
+    les gardes `init_from` et backup lisent le statut antérieur.
 
 Depends on:
-  ./../lib/tofu_gen.rhai — the only import; @has_tofu_files answers the `tofu` gate (its spec
+  ./../lib/tofu_gen.rhai — le seul import ; @has_tofu_files répond au gate `tofu` (sa spec
     ./../lib/tofu_gen.sdd).
-  The shipped stage modules of this directory, all specs pending: ./install_befores.rhai,
+  Les modules d'étape livrés de ce répertoire, toutes specs pendantes : ./install_befores.rhai,
     ./install_vitals.rhai, ./install_tofu.rhai, ./init_from.rhai, ./install_others.rhai,
     ./install_scalables.rhai, ./install_posts.rhai, ./schedule_backup.rhai,
-    ./delete_backup.rhai — each writes its own `set_status_*` / `set_status_*_failed` marker and
-    re-throws, and each returns the (maybe hook-merged) context. Tenant stage markers include the
-    tenant-carried `InitFrom` and `ScheduleBackup` stages.
-  vynil-core 0.7.7 engine API — the three-arg @import_run global shim injected by @Script
-    `add_common` (optional-import semantics, skip-vs-rethrow boundary quoted in Raises), @is_dir,
-    @log_debug/@log_warn, @json_encode and @k8s_resource(...).@get.
-  /common/src/instancetenant.sdd — the registered bridges used as methods/globals:
-    @get_tenant_instance → @TenantInstance::rhai_get and @set_status_ready →
-    @TenantInstance::rhai_set_status_ready; close and event semantics in
+    ./delete_backup.rhai — chacun pose son propre marqueur `set_status_*` / `set_status_*_failed` et
+    se re-lève, et chacun retourne le contexte (peut-être fondu aux hooks). Les marqueurs d'étape
+    tenant incluent les étapes `InitFrom` et `ScheduleBackup` portées par le tenant.
+  L'API du moteur vynil-core 0.7.7 — le shim global @import_run à trois args injecté par @Script
+    `add_common` (sémantique d'import optionnel, frontière skip/re-throw citée dans Raises), @is_dir,
+    @log_debug/@log_warn, @json_encode et @k8s_resource(...).@get.
+  /common/src/instancetenant.sdd — les bridges enregistrés utilisés en méthodes/globals :
+    @get_tenant_instance → @TenantInstance::rhai_get et @set_status_ready →
+    @TenantInstance::rhai_set_status_ready ; sémantique de close et d'événement dans
     /common/src/instance_macros.sdd.
-  /common/src/rhaihandler.sdd — the @Script constructor that mounts the above for the agent
-    lanes.
-  ./context.rhai (+ ./context_tenant.rhai, ./../lib/build_context.rhai) — producer of every
-    `context` key this file reads; shared keys owned by ./../lib/build_context.sdd, the tenant
-    `namespace`/`use_backup` aliasing by ./context_tenant.rhai's pending spec.
+  /common/src/rhaihandler.sdd — le constructeur @Script qui monte ce qui précède pour les lanes de
+    l'agent.
+  ./context.rhai (+ ./context_tenant.rhai, ./../lib/build_context.rhai) — producteur de chaque clé
+    `context` lue par ce fichier ; les clés partagées appartiennent à ./../lib/build_context.sdd,
+    l'aliasing tenant `namespace`/`use_backup` à la spec pendante de ./context_tenant.rhai.
 
 References:
-  /agent/src/tenant/install.sdd — the caller: snippet, `instance`/`args` injection, resolver
-    directories and the exit-1 error lane this script's raises land in.
-  ./../service/install.rhai and ./../service/install.sdd — the diff-verified twin this spec
-    calibrates against; the tenant copy shares the tofu-lane merge posture verbatim.
-  ./../system/install.rhai — the different-shaped third lane (unspecified yet).
-  /agent/tests/rhai_backup_redis.rs — the tenant mock-engine harness (lib + tenant resolver dirs,
-    mock `"TenantInstance"` values) — proof the tenant scripts test under mocks, but it imports
-    only the backup-prepare/restore modules, never `install` (Tasks).
-  /agent/tests/rhai_lifecycle.rs — mounts the service dirs only and never loads a tenant script;
-    no test runs this file (Tasks).
+  /agent/src/tenant/install.sdd — l'appelant : snippet, injection de `instance`/`args`, répertoires
+    de résolution et la lane d'erreur exit-1 où tombent les levées de ce script.
+  ./../service/install.rhai et ./../service/install.sdd — le jumeau vérifié par diff contre lequel
+    cette spec se calibre ; la copie tenant partage la posture de fusion de la lane tofu verbatim.
+  ./../system/install.rhai — la troisième lane de forme différente (pas encore specquée).
+  /agent/tests/rhai_backup_redis.rs — le harnais mock-engine tenant (dirs resolver lib + tenant,
+    valeurs `"TenantInstance"` mockées) — preuve que les scripts tenant se testent sous mocks, mais
+    il n'importe que les modules backup-prepare/restore, jamais `install` (Tasks).
+  /agent/tests/rhai_lifecycle.rs — monte seulement les dirs service et ne charge jamais un script
+    tenant ; aucun test n'exécute ce fichier (Tasks).
 
 Scenario: full bucket order with directories present
-  Given a tenant package dir holding all six category directories and tofu sources, on a live
-    engine
-  When @run executes
-  Then the stage modules are imported in exactly pre → befores → vitals → tofu → others →
-    scalables → posts → backup → post order, with @get_tenant_instance refreshing after each
-    taken bucket and no CRD apply or discovery-cache refresh anywhere
-  And the close runs last whatever the buckets returned
-  No mapped test: the harnesses never import the tenant `install` module.
+  Given un répertoire de package tenant contenant les six répertoires de catégorie et des sources
+    tofu, sur un moteur réel
+  When @run s'exécute
+  Then les modules d'étape sont importés dans l'ordre exactement pre → befores → vitals → tofu →
+    others → scalables → posts → backup → post, avec @get_tenant_instance qui rafraîchit après
+    chaque bucket pris et aucun apply CRD ni refresh de discovery-cache nulle part
+  And la close s'exécute en dernier, quel que soit le retour des buckets
+  Pas de test mappé : les harnais n'importent jamais le module `install` tenant.
 
 Scenario: absent modules and empty package skip clean
-  Given a stock image (no `install_pre`/`install_post` ship) on a package with no category dirs
-  When @run executes
-  Then both hooks, the five buckets, tofu and init_from skip silently (debug logs only), the
-    backup section still runs `delete_backup`, and @set_status_ready is reached
-  No mapped test; the service twin's @service_install_runs_without_error posture (catch-and-assert
-    any error) would at most prove reachability here if mirrored (Tasks).
+  Given une image stock (aucun `install_pre`/`install_post` livré) sur un package sans répertoire de
+    catégorie
+  When @run s'exécute
+  Then les deux hooks, les cinq buckets, tofu et init_from se sautent silencieusement (logs debug
+    seuls), la section backup exécute quand même `delete_backup`, et @set_status_ready est atteint
+  Pas de test mappé ; la posture @service_install_runs_without_error du jumeau service (attraper et
+    assertionner toute erreur) ne prouverait au mieux que l'atteignabilité ici si elle était copiée
+    (Tasks).
 
 Scenario: init_from fires only during the very first install
-  Given a TenantInstance with `spec.initFrom` set whose `status.vitals` was just written by the
-    vitals bucket and whose `status.tag` is unset
-  When the `init_from` gate is evaluated over the refreshed instance
-  Then @import_run("init_from") runs — its return and any hook-merged context are discarded
-  But given the same CR after a successful close wrote `status.tag`
-  Then the gate is false and `init_from` never runs again, and that later close evicts any
-    stale `InitFrom` and `ScheduleBackup` condition records
-  No mapped test.
+  Given un TenantInstance dont `spec.initFrom` est posé, dont `status.vitals` vient d'être écrit
+    par le bucket vitals et dont `status.tag` est non posé
+  When le gate `init_from` est évalué sur l'instance rafraîchie
+  Then @import_run("init_from") s'exécute — son retour et tout contexte fondu aux hooks sont jetés
+  But étant donné le même CR après une close réussie ayant écrit `status.tag`
+  Then le gate est faux et `init_from` ne s'exécute plus jamais, et cette close-là évince tout
+    enregistrement de condition `InitFrom` et `ScheduleBackup` périmé
+  Pas de test mappé.
 
 Scenario: backup branch table
-  Given vitals applied and `context.namespace.use_backup` true (namespace annotation override)
-    and the `backup-settings` Secret readable in `context.instance.namespace`
-    → @schedule_backup runs, @delete_backup does not
-  Given the same with the Secret missing OR its read erroring (warned) → @delete_backup runs
-  Given `use_backup` false (shipped default) or no `status.vitals` → @delete_backup runs
-  And in every branch the module's return is discarded and the flow continues to `install_post`
-  No mapped test.
+  Given vitals appliqués et `context.namespace.use_backup` vrai (surcharge par annotation de
+    namespace) et le Secret `backup-settings` lisible dans `context.instance.namespace`
+    → @schedule_backup s'exécute, @delete_backup non
+  Given la même chose avec le Secret manquant OU sa lecture en erreur (warnée) → @delete_backup s'exécute
+  Given `use_backup` false (défaut livré) ou pas de `status.vitals` → @delete_backup s'exécute
+  And dans chaque branche le retour du module est jeté et le flow continue vers `install_post`
+  Pas de test mappé.
 
 Scenario: stage throw aborts after its own marker
-  Given a bucket stage that fails — it writes its `set_status_*_failed` marker (e.g.
-    @set_status_init_failed, @set_status_schedule_backup_failed) and re-throws
-  When the throw crosses @import_run
-  Then it is not one of the two skip markers, so it re-throws: no later bucket, no close, and
-    the Rust lane fails to exit(1) — a failure raised inside THIS file instead (refresh,
-    tofu predicate, close) leaves no failed-marker at all
-  No mapped test.
+  Given une étape de bucket qui échoue — elle pose son marqueur `set_status_*_failed` (p. ex.
+    @set_status_init_failed, @set_status_schedule_backup_failed) et se re-lève
+  When la levée traverse @import_run
+  Then ce n'est pas l'un des deux marqueurs de skip, donc elle se re-lève : aucun bucket suivant,
+    pas de close, et la lane Rust échoue jusqu'à exit(1) — une levée levée à l'intérieur de CE
+    fichier-ci à la place (refresh, prédicat tofu, close) ne laisse aucun failed-marker
+  Pas de test mappé.
 
 Scenario: tofu context merge clobber
-  Given the befores/vitals lanes returned maps (the shipped stages always do) and a tofu gate
-    that is true
-  When @run reaches the tofu exit
-  Then `context` first becomes install_tofu's return and is then OVERWRITTEN by the stale `ctx`
-    still holding the pre-tofu merge — tofu-lane context updates (e.g. `context.tofu`) reach
-    `install_post` and the close only when no earlier lane merged
-  No mapped test; recorded behavior, see Tasks (shared verbatim with the service twin).
+  Given que les lanes befores/vitals ont retourné des cartes (les étapes livrées le font toujours)
+    et un gate tofu vrai
+  When @run atteint la sortie de la lane tofu
+  Then `context` devient d'abord le retour de install_tofu puis est ÉCRASÉ par la `ctx` périmée
+    portant encore la fusion pré-tofu — les mises à jour de contexte de la lane tofu (p. ex.
+    `context.tofu`) n'atteignent `install_post` et la close que si aucune lane antérieure n'a fondu
+  Pas de test mappé ; comportement consigné, voir Tasks (partagé verbatim avec le jumeau service).
 
 Tasks:
-  [ ] Map the Scenarios with a tenant install suite: /agent/tests/rhai_lifecycle.rs is
-      service-only and never loads the tenant dir; /agent/tests/rhai_backup_redis.rs shows the
-      tenant mock harness works but only for the backup-prepare/restore modules. Add a fixture
-      package with the six category dirs and mocks for the refs, pinning order/refresh/gates.
-  [?] Tofu-lane double assignment: `context = import_run("install_tofu", ...)` plus the stale
-      `ctx` re-merge (Scenario "tofu context merge clobber") drops install_tofu's context on
-      every package that has an earlier merged lane. Decide once for both twins — the tenant
-      copy shares the service shape byte-for-byte.
-  [?] `init_from`, `schedule_backup` and `delete_backup` returns are discarded while every
-      other hook result is merged — decide whether their `*_pre`/`*_post` hook context updates
-      are meant to propagate downstream (today: they do not).
-  [?] The backup-Secret probe funnels EVERY read error (Forbidden included) into "absent" →
-      `delete_backup`, which sweeps the tenant's backup objects — a transient or rbac error can
-      therefore drop a tenant backup schedule. Decide whether to narrow to NotFound (twin-shared
-      with /agent/scripts/service/install.sdd).
-  [?] `install_pre`/`install_post` ship in no engine directory, so they exist only as
-      package-side hooks ({package_dir}/scripts). Confirm that is intentional (twin-shared).
-  [?] A package shadowing `install_tofu` with a module whose `run` returns non-map leaves
-      `context` = `()` and the install dies on the next property read (here:
-      `context.namespace.use_backup`). Decide whether to guard with the `type_of` pattern or
-      make it a documented package-author contract a linter should catch (twin-shared).
-  [?] Tenant-only: the context carries the maintenance window (`maintenance_start_hour`/
-      `maintenance_start_minut`) yet the tenant install ignores it entirely — first install of a
-      maintenance-sensitive tenant applies vitals/scalables at any hour. Confirm only
-      backup/restore are maintenance-gated by design.
-  [?] Twin-drift watch: this file is currently the service twin minus the crds lane plus the
-      refresh rename; `update_k8s_crd_cache` is imported by neither kind's tenant-side module,
-      so a future service fix must be hand-copied here. Decide whether the orchestrator body
-      should be factored into a shared lib module with a kind hook.
+  [ ] Mapper les Scenarios avec une suite install tenant : /agent/tests/rhai_lifecycle.rs est
+      service-only et ne charge jamais le répertoire tenant ; /agent/tests/rhai_backup_redis.rs
+      montre que le harnais mock tenant fonctionne mais seulement pour les modules
+      backup-prepare/restore. Ajouter un package fixture avec les six répertoires de catégorie et
+      des mocks des refs, en épinglant ordre/refresh/gates.
+  [?] Double assignation de la lane tofu : `context = import_run("install_tofu", ...)` plus la
+      re-fusion de la variable `ctx` périmée (Scenario "tofu context merge clobber") jette le
+      contexte d'install_tofu sur tout package ayant une lane fusionnée antérieure. Trancher une
+      fois pour les deux jumeaux — la copie tenant partage la forme service byte-for-byte.
+  [?] Les retours de `init_from`, `schedule_backup` et `delete_backup` sont jetés alors que tout
+      autre résultat de hook est fondu — décider si leurs mises à jour de contexte des hooks
+      `*_pre`/`*_post` sont censées se propager en aval (aujourd'hui : non).
+  [?] La sonde du Secret backup déverse TOUTE erreur de lecture (Forbidden compris) dans "absent" →
+      `delete_backup`, qui balaie les backup objects du tenant — une erreur transitoire ou rbac peut
+      donc perdre une planification backup tenant. Décider de restreindre à NotFound (partagé en
+      twin avec /agent/scripts/service/install.sdd).
+  [?] `install_pre`/`install_post` ne sont livrés dans aucun répertoire d'engine, donc ils n'existent
+      que comme hooks côté package ({package_dir}/scripts). Confirmer que c'est intentionnel
+      (partagé en twin).
+  [?] Un package qui éclipse `install_tofu` avec un module dont `run` retourne un non-map laisse
+      `context` = `()` et l'install meurt à la lecture de propriété suivante (ici :
+      `context.namespace.use_backup`). Décider de garder avec le pattern `type_of` ou d'en faire un
+      contract documenté d'auteur de package qu'un linter devrait attraper (partagé en twin).
+  [?] Tenant-only : le contexte porte la maintenance window (`maintenance_start_hour`/
+      `maintenance_start_minut`) mais l'install tenant l'ignore entièrement — le premier install
+      d'un tenant sensible à la maintenance applique vitals/scalables à n'importe quelle heure.
+      Confirmer que seuls backup/restore sont gates par la maintenance by design.
+  [?] Watch du drift de jumeau : ce fichier est actuellement le jumeau service moins la lane crds
+      plus le renommage des refresh ; `update_k8s_crd_cache` n'est importé par aucun module côté
+      tenant d'aucun kind, donc une correction future côté service doit être recopiée ici à la
+      main. Décider si le corps d'orchestrateur doit être factorisé dans un module lib partagé avec
+      un hook de kind.
 
 Done when:
-  Every Scenario carries a passing mapped test or a recorded decision, the bucket/hook order and
-    gate texts above still match the source, and `specdd lint` is green on this file.
+  Chaque Scenario porte un test mappé passant ou une décision consignée, l'ordre des buckets/hooks
+    et les textes de gates ci-dessus correspondent toujours à la source, et `specdd lint` est vert
+    sur ce fichier.

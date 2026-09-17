@@ -1,311 +1,313 @@
 Spec: LibBackupContext
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Build the restic backup/restore ENV and CONTEXT consumed by the service and tenant
-    backup/restore lanes, in two disjoint halves. @from_args(context) reads the
-    backup/restore Pod's own process environment (repo URL, snapshot, engine lists,
-    retention, scale, TLS) back into the args map the runtime stages use; @run(instance,
-    context, use_init_from) produces that environment on the other side, assembling the
-    volumes/mounts/env/envFrom/files/CronJob fields of the init, schedule and
-    backup/restore pods that the ./../service and ./../tenant lane templates render.
+  Construit l'ENV et le CONTEXT de backup/restore restic consommés par les lanes
+    backup/restore des service et tenant, en deux moitiés disjointes. @from_args(context) relit
+    l'environnement-processus du Pod backup/restore lui-même (repo URL, snapshot, listes
+    d'engines, rétention, scale, TLS) dans la carte args que les stages du runtime utilisent ; @run(instance,
+    context, use_init_from) produit cet environnement de l'autre côté, en assemblant les champs
+    volumes/mounts/env/envFrom/files/CronJob des pods init, schedule et
+    backup/restore que les gabarits de lanes ./../service et ./../tenant rendent.
 
 Exposes:
-  @from_args(context) — env→map half; reached as `ctx::from_args(args)` by
+  @from_args(context) — moitié env→carte ; atteinte comme `ctx::from_args(args)` par
     ./../service/backup.rhai, ./../service/restore.rhai, ./../tenant/backup.rhai,
-    ./../tenant/restore.rhai. Mutates the passed map in place and returns it; reads no
-    key of it (only its own just-written values), overwrites exactly the 19 keys
+    ./../tenant/restore.rhai. Mute la carte passée en place et la retourne ; ne lit aucune
+    de ses clés (uniquement ses propres valeurs à elle juste écrites), écrase exactement les 19 clés
     `deployment_list`, `statefulset_list`, `secret_list`, `pg_list`, `mysql_list`,
     `mongo_list`, `redis_list`, `restic_tags`, `snapshot`, `max_dayly`, `max_weekly`,
     `max_monthly`, `max_yearly`, `namespace`, `scale_target`, `sub_path`, `base_path`,
     `s3_url`, `restic_args`.
-  @run(instance, context, use_init_from) — map→env half; reached as
-    `bctx::run(instance, context, true)` by ./../service/init_from.rhai and its tenant
-    twin (restore-from-instance lane feeding `{{> init_job.yaml }}`), and with `false`
-    as the third arg by ./../service/schedule_backup.rhai and its tenant twin (feeding
-    `{{> cronbackup.yaml }}`). Mutates and returns the same @context map; overwrites the
-    keys `volumes`, `mounts`, `envs_from`, `envs`, `files`, `has_files`, `schedule`,
+  @run(instance, context, use_init_from) — moitié carte→env ; atteinte comme
+    `bctx::run(instance, context, true)` par ./../service/init_from.rhai et son jumeau tenant
+    (lane restore-from-instance alimentant `{{> init_job.yaml }}`), et avec `false`
+    en troisième argument par ./../service/schedule_backup.rhai et son jumeau tenant (alimentant
+    `{{> cronbackup.yaml }}`). Mute et retourne la même carte @context ; écrase les
+    clés `volumes`, `mounts`, `envs_from`, `envs`, `files`, `has_files`, `schedule`,
     `service_account`, `backup_affinity`.
-  The two fns share no keys: no env key written by @run equals a context key @from_args
-    reads — the coupling is env-NAME-level through the rendered pod spec (see `Must`).
-  Importing the module runs nothing: the file body is one `//` comment and the two @fn
-    definitions, zero executable top-level code, so @import_run / @import on
-    `backup_context` touch no env, no filesystem and no cluster.
+  Les deux fns ne partagent aucune clé : aucune clé env écrite par @run n'égale une clé de
+    context lue par @from_args — le couplage se joue au niveau NOM d'ENV à travers le pod spec rendu (voir `Must`).
+  L'import du module n'exécute rien : le corps du fichier est un seul commentaire `//` et les deux
+    définitions @fn, zéro code exécutable au top-level, donc @import_run / @import sur
+    `backup_context` ne touchent ni env, ni système de fichiers, ni cluster.
 
 Accepts:
-  @from_args @context — any @rhai map used as accumulator (callers pass the ten-key CLI
-    `args` map injected by the Rust lane). All inputs are @get_env reads:
-    `DEPLOYMENT_LIST`, `STATEFULSET_LIST`, `SECRET_LIST`, `PG_LIST`, `MYSQL_LIST`,
-    `MONGO_LIST`, `REDIS_LIST` (space-separated -> arrays); `RESTIC_TAGS`,
-    `RESTIC_SNAPSHOT`, `NAMESPACE`, `SUB_PATH`, `BASE_REPO_URL` (raw strings);
+  @from_args @context — toute carte @rhai utilisée comme accumulateur (les appelants passent la
+    carte `args` CLI à dix clés injectée par la lane Rust). Toutes les entrées sont des lectures
+    @get_env : `DEPLOYMENT_LIST`, `STATEFULSET_LIST`, `SECRET_LIST`, `PG_LIST`, `MYSQL_LIST`,
+    `MONGO_LIST`, `REDIS_LIST` (séparés par espaces -> tableaux) ; `RESTIC_TAGS`,
+    `RESTIC_SNAPSHOT`, `NAMESPACE`, `SUB_PATH`, `BASE_REPO_URL` (chaînes brutes) ;
     `RESTIC_MAX_DAYLY`/`RESTIC_MAX_WEEKLY`/`RESTIC_MAX_MONTHLY`/`RESTIC_MAX_YEARLY`
-    (empty -> `7`/`5`/`12`/`4` respectively); `SCALE_TARGET` (@parse_int, any rejected
-    text -> int `1`, negatives kept); `INSECURE_TLS` (`== "true"` exact only).
-  @run @instance — a @ServiceInstance/@TenantInstance @Dynamic exposing
-    `.status.vitals` (REQUIRED array of `#{name, kind}`), `.status.scalables`
-    (nullable — guarded `!= ()`), and, only when @use_init_from, `.spec.initFrom`
-    (`.secretName`, `.subPath`, `.snapshot`, each separately nullable via `!= ()`).
-  @run @context — the install-lane context map: must carry `instance` (`name`,
-    `namespace`, `appslug`, `requested` and `["package"].name/.type/.backup_affinity`),
-    `namespace` (map: `ha`, `maintenance_start_minut`, `maintenance_start_hour` — the
-    `minut` misspelling is the cross-script contract), `cluster.vynil_namespace`,
-    `agent_image`, `package_dir`; and `tenant.name` additionally when
-    `["package"].type == "tenant"` — missing scalar map keys read as `()` and
-    interpolate as `()`, missing intermediate maps raise on the next dot.
-  @use_init_from — boolean flag positional third arg.
+    (vide -> `7`/`5`/`12`/`4` respectivement) ; `SCALE_TARGET` (@parse_int, tout texte rejeté
+    -> int `1`, négatifs conservés) ; `INSECURE_TLS` (`== "true"` exact seulement).
+  @run @instance — un @ServiceInstance/@TenantInstance @Dynamic exposant
+    `.status.vitals` (tableau REQUIS de `#{name, kind}`), `.status.scalables`
+    (nullable — gardé `!= ()`), et, seulement quand @use_init_from, `.spec.initFrom`
+    (`.secretName`, `.subPath`, `.snapshot`, chacun nullable séparément via `!= ()`).
+  @run @context — la carte de contexte de la lane install : doit porter `instance` (`name`,
+    `namespace`, `appslug`, `requested` et `["package"].name/.type/.backup_affinity`),
+    `namespace` (carte : `ha`, `maintenance_start_minut`, `maintenance_start_hour` — la
+    faute `minut` est le contrat inter-scripts), `cluster.vynil_namespace`,
+    `agent_image`, `package_dir` ; et `tenant.name` en plus quand
+    `["package"].type == "tenant"` — les clés scalaires manquantes de la carte se lisent comme `()` et
+    s'interpolent comme `()`, les cartes intermédiaires manquantes lèvent sur le dot suivant.
+  @use_init_from — flag booléen positionnel en troisième argument.
 
 Returns:
-  Both fns return the SAME mutated map passed in (last-expression `context`).
-  @from_args arrays are @Array of @String (empty env -> empty array: `"".split(" ")`
-    then @filter drops the single empty piece); `scale_target` is an int, retention and
-    snapshot values stay env strings; `s3_url` is `s3:${base_path}/${sub_path}`;
-    `restic_args` is `""` or `" --insecure-tls"` (leading space present).
-  @run writes `envs_from` as one secretRef entry (name `backup-settings` unless
-    initFrom overrides — that Secret must supply the restic repo credentials via envFrom),
-    `has_files` boolean, `schedule` cron text `${maintenance_start_minut} ${maintenance_start_hour} * * *`,
-    `service_account` `${appslug}-backup`, `backup_affinity` copied verbatim from
-    `instance["package"].backup_affinity` (may be `()`, not filtered).
+  Les deux fns retournent la MÊME carte mutée passée en argument (dernière expression `context`).
+  Les tableaux de @from_args sont des @Array de @String (env vide -> tableau vide : `"".split(" ")`
+    puis @filter élimine l'unique morceau vide) ; `scale_target` est un int, les valeurs de rétention et
+    de snapshot restent des chaînes d'env ; `s3_url` vaut `s3:${base_path}/${sub_path}` ;
+    `restic_args` vaut `""` ou `" --insecure-tls"` (espace de tête présent).
+  @run écrit `envs_from` comme une entrée secretRef unique (nom `backup-settings` sauf si
+    initFrom override — ce Secret doit fournir les credentials du repo restic via envFrom),
+    `has_files` booléen, `schedule` texte cron `${maintenance_start_minut} ${maintenance_start_hour} * * *`,
+    `service_account` `${appslug}-backup`, `backup_affinity` copié verbatim depuis
+    `instance["package"].backup_affinity` (peut être `()`, non filtré).
 
 Raises:
-  @from_args raises nothing for any env state (@get_env answers `""` unset, @parse_int
-    failure is caught); it raises only if @context is not a map (index-assign miss).
-  @run has zero @throw — failures are raw engine raises escaping unguarded spots:
-    `.status.vitals` absent or non-array (the `for` over `()`), any property dot on a
-    `()` intermediate (`instance` key missing, or `use_init_from` true while
-    `.spec.initFrom` itself is absent), `@file_read` inside the scripts scan, and the
-    Cluster branch's `k8s_resource("Secret", ns).@list_meta()` cluster call — that one
-    cluster read sits OUTSIDE any @try, so a Secrets-list failure aborts the whole run.
-  The MariaDB/NdbCluster/MongoDBCommunity/Dragonfly/RedisCluster/RedisSentinel branches
-    each wrap their CR @get in @try/@catch: a raised string is @log_warn'ed as-is,
-    anything else through @json_encode, and the branch is skipped (engine stays out of
-    its list). See Tasks: @json_encode of a non-serializable caught payload can itself
-    raise out of the @catch and still abort the run.
-  Absence-not-guarded spots: every `context.<key>.<field>` second-level dot; guarded
-    spots: the six DB/redis CR reads, `users[0]` (guarded by `users.len() > 0` — though a
-    missing `users[0].connectionStringSecretName` reads `()` and is written into the
-    `secretKeyRef.name` unvalidated), the per-list `.reduce` (guarded `len() > 0`, and
-    the rhai seed-free `reduce` starts the accumulator at `()` and returns `()` on
-    empty, which is why every reducer tests `sum.type_of() == "()"` first).
+  @from_args ne lève rien pour quelque état d'env que ce soit (@get_env répond `""` quand non posé,
+    l'échec de @parse_int est capté) ; il ne lève que si @context n'est pas une carte (index-assign manqué).
+  @run a zéro @throw — les échecs sont des levées brutes du moteur qui s'échappent des spots non
+    gardés : `.status.vitals` absent ou non-tableau (le `for` sur `()`), tout dot de propriété sur une
+    carte intermédiaire `()` (clé `instance` manquante, ou `use_init_from` vrai alors que
+    `.spec.initFrom` lui-même est absent), le `@file_read` dans le scan des scripts, et
+    l'appel cluster `k8s_resource("Secret", ns).@list_meta()` de la branche Cluster — cette
+    lecture cluster est EN DEHORS de tout @try, donc un échec de liste de Secrets interrompt tout le run.
+  Les branches MariaDB/NdbCluster/MongoDBCommunity/Dragonfly/RedisCluster/RedisSentinel
+    envelopnent chacune leur @get de CR dans @try/@catch : une chaîne levée est @log_warn'éée
+    telle quelle, tout le reste via @json_encode, et la branche est sautée (l'engine reste hors de
+    sa liste). Voir Tasks : @json_encode d'un payload capté non sérialisable peut
+    lui-même lever hors de l'@catch et avorter quand même le run.
+  Spots non gardés côté absence : chaque dot de second niveau `context.<key>.<field>` ;
+    spots gardés : les six lectures CR DB/redis, `users[0]` (gardé par `users.len() > 0` — bien
+    qu'un `users[0].connectionStringSecretName` manquant se lise `()` et soit écrit dans le
+    `secretKeyRef.name` sans validation), le `.reduce` par liste (gardé `len() > 0`, et le
+    `reduce` rhai sans seed démarre l'accumulateur à `()` et retourne `()` sur le vide,
+    d'où le test `sum.type_of() == "()"` en tête de chaque reducer).
 
 Handles:
-  Two disjoint lanes per import (runtime Pod from env / producer for pod specs) —
-    described in `Exposes`; neither fn calls the other.
-  Engine dispatch is by @v.kind string on `instance.status.vitals`:
+  Deux lanes disjointes par import (Pod runtime depuis l'env / producteur pour les pod specs) —
+    décrites dans `Exposes` ; aucune des deux fns n'appelle l'autre.
+  Le dispatch d'engine se fait sur la chaîne @v.kind dans `instance.status.vitals` :
     `PersistentVolumeClaim`, `Secret`, `Cluster`, `MariaDB`, `NdbCluster`,
-    `MongoDBCommunity`, `Dragonfly`, `RedisCluster`, `RedisSentinel`; any other kind is
-    ignored. `instance.status.scalables` `Deployment`/`StatefulSet` names feed
+    `MongoDBCommunity`, `Dragonfly`, `RedisCluster`, `RedisSentinel` ; tout autre kind est
+    ignoré. Les noms `Deployment`/`StatefulSet` de `instance.status.scalables` alimentent
     `DEPLOYMENT_LIST`/`STATEFULSET_LIST`.
-  Per-vital name sanitize (in place — rhai @replace/@trim mutate their @ImmutableString
-    receiver): strip every occurrence of `appslug`, swap `-`/space, @trim, restore `-`;
-    the empty result selects a per-kind default volume/suffix name — `data` (PVC),
-    `secret`, `postgres` (Cluster), `mariadb`, `ndb`, `mongodb`, `dragonfly`, `redis`
-    (both RedisCluster and RedisSentinel).
-  Secret vitals always contribute env `secret_${name}_target` (value = raw vital name)
-    and the `SECRET_LIST` entry; their `/secrets/${name}` volume+mount are written only
-    when @use_init_from is false (init-from pods get secret values through
-    the initFrom Secret instead).
-  Per-engine env blocks (all under the sanitized `${name}_` prefix):
-    Cluster/pgs — secret picked as `${v.name}-superuser` when the Secret @list_meta
-    filter finds it, else `${v.name}-app`; keys `host`, `username`, `password`,
-    `dbname` ALL written as `valueFrom.secretKeyRef` (host included, from the secret).
-    MariaDB — root leg when `spec.rootPasswordSecretKeyRef.name` present: literal `root`
-    username, password key ref (key `?? "password"`), literal host
-    `${v.name}.${namespace}.svc`, dbname literal with `?? "*"` fallback to the string
-    `"*"`; else user leg
-    (needs password ref + username + dbname all non-`()`): literal username, same
-    password/host shape, literal dbname. Absent either leg: warn-free silent skip.
-    NdbCluster — needs `spec.mysqlNode.rootPasswordSecretName`; refs keys
+  Sanitiz du nom par vital (en place — en rhai @replace/@trim mutent leur récepteur
+    @ImmutableString) : retire toute occurrence d'`appslug`, échange `-`/espace, @trim,
+    restaure `-` ; le résultat vide sélectionne un nom de volume/suffixe par défaut selon le
+    kind — `data` (PVC), `secret`, `postgres` (Cluster), `mariadb`, `ndb`, `mongodb`,
+    `dragonfly`, `redis` (RedisCluster et RedisSentinel confondues).
+  Les vitals Secret contribuent toujours l'env `secret_${name}_target` (valeur = nom brut
+    du vital) et l'entrée `SECRET_LIST` ; leur volume+mount `/secrets/${name}` n'est écrit
+    que quand @use_init_from est false (les pods init-from reçoivent les valeurs des
+    secrets via le Secret initFrom à la place).
+  Blocs d'env par engine (tous sous le préfixe sanitizé `${name}_`) :
+    Cluster/pgs — secret choisi comme `${v.name}-superuser` quand le filtre @list_meta
+    des Secret le trouve, sinon `${v.name}-app` ; les clés `host`, `username`, `password`,
+    `dbname` sont TOUTES écrites en `valueFrom.secretKeyRef` (host inclus, depuis le secret).
+    MariaDB — jambe root quand `spec.rootPasswordSecretKeyRef.name` présent : username
+    littéral `root`, password key ref (clé `?? "password"`), host littéral
+    `${v.name}.${namespace}.svc`, dbname littéral avec fallback `?? "*"` vers la chaîne
+    `"*"` ; sinon jambe user
+    (exige ref password + username + dbname tous non-`()`) : username littéral, même
+    forme password/host, dbname littéral. Aucune des deux jambes : skip silencieux sans warn.
+    NdbCluster — exige `spec.mysqlNode.rootPasswordSecretName` ; refs clés
     `username`/`password`, host `${v.name}-mysqld.${namespace}.svc`, dbname `"*"`.
-    MongoDBCommunity — needs `spec.users[0].connectionStringSecretName`; refs keys
+    MongoDBCommunity — exige `spec.users[0].connectionStringSecretName` ; refs clés
     `username`/`password`, host `${v.name}-svc.${namespace}.svc`, dbname `"*"`.
-    Dragonfly — needs `spec.authentication.passwordFromSecret.name`; password ref,
-    literal host `${v.name}.${namespace}.svc`, plus `${name}_kind` = `"Dragonfly"` and
-    `${name}_sts` = raw vital name. RedisCluster — `spec.kubernetesConfig.redisSecret`,
-    host `${v.name}-leader...`, `_sts` `${v.name}-leader`; RedisSentinel — same secret
-    path, host `${v.name}-master...`, `_sts` `${v.name}-master`. Redis engines get
-    `password`-only refs (no username/dbname keys). The optional password `key` defaults
-    to `"password"` via `??` on both mariadb refs and all three redis secret reads.
-  The `${name}.*` and secret-target env names are generated independently per vital;
-    two vitals sanitizing to the same name produce duplicate env entries, undeclared
-    here (see Tasks).
-  Scripts scan: `@is_dir(`${package_dir}/scripts`)` then @read_dir, keeping files whose
-    @basename @starts_with `backup`, `restore` or `maintenance` as
-    `#{name, content}` via @file_read; `has_files` additionally appends a configMap
-    volume `${appslug}-backups-scripts` (`defaultMode: 493` = 0755) mounted at
-    `/package/scripts` beside the always-present `empty-dir` volume mounted at
-    `/backup`; PVCs mount at `/backup/${name}`, secrets at `/secrets/${name}`.
+    Dragonfly — exige `spec.authentication.passwordFromSecret.name` ; ref password, host
+    littéral `${v.name}.${namespace}.svc`, plus `${name}_kind` = `"Dragonfly"` et
+    `${name}_sts` = nom brut du vital. RedisCluster — `spec.kubernetesConfig.redisSecret`,
+    host `${v.name}-leader...`, `_sts` `${v.name}-leader` ; RedisSentinel — même chemin
+    de secret, host `${v.name}-master...`, `_sts` `${v.name}-master`. Les engines Redis
+    reçoivent des refs `password` seules (pas de clés username/dbname). Le `key` de password
+    optionnel vaut `"password"` par défaut via `??` sur les deux refs mariadb et les trois
+    lectures de secret redis.
+  Les noms d'env `${name}.*` et des secret-target sont générés indépendamment par vital ;
+    deux vitals se sanitizant vers le même nom produisent des entrées env dupliquées, non
+    déclarées ici (voir Tasks).
+  Scan des scripts : `@is_dir(`${package_dir}/scripts`)` puis @read_dir, en gardant les
+    fichiers dont l'@basename @starts_with par `backup`, `restore` ou `maintenance` comme
+    `#{name, content}` via @file_read ; `has_files` ajoute en plus un volume configMap
+    `${appslug}-backups-scripts` (`defaultMode: 493` = 0755) monté dans
+    `/package/scripts` à côté du volume `empty-dir` toujours présent monté dans
+    `/backup` ; les PVC se montent dans `/backup/${name}`, les secrets dans `/secrets/${name}`.
 
 Must:
-  List envs `DEPLOYMENT_LIST`, `STATEFULSET_LIST`, `PG_LIST`, `MYSQL_LIST`, `MONGO_LIST`,
-    `REDIS_LIST`, `SECRET_LIST` are emitted ONLY when non-empty, joined space-separated
-    by the `()`-seeded @reduce idiom — empty lists emit no env name at all.
-  Emit the @envs base list in this fixed shape: `RESTIC_TAGS`, `RESTIC_HOST` (=
+  Les envs de listes `DEPLOYMENT_LIST`, `STATEFULSET_LIST`, `PG_LIST`, `MYSQL_LIST`, `MONGO_LIST`,
+    `REDIS_LIST`, `SECRET_LIST` ne sont émis QUE quand non vides, joints séparés par espaces
+    via l'idiome @reduce seedé par `()` — les listes vides n'émettent aucun nom d'env.
+  Émettre la liste de base @envs dans cette forme fixe : `RESTIC_TAGS`, `RESTIC_HOST` (=
     appslug), `GOMAXPROCS` = `"2"`, `GOMEMLIMIT` = `"1560MiB"`, `GOGC` = `"50"`,
-    `AGENT_IMAGE` (from context), `SCALE_TARGET` = `"2"` when `context.namespace.ha`
-    else `"1"`, `VYNIL_NAMESPACE` (from `context.cluster.vynil_namespace`), `INSTANCE`,
-    `TAG` (= `instance.requested`), `SUB_PATH` (= `${instance.namespace}/${appslug}` by
-    default, initFrom.subPath wins), `APPSLUG`, then `NAMESPACE` and `POD_NAME` as
-    `valueFrom.fieldRef` downward-API entries (`metadata.namespace` / `metadata.name`) —
-    the two and the DB password/host refs are the only non-literal-value entries.
-  `RESTIC_TAGS` composes as
+    `AGENT_IMAGE` (depuis context), `SCALE_TARGET` = `"2"` quand `context.namespace.ha`
+    sinon `"1"`, `VYNIL_NAMESPACE` (depuis `context.cluster.vynil_namespace`), `INSTANCE`,
+    `TAG` (= `instance.requested`), `SUB_PATH` (= `${instance.namespace}/${appslug}` par
+    défaut, initFrom.subPath gagne), `APPSLUG`, puis `NAMESPACE` et `POD_NAME` en
+    entrées `valueFrom.fieldRef` downward-API (`metadata.namespace` / `metadata.name`) —
+    elles et les refs password/host DB sont les seules entrées à valeur non littérale.
+  `RESTIC_TAGS` se compose comme
     `namespace:${ns},instance:${name},component:${package.name},version:${requested}`
-    plus `,tenant:${context.tenant.name}` appended if and only if
+    plus `,tenant:${context.tenant.name}` ajouté si et seulement si
     `package.type == "tenant"`.
-  Append `RESTIC_SNAPSHOT` (value `instance.spec.initFrom.snapshot`, possibly `()`
-    when that key is absent — the entry is NOT skipped) only when @use_init_from is
-    true; the schedule lane therefore never carries it.
-  Run @sub_path/base_path normalization in @from_args, not in @run: the
-    `@replace("/"," ")` -> @trim -> `@replace(" ","/")` in-place chain strips leading
-    and trailing slashes/whitespace of SUB_PATH and BASE_REPO_URL (interior
-    double-slashes survive, interior spaces become `/`); run's own default/defaulted
-    `SUB_PATH` env gets no such treatment.
-  Read BASE_REPO_URL/SUB_PATH normalized into key `s3_url` as
-    `s3:${base_path}/${sub_path}` — with unset env degrading to `s3:/`.
-  Keep the retention defaults as STRINGS `"7"`, `"5"`, `"12"`, `"4"` for
-    `max_dayly`/`max_weekly`/`max_monthly`/`max_yearly` (only when the env is empty;
-    the `dayly` misspelling matches the env name `RESTIC_MAX_DAYLY`).
+  Ajouter `RESTIC_SNAPSHOT` (valeur `instance.spec.initFrom.snapshot`, possiblement `()`
+    quand cette clé est absente — l'entrée N'EST PAS sautée) seulement quand @use_init_from est
+    true ; la lane schedule ne le porte donc jamais.
+  Effectuer la normalisation @sub_path/base_path dans @from_args, pas dans @run : la
+    chaîne en place `@replace("/"," ")` -> @trim -> `@replace(" ","/")` strippe les slashs/espaces
+    de tête et de queue de SUB_PATH et BASE_REPO_URL (les doubles slashs internes survivent, les
+    espaces internes deviennent `/`) ; le `SUB_PATH` d'env propre à run, défaut/défaut-posé,
+    ne reçoit aucun tel traitement.
+  Lire BASE_REPO_URL/SUB_PATH normalisés dans la clé `s3_url` comme
+    `s3:${base_path}/${sub_path}` — avec un env non posé dégradant vers `s3:/`.
+  Garder les défauts de rétention en TANT QUE STRINGS `"7"`, `"5"`, `"12"`, `"4"` pour
+    `max_dayly`/`max_weekly`/`max_monthly`/`max_yearly` (seulement quand l'env est vide ;
+    la faute `dayly` correspond au nom d'env `RESTIC_MAX_DAYLY`).
 
 Depends on:
-  Wynil-core 0.7.7 registrars behind the @Script::new live engine
-    (./../../../common/src/rhaihandler.sdd) and the @Script::new_mock test engines — the
-    script just calls the registered names: @get_env, @log_warn, @json_encode, @basename
+  Les registrars Wynil-core 0.7.7 derrière le moteur live @Script::new
+    (./../../../common/src/rhaihandler.sdd) et les moteurs de test @Script::new_mock — le
+    script appelle juste les noms enregistrés : @get_env, @log_warn, @json_encode, @basename
     (`core_common_rhai_register`), @is_dir, @read_dir, @file_read (`fs_rhai_register`,
-    `fs` feature), @k8s_resource(name, ns)/@get/@list_meta on the `"K8sGeneric"` type
-    (`k8sgeneric_rhai_register` — `.list_meta()` is the metadata-only variant, and the
-    `k8sraw` `get_url` surface is not used here), @parse_int and the map/reduce/
-    filter/@trim/@replace builtins. Spec boundary ends at "the script calls X".
+    feature `fs`), @k8s_resource(name, ns)/@get/@list_meta sur le type `"K8sGeneric"`
+    (`k8sgeneric_rhai_register` — `.list_meta()` est la variante metadata-only, et la
+    surface `get_url` de `k8sraw` n'est pas utilisée ici), @parse_int et les builtins
+    map/reduce/filter/@trim/@replace. La frontière de la spec s'arrête à "the script calls X".
   ./../service/backup.rhai, ./../service/restore.rhai, ./../tenant/backup.rhai,
-    ./../tenant/restore.rhai — @from_args(`args`) callers (alias `ctx`);
-    ./../service/init_from.rhai, ./../tenant/init_from.rhai — @run(..., true);
+    ./../tenant/restore.rhai — appelants de @from_args(`args`) (alias `ctx`) ;
+    ./../service/init_from.rhai, ./../tenant/init_from.rhai — @run(..., true) ;
     ./../service/schedule_backup.rhai, ./../tenant/schedule_backup.rhai — @run(...,
-    false) inside a @try whose @catch reports via `set_status_schedule_backup_failed`
-    then re-throws.
+    false) dans un @try dont l'@catch signale via `set_status_schedule_backup_failed`
+    puis relève.
   /agent/src/service/backup.sdd, /agent/src/service/restore.sdd,
-    /agent/src/tenant/backup.sdd, /agent/src/tenant/restore.sdd — the Rust-lane specs
-    that froze the consumer-side env contract this file's @from_args half satisfies
-    (reconciled in the `from_args` accept list; drifts in Tasks).
-  /agent/tests/rhai_lib.rs — the only tests naming this module (five pattern-simulating
-    `eval` snippets on `make_lib_script()`, a mock engine over `scripts/lib` only — none
-    calls either fn).
+    /agent/src/tenant/backup.sdd, /agent/src/tenant/restore.sdd — les specs des lanes Rust
+    qui ont gelé le contrat d'env côté consommateur que la moitié @from_args de ce fichier satisfait
+    (réconcilié dans la liste accept `from_args` ; drifts dans Tasks).
+  /agent/tests/rhai_lib.rs — les seuls tests nommant ce module (cinq extraits
+    `eval` simulant les patterns sur `make_lib_script()`, un moteur mock sur `scripts/lib`
+    uniquement — aucun n'appelle l'une ni l'autre fn).
 
 Scenario: from_args full environment decodes
-  Given process env with `DEPLOYMENT_LIST="a b"`, `PG_LIST="pg main"`,
+  Given un process env avec `DEPLOYMENT_LIST="a b"`, `PG_LIST="pg main"`,
     `RESTIC_MAX_DAYLY="3"`, `SCALE_TARGET="10"`, `INSECURE_TLS="true"`,
-    `BASE_REPO_URL="https://repo/"`, `SUB_PATH="/ns/app/"` and the rest empty
-  When @from_args runs on an empty map
-  Then `deployment_list` = `["a","b"]` (empty inner pieces filtered), `pg_list` has both
-    names, `max_dayly` is `"3"` while `max_weekly`/`max_monthly`/`max_yearly` fall to
+    `BASE_REPO_URL="https://repo/"`, `SUB_PATH="/ns/app/"` et le reste vide
+  When @from_args tourne sur une carte vide
+  Then `deployment_list` = `["a","b"]` (morceaux internes vides filtrés), `pg_list` a les deux
+    noms, `max_dayly` vaut `"3"` pendant que `max_weekly`/`max_monthly`/`max_yearly` retombent sur
     `"5"`/`"12"`/`"4"`
-  And `scale_target` is the int `10`, `restic_args` is `" --insecure-tls"`, and both
-    paths lost their edge slashes so `s3_url` is `s3:https://repo/ns/app`
+  And `scale_target` est l'int `10`, `restic_args` vaut `" --insecure-tls"`, et les deux
+    chemins ont perdu leurs slashs de bordure donc `s3_url` vaut `s3:https://repo/ns/app`
 
 Scenario: from_args on a bare environment
-  Given every read env var unset (each @get_env answers `""`)
-  When @from_args runs
-  Then every list key is an empty @Array, `snapshot` and `restic_tags` are `""`, the four
-    retention keys are `"7"`/`"5"`, `"12"`, `"4"`, `scale_target` is int `1` (the
-    @parse_int `""` throw is caught), `restic_args` keeps `""`, `s3_url` is the degraded
-    `s3:/` — no raise anywhere
+  Given chaque variable d'env lue non posée (chaque @get_env répond `""`)
+  When @from_args tourne
+  Then chaque clé de liste est un @Array vide, `snapshot` et `restic_tags` valent `""`, les quatre
+    clés de rétention valent `"7"`/`"5"`, `"12"`, `"4"`, `scale_target` est l'int `1` (la
+    levée @parse_int sur `""` est captée), `restic_args` garde `""`, `s3_url` est la valeur dégradée
+    `s3:/` — aucune levée nulle part
 
 Scenario: run secret and PVC mounting split by lane
-  Given a context with `instance` (`appslug: "box-shop"`) plus package type `service`,
-    and a `status.vitals` of one @PersistentVolumeClaim and one @Secret
-  When @run is called with @use_init_from false
-  Then `volumes`/`mounts` carry the `empty-dir` pair, a PVC volume named from the
-    sanitized vital (default `data` when the name sanitizes empty) mounted at
-    `/backup/${name}`, and the Secret volume at `/secrets/${name}`
-  And `envs` holds `secret_${name}_target` with the raw vital name and `SECRET_LIST`
-    with that name, while `RESTIC_SNAPSHOT` is absent and `has_files` reflects the
-    scripts scan
+  Given un contexte avec `instance` (`appslug: "box-shop"`) plus le type de package `service`,
+    et un `status.vitals` d'un @PersistentVolumeClaim et d'un @Secret
+  When @run est appelé avec @use_init_from false
+  Then `volumes`/`mounts` portent la paire `empty-dir`, un volume PVC nommé d'après le
+    vital sanitizé (défaut `data` quand le sanitizé du nom est vide) monté dans
+    `/backup/${name}`, et le volume Secret dans `/secrets/${name}`
+  And `envs` contient `secret_${name}_target` avec le nom brut du vital et `SECRET_LIST`
+    avec ce nom, tandis que `RESTIC_SNAPSHOT` est absent et que `has_files` reflète le
+    scan des scripts
 
 Scenario: run init-from overrides
-  Given the same with `use_init_from` true and `instance.spec.initFrom` carrying
-    `secretName`, `subPath` and `snapshot`
-  When @run runs
-  Then `envs_from` names the initFrom Secret instead of `backup-settings`, `SUB_PATH`
-    takes the initFrom subPath, `RESTIC_SNAPSHOT` is appended with the initFrom snapshot,
-    and the Secret vital contributes env + `SECRET_LIST` but NO `/secrets/` volume
+  Given le même avec `use_init_from` true et `instance.spec.initFrom` portant
+    `secretName`, `subPath` et `snapshot`
+  When @run tourne
+  Then `envs_from` nomme le Secret initFrom au lieu de `backup-settings`, `SUB_PATH`
+    prend le subPath de initFrom, `RESTIC_SNAPSHOT` est ajouté avec le snapshot de initFrom,
+    et le vital Secret contribue env + `SECRET_LIST` mais AUCUN volume `/secrets/`
 
 Scenario: engine pick and skip-by-absence
-  Given vitals with a CNPG `Cluster` named `db` while a Secret `db-superuser` exists in
-    the @list_meta result, one @MariaDB whose CR exposes only
-    `rootPasswordSecretKeyRef`, one @RedisSentinel with `kubernetesConfig.redisSecret`
-  When @run runs
-  Then the `db_host`/`db_username`/`db_password`/`db_dbname` envs (sanitized-vital
-    prefix) all index secret `db-superuser` on keys
-    `host`/`username`/`password`/`dbname` (host included), `MYSQL_LIST` names the
-    sanitized mariadb whose username env is the literal `root`, and `REDIS_LIST` plus
-    `_kind` = `"RedisSentinel"` / `_sts` suffix `-master` are set
-  But a mariadb vital whose CR @get raises (or has neither credential leg) is only
-    @log_warn'd/ignored and stays out of `MYSQL_LIST`
+  Given des vitals avec un `Cluster` CNPG nommé `db` alors qu'un Secret `db-superuser` existe dans
+    le résultat @list_meta, un @MariaDB dont le CR expose uniquement
+    `rootPasswordSecretKeyRef`, un @RedisSentinel avec `kubernetesConfig.redisSecret`
+  When @run tourne
+  Then les envs `db_host`/`db_username`/`db_password`/`db_dbname` (préfixe du vital
+    sanitizé) indexent tous le secret `db-superuser` sur les clés
+    `host`/`username`/`password`/`dbname` (host inclus), `MYSQL_LIST` nomme le
+    mariadb sanitizé dont l'env username est le littéral `root`, et `REDIS_LIST` plus
+    `_kind` = `"RedisSentinel"` / suffixe `_sts` `-master` sont posés
+  But un vital mariadb dont le @get du CR lève (ou n'ayant aucune des deux jambes de credentials)
+    est seulement @log_warn'é/ignoré et reste hors de `MYSQL_LIST`
 
 Scenario: scripts scan feeds the configMap pair
-  Given `${package_dir}/scripts` containing `backup.sh`, `maintenance_stop.sh` and
+  Given `${package_dir}/scripts` contenant `backup.sh`, `maintenance_stop.sh` et
     `other.sh`
-  When @run runs
-  Then `files` holds `#{name: "backup.sh", ...}` and the maintenance entry (content =
-    full file text) but not `other.sh`, `has_files` is true, and `volumes`/`mounts` gain
-    `${appslug}-backups-scripts` at `/package/scripts`
+  When @run tourne
+  Then `files` contient `#{name: "backup.sh", ...}` et l'entrée maintenance (contenu =
+    texte complet du fichier) mais pas `other.sh`, `has_files` est true, et `volumes`/`mounts` gagnent
+    `${appslug}-backups-scripts` dans `/package/scripts`
 
 Scenario: the unguarded cluster read and dead vitals abort
-  Given vitals including a `Cluster` vital while the Secret @list_meta call fails, or a
-    context where the `instance` key is missing, or `status` without `vitals`
-  When @run runs
-  Then each of the three raises out of the function (Cluster-list failure is outside any
-    @try; the last two are property-on-`()` raises) — the schedule lane sees them as its
-    own @catch status-failure text
+  Given des vitals incluant un vital `Cluster` alors que l'appel @list_meta des Secret échoue, ou un
+    contexte où la clé `instance` manque, ou un `status` sans `vitals`
+  When @run tourne
+  Then chacun des trois lève hors de la fonction (l'échec de liste Cluster est hors de tout
+    @try ; les deux derniers sont des levées property-on-`()`) — la
+    lane schedule les voit comme son propre texte d'échec de statut de son @catch
 
 Example:
-  `RESTIC_TAGS` full form: `namespace:web,instance:shop,component:shop-pkg,version:1.4.2`
-    plus `,tenant:acme` on tenant packages
-  from_args key/value types: lists `Array<String>`, `scale_target` int, `restic_args`
-    `" --insecure-tls"` or `""`
+  Forme complète de `RESTIC_TAGS` : `namespace:web,instance:shop,component:shop-pkg,version:1.4.2`
+    plus `,tenant:acme` sur les packages tenant
+  Types clé/valeur de from_args : les listes `Array<String>`, `scale_target` int, `restic_args`
+    `" --insecure-tls"` ou `""`
 
 Tasks:
-  [ ] Call @from_args directly from /agent/tests/rhai_lib.rs: no test invokes either fn.
-      The five existing `backup_context_*` tests @eval hand-copied pattern snippets
-      (split/filter, seeded reduce incl. the `()`-seed idiom, both replace/trim chains)
-      and would keep passing even if this module deleted; /agent/tests/rhai_backup_redis.rs
-      never names this file. Drive from_args with `@std::env` fixtures once injectable,
-      and @run through `make_lib_script_with_k8s` mocks covering the nine kinds, both
-      init_from legs, the scripts scan and each @catch.
-  [?] Produce/consume drift toward the four Rust-lane specs: @from_args reads
-      `BASE_REPO_URL`, `SUB_PATH`, `RESTIC_SNAPSHOT`, `NAMESPACE`, both list sets and the
-      retention/scale/TLS envs, but @run WRITES NO `BASE_REPO_URL`, NO
-      `INSECURE_TLS` and NO `RESTIC_MAX_*` entry — those five (plus
-      `NAMESPACE` as plain string, which the restore.sdd env enumeration also omits) have
-      no producer anywhere in this file, and the specs only say unset envs resolve to
-      empty by @get_env, silently degrading `s3_url` to `s3:/`. Confirm the operator/box
-      Job env is their real producer and settle which side freezes them.
-  [?] Consumer-side list for the @run-only envs: `RESTIC_HOST` (restic binary),
-      `GOMAXPROCS`/`GOMEMLIMIT`/`GOGC` (Go tuning constants baked here),
-      `AGENT_IMAGE`/`INSTANCE`/`TAG`/`VYNIL_NAMESPACE`/`APPSLUG`/`POD_NAME`, the
-      `secret_*_target` and `${name}_host/_username/_password/_dbname/_kind/_sts`
-      families are read by the package scripts and stage modules via shell env, not by
-      @from_args, and no spec yet freezes which reader takes which — enumerate here or
-      move each to its owner once the stage scripts get specs.
-  [?] Duplicate generated env names: two vitals sanitizing to the same `${name}` (e.g.
-      two Clusters, or a Secret and a Cluster both reducing to `main`) emit colliding
-      env entries and volumes with no detection — decide whether the file must
-      disambiguate or the CR surface forbids it.
-  [?] Name sanitize removes EVERY appslug occurrence, not just the prefix, and turns
-      interior spaces into `-` — decide whether prefix-strip is the intent (the
-      existing simulate-only test only exercises the prefix case).
-  [?] initFrom with `snapshot` absent still appends `RESTIC_SNAPSHOT` with a `()` value
-      into the rendered pod spec, while the schedule lane never sets the name at all —
-      confirm the `()`-valued env entry is tolerated by the init_job template or must be
-      guarded like the retention defaults.
-  [?] Inside the six DB/redis @catch blocks, @json_encode(e) on a non-serializable
-      caught payload would itself raise and abort @run — decide whether the catch must
-      degrade to a lossier log, and pin with a mock @get failure what @type_of the
-      raised system errors actually report (the `"string"` arm only covers thrown
-      strings).
-  [?] `context["namespace"]` is a plain string in the @from_args lane but a map
-      (`ha`/maintenance fields) in the template lane — same key, two types, never in one
-      map today; confirm the split stays or rename one side.
+  [ ] Appeler @from_args directement depuis /agent/tests/rhai_lib.rs : aucun test n'appelle
+      l'une ni l'autre fn.
+      Les cinq tests existants `backup_context_*` @eval des extraits de patterns recopiés à la
+      main (split/filter, reduce seedé incluant l'idiome seed `()`, les deux chaînes
+      replace/trim) et passeraient encore même si ce module était supprimé ;
+      /agent/tests/rhai_backup_redis.rs ne nomme jamais ce fichier. Piloter from_args avec des
+      fixtures `@std::env` une fois injectables, et @run via les mocks
+      `make_lib_script_with_k8s` couvrant les nine kinds, les deux jambes init_from, le scan des
+      scripts et chaque @catch.
+  [?] Dérive produce/consume vis-à-vis des quatre specs des lanes Rust : @from_args lit
+      `BASE_REPO_URL`, `SUB_PATH`, `RESTIC_SNAPSHOT`, `NAMESPACE`, les deux jeux de listes et les
+      envs rétention/scale/TLS, mais @run n'écrit AUCUN `BASE_REPO_URL`, AUCUN
+      `INSECURE_TLS` et AUCUNE entrée `RESTIC_MAX_*` — ces cinq-là (plus
+      `NAMESPACE` comme chaîne simple, que l'énumération d'env de restore.sdd omet aussi) n'ont
+      aucun producteur nulle part dans ce fichier, et les specs disent seulement que les envs non
+      posés se résolvent en vide via @get_env, dégradant silencieusement `s3_url` vers `s3:/`.
+      Confirmer que l'env du Job operator/box est leur vrai producteur et trancher quel côté les gèle.
+  [?] Liste côté consommateur des envs propres à @run : `RESTIC_HOST` (binaire restic),
+      `GOMAXPROCS`/`GOMEMLIMIT`/`GOGC` (constantes de tuning Go cablées ici),
+      `AGENT_IMAGE`/`INSTANCE`/`TAG`/`VYNIL_NAMESPACE`/`APPSLUG`/`POD_NAME`, les familles
+      `secret_*_target` et `${name}_host/_username/_password/_dbname/_kind/_sts` sont lues par
+      les scripts package et les modules de stage via l'env shell, pas par @from_args, et aucune
+      spec ne gèle encore quel lecteur prend quoi — énumérer ici ou déplacer chacun vers son
+      propriétaire quand les scripts de stage auront leurs specs.
+  [?] Noms d'env générés dupliqués : deux vitals se sanitizant vers le même `${name}` (p. ex.
+      deux Clusters, ou un Secret et un Cluster se réduisant tous deux à `main`) émettent des
+      entrées env et des volumes en collision sans détection — décider si le fichier doit
+      désambiguïser ou si la surface CR l'interdit.
+  [?] Le sanitiz de nom retire TOUTE occurrence d'appslug, pas seulement le préfixe, et
+      transforme les espaces internes en `-` — décider si le strip par préfixe est l'intention (le
+      test existant, simulate-only, n'exerce que le cas du préfixe).
+  [?] Un initFrom dont `snapshot` est absent ajoute quand même `RESTIC_SNAPSHOT` avec une valeur
+      `()` dans le pod spec rendu, tandis que la lane schedule ne pose jamais ce nom du tout —
+      confirmer que l'entrée d'env à valeur `()` est tolérée par le template init_job ou doit être
+      gardée comme les défauts de rétention.
+  [?] Dans les six blocs @catch DB/redis, @json_encode(e) sur un payload capté non sérialisable
+      lèverait lui-même et avorter @run — décider si le catch doit se dégrader vers un log plus
+      pauvre, et épingler avec un mock de failure @get ce que @type_of des erreurs système levées
+      rapporte réellement (la branche `"string"` ne couvre que les chaînes levées).
+  [?] `context["namespace"]` est une chaîne simple dans la lane @from_args mais une carte
+      (champs `ha`/maintenance) dans la lane template — même clé, deux types, jamais dans une
+      seule carte aujourd'hui ; confirmer que la scission tient ou renommer un côté.
 
 Done when:
-  Every Scenario has a mapped @Script::new_mock test against this module (not a copied
-    snippet), the produce/consume env contract with the four Rust-lane specs is closed on
-    whichever side owns each var, and `specdd lint` stays green.
+  Chaque Scenario a un test @Script::new_mock mappé contre ce module (pas un extrait recopié),
+    le contrat d'env produce/consume avec les quatre specs des lanes Rust est fermé du côté qui
+    possède chaque variable, et `specdd lint` reste vert.
