@@ -14,7 +14,7 @@ Purpose:
     ./../../../common/src/handlebarshandler.sdd.
 
 Exposes:
-  File emitters:
+  Émetteurs de fichiers :
     @gen_yaml(path, data) — @file_write de la ligne `---` + @yaml_encode(data) vers @path.
     @gen_crd_yaml(path, data) — idem, préfixé de la ligne supplémentaire
       `# yamllint disable rule:line-length` (les CRDs portent de longues lignes de description
@@ -97,7 +97,7 @@ Exposes:
       `labels` ; le paramètre @name n'est jamais lu (voir Tasks).
     @clean_annotations(metadata) — la même passe d'annotations sans suppression des labels
       (« backward compat » selon son commentaire) ; aucun appelant intra-module.
-  Pod-doc rewriters (all mutate/return the passed doc, every branch `in`/`() !=`-guarded):
+  Réécriture des docs Pod (toutes mutent/retournent le doc passé, chaque branche sous garde `in`/`() !=`) :
     @replace_image_pull_secrets(ips, name) — le `.name` de chaque sujet reçoit @name →
       `{{instance.appslug}}` (replace à effet de bord), liste reconstruite.
     @replace_volumes(volumes, name) — même substitution dans `configMap.name`,
@@ -155,7 +155,7 @@ Exposes:
       `{{instance.appslug}}`, `.namespace` assigné `{{instance.namespace}}`.
     @replace_ingress(doc, name) — @clean_metadata, puis substitutions `spec.rules[].http.paths[].backend.
       service.name` et `spec.tls[].secretName`.
-  Kind-level processors:
+  Traitements par kind :
     @replace_workload(path, doc_name, doc, name) — forme à 4 args avec extract_envs `true`.
     @replace_workload(path, doc_name, doc, name, extract_envs) — @clean_metadata ; quand
       `spec.template` présent : @replace_pod_template, snapshot des labels du pod,
@@ -171,7 +171,7 @@ Exposes:
     @replace_cronjob(path, doc_name, doc, name) — le cycle @replace_pod_template +
       @add_security_contexts + @add_reloader_annotations contre `spec.jobTemplate.spec.template` ;
       AUCUNE extraction d'envs et AUCUN TSC.
-  Selector analysis:
+  Analyse de sélecteur :
     @selector_matches(selector, labels) — false pour un selector vide, sinon toutes les clés du
       selector présentes dans @labels avec valeurs égales après coercition chaîne `${}`.
     @extract_comp(val, name) — valeur de label moins un `${name}-` de tête (seulement quand c'est
@@ -202,7 +202,7 @@ Exposes:
       `{{json_to_str (selector_from_ctx this comp="<comp>")}}` et `LABELS_FROM_CTX`
       (nu/quoted) par `{{json_to_str (labels_from_ctx this comp="<comp>")}}` ; réécrit
       toujours le fichier.
-  Package generators (the importers' entry points):
+  Générateurs de package (points d'entrée des importeurs) :
     @gen_system_core(path, docs, name, ns) — @build_analysis, puis par doc filtré : les CRDs
       vont à @create_dir plus @gen_crd_yaml de `get_crds/<name>.yaml` (ou `.yaml.hbs` seulement
       quand `spec.conversion` + `spec.conversion.webhook` existent — cette branche réécrit aussi
