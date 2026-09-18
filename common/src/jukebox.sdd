@@ -1,384 +1,400 @@
 Spec: JukeBox
 
 Purpose:
-  Carry the cluster-side contract of the `JukeBox` CRD — a declared source of Vynil packages:
-    the source variants (@JukeBoxDef: image list, Harbor, GitLab, custom Rhai script, HTTP cache,
-    S3 cache), maturity, pull secret and cron schedule in @JukeBoxSpec; the scan result in
-    @JukeBoxStatus as a cached `Vec<@crate::vynilpackage::VynilPackage>` plus `Ready`/`Updated`
-    @ApplicationCondition records. Provide cluster lookups, the full-scan, failure and
-    partial-merge status mutators with their Kubernetes events and Rhai bridges, and register the
-    whole script surface via @jukebox_rhai_register. The file-scan JukeBox variant with no cluster
-    connection lives in ./jukebox_file.rs and is not this contract.
+  Porte le contrat côté cluster du CRD `JukeBox` — une source déclarée de paquets Vynil : les
+    variantes de source (@JukeBoxDef : liste d'images, Harbor, GitLab, script Rhai custom, cache
+    HTTP, cache S3), la maturité, le pull secret et le planning cron de @JukeBoxSpec ; le résultat
+    de scan dans @JukeBoxStatus comme `Vec<@crate::vynilpackage::VynilPackage>` mis en cache plus
+    des enregistrements @ApplicationCondition `Ready`/`Updated`. Fournit les recherches cluster,
+    les mutateurs de statut scan-complet, échec et merge-partiel avec leurs événements Kubernetes
+    et ponts Rhai, et enregistre toute la surface script via @jukebox_rhai_register. La variante
+    JukeBox scan-de-fichier sans connexion cluster vit dans ./jukebox_file.rs et ne fait pas
+    partie de ce contrat.
 
 References:
-  ./vynilpackage.sdd — the @crate::vynilpackage::VynilPackage model this file stores in
-    `status.packages`; its serde wire shape is owned there, not restated here.
-  ./jukebox_file.rs — owns the offline file-scan variant (@crate::jukebox_file::FileJukeBox,
-    @crate::jukebox_file::file_jukebox_rhai_register) which reuses @JukeBoxDef but persists to a
-    cache directory instead of the API server.
+  ./vynilpackage.sdd — le modèle @crate::vynilpackage::VynilPackage que ce fichier stocke dans
+    `status.packages` ; sa forme wire serde y est propriétaire, pas redite ici.
+  ./jukebox_file.rs — propriétaire de la variante scan-de-fichier hors-ligne
+    (@crate::jukebox_file::FileJukeBox, @crate::jukebox_file::file_jukebox_rhai_register) qui
+    réutilise @JukeBoxDef mais persiste dans un répertoire de cache au lieu de l'API server.
 
 Must:
-  The @kube::CustomResource derive over @JukeBoxSpec generates the @JukeBox resource: kind
-    `JukeBox`, group `vynil.solidite.fr`, version `v1`, Cluster scope, shortname `box`, singular
-    `jukebox`, plural `jukeboxes`, status type @JukeBoxStatus, CRD doc `Custom resource
-    representing a JukeBox, source of vynil packages`.
-  The CRD printer columns are, in order: `schedule` (type `string`) -> `.spec.schedule`,
-    `last_updated` (type `date`, format `date-time`) ->
+  Le derive @kube::CustomResource sur @JukeBoxSpec génère la ressource @JukeBox : kind
+    `JukeBox`, groupe `vynil.solidite.fr`, version `v1`, scope Cluster, shortname `box`,
+    singulier `jukebox`, pluriel `jukeboxes`, type de statut @JukeBoxStatus, doc CRD `Custom
+    resource representing a JukeBox, source of vynil packages`.
+  Les printer columns du CRD sont, dans l'ordre : `schedule` (type `string`) ->
+    `.spec.schedule`, `last_updated` (type `date`, format `date-time`) ->
     `.status.conditions[?(@.type == 'Ready')].lastTransitionTime`, `message` (type `string`) ->
-    `.status.conditions[?(@.type == 'Updated')].message`. The status carries no dedicated
-    timestamp keys: the printed last-update date is the `Ready` condition's `lastTransitionTime`
-    and the printed message is the `Updated` condition's message; `packages` is a plain list,
-    not a map.
-  Wire keys are fixed: spec keys `source`, `maturity`, `pull_secret`, `schedule` with only
-    `schedule` required and the @Option fields deserializing to @None when absent (the wire key is
-    snake_case `pull_secret`, the derived @JukeBoxMaturity::Stable default is not applied to the
-    option); @JukeBoxStatus keys `conditions` and `packages`, both always serialized since
-    neither field is @Option; @ApplicationCondition serializes camelCase keys
-    `lastTransitionTime`, `message`, `type` (fixed by the @serde rename on
-    @ApplicationCondition::condition_type), `status`, `generation`; @ConditionsType serializes
-    `Ready` / `Updated`, @ConditionsStatus `True` / `False`; @JukeBoxMaturity serializes `stable`
+    `.status.conditions[?(@.type == 'Updated')].message`. Le statut ne porte aucune clé timestamp
+    dédiée : la date de dernière mise à jour imprimée est le `lastTransitionTime` de la condition
+    `Ready` et le message imprimé est celui de la condition `Updated` ; `packages` est une liste
+    simple, pas une map.
+  Les clés wire sont figées : clés spec `source`, `maturity`, `pull_secret`, `schedule` avec
+    seule `schedule` requise et les champs @Option se désérialisant en @None quand absents (la
+    clé wire est le snake_case `pull_secret`, le défaut @JukeBoxMaturity::Stable du derive
+    @Default ne s'applique pas à l'option) ; clés de @JukeBoxStatus `conditions` et `packages`,
+    toujours sérialisées car aucun champ n'est @Option ; @ApplicationCondition sérialise les clés
+    camelCase `lastTransitionTime`, `message`, `type` (figées par le @serde rename de
+    @ApplicationCondition::condition_type), `status`, `generation` ; @ConditionsType sérialise
+    `Ready` / `Updated`, @ConditionsStatus `True` / `False` ; @JukeBoxMaturity sérialise `stable`
     / `beta` / `alpha`.
-  @JukeBoxDef serializes as an externally tagged snake_case enum (JSON/YAML round-trips preserve
-    equality): `list` as a bare array of image strings, `harbor` `{registry, project}`, `gitlab`
-    `{url, registry, project}`, `script` as a bare string, `http` `{url, secret?}`, `s3`
-    `{bucket, region, prefix?, endpoint?, secret?}` — `secret` is an Opaque-secret name whose
-    expected keys (`username`+`password` or `token` for `http`, `access_key_id` +
-    `secret_access_key` for `s3`, absent meaning IAM role) are doc-comment contracts this file
-    never validates or resolves. @Default for @JukeBoxDef is `List` of the single image
-    `docker.io/sebt3/vynil`.
-  Every @ApplicationCondition built through @ApplicationCondition::new stamps
-    `last_transition_time` @Some(@chrono::Utc::now()) captured at construction and carries the
-    caller-supplied generation; the fixed messages are `Updated succesfully` (misspelling intact)
-    on @ApplicationCondition::ready_ok and @ApplicationCondition::updated_ok — both — and
-    `No successful update` on @ApplicationCondition::ready_ko; @ApplicationCondition::updated_ko
-    carries the caller message verbatim.
-  All three status mutators read `metadata.generation` defaulting to `1`, patch through private
-    @JukeBox::patch_status, and return the server-merged @JukeBox it reads back, never the local
-    object: the patch is a @kube::api::Patch::Merge carrying `apiVersion`
-    `vynil.solidite.fr/v1`, kind string `JukeBox` and the caller's `status` JSON, sent via
-    @kube::api::Api::all (cluster scope) with @PatchParams::apply(@crate::context::get_short_name())
-    against `metadata.name`; a nameless object fails as @crate::Error::Other
-    `JukeBox has no name` before any API call.
-  A successful patch is followed by event publication through private @JukeBox::send_event, and
-    any event failure other than a @kube::Error::Api discards the successful patch result and
-    returns @Err; every @kube::Error::Api publish failure ends as `@Ok` — `tracing::warn!` fires
-    unless the status message contains both `unable to create new content in namespace` and
-    `being terminated`. Events record against @kube::ResourceExt::object_ref with a
-    @kube::runtime::events::Reporter from @crate::context::get_reporter().
-  @JukeBox::set_status_updated replaces `status.conditions` wholesale — the `conditions` array is
-    exactly [@ApplicationCondition::updated_ok, @ApplicationCondition::ready_ok], no stored
-    condition carried over — and replaces `status.packages` with its argument, then publishes a
-    `Normal` event reason `ScanSucceed`, action `Scan`, note `Found {count} packages` with
-    `count` the argument length.
-  @JukeBox::set_status_failed rebuilds `conditions` from stored ones minus every
-    @ConditionsType::Updated record (private @JukeBox::get_conditions_excluding; absent status
-    starts from empty), appends @ApplicationCondition::updated_ko carrying the full reason, and
-    appends @ApplicationCondition::ready_ko only when no surviving condition has type
-    @ConditionsType::Ready — matched by type alone, ignoring generation and @ConditionsStatus.
-    `packages` is re-patched verbatim from the stored status (empty list when none), so a failure
-    never drops the cache; it publishes a `Warning` event reason `ScanFailed`, action `Scan`,
-    whose note is the reason truncated in place to `1023` bytes (@str::truncate) while the
-    stored condition `message` keeps the full reason.
-  @JukeBox::set_status_packages_merge splits its `filter` on the first `/`: no slash means the
-    whole string is a category with name @None, otherwise the prefix is the category and the
-    remainder is @Some name — including the empty string for a trailing slash. Stored `packages`
-    are rebuilt by private @filter_packages: entries whose @crate::vynilpackage::VynilPackage
-    `metadata.category` equals the category and whose `metadata.name` equals the name when one is
-    given are dropped, then all new packages are appended in input order verbatim — survivors and
-    new entries are never deduplicated. `conditions` get the same wholesale two-record replace as
-    @JukeBox::set_status_updated, and the `Normal` event is reason `ScanSucceed`, action `Scan`,
-    note `Partial scan updated filter: {filter}`.
-  Every Rhai bridge over an async operation (@JukeBox::rhai_get, @JukeBox::rhai_list,
+  @JukeBoxDef se sérialise en enum snake_case externally tagged (les allers-retours JSON/YAML
+    préservent l'égalité) : `list` comme tableau nu d'images, `harbor` `{registry, project}`,
+    `gitlab` `{url, registry, project}`, `script` comme chaîne nue, `http` `{url, secret?}`, `s3`
+    `{bucket, region, prefix?, endpoint?, secret?}` — `secret` est un nom de secret Opaque dont
+    les clés attendues (`username`+`password` ou `token` pour `http`, `access_key_id` +
+    `secret_access_key` pour `s3`, leur absence signifiant un rôle IAM) sont des contrats de
+    doc-comment que ce fichier ne valide ni ne résout. Le @Default de @JukeBoxDef est `List` de
+    la seule image `docker.io/sebt3/vynil`.
+  Toute @ApplicationCondition construite via @ApplicationCondition::new horodate
+    `last_transition_time` @Some(@chrono::Utc::now()) capturé à la construction et porte la
+    generation de l'appelant ; les messages figés sont `Updated succesfully` (faute d'orthographe
+    conservée) sur @ApplicationCondition::ready_ok et @ApplicationCondition::updated_ok — les deux
+    — et `No successful update` sur @ApplicationCondition::ready_ko ;
+    @ApplicationCondition::updated_ko porte le message de l'appelant tel quel.
+  Les trois mutateurs de statut lisent `metadata.generation` avec défaut `1`, patchent via
+    @JukeBox::patch_status (privé) et retournent le @JukeBox fondu côté serveur qu'ils relisent,
+    jamais l'objet local : le patch est un @kube::api::Patch::Merge portant `apiVersion`
+    `vynil.solidite.fr/v1`, la chaîne de kind `JukeBox` et le JSON `status` de l'appelant, envoyé
+    via @kube::api::Api::all (scope cluster) avec
+    @PatchParams::apply(@crate::context::get_short_name()) sur `metadata.name` ; un objet sans
+    nom échoue en @crate::Error::Other `JukeBox has no name` avant tout appel API.
+  Un patch réussi est suivi d'une publication d'événement via @JukeBox::send_event (privé), et
+    tout échec d'événement autre qu'un @kube::Error::Api jette le résultat du patch réussi et
+    retourne @Err ; chaque échec de publication en @kube::Error::Api finit en `@Ok` —
+    `tracing::warn!` se déclenche sauf si le message de statut contient à la fois
+    `unable to create new content in namespace` et `being terminated`. Les événements ciblent
+    @kube::ResourceExt::object_ref avec un @kube::runtime::events::Reporter issu de
+    @crate::context::get_reporter().
+  @JukeBox::set_status_updated remplace `status.conditions` en bloc — le tableau `conditions` est
+    exactement [@ApplicationCondition::updated_ok, @ApplicationCondition::ready_ok], aucun report
+    de condition stockée — et remplace `status.packages` par son argument, puis publie un
+    événement `Normal` de raison `ScanSucceed`, action `Scan`, note `Found {count} packages` où
+    `count` est la longueur de l'argument.
+  @JukeBox::set_status_failed reconstruit `conditions` à partir de celles stockées moins tout
+    enregistrement @ConditionsType::Updated (@JukeBox::get_conditions_excluding privée ; statut
+    absent = départ vide), ajoute @ApplicationCondition::updated_ko portant la raison complète,
+    et ajoute @ApplicationCondition::ready_ko seulement si aucune condition survivante n'a le
+    type @ConditionsType::Ready — apparié sur le type seul, generation et @ConditionsStatus
+    ignorés. `packages` est re-patché tel quel du statut stocké (liste vide sinon), donc un
+    échec ne jette jamais le cache ; il publie un événement `Warning` de raison `ScanFailed`,
+    action `Scan`, dont la note est la raison tronquée sur place à `1023` octets
+    (@str::truncate) alors que le `message` de la condition stockée garde la raison complète.
+  @JukeBox::set_status_packages_merge coupe son `filter` sur le premier `/` : pas de slash
+    signifie la chaîne entière comme catégorie avec nom @None, sinon le préfixe est la catégorie
+    et le reste un nom @Some — y compris la chaîne vide pour un slash final. Les `packages`
+    stockés sont reconstruits par @filter_packages (privé) : les entrées dont le
+    @crate::vynilpackage::VynilPackage a un `metadata.category` égal à la catégorie et un
+    `metadata.name` égal au nom quand fourni sont retirées, puis tous les nouveaux paquets sont
+    ajoutés dans l'ordre d'entrée tels quels — survivants et nouvelles entrées ne sont jamais
+    dédupliqués. `conditions` reçoivent le même remplacement en bloc à deux enregistrements que
+    @JukeBox::set_status_updated, et l'événement `Normal` a pour raison `ScanSucceed`, action
+    `Scan`, note `Partial scan updated filter: {filter}`.
+  Chaque pont Rhai sur opération async (@JukeBox::rhai_get, @JukeBox::rhai_list,
     @JukeBox::rhai_set_status_updated, @JukeBox::rhai_set_status_failed,
-    @JukeBox::rhai_set_status_packages_merge) drives it through @tokio::task::block_in_place plus
-    @tokio::runtime::Handle::block_on — which panics on a current-thread runtime — and flattens
-    any @crate::Error through @crate::rhai_err into a message-string @rhai error, losing the
-    variant; bridges taking a @rhai::Dynamic (@JukeBox::rhai_set_status_updated,
-    @JukeBox::rhai_set_status_packages_merge) convert it by a @serde_json to-string-then-from-
-    string round-trip into `Vec<@crate::vynilpackage::VynilPackage>` before any patch, so a
-    mis-shaped argument fails without touching the cluster.
-  @JukeBox::get_metadata, @JukeBox::get_spec and @JukeBox::get_status take @mut @self without
-    mutating (the @rhai::Engine::register_get accessor shape) and convert `metadata`, `spec` and
-    `status` to @rhai::Dynamic through the same @serde_json string round-trip, each leg mapped to
-    a flattened @crate::Error::SerializationError; a @None status surfaces as Rhai null.
-  The lookups @JukeBox::get, @JukeBox::list and @JukeBox::list_with_client use cluster-scoped
-    @kube::api::Api::all with @kube::api::ListParams::default (no label or field selectors);
-    @JukeBox::get and @JukeBox::list fetch the @kube::Client per call from
-    @crate::context::get_client_async — which panics when no client can be built — while
-    @JukeBox::list_with_client uses the caller-provided client; nothing stores a client on the
-    resource.
-  @jukebox_rhai_register freezes the script-visible surface on a caller @rhai::Engine: the Rust
-    @JukeBox registered under Rhai type name `JukeBox`; free functions `get_jukebox` ->
-    @JukeBox::rhai_get, `list_jukebox` -> @JukeBox::rhai_list, `set_status_updated` ->
-    @JukeBox::rhai_set_status_updated, `set_status_failed` -> @JukeBox::rhai_set_status_failed,
-    `set_status_packages_merge` -> @JukeBox::rhai_set_status_packages_merge; property getters
-    `metadata` -> @JukeBox::get_metadata, `spec` -> @JukeBox::get_spec, `status` ->
-    @JukeBox::get_status. The file-scan twins registered by
-    @crate::jukebox_file::file_jukebox_rhai_register onto ./jukebox_file.rs are distinct.
+    @JukeBox::rhai_set_status_packages_merge) la pilote via @tokio::task::block_in_place plus
+    @tokio::runtime::Handle::block_on — qui panique sur un runtime current-thread — et aplatit
+    tout @crate::Error via @crate::rhai_err en une erreur @rhai chaîne-message, perdant la
+    variante ; les ponts prenant un @rhai::Dynamic (@JukeBox::rhai_set_status_updated,
+    @JukeBox::rhai_set_status_packages_merge) le convertissent par aller-retour @serde_json
+    vers-chaîne-puis-depuis-chaîne en `Vec<@crate::vynilpackage::VynilPackage>` avant tout patch,
+    donc un argument mal formé échoue sans toucher le cluster.
+  @JukeBox::get_metadata, @JukeBox::get_spec et @JukeBox::get_status prennent @mut @self sans
+    muter (la forme d'accessor @rhai::Engine::register_get) et convertissent `metadata`, `spec`
+    et `status` en @rhai::Dynamic par le même aller-retour chaîne @serde_json, chaque segment
+    mappé vers un @crate::Error::SerializationError aplati ; un statut @None ressort comme null
+    Rhai.
+  Les recherches @JukeBox::get, @JukeBox::list et @JukeBox::list_with_client utilisent
+    @kube::api::Api::all scope cluster avec @kube::api::ListParams::default (aucun sélecteur de
+    label ou de champ) ; @JukeBox::get et @JukeBox::list récupèrent le @kube::Client par appel
+    via @crate::context::get_client_async — qui panique quand aucun client ne peut être construit
+    — tandis que @JukeBox::list_with_client utilise le client fourni par l'appelant ; rien ne
+    stocke de client sur la ressource.
+  @jukebox_rhai_register gèle la surface visible des scripts sur un @rhai::Engine appelant : le
+    @JukeBox Rust enregistré sous le nom de type Rhai `JukeBox` ; fonctions libres
+    `get_jukebox` -> @JukeBox::rhai_get, `list_jukebox` -> @JukeBox::rhai_list,
+    `set_status_updated` -> @JukeBox::rhai_set_status_updated, `set_status_failed` ->
+    @JukeBox::rhai_set_status_failed, `set_status_packages_merge` ->
+    @JukeBox::rhai_set_status_packages_merge ; getters de propriété `metadata` ->
+    @JukeBox::get_metadata, `spec` -> @JukeBox::get_spec, `status` -> @JukeBox::get_status. Les
+    jumeaux scan-de-fichier enregistrés par
+    @crate::jukebox_file::file_jukebox_rhai_register sur ./jukebox_file.rs sont distincts.
 
 Depends on:
-  @crate::vynilpackage::VynilPackage in ./vynilpackage.rs — the `status.packages` cache entries;
-    the merge filter reads only its `metadata.category` and `metadata.name`, and its serde and
-    schemars shape (CRD wire) is owned by ./vynilpackage.sdd.
-  @crate::Error, @crate::Result, @crate::RhaiRes and @crate::rhai_err in ./lib.rs —
-    @crate::Error::KubeError, @crate::Error::Other(`JukeBox has no name`) and
-    @crate::Error::SerializationError, flattened to strings at the Rhai bridges.
-  @crate::context::get_client_async, @crate::context::get_short_name and
-    @crate::context::get_reporter in ./context.rs — per-call client, server-side field manager
-    name, and event reporter (controller = short name, instance = `POD_NAME` or `unknown`).
-  @kube::CustomResource, @kube::Resource, @kube::ResourceExt — the derive generating @JukeBox and
-    the metadata/object-ref plumbing; @kube::Client, @kube::api::Api, @kube::api::ListParams,
-    @kube::api::ObjectList, @kube::api::Patch, @kube::api::PatchParams — lookups and the status
-    merge patch.
-  @kube::runtime::events::Recorder, @kube::runtime::events::Event and
-    @kube::runtime::events::EventType — scan-event publication.
-  @rhai::Engine and @rhai::Dynamic — the engine this file registers onto and the argument type
-    accepted from scan scripts.
-  @tokio::task::block_in_place and @tokio::runtime::Handle — the sync-to-async bridge under every
-    Rhai mutator bridge; @chrono::Utc::now — condition timestamps; @serde, @serde_json,
-    @schemars::JsonSchema — wire shapes of this file's own types.
+  @crate::vynilpackage::VynilPackage dans ./vynilpackage.rs — les entrées du cache
+    `status.packages` ; le filtre de merge ne lit que ses `metadata.category` et `metadata.name`,
+    et ses formes serde et schemars (wire CRD) sont propriétaires de ./vynilpackage.sdd.
+  @crate::Error, @crate::Result, @crate::RhaiRes et @crate::rhai_err dans ./lib.rs —
+    @crate::Error::KubeError, @crate::Error::Other(`JukeBox has no name`) et
+    @crate::Error::SerializationError, aplatis en chaînes aux ponts Rhai.
+  @crate::context::get_client_async, @crate::context::get_short_name et
+    @crate::context::get_reporter dans ./context.rs — client par appel, nom de field manager
+    server-side, et reporter d'événements (controller = short name, instance = `POD_NAME` ou
+    `unknown`).
+  @kube::CustomResource, @kube::Resource, @kube::ResourceExt — le derive générant @JukeBox et
+    la plomberie metadata/object-ref ; @kube::Client, @kube::api::Api, @kube::api::ListParams,
+    @kube::api::ObjectList, @kube::api::Patch, @kube::api::PatchParams — recherches et patch de
+    merge du statut.
+  @kube::runtime::events::Recorder, @kube::runtime::events::Event et
+    @kube::runtime::events::EventType — publication des événements de scan.
+  @rhai::Engine et @rhai::Dynamic — le moteur sur lequel ce fichier s'enregistre et le type
+    d'argument accepté depuis les scripts de scan.
+  @tokio::task::block_in_place et @tokio::runtime::Handle — le pont sync-vers-async sous chaque
+    pont de mutateur Rhai ; @chrono::Utc::now — horodatages des conditions ; @serde, @serde_json,
+    @schemars::JsonSchema — formes wire des types propres à ce fichier.
 
 Exposes:
-  @JukeBoxDef — source enum, derives @Serialize/@Deserialize/@Eq/@PartialEq/@Clone/@Debug/@JsonSchema
-    over snake_case wire: @JukeBoxDef::List(@Vec<@String>), ::Harbor { @registry, @project },
-    ::Gitlab { @url, @registry, @project }, ::Script(@String), ::Http { @url, @secret:
-    @Option<@String> }, ::S3 { @bucket, @region, @prefix, @endpoint, @secret } (last three
-    @Option); the @std::default::Default impl yields @JukeBoxDef::List of `docker.io/sebt3/vynil`.
-  @JukeBoxMaturity — enum @JukeBoxMaturity::Stable (`#[default]`), ::Beta, ::Alpha, snake_case
-    wire, derives @Serialize/@Deserialize/@Eq/@PartialEq/@Clone/@Debug/@JsonSchema/@Default.
-  @JukeBoxSpec — CRD spec struct with public fields @JukeBoxSpec::source
+  @JukeBoxDef — enum de source, derives @Serialize/@Deserialize/@Eq/@PartialEq/@Clone/@Debug/
+    @JsonSchema sur le wire snake_case : @JukeBoxDef::List(@Vec<@String>), ::Harbor
+    { @registry, @project }, ::Gitlab { @url, @registry, @project }, ::Script(@String), ::Http
+    { @url, @secret: @Option<@String> }, ::S3 { @bucket, @region, @prefix, @endpoint, @secret }
+    (les trois derniers @Option) ; l'impl @std::default::Default donne @JukeBoxDef::List de
+    `docker.io/sebt3/vynil`.
+  @JukeBoxMaturity — enum @JukeBoxMaturity::Stable (`#[default]`), ::Beta, ::Alpha, wire
+    snake_case, derives @Serialize/@Deserialize/@Eq/@PartialEq/@Clone/@Debug/@JsonSchema/@Default.
+  @JukeBoxSpec — struct spec du CRD aux champs publics @JukeBoxSpec::source
     (`@Option<@JukeBoxDef>`), @JukeBoxSpec::maturity (`@Option<@JukeBoxMaturity>`),
-    @JukeBoxSpec::pull_secret (`@Option<@String>`) and @JukeBoxSpec::schedule (@String, required).
-  @JukeBox — resource root generated by the @kube::CustomResource derive over @JukeBoxSpec, with
-    `spec` and `status` (`@Option<@JukeBoxStatus>`); derives @Serialize/@Deserialize/@Clone/@Debug
-    and @JsonSchema via the derive.
-  @ConditionsType — enum `Ready` (`#[default]`) and `Updated`; @ConditionsStatus — enum `True`
-    (`#[default]`) and `False`; both derive @Serialize/@Deserialize/@Eq/@PartialEq/@Clone/@Debug/
-    @JsonSchema/@Default. Separate types from the identically named ones in the instance modules;
-    no macro from ./instance_macros.rs is expanded here.
-  @ApplicationCondition — one recorded condition with public fields
+    @JukeBoxSpec::pull_secret (`@Option<@String>`) et @JukeBoxSpec::schedule (@String, requis).
+  @JukeBox — racine ressource générée par le derive @kube::CustomResource sur @JukeBoxSpec, avec
+    `spec` et `status` (`@Option<@JukeBoxStatus>`) ; derives @Serialize/@Deserialize/@Clone/
+    @Debug et @JsonSchema via le derive.
+  @ConditionsType — enum `Ready` (`#[default]`) et `Updated` ; @ConditionsStatus — enum `True`
+    (`#[default]`) et `False` ; les deux dérivent
+    @Serialize/@Deserialize/@Eq/@PartialEq/@Clone/@Debug/@JsonSchema/@Default. Types distincts
+    des homonymes des modules instance ; aucun macro de ./instance_macros.rs n'est étendu ici.
+  @ApplicationCondition — un enregistrement de condition aux champs publics
     @ApplicationCondition::last_transition_time (`@Option<@chrono::DateTime<@chrono::Utc>>`),
     @ApplicationCondition::message, @ApplicationCondition::condition_type,
-    @ApplicationCondition::status, @ApplicationCondition::generation (`@i64`); `#[must_use]`
-    constructors @ApplicationCondition::new, @ApplicationCondition::ready_ok,
+    @ApplicationCondition::status, @ApplicationCondition::generation (`@i64`) ; constructeurs
+    `#[must_use]` @ApplicationCondition::new, @ApplicationCondition::ready_ok,
     @ApplicationCondition::ready_ko, @ApplicationCondition::updated_ok,
-    @ApplicationCondition::updated_ko — all defined in-file.
-  @JukeBoxStatus — status struct with public fields @JukeBoxStatus::conditions
-    (`@Vec<@ApplicationCondition>`) and @JukeBoxStatus::packages
+    @ApplicationCondition::updated_ko — tous définis dans le fichier.
+  @JukeBoxStatus — struct de statut aux champs publics @JukeBoxStatus::conditions
+    (`@Vec<@ApplicationCondition>`) et @JukeBoxStatus::packages
     (`@Vec<@crate::vynilpackage::VynilPackage>`).
-  Async lookups @JukeBox::get(@String), @JukeBox::list(), @JukeBox::list_with_client(@kube::Client).
-  Async status mutators @JukeBox::set_status_updated, @JukeBox::set_status_failed and
-    @JukeBox::set_status_packages_merge — semantics in Must.
-  Rhai bridges @JukeBox::rhai_get, @JukeBox::rhai_list, @JukeBox::get_metadata,
-    @JukeBox::get_spec, @JukeBox::get_status, @JukeBox::rhai_set_status_updated,
-    @JukeBox::rhai_set_status_failed, @JukeBox::rhai_set_status_packages_merge.
-  @jukebox_rhai_register — @pub fn(@engine: &mut @rhai::Engine); frozen script surface in Must;
-    wired into Vynil scan scripts by @crate::rhaihandler::Script in ./rhaihandler.rs.
+  Recherches async @JukeBox::get(@String), @JukeBox::list(),
+    @JukeBox::list_with_client(@kube::Client).
+  Mutateurs de statut async @JukeBox::set_status_updated, @JukeBox::set_status_failed et
+    @JukeBox::set_status_packages_merge — sémantiques dans Must.
+  Ponts Rhai @JukeBox::rhai_get, @JukeBox::rhai_list, @JukeBox::get_metadata, @JukeBox::get_spec,
+    @JukeBox::get_status, @JukeBox::rhai_set_status_updated, @JukeBox::rhai_set_status_failed,
+    @JukeBox::rhai_set_status_packages_merge.
+  @jukebox_rhai_register — @pub fn(@engine: &mut @rhai::Engine) ; surface script gelée dans
+    Must ; branchée dans les scripts de scan Vynil par @crate::rhaihandler::Script dans
+    ./rhaihandler.rs.
 
 Accepts:
-  Declared sources as any @JukeBoxDef wire shape (Must), unvalidated here beyond serde typing —
-    registry URLs, project paths and secret names are free-form @String consumed by the scan
-    flow, not by this file.
-  @JukeBoxSpec::schedule — any @String; this file never parses it as a cron expression.
-  @JukeBox::set_status_updated and @JukeBox::rhai_set_status_updated take the fresh full package
-    list `Vec<@crate::vynilpackage::VynilPackage>` (or any @rhai::Dynamic that JSON-round-trips
-    into one).
-  @JukeBox::set_status_failed and @JukeBox::rhai_set_status_failed take a human-readable `reason`
-    @String with no length or charset validation.
-  @JukeBox::set_status_packages_merge and @JukeBox::rhai_set_status_packages_merge take `filter`
-    @String (`<category>` or `<category>/<name>`, split verbatim on the first `/`) plus the
-    replacement package list.
+  Sources déclarées sous n'importe quelle forme wire @JukeBoxDef (Must), non validées ici au-delà
+    du typage serde — URLs de registry, chemins de projet et noms de secrets sont des @String
+    libres consommés par le flux de scan, pas par ce fichier.
+  @JukeBoxSpec::schedule — n'importe quel @String ; ce fichier ne le parse jamais en expression
+    cron.
+  @JukeBox::set_status_updated et @JukeBox::rhai_set_status_updated prennent la liste fraîche
+    complète `Vec<@crate::vynilpackage::VynilPackage>` (ou tout @rhai::Dynamic faisant un
+    aller-retour JSON vers une telle liste).
+  @JukeBox::set_status_failed et @JukeBox::rhai_set_status_failed prennent un @String `reason`
+    lisible par un humain sans validation de longueur ni de charset.
+  @JukeBox::set_status_packages_merge et @JukeBox::rhai_set_status_packages_merge prennent le
+    @String `filter` (`<category>` ou `<category>/<name>`, coupé tel quel sur le premier `/`)
+    plus la liste de paquets de remplacement.
 
 Returns:
-  @JukeBox::get — @crate::Result<@JukeBox>; @JukeBox::list and @JukeBox::list_with_client —
-    @crate::Result<@kube::api::ObjectList<@JukeBox>> of every box cluster-wide.
-  Each async mutator — @crate::Result<@JukeBox> whose `@Ok` carries the server-merged object read
-    back from @JukeBox::patch_status; the three bridges @JukeBox::rhai_get,
-    @JukeBox::rhai_set_status_updated, @JukeBox::rhai_set_status_failed and
-    @JukeBox::rhai_set_status_packages_merge return @crate::RhaiRes<@JukeBox>, and
-    @JukeBox::rhai_list a @crate::RhaiRes<@Vec<@JukeBox>> (@JukeBox::rhai_list collects the
-    @kube::api::ObjectList).
-  The property getters @JukeBox::get_metadata, @JukeBox::get_spec and @JukeBox::get_status —
+  @JukeBox::get — @crate::Result<@JukeBox> ; @JukeBox::list et @JukeBox::list_with_client —
+    @crate::Result<@kube::api::ObjectList<@JukeBox>> de toutes les boxes du cluster.
+  Chaque mutateur async — @crate::Result<@JukeBox> dont le `@Ok` porte l'objet fondu côté serveur
+    relu par @JukeBox::patch_status ; les trois ponts @JukeBox::rhai_get,
+    @JukeBox::rhai_set_status_updated, @JukeBox::rhai_set_status_failed et
+    @JukeBox::rhai_set_status_packages_merge retournent @crate::RhaiRes<@JukeBox>, et
+    @JukeBox::rhai_list un @crate::RhaiRes<@Vec<@JukeBox>> (@JukeBox::rhai_list collecte l'@kube::api::ObjectList).
+  Les getters de propriété @JukeBox::get_metadata, @JukeBox::get_spec et @JukeBox::get_status —
     @crate::RhaiRes<@rhai::Dynamic>.
 
 Raises:
-  @crate::Error::KubeError from @JukeBox::get, @JukeBox::list, @JukeBox::list_with_client and
-    @JukeBox::patch_status when any Kubernetes call fails; every async mutator propagates it
-    through `?` before any event is published.
-  @crate::Error::Other(`JukeBox has no name`) from @JukeBox::patch_status when
-    `metadata.name` is @None.
-  @crate::Error::KubeError from @JukeBox::send_event for every @kube::Error variant other than
-    `Api` — after the status patch already succeeded.
-  @crate::Error::SerializationError when a @rhai::Dynamic argument or a metadata/spec/status
-    round-trip fails to convert.
-  Every Rhai bridge instead fails with a message-string @rhai error from @crate::rhai_err — the
-    typed @crate::Error variant is lost.
-  Panics (no typed path): @tokio::task::block_in_place on a current-thread runtime;
-    @crate::context::get_client_async upstream when no client can be built; `@str::truncate(1023)`
-    when the byte cut lands inside a multi-byte character of the failure reason.
+  @crate::Error::KubeError de @JukeBox::get, @JukeBox::list, @JukeBox::list_with_client et
+    @JukeBox::patch_status quand un appel Kubernetes échoue ; chaque mutateur async le propage
+    par `?` avant toute publication d'événement.
+  @crate::Error::Other(`JukeBox has no name`) de @JukeBox::patch_status quand `metadata.name`
+    est @None.
+  @crate::Error::KubeError de @JukeBox::send_event pour toute variante @kube::Error autre que
+    `Api` — après que le patch de statut a déjà réussi.
+  @crate::Error::SerializationError quand un argument @rhai::Dynamic ou un aller-retour
+    metadata/spec/status échoue à se convertir.
+  Chaque pont Rhai échoue plutôt avec une erreur @rhai chaîne-message issue de @crate::rhai_err —
+    la variante @crate::Error typée est perdue.
+  Panics (aucune voie typée) : @tokio::task::block_in_place sur un runtime current-thread ;
+    @crate::context::get_client_async en amont quand aucun client ne peut être construit ;
+    `@str::truncate(1023)` quand la coupe d'octets tombe dans un caractère multi-octets de la
+    raison d'échec.
 
 Handles:
-  Missing `metadata.generation` — recorded and defaulted to `1` by every mutator.
-  @JukeBoxStatus absent — @JukeBox::set_status_failed and @JukeBox::set_status_packages_merge
-    still complete with `packages` re-patched as `[]` / new entries only and the condition
-    rebuild starting from empty.
-  A `Ready` condition already present at any generation or @ConditionsStatus when
-    @JukeBox::set_status_failed runs — it is carried over through the rebuild, so the patched list
-    holds exactly [other surviving..., Updated/False, Ready/False] and no
-    @ApplicationCondition::ready_ko is appended.
-  Event publishing answering a @kube::Error::Api (for example on a terminating namespace) —
-    @JukeBox::send_event returns `@Ok` (warned unless both terminating phrases appear) and the
-    mutator still completes with the server-merged object.
-  Failure reason longer than 1023 bytes — the event note is truncated, the stored condition
-    `message` keeps the full reason.
-  A `filter` with no `/`, a leading `/` (empty category, name after) or a trailing `/` (category,
-    empty name) — split verbatim, no validation.
-  A JSON list argument arriving from Rhai as any map/array mix that @serde can coerce into
-    `Vec<@crate::vynilpackage::VynilPackage>`; anything else errors before the patch.
+  `metadata.generation` absent — enregistré et mis à `1` par défaut par chaque mutateur.
+  @JukeBoxStatus absent — @JukeBox::set_status_failed et @JukeBox::set_status_packages_merge
+    vont au bout quand même, `packages` re-patché en `[]` / nouvelles entrées seules et la
+    reconstruction des conditions partant de vide.
+  Une condition `Ready` déjà présente à n'importe quelle generation ou @ConditionsStatus quand
+    @JukeBox::set_status_failed tourne — elle est reportée via la reconstruction, donc la liste
+    patchée contient exactement [autres survivantes..., Updated/False, Ready/False] et aucun
+    @ApplicationCondition::ready_ko n'est ajouté.
+  Une publication d'événement répondant @kube::Error::Api (par exemple sur un namespace en cours
+    de termination) — @JukeBox::send_event retourne `@Ok` (warné sauf si les deux phrases de
+    termination apparaissent) et le mutateur va au bout avec l'objet fondu côté serveur.
+  Une raison d'échec plus longue que 1023 octets — la note de l'événement est tronquée, le
+    `message` de la condition stockée garde la raison complète.
+  Un `filter` sans `/`, un `/` initial (catégorie vide, nom après) ou un `/` final (catégorie,
+    nom vide) — coupé tel quel, aucune validation.
+  Un argument liste JSON arrivant de Rhai comme tout mélange map/tableau que @serde peut
+    convertir en `Vec<@crate::vynilpackage::VynilPackage>` ; tout le reste échoue avant le patch.
 
 Tasks:
-  [ ] Cover with tests all Scenarios below except the source-variant and @filter_packages legs,
-      which are covered today: @JukeBox::set_status_updated / ::set_status_failed /
-      ::set_status_packages_merge patch+event outcomes, the lookups, the eight Rhai bridges and
-      the @jukebox_rhai_register surface (agent ./tests/rhai_scan*.rs exercise the script side
-      only).
-  [?] @JukeBox::set_status_updated and @JukeBox::set_status_packages_merge replace
-      `status.conditions` wholesale while @JukeBox::set_status_failed carries every non-`Updated`
-      record over — one scan-success erases any `Ready` history, one failure preserves it. Confirm
-      the asymmetry is intended.
-  [?] @JukeBox::set_status_failed appends @ApplicationCondition::ready_ko based on surviving
-      conditions matched on @ConditionsType::Ready alone, ignoring generation and
-      @ConditionsStatus — a `Ready`/`True` from an older generation stays while `Updated` turns
-      to `False`; the printed `last_updated` then reports the stale success (same pattern as the
-      macro-owned setters in ./instance_macros.rs). Decide later whether generation or status must
-      be considered.
-  [?] The failure-event note truncates by byte index with @str::truncate(`1023`), which panics when
-      the cut lands inside a multi-byte character of a non-ASCII reason. Decide later whether
-      truncation must be char-safe.
-  [?] @JukeBox::send_event turns every @kube::Error::Api into `@Ok`; the De Morgan guard
-      `!contains(..) || !contains(..)` only decides whether `tracing::warn!` fires (silent only when
-      both terminating phrases appear), so a lost event is invisible to callers by default. Decide
-      later whether non-terminating-namespace publish failures must propagate.
-  [?] Wire-visible messages @ApplicationCondition::ready_ok and @ApplicationCondition::updated_ok
-      both carry `Updated succesfully` and @ApplicationCondition::ready_ko carries
-      `No successful update`; the ready condition never says "ready". Recorded as-is; decide later
-      whether corrected strings are an acceptable CRD-visible change.
-  [?] @Default for @JukeBoxDef hardcodes the maintainer image `docker.io/sebt3/vynil` as the
-      default package source. Decide later whether an empty or neutral default is safer.
-  [?] A trailing-slash filter such as `db/` yields name @Some(`""`) in @filter_packages, matching
-      (and replacing) only packages whose name is literally empty — likely unintended vs. a
-      whole-category match. Decide whether empty filter parts normalize to @None / are rejected.
-  [?] @JukeBox::set_status_packages_merge appends new packages with no dedup against survivors or
-      among themselves, so a scan script passing overlapping versions or re-running the same
-      package stores duplicates. Confirm version-stacking is intended.
-  [?] The @std::default::Default derives have no detectable in-crate call sites, and
-      @JukeBoxMaturity::Stable is unreachable through @JukeBoxSpec::maturity (the @Option field
-      absent means @None, not `stable`, which scripts see as null). Decide whether absent maturity
-      should mean Stable or the derives should go.
-  [?] @JukeBoxSpec::schedule is documented as an "Actual cron-type expression" but is never parsed
-      here nor anywhere in `common`; the `http`/`s3` `secret` key contracts are doc comments only.
-      Decide later whether the model validates schedule or secret references.
-  [?] @JukeBox::patch_status raises @crate::Error::Other(`JukeBox has no name`), whose text carries
-      no stable unique error identifier as required by `.specdd/bootstrap.project.md`. Decide
-      whether to add one.
-  [?] All Rhai bridges run async work through @tokio::task::block_in_place plus
-      @tokio::runtime::Handle::block_on and panic on a current-thread runtime; recorded per
-      ./instancesystem.sdd. Decide once, centrally, whether the runtime requirement is enforced or
-      the bridges redesigned.
+  [ ] Couvrir par des tests tous les Scenarios ci-dessous sauf les jambes source-variant et
+      @filter_packages, couvertes aujourd'hui : @JukeBox::set_status_updated / ::set_status_failed
+      / ::set_status_packages_merge résultats patch+événement, les recherches, les huit ponts
+      Rhai et la surface @jukebox_rhai_register (les ./tests/rhai_scan*.rs n'exercent que le côté
+      script).
+  [?] @JukeBox::set_status_updated et @JukeBox::set_status_packages_merge remplacent
+      `status.conditions` en bloc tandis que @JukeBox::set_status_failed reporte tout
+      enregistrement non-`Updated` — un scan réussi efface tout historique `Ready`, un échec le
+      préserve. Confirmer que l'asymétrie est voulue.
+  [?] @JukeBox::set_status_failed ajoute @ApplicationCondition::ready_ko d'après les conditions
+      survivantes appariées sur @ConditionsType::Ready seul, generation et @ConditionsStatus
+      ignorés — un `Ready`/`True` d'une génération antérieure reste pendant qu'`Updated` passe à
+      `False` ; le `last_updated` imprimé rapporte alors le succès périmé (même motif que les
+      setters sous macro de ./instance_macros.rs). Décider plus tard si generation ou statut
+      doivent être considérés.
+  [?] La note de l'événement d'échec tronque par index d'octets avec @str::truncate(`1023`), ce
+      qui panique quand la coupe tombe dans un caractère multi-octets d'une raison non-ASCII.
+      Décider plus tard si la troncature doit être sûre en caractères.
+  [?] @JukeBox::send_event tourne tout @kube::Error::Api en `@Ok` ; la garde de De Morgan
+      `!contains(..) || !contains(..)` ne décide que si `tracing::warn!` se déclenche (silencieux
+      seulement quand les deux phrases de termination apparaissent), donc un événement perdu est
+      invisible pour les appelants par défaut. Décider plus tard si les échecs de publication hors
+      namespace-en-termination doivent se propager.
+  [?] Les messages visibles sur le fil @ApplicationCondition::ready_ok et
+      @ApplicationCondition::updated_ok portent tous deux `Updated succesfully` et
+      @ApplicationCondition::ready_ko porte `No successful update` ; la condition ready ne dit
+      jamais « ready ». Consigné tel quel ; décider plus tard si des chaînes corrigées sont un
+      changement visible du CRD acceptable.
+  [?] Le @Default de @JukeBoxDef code en dur l'image mainteneur `docker.io/sebt3/vynil` comme
+      source de paquets par défaut. Décider plus tard si un défaut vide ou neutre est plus sûr.
+  [?] Un filtre à slash final comme `db/` donne le nom @Some(`""`) dans @filter_packages,
+      n'appariant (et remplaçant) que les paquets dont le nom est littéralement vide — sans doute
+      involontaire vs un appariement catégorie entière. Décider si les parties de filtre vides se
+      normalisent en @None / sont rejetées.
+  [?] @JukeBox::set_status_packages_merge ajoute les nouveaux paquets sans déduplication contre
+      les survivants ni entre eux, donc un script de scan passant des versions qui se recouvrent
+      ou relançant le même paquet stocke des doublons. Confirmer que l'empilement de versions est
+      voulu.
+  [?] Les derives @std::default::Default n'ont aucun site d'appel intra-crate détectable, et
+      @JukeBoxMaturity::Stable est inatteignable via @JukeBoxSpec::maturity (l'option absente
+      signifie @None, pas `stable`, que les scripts voient comme null). Décider si maturité
+      absente doit signifier Stable ou si les derives doivent partir.
+  [?] @JukeBoxSpec::schedule est documenté comme une « Actual cron-type expression » mais jamais
+      parsé ici ni nulle part dans `common` ; les contrats de clés `secret` de `http`/`s3` ne
+      sont que des commentaires de doc. Décider plus tard si le modèle valide le schedule ou les
+      références de secret.
+  [?] @JukeBox::patch_status lève @crate::Error::Other(`JukeBox has no name`), dont le texte ne
+      porte pas d'identifiant d'erreur unique stable exigé par `.specdd/bootstrap.project.md`.
+      Décider d'en ajouter un.
+  [?] Tous les ponts Rhai exécutent le travail async via @tokio::task::block_in_place plus
+      @tokio::runtime::Handle::block_on et paniquent sur un runtime current-thread ; consigné
+      selon ./instancesystem.sdd. Décider une fois, centralement, si l'exigence de runtime est
+      imposée ou les ponts redesignés.
 
 Done when:
-  Every Scenario above has a passing mapped test and `cargo test -p common` is green.
+  Chaque Scenario ci-dessus a un test mappé passant et `cargo test -p common` est vert.
 
 Scenario: Source variants round-trip through JSON and YAML
-  Given @JukeBoxDef::Http{url: `https://example.com/cache`, secret: @None} and
+  Given @JukeBoxDef::Http{url: `https://example.com/cache`, secret: @None} et
     @JukeBoxDef::S3{bucket: `my-bucket`, region: `eu-west-1`, prefix: @Some(`vynil/`), endpoint:
     @None, secret: @None}
-  When each is serialized to JSON and back, and the Http value also through YAML and back
-  Then the JSON carries the external tags `"http"` and `"s3"` plus the url text, and every
-    round-trip compares @Eq to the original
-  Maps to tests @jukebox_def_http_serde_roundtrip, @jukebox_def_s3_serde_roundtrip,
+  When chacun est sérialisé en JSON puis relu, et la valeur Http aussi en YAML puis relue
+  Then le JSON porte les tags externes `"http"` et `"s3"` plus le texte de l'URL, et chaque
+    aller-retour est @Eq à l'original
+  Tests mappés : @jukebox_def_http_serde_roundtrip, @jukebox_def_s3_serde_roundtrip,
     @jukebox_def_http_yaml_roundtrip
 
 Scenario: Default source is the maintainer image list
   Given @JukeBoxDef::default()
-  Then the value is @JukeBoxDef::List of exactly `docker.io/sebt3/vynil`
-  No mapped test exists.
+  Then la valeur est @JukeBoxDef::List de exactement `docker.io/sebt3/vynil`
+  Aucun test mappé n'existe.
 
 Scenario: Full scan success closes both conditions and replaces the cache
-  Given a @JukeBox whose `metadata.generation` is absent and whose status holds a stale
-    `Updated`/`False` record with a message and packages from a previous scan
-  When @JukeBox::set_status_updated is awaited with N packages
-  Then the patched `conditions` are exactly the two records @ApplicationCondition::updated_ok and
-    @ApplicationCondition::ready_ok, both `True` at generation `1` with message
-    `Updated succesfully` — the stale record is not carried over — and `packages` are exactly the
-    N arguments
-  And a `Normal` event with reason `ScanSucceed`, action `Scan` and note `Found N packages`
-    is published
-  No mapped test exists.
+  Given un @JukeBox dont `metadata.generation` est absent et dont le statut porte un vieil
+    enregistrement `Updated`/`False` avec message et paquets d'un scan précédent
+  When @JukeBox::set_status_updated est attendu avec N paquets
+  Then les `conditions` patchées sont exactement les deux enregistrements
+    @ApplicationCondition::updated_ok et @ApplicationCondition::ready_ok, tous deux `True` à la
+    generation `1` avec le message `Updated succesfully` — l'enregistrement périmé n'est pas
+    reporté — et `packages` sont exactement les N arguments
+  And un événement `Normal` de raison `ScanSucceed`, action `Scan` et note `Found N packages`
+    est publié
+  Aucun test mappé n'existe.
 
 Scenario: Scan failure keeps the cache and preserves a Ready trace
-  Given a @JukeBox whose status holds a `Ready`/`True` record from an earlier scan plus stored
-    packages, at `metadata.generation` `4`
-  When @JukeBox::set_status_failed is awaited with a reason over 1023 bytes
-  Then the stored `Updated`/`False` record carries the full reason at generation `4`, no
-    @ApplicationCondition::ready_ko is appended, every other record is carried over, and `packages`
-    are re-patched unchanged
-  And the `Warning` event has reason `ScanFailed`, action `Scan` and the note truncated to `1023`
-    bytes
-  But when the status holds no `Ready`-type condition at all, an @ApplicationCondition::ready_ko
-    with message `No successful update` is appended
-  And when no status exists at all, `packages` is patched as `[]`
-  No mapped test exists.
+  Given un @JukeBox dont le statut porte un enregistrement `Ready`/`True` d'un scan antérieur
+    plus des paquets stockés, à `metadata.generation` `4`
+  When @JukeBox::set_status_failed est attendu avec une raison de plus de 1023 octets
+  Then l'enregistrement stocké `Updated`/`False` porte la raison complète à la generation `4`,
+    aucun @ApplicationCondition::ready_ko n'est ajouté, chaque autre enregistrement est reporté,
+    et `packages` est re-patché inchangé
+  And l'événement `Warning` a la raison `ScanFailed`, l'action `Scan` et la note tronquée à
+    `1023` octets
+  But quand le statut ne porte aucune condition de type `Ready`, un @ApplicationCondition::ready_ko
+    avec le message `No successful update` est ajouté
+  And quand aucun statut n'existe, `packages` est patché en `[]`
+  Aucun test mappé n'existe.
 
 Scenario: Category-wide filter replaces every entry of the category
-  Given stored packages `db/pg`, `db/mysql`, `monitoring/prom` and a partial scan delivering
-    `db/pg` under filter `db`
-  When @filter_packages (via @JukeBox::set_status_packages_merge) runs
-  Then `db/pg` and `db/mysql` are dropped, `monitoring/prom` survives, and the new `db/pg` is
-    appended — result 2 entries — under conditions replaced by fresh `updated_ok`+`ready_ok`
-  Maps to test @filter_by_category_removes_all_matching
+  Given les paquets stockés `db/pg`, `db/mysql`, `monitoring/prom` et un scan partiel livrant
+    `db/pg` sous le filtre `db`
+  When @filter_packages (via @JukeBox::set_status_packages_merge) tourne
+  Then `db/pg` et `db/mysql` sont retirés, `monitoring/prom` survit, et le nouveau `db/pg` est
+    ajouté — résultat 2 entrées — sous des conditions remplacées par de frais
+    `updated_ok`+`ready_ok`
+  Tests mappés : @filter_by_category_removes_all_matching
 
 Scenario: Category-plus-name filter replaces only one package
-  Given the same stored list and a partial scan delivering `db/pg` under filter `db/pg`
-  Then only `db/pg` is dropped — `db/mysql` and `monitoring/prom` survive beside the new `db/pg`,
-    result 3 entries
-  Maps to test @filter_by_category_name_removes_only_matching
+  Given la même liste stockée et un scan partiel livrant `db/pg` sous le filtre `db/pg`
+  Then seul `db/pg` est retiré — `db/mysql` et `monitoring/prom` survivent à côté du nouveau
+    `db/pg`, résultat 3 entrées
+  Tests mappés : @filter_by_category_name_removes_only_matching
 
 Scenario: Non-matching filter and empty status just append
-  Given a filter `storage` matching nothing in the stored list, or an empty stored list
-  When the merge runs with `storage/ceph` (or `db/pg`)
-  Then every stored entry survives and the new one is appended (result 4 entries; 1 entry carrying
-    name `pg` from an empty base)
-  Maps to tests @filter_no_match_appends_new_packages, @filter_empty_existing_returns_new_packages
+  Given un filtre `storage` n'appariant rien dans la liste stockée, ou une liste stockée vide
+  When le merge tourne avec `storage/ceph` (ou `db/pg`)
+  Then chaque entrée stockée survit et la nouvelle est ajoutée (résultat 4 entrées ; 1 entrée
+    portant le nom `pg` depuis une base vide)
+  Tests mappés : @filter_no_match_appends_new_packages, @filter_empty_existing_returns_new_packages
 
 Scenario: Trailing-slash filter targets the empty package name
-  Given stored packages in category `db` with non-empty names and filter `db/`
-  When the merge runs
-  Then nothing is dropped — the empty name in @Some(`""`) matches no package — and the new packages
-    are appended on top, with event note `Partial scan updated filter: db/`
-  No mapped test exists; see the `[?]` on empty filter parts.
+  Given des paquets stockés dans la catégorie `db` aux noms non vides et le filtre `db/`
+  When le merge tourne
+  Then rien n'est retiré — le nom vide dans @Some(`""`) n'apparie aucun paquet — et les nouveaux
+    paquets sont ajoutés par-dessus, avec la note d'événement `Partial scan updated filter: db/`
+  Aucun test mappé n'existe ; voir le `[?]` sur les parties de filtre vides.
 
 Scenario: Mis-shaped Rhai package list is rejected before any patch
-  Given a scan script calling the registered `set_status_updated` with a @rhai::Dynamic whose
-    entries lack the mandatory @crate::vynilpackage::VynilPackage fields
-  When @JukeBox::rhai_set_status_updated runs
-  Then the call fails with a @rhai error carrying the serialized @crate::Error::SerializationError
-    message and no status patch or event is attempted
-  No mapped test exists.
+  Given un script de scan appelant le `set_status_updated` enregistré avec un @rhai::Dynamic dont
+    les entrées n'ont pas les champs obligatoires @crate::vynilpackage::VynilPackage
+  When @JukeBox::rhai_set_status_updated tourne
+  Then l'appel échoue avec une erreur @rhai portant le message @crate::Error::SerializationError
+    sérialisé et aucun patch de statut ni événement n'est tenté
+  Aucun test mappé n'existe.
 
 Scenario: Api event failure is swallowed after a good patch
-  Given an awaited mutator whose status patch succeeded but whose event publish fails with a
-    @kube::Error::Api status
-  Then the mutator still completes `@Ok` with the server-merged @JukeBox
-  And `tracing::warn!` logs the failure unless the status message contains both
-    `unable to create new content in namespace` and `being terminated`
-  No mapped test exists.
+  Given un mutateur attendu dont le patch de statut a réussi mais dont la publication d'événement
+    échoue avec un statut @kube::Error::Api
+  Then le mutateur va quand même au bout en `@Ok` avec le @JukeBox fondu côté serveur
+  And `tracing::warn!` journalise l'échec sauf si le message de statut contient à la fois
+    `unable to create new content in namespace` et `being terminated`
+  Aucun test mappé n'existe.
 
 Example:
-  Condition messages wire-visible: `Updated succesfully` (Ready/True and Updated/True),
-    `No successful update` (Ready/False), caller text (Updated/False).
-  Events: `Normal`/`ScanSucceed`/`Scan` note `Found {count} packages` (full scan) or
-    `Partial scan updated filter: {filter}` (merge); `Warning`/`ScanFailed`/`Scan` note = reason
-    truncated to 1023 bytes.
-  Filter forms: `db` → category-wide; `db/pg` → one package; `db/` → empty name; `/pg` → empty
-    category with name `pg`.
+  Messages de condition visibles sur le fil : `Updated succesfully` (Ready/True et Updated/True),
+    `No successful update` (Ready/False), texte de l'appelant (Updated/False).
+  Événements : `Normal`/`ScanSucceed`/`Scan` note `Found {count} packages` (scan complet) ou
+    `Partial scan updated filter: {filter}` (merge) ; `Warning`/`ScanFailed`/`Scan` note = raison
+    tronquée à 1023 octets.
+  Formes de filtre : `db` → catégorie entière ; `db/pg` → un paquet ; `db/` → nom vide ;
+    `/pg` → catégorie vide avec nom `pg`.

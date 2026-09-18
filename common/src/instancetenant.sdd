@@ -1,207 +1,229 @@
 Spec: TenantInstance
 
 Purpose:
-  Carry the full cluster-side contract of one tenant-package installation: declare the install
-    coordinate (`jukebox`, `category`, `package`, opaque `options`, optional `initFrom` restore
-    source), track per-stage install progress across the richest @ConditionsType set of the CRD
-    family — including the tenant-flow `InitFrom` and `ScheduleBackup` stages — in
-    @TenantInstanceStatus through @ApplicationCondition records, resolve the tenant identity
-    (name, namespaces, published service names) shared by scripts and flow code, and register
-    @TenantInstance with its full accessor and mutator bridge onto package @rhai::Engine
-    instances via @tenant_rhai_register.
+  Porter le contrat complet côté cluster d'une installation de package tenant : déclarer les
+    coordonnées d'installation (`jukebox`, `category`, `package`, `options` opaques, source de
+    restauration `initFrom` optionnelle), suivre la progression de l'installation par étape à
+    travers le jeu @ConditionsType le plus riche de la famille de CRD — y compris les étapes
+    `InitFrom` et `ScheduleBackup` du flux tenant — dans @TenantInstanceStatus via les
+    enregistrements @ApplicationCondition, résoudre l'identité tenant (nom, namespaces, noms
+    de services publiés) partagée par les scripts et le code de flux, et enregistrer
+    @TenantInstance avec son pont complet d'accessors et de mutators sur les instances
+    @rhai::Engine des packages via @tenant_rhai_register.
 
 Owns:
   ./instancetenant.rs
 
 References:
-  ./instance_macros.sdd — owns the semantics of every condition constructor, status setter,
-    merge-patch, event, gate and Rhai bridge the macros attach to this type; this spec names the
-    attached surface by name only.
+  ./instance_macros.sdd — porte la sémantique de chaque constructeur de condition, setter de
+    statut, merge-patch, événement, gate et pont Rhai que les macros attachent à ce type ;
+    cette spec ne nomme la surface attachée que par son nom.
 
 Must:
-  The @kube::CustomResource derive over @TenantInstanceSpec generates the @TenantInstance
-    resource kind `TenantInstance` in group `vynil.solidite.fr`, version `v1`, namespaced
-    scope, shortname `vti`, plural `tenantinstances`, with status type @TenantInstanceStatus and
-    CRD doc `Custom resource representing an Vynil tenant package installation`.
-  The CRD printer columns are, in order and by `jsonPath`: `Juke` -> `.spec.jukebox`,
-    `cat` -> `.spec.category`, `pkg` -> `.spec.package`, `tag` -> `.status.tag`,
-    `last_updated` -> `.status.conditions[?(@.type == 'Ready')].lastTransitionTime`
-    (column type `date`, format `date-time`; the other six columns are type `string`),
-    `stage` -> `.status.conditions[-1:].type`,
+  Le derive @kube::CustomResource sur @TenantInstanceSpec génère le resource kind
+    `TenantInstance` dans le groupe `vynil.solidite.fr`, version `v1`, portée namespaced,
+    shortname `vti`, pluriel `tenantinstances`, avec le type de statut @TenantInstanceStatus
+    et la doc CRD `Custom resource representing an Vynil tenant package installation`.
+  Les colonnes printer du CRD sont, dans l'ordre et par `jsonPath` : `Juke` ->
+    `.spec.jukebox`, `cat` -> `.spec.category`, `pkg` -> `.spec.package`, `tag` ->
+    `.status.tag`, `last_updated` ->
+    `.status.conditions[?(@.type == 'Ready')].lastTransitionTime` (type de colonne `date`,
+    format `date-time` ; les six autres colonnes sont de type `string`), `stage` ->
+    `.status.conditions[-1:].type`,
     `errors` -> `.status.conditions[?(@.status == 'False')].message`.
-  Wire keys are fixed: the spec keys are `jukebox`, `category`, `package`, `initFrom` and
-    `options`; @InitFrom keys are `secretName`, `subPath`, `snapshot` and `version` with
-    `snapshot` the only key required at deserialization; the status keys are `conditions`,
-    `tag`, `digest`, `tfstate`, `rhaistate`, `befores`, `vitals`, `scalables`, `others`, `posts`
-    and `services`; @ApplicationCondition serializes camelCase keys `lastTransitionTime`,
-    `message`, `type` (fixed by the @serde rename on @ApplicationCondition::condition_type),
-    `status` and `generation`; @ConditionsType and @ConditionsStatus serialize as bare variant
-    strings with @Default selecting `Ready` and `True`. Nothing in this file interprets
-    `initFrom` or `options` contents.
-  The module expands @impl_condition_common! and @impl_condition_children! at module scope plus
-    @impl_instance_common!(TenantInstance, "TenantInstance") and @impl_instance_befores!
-    (TenantInstance); @impl_condition_crds! and @impl_instance_crds! are deliberately not
-    expanded, so this type carries no CRD-stage surface, its @ConditionsType omits `CrdApplied`,
-    and @tenant_rhai_register registers no crd functions.
-  Every @ConditionsType variant named by the two expanded condition macros exists in this
-    module's enum — `Ready`, `Installed`, `AgentStarted`, `TofuInstalled`, `RhaiApplied`,
-    `BeforeApplied`, `VitalApplied`, `ScalableApplied`, `OtherApplied`, `PostApplied`,
-    `InitFrom`, `ScheduleBackup` — satisfying the macro declaration contract; the children and
-    `InitFrom`/`ScheduleBackup` stages are carried only by this CRD and its `ServiceInstance`
-    sibling, never by `SystemInstance`. The two remaining variants `Backuped` and `Restored`
-    are declared (and visible in the generated schema) but named by no constructor or setter
-    here (see Tasks).
-  Every mutator attached by @impl_instance_common! patches the `status` subresource as a
-    @kube::api::Patch::Merge carrying `apiVersion` `vynil.solidite.fr/v1` and the kind string
-    `TenantInstance` — the @impl_instance_common! call-site literal — so the server replaces
-    only the keys present in the patch; the keys ever written for this type are among
-    `conditions`, `tag`, `digest`, `tfstate`, `rhaistate`, `services`, `befores`, `vitals`,
-    `scalables`, `others` and `posts`, and `crds` is never written. Events published against
-    the instance object ref follow the per-stage table in ./instance_macros.sdd.
-  @TenantInstance::have_child answers `true` exactly when a status is present and at least one
-    probe succeeds: `rhaistate` is `@Some` or `tfstate` is `@Some` regardless of content, or any
-    of `befores`, `vitals`, `others`, `scalables`, `posts` is `@Some` and non-empty; a missing
-    status answers `false`.
-  @TenantInstance::get_tenant_name reads the tenant identity from the instance namespace: with
-    no `metadata.namespace` it fails with @crate::Error::Other carrying the exact text
-    `TenantInstance has no namespace`; otherwise it fetches the @Namespace metadata
-    cluster-wide and, when the namespace carries the label key from process environment
-    `TENANT_LABEL` (read on every call, default `vynil.solidite.fr/tenant`), returns that label
-    value, falling back to the instance namespace name when there are no labels or no such
-    label.
-  @TenantInstance::get_tenant_namespaces returns every namespace owned by the tenant: with the
-    label present it lists namespace metadata with the equality selector
-    `{label-key}=={tenant-value}` and collects the present names; without the label, or without
-    labels at all, it returns exactly the instance namespace as a single-element list. Result
-    order is the API list order — never re-sorted.
-  @TenantInstance::get_tenant_services_names unions, over every tenant namespace, the service
-    `key` values of `status.services` of every @TenantInstance listed there — including the
-    calling instance's own services — sorts the concatenated keys lexicographically and keeps
-    duplicates; each namespace is read with a full `api.list`, not metadata-only.
-  Every Rhai-facing bridge in this file drives its async body through @tokio::task::block_in_place
-    combined with @tokio::runtime::Handle::block_on, so it must run on a multi-thread runtime
-    (@tokio::task::block_in_place panics on a current-thread runtime), and failures reach scripts
-    as @crate::rhai_err strings. @TenantInstance::rhai_get_tenant_name propagates every
-    underlying failure that way, while @TenantInstance::rhai_get_tenant_namespaces and
-    @TenantInstance::rhai_get_tenant_services_names only propagate their @serde_json round-trip
-    conversion errors.
-  @tenant_rhai_register registers the type under the script name `TenantInstance` and is the
-    only bridge exposing the three in-file tenant getters to scripts; the registered
-    `options_digest` binds directly to @TenantInstance::get_options_digest (plain @String
-    return, no Rhai wrapper), and the registered `get_services` binds to
-    @TenantInstance::rhai_get_services (joined @String), not to the list-returning
-    @TenantInstance::get_services.
+  Les clés wire sont figées : les clés du spec sont `jukebox`, `category`, `package`,
+    `initFrom` et `options` ; les clés de @InitFrom sont `secretName`, `subPath`, `snapshot`
+    et `version` avec `snapshot` comme seule clé requise à la désérialisation ; les clés du
+    status sont `conditions`, `tag`, `digest`, `tfstate`, `rhaistate`, `befores`, `vitals`,
+    `scalables`, `others`, `posts` et `services` ; @ApplicationCondition sérialise les clés
+    camelCase `lastTransitionTime`, `message`, `type` (figées par le rename @serde sur
+    @ApplicationCondition::condition_type), `status` et `generation` ; @ConditionsType et
+    @ConditionsStatus se sérialisent en chaînes de variantes nues avec @Default sélectionnant
+    `Ready` et `True`. Rien dans ce fichier n'interprète le contenu de `initFrom` ou
+    `options`.
+  Le module déploie @impl_condition_common! et @impl_condition_children! à portée de module
+    plus @impl_instance_common!(TenantInstance, "TenantInstance") et
+    @impl_instance_befores!(TenantInstance) ; @impl_condition_crds! et @impl_instance_crds!
+    ne sont délibérément pas déployés, si bien que ce type ne porte aucune surface d'étape
+    CRD, que son @ConditionsType omet `CrdApplied`, et que @tenant_rhai_register
+    n'enregistre aucune fonction crd.
+  Chaque variante @ConditionsType nommée par les deux macros de condition déployées existe
+    dans l'enum de ce module — `Ready`, `Installed`, `AgentStarted`, `TofuInstalled`,
+    `RhaiApplied`, `BeforeApplied`, `VitalApplied`, `ScalableApplied`, `OtherApplied`,
+    `PostApplied`, `InitFrom`, `ScheduleBackup` — satisfaisant le contrat de déclaration des
+    macros ; les étapes children et `InitFrom`/`ScheduleBackup` ne sont portées que par ce
+    CRD et son frère `ServiceInstance`, jamais par `SystemInstance`. Les deux variantes
+    restantes `Backuped` et `Restored` sont déclarées (et visibles dans le schéma généré)
+    mais nommées par aucun constructeur ni setter ici (voir Tasks).
+  Tout mutator attaché par @impl_instance_common! patche le sous-ressource `status` en
+    @kube::api::Patch::Merge portant `apiVersion` `vynil.solidite.fr/v1` et la chaîne de
+    kind `TenantInstance` — le literal du site d'appel de @impl_instance_common! — si bien
+    que le serveur ne remplace que les clés présentes dans le patch ; les clés susceptibles
+    d'être écrites pour ce type figurent parmi `conditions`, `tag`, `digest`, `tfstate`,
+    `rhaistate`, `services`, `befores`, `vitals`, `scalables`, `others` et `posts`, et
+    `crds` n'est jamais écrit. Les événements publiés contre la référence d'objet de
+    l'instance suivent le tableau par étape de ./instance_macros.sdd.
+  @TenantInstance::have_child répond `true` exactement quand un statut est présent et
+    qu'au moins une sonde réussit : `rhaistate` est `@Some` ou `tfstate` est `@Some` quel
+    qu'en soit le contenu, ou l'un de `befores`, `vitals`, `others`, `scalables`, `posts`
+    est `@Some` et non vide ; un statut absent répond `false`.
+  @TenantInstance::get_tenant_name lit l'identité tenant depuis le namespace de l'instance :
+    sans `metadata.namespace` il échoue avec @crate::Error::Other portant le texte exact
+    `TenantInstance has no namespace` ; sinon il récupère les métadonnées @Namespace à
+    l'échelle du cluster et, quand le namespace porte la clé de label lue dans
+    l'environnement process `TENANT_LABEL` (lu à chaque appel, défaut
+    `vynil.solidite.fr/tenant`), retourne la valeur de ce label, retombant sur le nom du
+    namespace de l'instance en l'absence de labels ou d'un tel label.
+  @TenantInstance::get_tenant_namespaces retourne tous les namespaces possédés par le
+    tenant : avec le label présent il liste les métadonnées de namespaces avec le sélecteur
+    d'égalité `{label-key}=={tenant-value}` et collecte les noms présents ; sans le label,
+    ou sans labels du tout, il retourne exactement le namespace de l'instance comme liste à
+    un seul élément. L'ordre du résultat est l'ordre de la liste de l'API — jamais
+    re-trié.
+  @TenantInstance::get_tenant_services_names fait l'union, sur chaque namespace du tenant,
+    des valeurs `key` de service de `status.services` de chaque @TenantInstance répertorié
+    là — y compris les services propres à l'instance appelante — trie les clés concaténées
+    lexicographiquement et garde les doublons ; chaque namespace est lu par un `api.list`
+    complet, pas seulement en métadonnées.
+  Tout pont orienté Rhai de ce fichier pilote son corps asynchrone via
+    @tokio::task::block_in_place combiné à @tokio::runtime::Handle::block_on, il doit donc
+    tourner sur un runtime multi-thread (@tokio::task::block_in_place panique sur un runtime
+    current-thread), et les échecs parviennent aux scripts en chaînes @crate::rhai_err.
+    @TenantInstance::rhai_get_tenant_name propage tout échec sous-jacent de cette façon,
+    tandis que @TenantInstance::rhai_get_tenant_namespaces et
+    @TenantInstance::rhai_get_tenant_services_names ne propagent que leurs erreurs de
+    conversion du round-trip @serde_json.
+  @tenant_rhai_register enregistre le type sous le nom de script `TenantInstance` et est le
+    seul pont exposant aux scripts les trois getters tenant du fichier ; le `options_digest`
+    enregistré est lié directement à @TenantInstance::get_options_digest (retour @String
+    nu, sans wrapper Rhai), et le `get_services` enregistré est lié à
+    @TenantInstance::rhai_get_services (@String joint), et non au
+    @TenantInstance::get_services qui retourne une liste.
 
 Depends on:
-  @impl_condition_common! and @impl_condition_children! in ./instance_macros.rs — stamp
-    @ApplicationCondition::new with @chrono::Utc::now and supply the generation-carrying
-    constructors this type's flow composes, including @ApplicationCondition::ready_ok,
-    @ApplicationCondition::ready_ko, @ApplicationCondition::installed_ok,
-    @ApplicationCondition::installed_ko, the five ok/ko children-stage pairs, and the
-    @ApplicationCondition::init_ko, @ApplicationCondition::init_version_ko and
-    @ApplicationCondition::schedule_ko recorders of the `InitFrom` and `ScheduleBackup` stages.
-  @impl_instance_common!(TenantInstance, "TenantInstance") in ./instance_macros.rs — attach the
-    status merge-patch (@TenantInstance::patch_status, embedding the call-site kind literal), the
-    event recorder (@TenantInstance::send_event), the private rebuild and gating probes
-    (@TenantInstance::have_condition, @TenantInstance::get_conditions_excluding) that this file's
-    Scenario tests exercise, and the shared lookup, options-digest, tfstate/rhaistate,
-    agent/missing and Rhai surface that @tenant_rhai_register republishes.
-  @impl_instance_befores!(TenantInstance) in ./instance_macros.rs — attach the children-stage
-    setters and the children variant of @TenantInstance::set_status_ready (whose exclusion list
-    evicts `InitFrom` and `ScheduleBackup` records on every success close), @TenantInstance::get_services,
-    @TenantInstance::set_status_init_failed, @TenantInstance::set_status_schedule_backup_failed and
-    @TenantInstance::set_missing_init_version with their Rhai bridges.
-  @crate::context::get_client_async in ./context.rs — every cluster-read call builds its
-    @kube::Client from context at call time; nothing stores a client in the resource.
-  @k8s_openapi::api::core::v1::Namespace with @kube::api::Api and @kube::api::ListParams — the
-    cluster-wide namespace metadata reads and the tenant label-selector list.
-  @crate::Children and @crate::Published in ./lib.rs — the child records stored in the five
-    stage lists and the published-service records in `services`, whose `key` fields
-    @TenantInstance::get_tenant_services_names collects through the macro-attached
-    @TenantInstance::get_services.
-  @crate::Error, @crate::Result, @crate::RhaiRes and @crate::rhai_err in ./lib.rs — the error
-    contract propagated by the async getters and flattened to strings at the Rhai bridges.
-  @kube::CustomResource, @kube::Resource, @kube::ResourceExt — the derive that generates
-    @TenantInstance and the metadata/namespace plumbing behind macro-owned patching.
-  @rhai::Engine and @rhai::Dynamic — the engine this file registers the bridge onto and the
-    array value the collection wrappers return.
-  @tokio::task::block_in_place and @tokio::runtime::Handle — the sync-to-async bridge under the
-    three Rhai wrappers.
-  @chrono::DateTime<@chrono::Utc> — the condition timestamp type.
+  @impl_condition_common! et @impl_condition_children! dans ./instance_macros.rs —
+    estampillent @ApplicationCondition::new avec @chrono::Utc::now et fournissent les
+    constructeurs portant la generation que compose le flux de ce type, dont
+    @ApplicationCondition::ready_ok, @ApplicationCondition::ready_ko,
+    @ApplicationCondition::installed_ok, @ApplicationCondition::installed_ko, les cinq
+    paires ok/ko des étapes children, et les enregistreurs
+    @ApplicationCondition::init_ko, @ApplicationCondition::init_version_ko et
+    @ApplicationCondition::schedule_ko des étapes `InitFrom` et `ScheduleBackup`.
+  @impl_instance_common!(TenantInstance, "TenantInstance") dans ./instance_macros.rs —
+    attache le merge-patch de statut (@TenantInstance::patch_status, qui embarque le
+    literal de kind du site d'appel), le recorder d'événements
+    (@TenantInstance::send_event), les sondes privées de rebuild et de gating
+    (@TenantInstance::have_condition, @TenantInstance::get_conditions_excluding) que les
+    tests Scenario de ce fichier exercent, et la surface partagée de lookup,
+    options-digest, tfstate/rhaistate, agent/missing et Rhai que @tenant_rhai_register
+    republie.
+  @impl_instance_befores!(TenantInstance) dans ./instance_macros.rs — attache les setters
+    des étapes children et la variante children de @TenantInstance::set_status_ready (dont
+    la liste d'exclusion évince les enregistrements `InitFrom` et `ScheduleBackup` à chaque
+    fermeture de succès), @TenantInstance::get_services,
+    @TenantInstance::set_status_init_failed,
+    @TenantInstance::set_status_schedule_backup_failed et
+    @TenantInstance::set_missing_init_version avec leurs ponts Rhai.
+  @crate::context::get_client_async dans ./context.rs — chaque appel de lecture cluster
+    construit son @kube::Client depuis le context au moment de l'appel ; rien ne stocke de
+    client dans la ressource.
+  @k8s_openapi::api::core::v1::Namespace avec @kube::api::Api et @kube::api::ListParams —
+    les lectures de métadonnées de namespaces à l'échelle du cluster et la liste par
+    sélecteur de label tenant.
+  @crate::Children et @crate::Published dans ./lib.rs — les enregistrements children
+    stockés dans les cinq listes d'étapes et les enregistrements de services publiés dans
+    `services`, dont @TenantInstance::get_tenant_services_names collecte les champs `key`
+    via le @TenantInstance::get_services attaché par macro.
+  @crate::Error, @crate::Result, @crate::RhaiRes et @crate::rhai_err dans ./lib.rs — le
+    contrat d'erreur propagé par les getters asynchrones et aplatien en chaînes aux ponts
+    Rhai.
+  @kube::CustomResource, @kube::Resource, @kube::ResourceExt — le derive qui génère
+    @TenantInstance et le plumbing metadata/namespace derrière le patching porté par les
+    macros.
+  @rhai::Engine et @rhai::Dynamic — le moteur sur lequel ce fichier enregistre le pont et
+    la valeur de tableau que retournent les wrappers de collection.
+  @tokio::task::block_in_place et @tokio::runtime::Handle — le pont sync-vers-async sous
+    les trois wrappers Rhai.
+  @chrono::DateTime<@chrono::Utc> — le type d'horodatage des conditions.
 
 Exposes:
-  @InitFrom — restore-source struct with public fields @InitFrom::secret_name,
-    @InitFrom::sub_path and @InitFrom::version (`@Option<@String>`, wire `secretName`,
-    `subPath`, `version`) and @InitFrom::snapshot (required @String); derives @Serialize,
-    @Deserialize, @Eq, @PartialEq, @Clone, @Debug, @JsonSchema. Its doc comments name defaults
-    (`backup-settings` secret, `<namespace-name>/<app-slug>` sub-path) this file never applies.
-  @TenantInstanceSpec — CRD spec struct with public fields @TenantInstanceSpec::jukebox,
-    @TenantInstanceSpec::category, @TenantInstanceSpec::package, @TenantInstanceSpec::init_from
-    (`@Option<@InitFrom>`, wire `initFrom`) and @TenantInstanceSpec::options
-    (`@Option<@serde_json::Map<@String, @serde_json::Value>>`); derives @Serialize, @Deserialize,
-    @Clone, @Debug, @JsonSchema; unknown top-level spec keys are silently dropped (no
-    `deny_unknown_fields`).
-  @TenantInstance — resource root generated by the @kube::CustomResource derive over
-    @TenantInstanceSpec, with fields `spec` (@TenantInstanceSpec) and `status`
-    (`@Option<@TenantInstanceStatus>`); derives @Serialize, @Deserialize, @Clone, @Debug and
-    @JsonSchema via the derive.
-  @ConditionsType — install-stage enum in declaration order: `Ready` (@Default), `Installed`,
-    `Backuped`, `Restored`, `AgentStarted`, `TofuInstalled`, `BeforeApplied`, `VitalApplied`,
-    `ScalableApplied`, `InitFrom`, `ScheduleBackup`, `OtherApplied`, `RhaiApplied`,
-    `PostApplied`; serialized as bare variant strings (no `CrdApplied` — the tenant family
-    variant is absent by design); derives @Serialize, @Deserialize, @Eq, @PartialEq, @Clone,
-    @Debug, @JsonSchema, @Default.
-  @ConditionsStatus — enum `True` or `False`, serialized as those strings, with @Default
-    selecting `True`; derives @Eq, @PartialEq, @Clone, @Debug, @JsonSchema, @Default.
-  @ApplicationCondition — one recorded condition, module-local to ./instancetenant.rs and
-    distinct from the same-named types of the sibling instance modules, with public fields
+  @InitFrom — struct de source de restauration aux champs publics @InitFrom::secret_name,
+    @InitFrom::sub_path et @InitFrom::version (`@Option<@String>`, wire `secretName`,
+    `subPath`, `version`) et @InitFrom::snapshot (un @String requis) ; derive @Serialize,
+    @Deserialize, @Eq, @PartialEq, @Clone, @Debug, @JsonSchema. Ses commentaires doc
+    nomment des défauts (secret `backup-settings`, sous-chemin `<namespace-name>/<app-slug>`)
+    que ce fichier n'applique jamais.
+  @TenantInstanceSpec — struct spec du CRD aux champs publics @TenantInstanceSpec::jukebox,
+    @TenantInstanceSpec::category, @TenantInstanceSpec::package,
+    @TenantInstanceSpec::init_from (`@Option<@InitFrom>`, wire `initFrom`) et
+    @TenantInstanceSpec::options
+    (`@Option<@serde_json::Map<@String, @serde_json::Value>>`) ; derive @Serialize,
+    @Deserialize, @Clone, @Debug, @JsonSchema ; les clés spec inconnues de premier niveau
+    sont silencieusement jetées (pas de `deny_unknown_fields`).
+  @TenantInstance — racine de ressource générée par le derive @kube::CustomResource sur
+    @TenantInstanceSpec, avec les champs `spec` (@TenantInstanceSpec) et `status`
+    (`@Option<@TenantInstanceStatus>`) ; derive @Serialize, @Deserialize, @Clone, @Debug et
+    @JsonSchema via le derive.
+  @ConditionsType — enum des étapes d'installation dans l'ordre de déclaration : `Ready`
+    (@Default), `Installed`, `Backuped`, `Restored`, `AgentStarted`, `TofuInstalled`,
+    `BeforeApplied`, `VitalApplied`, `ScalableApplied`, `InitFrom`, `ScheduleBackup`,
+    `OtherApplied`, `RhaiApplied`, `PostApplied` ; sérialisé en chaînes de variantes nues
+    (pas de `CrdApplied` — la variante de la famille tenant est absente par conception) ;
+    derive @Serialize, @Deserialize, @Eq, @PartialEq, @Clone, @Debug, @JsonSchema, @Default.
+  @ConditionsStatus — enum `True` ou `False`, sérialisé en ces chaînes, avec @Default
+    sélectionnant `True` ; derive @Eq, @PartialEq, @Clone, @Debug, @JsonSchema, @Default.
+  @ApplicationCondition — une condition enregistrée, locale au module ./instancetenant.rs
+    et distincte des types homonymes des modules instance frères, aux champs publics
     @ApplicationCondition::last_transition_time (`@Option<@chrono::DateTime<@chrono::Utc>>`),
     @ApplicationCondition::message, @ApplicationCondition::condition_type,
-    @ApplicationCondition::status and @ApplicationCondition::generation (`@i64`); derives @Eq
-    and @PartialEq, compared field-by-field by the macro-owned dedup gate.
-  Constructors attached by @impl_condition_common!: @ApplicationCondition::new,
+    @ApplicationCondition::status et @ApplicationCondition::generation (`@i64`) ; derive
+    @Eq et @PartialEq, comparée champ par champ par le gate de dedup porté par les macros.
+  Constructeurs attachés par @impl_condition_common! : @ApplicationCondition::new,
     @ApplicationCondition::ready_ok, @ApplicationCondition::ready_ko,
     @ApplicationCondition::installed_ok, @ApplicationCondition::installed_ko,
     @ApplicationCondition::agent_started, @ApplicationCondition::missing_package,
     @ApplicationCondition::missing_box, @ApplicationCondition::missing_requirement,
     @ApplicationCondition::tofu_ok, @ApplicationCondition::tofu_ko,
     @ApplicationCondition::rhai_ok, @ApplicationCondition::rhai_ko.
-  Constructors attached by @impl_condition_children!: @ApplicationCondition::before_ok,
+  Constructeurs attachés par @impl_condition_children! : @ApplicationCondition::before_ok,
     @ApplicationCondition::before_ko, @ApplicationCondition::vital_ok,
     @ApplicationCondition::vital_ko, @ApplicationCondition::scalable_ok,
     @ApplicationCondition::scalable_ko, @ApplicationCondition::other_ok,
     @ApplicationCondition::other_ko, @ApplicationCondition::post_ok,
     @ApplicationCondition::post_ko, @ApplicationCondition::init_ko,
-    @ApplicationCondition::init_version_ko and @ApplicationCondition::schedule_ko.
-  @TenantInstanceStatus — status struct with public fields @TenantInstanceStatus::conditions
-    (`@Vec<@ApplicationCondition>`, required), @TenantInstanceStatus::tag,
-    @TenantInstanceStatus::digest, @TenantInstanceStatus::tfstate,
+    @ApplicationCondition::init_version_ko et @ApplicationCondition::schedule_ko.
+  @TenantInstanceStatus — struct de status aux champs publics
+    @TenantInstanceStatus::conditions (`@Vec<@ApplicationCondition>`, requis),
+    @TenantInstanceStatus::tag, @TenantInstanceStatus::digest, @TenantInstanceStatus::tfstate,
     @TenantInstanceStatus::rhaistate (`@Option<@String>`), @TenantInstanceStatus::befores,
     @TenantInstanceStatus::vitals, @TenantInstanceStatus::scalables,
-    @TenantInstanceStatus::others, @TenantInstanceStatus::posts (`@Option<@Vec<@crate::Children>>`),
-    and @TenantInstanceStatus::services (`@Option<@Vec<@crate::Published>>`); derives
-    @Serialize, @Deserialize, @Clone, @Debug, @JsonSchema.
-  @TenantInstance::have_child — child-state probe.
-  @TenantInstance::get_tenant_name, @TenantInstance::get_tenant_namespaces and
-    @TenantInstance::get_tenant_services_names — the async tenant-identity getters.
-  @TenantInstance::rhai_get_tenant_name, @TenantInstance::rhai_get_tenant_namespaces and
-    @TenantInstance::rhai_get_tenant_services_names — the synchronous Rhai bridges over those
+    @TenantInstanceStatus::others, @TenantInstanceStatus::posts
+    (`@Option<@Vec<@crate::Children>>`), et @TenantInstanceStatus::services
+    (`@Option<@Vec<@crate::Published>>`) ; derive @Serialize, @Deserialize, @Clone, @Debug,
+    @JsonSchema.
+
+  @TenantInstance::have_child — sonde d'état children.
+  @TenantInstance::get_tenant_name, @TenantInstance::get_tenant_namespaces et
+    @TenantInstance::get_tenant_services_names — les getters asynchrones d'identité tenant.
+  @TenantInstance::rhai_get_tenant_name, @TenantInstance::rhai_get_tenant_namespaces et
+    @TenantInstance::rhai_get_tenant_services_names — les ponts Rhai synchrones sur ces
     getters.
-  Methods attached by @impl_instance_common!: async @TenantInstance::get, @TenantInstance::list,
-    @TenantInstance::get_options_digest, @TenantInstance::get_tfstate,
+  Méthodes attachées par @impl_instance_common! : async @TenantInstance::get,
+    @TenantInstance::list, @TenantInstance::get_options_digest, @TenantInstance::get_tfstate,
     @TenantInstance::get_rhaistate, @TenantInstance::set_tfstate,
     @TenantInstance::set_status_tofu_failed, @TenantInstance::set_rhaistate,
     @TenantInstance::set_status_rhai_failed, @TenantInstance::set_agent_started,
-    @TenantInstance::set_missing_box, @TenantInstance::set_missing_package and
-    @TenantInstance::set_missing_requirement; Rhai bridges @TenantInstance::rhai_get,
+    @TenantInstance::set_missing_box, @TenantInstance::set_missing_package et
+    @TenantInstance::set_missing_requirement ; ponts Rhai @TenantInstance::rhai_get,
     @TenantInstance::rhai_list, @TenantInstance::get_metadata, @TenantInstance::get_spec,
     @TenantInstance::get_status, @TenantInstance::rhai_get_tfstate,
     @TenantInstance::rhai_get_rhaistate, @TenantInstance::rhai_set_status_ready,
     @TenantInstance::rhai_set_tfstate, @TenantInstance::rhai_set_status_tofu_failed,
     @TenantInstance::rhai_set_rhaistate, @TenantInstance::rhai_set_status_rhai_failed,
     @TenantInstance::rhai_set_agent_started, @TenantInstance::rhai_set_missing_box,
-    @TenantInstance::rhai_set_missing_package and @TenantInstance::rhai_set_missing_requirement.
-  Methods attached by @impl_instance_befores!: async @TenantInstance::set_status_ready,
+    @TenantInstance::rhai_set_missing_package et
+    @TenantInstance::rhai_set_missing_requirement.
+  Méthodes attachées par @impl_instance_befores! : async @TenantInstance::set_status_ready,
     @TenantInstance::get_services, @TenantInstance::get_services_string,
     @TenantInstance::set_services, @TenantInstance::set_status_befores,
     @TenantInstance::set_status_before_failed, @TenantInstance::set_status_vitals,
@@ -209,24 +231,25 @@ Exposes:
     @TenantInstance::set_status_scalable_failed, @TenantInstance::set_status_others,
     @TenantInstance::set_status_other_failed, @TenantInstance::set_status_posts,
     @TenantInstance::set_status_post_failed, @TenantInstance::set_status_init_failed,
-    @TenantInstance::set_status_schedule_backup_failed and
-    @TenantInstance::set_missing_init_version; Rhai bridges @TenantInstance::rhai_set_services,
+    @TenantInstance::set_status_schedule_backup_failed et
+    @TenantInstance::set_missing_init_version ; ponts Rhai @TenantInstance::rhai_set_services,
     @TenantInstance::rhai_get_services, @TenantInstance::rhai_set_status_befores,
     @TenantInstance::rhai_set_status_before_failed, @TenantInstance::rhai_set_status_vitals,
     @TenantInstance::rhai_set_status_vital_failed, @TenantInstance::rhai_set_status_scalables,
     @TenantInstance::rhai_set_status_scalable_failed, @TenantInstance::rhai_set_status_others,
     @TenantInstance::rhai_set_status_other_failed, @TenantInstance::rhai_set_status_posts,
     @TenantInstance::rhai_set_status_post_failed, @TenantInstance::rhai_set_status_init_failed,
-    @TenantInstance::rhai_set_status_schedule_backup_failed and
+    @TenantInstance::rhai_set_status_schedule_backup_failed et
     @TenantInstance::rhai_set_missing_init_version.
-  @tenant_rhai_register — installs the script-visible surface on a caller @rhai::Engine under
-    the registered type name `TenantInstance`: free functions `get_tenant_instance` ->
-    @TenantInstance::rhai_get, `get_tenant_name` -> @TenantInstance::rhai_get_tenant_name,
-    `get_tenant_namespaces` -> @TenantInstance::rhai_get_tenant_namespaces,
-    `get_tenant_services_names` -> @TenantInstance::rhai_get_tenant_services_names,
-    `list_tenant_instance` -> @TenantInstance::rhai_list, `options_digest` ->
-    @TenantInstance::get_options_digest, `get_tfstate` -> @TenantInstance::rhai_get_tfstate,
-    `get_rhaistate` -> @TenantInstance::rhai_get_rhaistate, `set_agent_started` ->
+  @tenant_rhai_register — installe la surface visible des scripts sur un @rhai::Engine
+    emprunté par l'appelant, sous le nom de type enregistré `TenantInstance` : fonctions
+    libres `get_tenant_instance` -> @TenantInstance::rhai_get, `get_tenant_name` ->
+    @TenantInstance::rhai_get_tenant_name, `get_tenant_namespaces` ->
+    @TenantInstance::rhai_get_tenant_namespaces, `get_tenant_services_names` ->
+    @TenantInstance::rhai_get_tenant_services_names, `list_tenant_instance` ->
+    @TenantInstance::rhai_list, `options_digest` -> @TenantInstance::get_options_digest,
+    `get_tfstate` -> @TenantInstance::rhai_get_tfstate, `get_rhaistate` ->
+    @TenantInstance::rhai_get_rhaistate, `set_agent_started` ->
     @TenantInstance::rhai_set_agent_started, `set_missing_box` ->
     @TenantInstance::rhai_set_missing_box, `set_missing_package` ->
     @TenantInstance::rhai_set_missing_package, `set_missing_requirement` ->
@@ -249,184 +272,199 @@ Exposes:
     `get_services` -> @TenantInstance::rhai_get_services, `set_status_rhai_failed` ->
     @TenantInstance::rhai_set_status_rhai_failed, `set_status_schedule_backup_failed` ->
     @TenantInstance::rhai_set_status_schedule_backup_failed, `set_status_init_failed` ->
-    @TenantInstance::rhai_set_status_init_failed; property getters `metadata` ->
+    @TenantInstance::rhai_set_status_init_failed ; getters de propriété `metadata` ->
     @TenantInstance::get_metadata, `spec` -> @TenantInstance::get_spec, `status` ->
     @TenantInstance::get_status.
 
 Accepts:
-  Install coordinates as free-form strings in @TenantInstanceSpec::jukebox,
-    @TenantInstanceSpec::category and @TenantInstanceSpec::package, plus
-    @TenantInstanceSpec::options as any JSON object map or @None, and @TenantInstanceSpec::init_from
-    as an `@InitFrom` object or @None — this file only digests `options` (macro) and never
-    interprets `initFrom`.
-  The three async getters take only `&self` and read the cluster: instance namespace from
-    `metadata`, process environment `TENANT_LABEL` read per call.
-  The three in-file Rhai bridges take `&mut self` (Rhai registration shape) and no arguments.
-  @tenant_rhai_register takes a borrowed @rhai::Engine to decorate.
-  Macro-attached setters accept the argument shapes and @rhai::Dynamic conversions frozen in
-    ./instance_macros.sdd.
+  Les coordonnées d'installation en chaînes libres dans @TenantInstanceSpec::jukebox,
+    @TenantInstanceSpec::category et @TenantInstanceSpec::package, plus
+    @TenantInstanceSpec::options comme toute carte d'objet JSON ou @None, et
+    @TenantInstanceSpec::init_from comme un objet `@InitFrom` ou @None — ce fichier ne
+    digère que `options` (macro) et n'interprète jamais `initFrom`.
+  Les trois getters asynchrones ne prennent que `&self` et lisent le cluster : le namespace
+    de l'instance depuis `metadata`, l'environnement process `TENANT_LABEL` lu à chaque
+    appel.
+  Les trois ponts Rhai du fichier prennent `&mut self` (forme d'enregistrement Rhai) et
+    aucun argument.
+  @tenant_rhai_register prend un @rhai::Engine emprunté à décorer.
+  Les setters attachés par macro acceptent les formes d'arguments et les conversions
+    @rhai::Dynamic gelées dans ./instance_macros.sdd.
 
 Returns:
-  @TenantInstance::get_tenant_name returns @crate::Result<@String> — the tenant label value or
-    the fallback namespace name.
-  @TenantInstance::get_tenant_namespaces returns @crate::Result<@Vec<@String>> in API order,
-    the single own namespace when unlabeled.
-  @TenantInstance::get_tenant_services_names returns @crate::Result<@Vec<@String>> sorted
-    lexicographically, duplicates kept, own services included.
-  @TenantInstance::have_child returns a `@bool` per the probe rules above.
-  @TenantInstance::rhai_get_tenant_name returns @crate::RhaiRes<@String>; the two collection
-    bridges return @crate::RhaiRes<@rhai::Dynamic> — a @rhai string array on success, or the
-    plain @rhai string `""` when the underlying getter failed.
-  Macro-attached mutators return @crate::Result<@TenantInstance> carrying the server-merged
-    object; @tenant_rhai_register returns nothing.
+  @TenantInstance::get_tenant_name retourne @crate::Result<@String> — la valeur du label
+    tenant ou le nom de namespace de repli.
+  @TenantInstance::get_tenant_namespaces retourne @crate::Result<@Vec<@String>> dans
+    l'ordre de l'API, le namespace propre seul quand non labelisé.
+  @TenantInstance::get_tenant_services_names retourne @crate::Result<@Vec<@String>> trié
+    lexicographiquement, doublons conservés, services propres inclus.
+  @TenantInstance::have_child retourne un `@bool` selon les règles de sonde ci-dessus.
+  @TenantInstance::rhai_get_tenant_name retourne @crate::RhaiRes<@String> ; les deux ponts
+    de collection retournent @crate::RhaiRes<@rhai::Dynamic> — un tableau de chaînes @rhai
+    en cas de succès, ou la chaîne @rhai nue `""` quand le getter sous-jacent a échoué.
+  Les mutators attachés par macro retournent @crate::Result<@TenantInstance> portant
+    l'objet fusionné par le serveur ; @tenant_rhai_register ne retourne rien.
 
 Raises:
-  @crate::Error::Other(`TenantInstance has no namespace`) from @TenantInstance::get_tenant_name
-    and @TenantInstance::get_tenant_namespaces when `metadata.namespace` is @None.
-  @crate::Error::KubeError when the namespace metadata `get_metadata`, the selector
-    `list_metadata`, or the per-namespace instance `list` fails;
-    @TenantInstance::get_tenant_services_names also propagates both earlier error variants
-    through its inner @TenantInstance::get_tenant_namespaces call (its doc comment names only
-    `KubeError`).
-  @crate::Error::SerializationError inside @TenantInstance::rhai_get_tenant_namespaces and
-    @TenantInstance::rhai_get_tenant_services_names when the @serde_json round-trip to
-    @rhai::Dynamic fails.
-  Every in-file Rhai bridge instead surfaces @rhai::EvalAltResult produced by @crate::rhai_err —
-    the typed @crate::Error is flattened into its message string; @tokio::task::block_in_place
-    panics on a current-thread runtime.
+  @crate::Error::Other(`TenantInstance has no namespace`) depuis
+    @TenantInstance::get_tenant_name et @TenantInstance::get_tenant_namespaces quand
+    `metadata.namespace` est @None.
+  @crate::Error::KubeError quand le `get_metadata` des métadonnées de namespace, le
+    `list_metadata` par sélecteur, ou le `list` d'instances par namespace échoue ;
+    @TenantInstance::get_tenant_services_names propage aussi les deux variantes d'erreur
+    précédentes via son appel interne @TenantInstance::get_tenant_namespaces (son
+    commentaire doc ne nomme que `KubeError`).
+  @crate::Error::SerializationError dans @TenantInstance::rhai_get_tenant_namespaces et
+    @TenantInstance::rhai_get_tenant_services_names quand le round-trip @serde_json vers
+    @rhai::Dynamic échoue.
+  Chaque pont Rhai du fichier remonte à la place un @rhai::EvalAltResult produit par
+    @crate::rhai_err — le @crate::Error typé est aplatien dans sa chaîne de message ;
+    @tokio::task::block_in_place panique sur un runtime current-thread.
 
 Handles:
-  Missing `metadata.namespace` — typed @crate::Error::Other before any cluster call.
-  Namespace with no labels, or labels without the tenant key — tenant name falls back to the
-    namespace name and the namespace list to the single own namespace.
-  `TENANT_LABEL` set in the process environment — the non-default label key is used on both
-    metadata paths.
-  Namespace metadata answers without a name during the selector list — that entry is dropped by
-    `filter_map`.
-  Async getter failure reached through the two collection Rhai bridges — scripts receive the
-    plain string `""` instead of an array or an error.
-  @TenantInstanceStatus absent — @TenantInstance::have_child answers `false`; macro-owned
-    rebuilds and service reads start from empty sets.
+  `metadata.namespace` manquant — @crate::Error::Other typé avant tout appel cluster.
+  Namespace sans labels, ou labels sans la clé tenant — le nom de tenant retombe sur le
+    nom du namespace et la liste de namespaces au seul namespace propre.
+  `TENANT_LABEL` posé dans l'environnement process — la clé de label non par défaut est
+    utilisée sur les deux chemins de métadonnées.
+  Des métadonnées de namespace répondent sans nom pendant la liste par sélecteur — cette
+    entrée est jetée par `filter_map`.
+  Échec d'un getter asynchrone atteint via les deux ponts Rhai de collection — les scripts
+    reçoivent la chaîne nue `""` au lieu d'un tableau ou d'une erreur.
+  @TenantInstanceStatus absent — @TenantInstance::have_child répond `false` ; les rebuilds
+    et lectures de services portés par les macros partent d'ensembles vides.
 
 Tasks:
-  [x] #0 The five in-file @tests cover the Scenario blocks below for the @InitFrom wire shape
-      (@test_init_from_with_version, @test_init_from_without_version), the ignored misplaced
-      `version` key (@test_spec_version_top_level_ignored), the macro @init_version_ko message
-      (@test_init_version_ko_message_contains_error_id_and_version) and the private
-      @have_condition gate probe (@test_have_condition_detects_init_version_ko); verified green
+  [x] #0 Les cinq @tests du fichier couvrent les blocs Scenario ci-dessous pour la forme
+      wire de @InitFrom (@test_init_from_with_version, @test_init_from_without_version), la
+      clé `version` mal placée ignorée (@test_spec_version_top_level_ignored), le message
+      @init_version_ko de la macro
+      (@test_init_version_ko_message_contains_error_id_and_version) et la sonde privée du
+      gate @have_condition (@test_have_condition_detects_init_version_ko) ; vérifiés verts
       via `cargo test -p common`.
-  [ ] #1 No mapped test exists for the tenant-identity Scenarios below (name fallback, selector
-      list, service-name union, swallowed Rhai failures, @have_child); cover them from these
-      Scenario blocks under the project TTD rule when test work starts, likely against the
-      ./k8smock.rs doubles which already register the same three script names.
-  [?] @ConditionsType declares `Backuped` and `Restored` and the generated CRD schema offers
-      them on the wire, but no constructor or setter in this file or the two condition macros
-      ever writes them — they are reachable only through hand-written status writes and never
-      by the reconciled flow. Decide later whether backup/restore stages get real setters or
-      the variants shrink.
-  [?] @TenantInstance::rhai_get_tenant_namespaces and @TenantInstance::rhai_get_tenant_services_names
-      convert any underlying failure (`Error::Other` no-namespace, `Error::KubeError`) into
-      `Ok(@rhai::Dynamic::from(""))` — a plain string where scripts otherwise receive an array —
-      so a cluster read failure is indistinguishable from an empty tenant; their
-      @TenantInstance::rhai_get_tenant_name sibling propagates every failure as a Rhai error
-      instead. Decide later whether the swallow is kept and the three wrappers unified.
-  [?] @TenantInstance::get_tenant_services_names includes the calling instance's own service
-      keys and keeps duplicates across tenant namespaces (sort without dedup), and its doc
-      comment promises `Error::KubeError` only while `Error::Other` propagates through the inner
-      namespaces call. Confirm the self-inclusion/duplication and fix the doc.
-  [?] @InitFrom doc comments promise defaults (`backup-settings` secret,
-      `<namespace-name>/<app-slug>` sub-path) that nothing in this file applies — the fields
-      travel as @None until some consumer interprets them. Decide where the defaults must be
-      documented and applied (candidate consumer owns them).
-  [?] @test_spec_version_top_level_ignored freezes that a misplaced top-level spec `version`
-      key is silently dropped (no `deny_unknown_fields`), which reads like a migration guard
-      from a schema where the version sat at spec top level. Decide later whether unknown keys
-      should be rejected to surface the misplacement.
-  [?] @TenantInstance::have_child is asymmetric like its siblings: `tfstate`/`rhaistate` as
-      @Some of the empty string count as a child while @Some of an empty list in the five child
-      keys does not. Confirm the asymmetry is intended (same finding in ./instancesystem.sdd).
-  [?] Dérives @std::default::Default on @ConditionsType and @ConditionsStatus have no
-      detectable use repo-wide (same finding in ./instancesystem.sdd). Decide later whether
-      they stay.
-  [?] The @TenantInstanceSpec struct doc `Describe a source of vynil packages jukebox` is
-      inherited from the `JukeBox` model and does not describe this CRD (the CRD doc string
-      itself is correct) — confirm the intended wording (same drift in ./instancesystem.sdd).
-  [?] @ApplicationCondition, @ConditionsType and @ConditionsStatus are redeclared per instance
-      module with byte-identical shapes; the macros resolve them against the call site (see
-      ./instance_macros.sdd). Decide later whether one shared type replaces the three copies.
+  [ ] #1 Aucun test mappé n'existe pour les Scenarios d'identité tenant ci-dessous (repli
+      du nom, liste par sélecteur, union des noms de services, échecs Rhai avalés,
+      @have_child) ; les couvrir depuis ces blocs Scenario sous la règle TTD du projet
+      quand le travail de test démarre, probablement contre les doubles de ./k8smock.rs qui
+      enregistrent déjà les trois mêmes noms de script.
+  [?] @ConditionsType déclare `Backuped` et `Restored` et le schéma CRD généré les offre
+      sur le wire, mais aucun constructeur ni setter de ce fichier ni des deux macros de
+      condition ne les écrit jamais — ils ne sont atteignables que par des écritures de
+      statut à la main et jamais par le flux reconcilié. Décider plus tard si les étapes
+      backup/restore reçoivent de vrais setters ou si les variantes se réduisent.
+  [?] @TenantInstance::rhai_get_tenant_namespaces et
+      @TenantInstance::rhai_get_tenant_services_names convertissent tout échec sous-jacent
+      (`Error::Other` sans-namespace, `Error::KubeError`) en
+      `Ok(@rhai::Dynamic::from(""))` — une chaîne nue là où les scripts reçoivent sinon un
+      tableau — si bien qu'un échec de lecture cluster est indistinguable d'un tenant vide ;
+      leur frère @TenantInstance::rhai_get_tenant_name propage lui tout échec en erreur
+      Rhai. Décider plus tard si l'avalement est gardé et les trois wrappers unifiés.
+  [?] @TenantInstance::get_tenant_services_names inclut les clés de service propres à
+      l'instance appelante et garde les doublons entre les namespaces du tenant (tri sans
+      dedup), et son commentaire doc ne promet que `Error::KubeError` alors que
+      `Error::Other` se propage via l'appel interne aux namespaces. Confirmer
+      l'auto-inclusion/la duplication et corriger le doc.
+  [?] Les commentaires doc de @InitFrom promettent des défauts (secret `backup-settings`,
+      sous-chemin `<namespace-name>/<app-slug>`) que rien dans ce fichier n'applique — les
+      champs voyagent en @None tant qu'un consommateur ne les interprète pas. Décider où
+      les défauts doivent être documentés et appliqués (le consommateur candidat en devient
+      propriétaire).
+  [?] @test_spec_version_top_level_ignored gèle qu'une clé `version` de premier niveau mal
+      placée dans le spec est silencieusement jetée (pas de `deny_unknown_fields`), ce qui
+      se lit comme un garde de migration issu d'un schéma où la version siégeait au top du
+      spec. Décider plus tard si les clés inconnues doivent être rejetées pour révéler le
+      mauvais placement.
+  [?] @TenantInstance::have_child est asymétrique comme ses frères : `tfstate`/`rhaistate`
+      en @Some de la chaîne vide compte comme child alors que @Some d'une liste vide dans
+      les cinq clés children ne compte pas. Confirmer que l'asymétrie est voulue (même
+      constat dans ./instancesystem.sdd).
+  [?] Les derives de @std::default::Default sur @ConditionsType et @ConditionsStatus n'ont
+      aucun usage détectable dans tout le dépôt (même constat dans ./instancesystem.sdd).
+      Décider plus tard s'ils restent.
+  [?] La doc du struct @TenantInstanceSpec `Describe a source of vynil packages jukebox`
+      est héritée du modèle `JukeBox` et ne décrit pas ce CRD (la chaîne doc du CRD, elle,
+      est correcte) — confirmer le libellé voulu (même dérive dans ./instancesystem.sdd).
+  [?] @ApplicationCondition, @ConditionsType et @ConditionsStatus sont redéclarés par
+      module instance avec des formes identiques octet pour octet ; les macros les
+      résolvent contre le site d'appel (voir ./instance_macros.sdd). Décider plus tard si
+      un type partagé remplace les trois copies.
 
 Done when:
-  Every Scenario above has a passing mapped test, the Tasks decisions are closed, and
-    `cargo test -p common`, `cargo clippy --all-targets -- -D warnings`,
-    `cargo +nightly fmt --check` and `specdd lint` are green.
+  Chaque Scenario ci-dessus a un test mappé passant, les décisions des Tasks sont closes,
+    et `cargo test -p common`, `cargo clippy --all-targets -- -D warnings`,
+    `cargo +nightly fmt --check` et `specdd lint` sont verts.
 
 Scenario: initFrom keeps the requested restore version
-  Given YAML `snapshot: "abc123"` with `version: "1.5.0"`
-  When it deserializes into @InitFrom
-  Then @InitFrom::version is @Some(`1.5.0`)
-  Maps to test @test_init_from_with_version
+  Given un YAML `snapshot: "abc123"` avec `version: "1.5.0"`
+  When il se désérialise en @InitFrom
+  Then @InitFrom::version est @Some(`1.5.0`)
+  Mappé sur le test @test_init_from_with_version
 
 Scenario: initFrom without a version deserializes to None
-  Given YAML carrying only `snapshot: "abc123"`
-  When it deserializes into @InitFrom
-  Then @InitFrom::version is @None — the version is optional while `snapshot` is required
-  Maps to test @test_init_from_without_version
+  Given un YAML ne portant que `snapshot: "abc123"`
+  When il se désérialise en @InitFrom
+  Then @InitFrom::version est @None — la version est optionnelle alors que `snapshot` est
+    requise
+  Mappé sur le test @test_init_from_without_version
 
 Scenario: Misplaced top-level spec version is ignored
-  Given spec YAML with `jukebox`, `category`, `package` and a misplaced top-level
-    `version: "1.0.0"` instead of an `initFrom` block
-  When it deserializes into @TenantInstanceSpec
-  Then parsing succeeds, @TenantInstanceSpec::jukebox is `my-juke` and
-    @TenantInstanceSpec::init_from is @None — unknown top-level keys are dropped silently
-  Maps to test @test_spec_version_top_level_ignored
+  Given un YAML de spec avec `jukebox`, `category`, `package` et un `version: "1.0.0"` de
+    premier niveau mal placé au lieu d'un bloc `initFrom`
+  When il se désérialise en @TenantInstanceSpec
+  Then le parsing réussit, @TenantInstanceSpec::jukebox vaut `my-juke` et
+    @TenantInstanceSpec::init_from est @None — les clés de premier niveau inconnues sont
+    jetées silencieusement
+  Mappé sur le test @test_spec_version_top_level_ignored
 
 Scenario: Init-version failure message carries the error identifier
-  Given this module expanded @impl_condition_common! and @impl_condition_children!
-  When @ApplicationCondition::init_version_ko is called with version `1.5.0` and generation `3`
-  Then the record is `False`/`InitFrom` and its message contains both `E_INIT_VERSION_NOT_FOUND`
-    and `1.5.0`, at generation `3`
-  Maps to test @test_init_version_ko_message_contains_error_id_and_version
+  Given que ce module a déployé @impl_condition_common! et @impl_condition_children!
+  When @ApplicationCondition::init_version_ko est appelé avec la version `1.5.0` et la
+    generation `3`
+  Then l'enregistrement est `False`/`InitFrom` et son message contient à la fois
+    `E_INIT_VERSION_NOT_FOUND` et `1.5.0`, à la generation `3`
+  Mappé sur le test @test_init_version_ko_message_contains_error_id_and_version
 
 Scenario: Gate probe detects an already-stored init-version failure
-  Given a client-side-built @TenantInstance whose stored conditions hold the exact
-    @ApplicationCondition::init_version_ko record
-  When the private @have_condition probe runs against that record
-  Then it answers `true`, confirming the four-field (type, generation, status, message)
-    equality gate the macro setters consult before patching
-  Maps to test @test_have_condition_detects_init_version_ko
+  Given une @TenantInstance construite côté client dont les conditions stockées détiennent
+    exactement l'enregistrement @ApplicationCondition::init_version_ko
+  When la sonde privée @have_condition s'exécute contre cet enregistrement
+  Then elle répond `true`, confirmant le gate d'égalité à quatre champs (type, generation,
+    status, message) que les setters des macros consultent avant de patcher
+  Mappé sur le test @test_have_condition_detects_init_version_ko
 
 Scenario: Tenant name falls back to the namespace when unlabeled
-  Given a @TenantInstance in namespace `team-a` whose @Namespace metadata carries no
-    `vynil.solidite.fr/tenant` label (or `TENANT_LABEL` names a key it lacks)
-  When @TenantInstance::get_tenant_name is awaited
-  Then it returns `team-a` and @TenantInstance::get_tenant_namespaces returns the single
-    element `team-a`
-  No mapped test exists for this Scenario yet; see the open task above.
+  Given une @TenantInstance dans le namespace `team-a` dont les métadonnées @Namespace ne
+    portent pas le label `vynil.solidite.fr/tenant` (ou `TENANT_LABEL` nomme une clé qui
+    lui manque)
+  When @TenantInstance::get_tenant_name est attendu
+  Then il retourne `team-a` et @TenantInstance::get_tenant_namespaces retourne le seul
+    élément `team-a`
+  Aucun test mappé n'existe encore pour ce scénario ; voir la tâche ouverte ci-dessus.
 
 Scenario: Labeled tenant gathers namespaces and service names across them
-  Given namespace `team-a` labeled `vynil.solidite.fr/tenant`=`acme` and another namespace
-    `team-a-extra` with the same label, each holding @TenantInstance objects publishing service
-    keys, including the calling instance itself
-  When @TenantInstance::get_tenant_name is awaited it returns `acme`
-  And @TenantInstance::get_tenant_namespaces lists both namespaces by the selector
+  Given le namespace `team-a` labelisé `vynil.solidite.fr/tenant`=`acme` et un autre
+    namespace `team-a-extra` avec le même label, chacun porteur d'objets @TenantInstance
+    publiant des clés de service, y compris l'instance appelante elle-même
+  When @TenantInstance::get_tenant_name est attendu il retourne `acme`
+  And @TenantInstance::get_tenant_namespaces liste les deux namespaces par le sélecteur
     `vynil.solidite.fr/tenant==acme`
-  And @TenantInstance::get_tenant_services_names returns every key sorted with duplicates kept
-    and the instance's own keys included
-  No mapped test exists for this Scenario yet.
+  And @TenantInstance::get_tenant_services_names retourne toutes les clés triées avec les
+    doublons conservés et les clés propres à l'instance incluses
+  Aucun test mappé n'existe encore pour ce scénario.
 
 Scenario: Collection bridges swallow cluster failures into an empty string
-  Given a @rhai script whose cluster is unreachable so the registered `get_tenant_namespaces`
-    underlying getter fails
-  When @TenantInstance::rhai_get_tenant_namespaces runs
-  Then the script receives the plain @rhai string `""`, not an array and not an error, while
-    the same failure through the registered `get_tenant_name` surfaces as a @rhai::EvalAltResult
-  No mapped test exists for this Scenario yet.
+  Given un script @rhai dont le cluster est injoignable si bien que le getter sous-jacent
+    du `get_tenant_namespaces` enregistré échoue
+  When @TenantInstance::rhai_get_tenant_namespaces s'exécute
+  Then le script reçoit la chaîne @rhai nue `""`, pas un tableau et pas une erreur, alors
+    que le même échec via le `get_tenant_name` enregistré remonte en @rhai::EvalAltResult
+  Aucun test mappé n'existe encore pour ce scénario.
 
 Scenario: Child-state probe
-  Given a @TenantInstance with no status at all, @TenantInstance::have_child answers `false`
-  But when only `rhaistate` or only `tfstate` is `@Some`, even the empty string, it answers
+  Given une @TenantInstance sans aucun statut, @TenantInstance::have_child répond `false`
+  But quand seul `rhaistate` ou seul `tfstate` est `@Some`, même la chaîne vide, il répond
     `true`
-  And when the five child lists are all `@Some` of empty lists and no state is stored, it
-    answers `false`
-  And when any one of them is `@Some` of one entry, it answers `true`
-  No mapped test exists for this Scenario yet.
+  And quand les cinq listes children sont toutes `@Some` de listes vides et qu'aucun état
+    n'est stocké, il répond `false`
+  And quand l'une d'entre elles est `@Some` d'une seule entrée, il répond `true`
+  Aucun test mappé n'existe encore pour ce scénario.
