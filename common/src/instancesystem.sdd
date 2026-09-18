@@ -1,166 +1,166 @@
 Spec: SystemInstance
 
 Purpose:
-  Carry the full cluster-side contract of one system-package installation: declare the install
-    coordinate (`jukebox`, `category`, `package`, opaque `options`), track per-stage install
-    progress and child inventory in @SystemInstanceStatus through @ApplicationCondition records,
-    provide the status mutators awaited by the install flow and its Rhai scripts, and register
-    @SystemInstance with its full accessor and mutator bridge onto package @rhai::Engine
-    instances.
+  Porte le contrat complet cote cluster d'une installation de paquet systeme : declare la
+    coordonnee d'installation (`jukebox`, `category`, `package`, `options` opaques), suit la
+    progression etape par etape et l'inventaire des enfants dans @SystemInstanceStatus via les
+    enregistrements @ApplicationCondition, fournit les mutateurs d'etat attendus par le flux
+    d'installation et ses scripts Rhai, et enregistre @SystemInstance avec toute sa passerelle
+    d'accesseurs et de mutateurs sur les instances @rhai::Engine des paquets.
 
 Owns:
   ./instancesystem.rs
 
 Must:
-  The @kube::CustomResource derive over @SystemInstanceSpec generates the @SystemInstance
-    resource kind `SystemInstance` in group `vynil.solidite.fr`, version `v1`, namespaced
-    scope, shortname `vsi`, plural `systeminstances`, with status type @SystemInstanceStatus and
-    CRD doc `Custom resource representing an Vynil cluster package installation`.
-  The CRD printer columns are, in order and by `jsonPath`: `Juke` -> `.spec.jukebox`,
-    `cat` -> `.spec.category`, `pkg` -> `.spec.package`, `tag` -> `.status.tag`,
-    `last_updated` -> `.status.conditions[?(@.type == 'Ready')].lastTransitionTime`
-    (column type `date`, format `date-time`; the other six columns are type `string`),
-    `stage` -> `.status.conditions[-1:].type`,
+  Le derive @kube::CustomResource sur @SystemInstanceSpec genere le type de ressource
+    `SystemInstance` dans le groupe `vynil.solidite.fr`, version `v1`, portee namespaced, nom
+    court `vsi`, pluriel `systeminstances`, avec le type de statut @SystemInstanceStatus et la
+    doc CRD `Custom resource representing an Vynil cluster package installation`.
+  Les colonnes printer de la CRD sont, dans l'ordre et par `jsonPath` : `Juke` ->
+    `.spec.jukebox`, `cat` -> `.spec.category`, `pkg` -> `.spec.package`, `tag` ->
+    `.status.tag`, `last_updated` ->
+    `.status.conditions[?(@.type == 'Ready')].lastTransitionTime` (type `date`, format
+    `date-time` ; les six autres colonnes sont `string`), `stage` -> `.status.conditions[-1:].type`,
     `errors` -> `.status.conditions[?(@.status == 'False')].message`.
-  Wire keys are fixed: the spec keys are `jukebox`, `category`, `package`, `options`; the
-    status keys are `conditions`, `tag`, `digest`, `tfstate`, `rhaistate`, `systems`, `crds`;
-    @ApplicationCondition serializes camelCase keys `lastTransitionTime`, `message`, `type`
-    (fixed by the @serde rename on @ApplicationCondition::condition_type), `status`,
-    `generation`; @ConditionsType and @ConditionsStatus serialize as bare variant strings.
-  Every @ApplicationCondition stamps @chrono::Utc::now() into `lastTransitionTime` and the
-    caller-supplied generation at construction; a condition carried across a later patch keeps
-    its original timestamp.
-  Each status mutator reads `metadata.generation` and uses `1` when absent, rebuilds
-    `status.conditions` from the existing conditions minus the types it excludes, then appends
-    its fresh conditions (@SystemInstance::get_conditions_excluding), and finally patches the
-    `status` subresource as a @kube::api::Patch::Merge carrying `apiVersion`
-    `vynil.solidite.fr/v1` and the kind string `SystemInstance` — the @impl_instance_common!
-    call-site literal — so the server replaces only the keys present in the patch, omitted
-    keys keep their stored values, and an included `conditions` array is replaced wholesale.
-  Each mutator returns the `@Ok` value of its status patch, not the locally mutated value:
-    a successful patch publishes its event, a failed patch or an unsuppressed event-publish
-    error returns `Err` and publishes nothing.
-  @SystemInstance::set_status_ready removes every `AgentStarted`, `Ready` and `Installed`
-    condition, appends @ApplicationCondition::ready_ok and @ApplicationCondition::installed_ok
-    (message `Installed succesfully` for both), and patches `conditions`, `tag`, and `digest`
-    — the digest is @sha256::digest of the @serde_json serialization of
-    @SystemInstanceSpec::options, or @sha256::digest of `""` when options are absent — then
-    publishes a `Normal` event with reason `InstallSucceed` and action `Install`.
-  @SystemInstance::set_status_systems replaces only the `SystemApplied` condition with
-    @ApplicationCondition::system_ok (message `Templates applied succesfully`, always this fixed
-    text, never the children), patches `conditions` and `systems`, and publishes a `Normal`
-    event with reason `SystemApplySucceed`, action `SystemApply`, note
-    `Applied {count} Objects` where `count` is the length of the input list.
-  @SystemInstance::set_status_system_failed removes `AgentStarted`, `SystemApplied` and
-    `Installed`, appends @ApplicationCondition::system_ko and @ApplicationCondition::installed_ko
-    both carrying the full reason, and appends @ApplicationCondition::ready_ko only when no
-    `Ready`-type condition survives the rebuild — presence is matched by type alone, ignoring
-    generation and current status — then patches `conditions` only and publishes a `Warning`
-    event with reason `SystemApplyFailed` and action `SystemApply` whose note is the reason
-    truncated to 1023 bytes.
-  @SystemInstance::have_child answers `true` exactly when a status is present and at least one
-    probe succeeds: `rhaistate` is `@Some` or `tfstate` is `@Some` regardless of content, or
-    `systems` or `crds` is `@Some` and non-empty; probes are evaluated in that order and short
-    circuit.
-  Every Rhai-facing synchronous bridge — @SystemInstance::rhai_set_status_systems,
-    @SystemInstance::rhai_set_status_system_failed, and the wrappers the instance macros attach —
-    drives its async operation through @tokio::task::block_in_place combined with
-    @tokio::runtime::Handle::block_on, so it must run on a multi-thread runtime
-    (@tokio::task::block_in_place panics on a current-thread runtime) and converts any failure
-    through @crate::rhai_err into a string-carrying @rhai error, losing the @crate::Error
-    variant.
-  @SystemInstance::rhai_set_status_systems converts its @rhai::Dynamic argument by a
-    @serde_json string round-trip into `Vec<@crate::Children>` before delegating; an argument
-    that does not deserialize to that shape fails without touching the cluster.
+  Les cles wire sont fixes : spec = `jukebox`, `category`, `package`, `options` ; statut =
+    `conditions`, `tag`, `digest`, `tfstate`, `rhaistate`, `systems`, `crds` ;
+    @ApplicationCondition serialise les cles camelCase `lastTransitionTime`, `message`, `type`
+    (fixees par le rename @serde sur @ApplicationCondition::condition_type), `status`,
+    `generation` ; @ConditionsType et @ConditionsStatus se serialisent en chaines nues.
+  Chaque @ApplicationCondition grave @chrono::Utc::now() dans `lastTransitionTime` et la
+    generation fournie par l'appelant a la construction ; une condition reprise lors d'un patch
+    posterieur conserve son horodatage d'origine.
+  Chaque mutateur d'etat lit `metadata.generation` et utilise `1` en l'absence, reconstruit
+    `status.conditions` a partir des conditions existantes amputees des types qu'il exclut,
+    ajoute ses conditions fraiches (@SystemInstance::get_conditions_excluding), puis patche le
+    sous-ressource `status` comme un @kube::api::Patch::Merge portant `apiVersion`
+    `vynil.solidite.fr/v1` et la chaine de kind `SystemInstance` — le litteral du site d'appel
+    @impl_instance_common! — : le serveur ne remplace que les cles presentes, les cles omises
+    gardent leurs valeurs stockees, et un tableau `conditions` inclus est remplace entier.
+  Chaque mutateur renvoie la valeur `@Ok` de son patch de statut, pas la valeur localement
+    mutee : un patch reussi publie son evenement, un patch echoue ou une erreur de publication
+    d'evenement non supprimee renvoie `Err` et ne publie rien.
+  @SystemInstance::set_status_ready supprime toute condition `AgentStarted`, `Ready` et
+    `Installed`, ajoute @ApplicationCondition::ready_ok et @ApplicationCondition::installed_ok
+    (message `Installed succesfully` pour les deux), et patche `conditions`, `tag` et `digest` —
+    le digest est @sha256::digest de la serialization @serde_json des
+    @SystemInstanceSpec::options, ou @sha256::digest de `""` quand les options sont absentes —
+    puis publie un evenement `Normal` de raison `InstallSucceed` et d'action `Install`.
+  @SystemInstance::set_status_systems remplace uniquement la condition `SystemApplied` par
+    @ApplicationCondition::system_ok (message `Templates applied succesfully`, toujours ce texte
+    fixe, jamais les enfants), patche `conditions` et `systems`, et publie un evenement `Normal`
+    de raison `SystemApplySucceed`, d'action `SystemApply` et de note `Applied {count} Objects`
+    ou `count` est la longueur de la liste d'entree.
+  @SystemInstance::set_status_system_failed supprime `AgentStarted`, `SystemApplied` et
+    `Installed`, ajoute @ApplicationCondition::system_ko et @ApplicationCondition::installed_ko
+    portant tous deux la raison complete, et n'ajoute @ApplicationCondition::ready_ko que
+    lorsqu'aucune condition de type `Ready` ne survit a la reconstruction — la presence se juge
+    au type seul, generation et statut courant ignores — puis patche `conditions` seul et publie
+    un evenement `Warning` de raison `SystemApplyFailed` et d'action `SystemApply` dont la note
+    est la raison tronquee a 1023 octets.
+  @SystemInstance::have_child repond `true` exactement quand un statut est present et qu'au
+    moins une sonde reussit : `rhaistate` est `@Some` ou `tfstate` est `@Some` quel qu'en soit
+    le contenu, ou `systems` ou `crds` est `@Some` et non vide ; les sondes sont evaluees dans
+    cet ordre et s'arretent a la premiere reussite.
+  Toute passerelle synchrone exposee a Rhai — @SystemInstance::rhai_set_status_systems,
+    @SystemInstance::rhai_set_status_system_failed, et les wrappers attaches par les macros
+    d'instance — pilote son operation asynchrone via @tokio::task::block_in_place combine a
+    @tokio::runtime::Handle::block_on ; elle doit donc tourner sur un runtime multi-thread
+    (@tokio::task::block_in_place panique sur un runtime current-thread) et convertit toute
+    erreur via @crate::rhai_err en une erreur @rhai portant une chaine, en perdant la variante
+    @crate::Error.
+  @SystemInstance::rhai_set_status_systems convertit son argument @rhai::Dynamic par un
+    aller-retour @serde_json en `Vec<@crate::Children>` avant de deleguer ; un argument qui ne
+    se deserialise pas dans cette forme echoue sans toucher le cluster.
 
 Depends on:
-  @impl_condition_common! and @impl_condition_crds! in ./instance_macros.rs — stamp
-    @ApplicationCondition::new with @chrono::Utc::now and supply the generation-carrying
-    constructors the in-file setters compose, including @ApplicationCondition::ready_ok,
-    @ApplicationCondition::ready_ko, @ApplicationCondition::installed_ok and
-    @ApplicationCondition::installed_ko.
-  @impl_instance_common!(SystemInstance, "SystemInstance") in ./instance_macros.rs — attach the
-    status merge-patch (@SystemInstance::patch_status, embedding the call-site kind literal),
-    the event recorder (@SystemInstance::send_event, which reports `kube::Error::Api` publish
-    failures as warnings and returns `@Ok`), the private
-    @SystemInstance::get_conditions_excluding rebuild helper this file's setters call, and the
-    shared lookup, options-digest, tfstate/rhaistate, agent/missing, and CRD-agnostic Rhai
-    surface that @system_rhai_register republishes.
-  @impl_instance_crds!(SystemInstance) in ./instance_macros.rs — attach the CRD-stage setters
-    @SystemInstance::set_status_crds and @SystemInstance::set_status_crd_failed with their Rhai
-    wrappers, completing the condition stages @ConditionsType::CrdApplied names.
-  @crate::context::get_client_async in ./context.rs — every mutating call fetches the shared
-    @kube::Client from context at call time; nothing stores a client in the resource.
-  @crate::Children in ./lib.rs — the child object records stored in `status.systems` and
-    deserialized out of the @rhai::Dynamic argument.
-  @crate::Error, @crate::Result, @crate::RhaiRes and @crate::rhai_err in ./lib.rs — the error
-    contract propagated by the async setters and flattened to strings at the Rhai bridges.
-  @kube::CustomResource, @kube::Resource, @kube::ResourceExt — the derive that generates
-    @SystemInstance and the metadata/object-ref plumbing behind the macro-owned patching and
-    event recording.
-  @rhai::Engine and @rhai::Dynamic — the engine this file registers the bridge onto and the
-    argument type accepted from package scripts.
+  @impl_condition_common! et @impl_condition_crds! dans ./instance_macros.rs — gravent
+    @ApplicationCondition::new avec @chrono::Utc::now et fournissent les constructeurs portant
+    la generation que les setters du fichier composent, y compris
+    @ApplicationCondition::ready_ok, @ApplicationCondition::ready_ko,
+    @ApplicationCondition::installed_ok et @ApplicationCondition::installed_ko.
+  @impl_instance_common!(SystemInstance, "SystemInstance") dans ./instance_macros.rs — attache
+    le merge-patch de statut (@SystemInstance::patch_status, qui embarque le litteral de kind du
+    site d'appel), le recorder d'evenements (@SystemInstance::send_event, qui signale les
+    echecs de publication `kube::Error::Api` en avertissements et renvoie `@Ok`), le helper
+    prive @SystemInstance::get_conditions_excluding de reconstruction que les setters de ce
+    fichier appellent, et la surface partagee de lookup, digest d'options, tfstate/rhaistate,
+    agent/missing et CRD-agnostique que @system_rhai_register republie.
+  @impl_instance_crds!(SystemInstance) dans ./instance_macros.rs — attache les setters de
+    l'etape CRD @SystemInstance::set_status_crds et @SystemInstance::set_status_crd_failed avec
+    leurs wrappers Rhai, completant les etapes nommees par @ConditionsType::CrdApplied.
+  @crate::context::get_client_async dans ./context.rs — chaque appel mutateur recupere le
+    @kube::Client partage depuis le context a l'appel ; la ressource ne stocke aucun client.
+  @crate::Children dans ./lib.rs — les enregistrements d'objets enfants stockes dans
+    `status.systems` et deserialises hors de l'argument @rhai::Dynamic.
+  @crate::Error, @crate::Result, @crate::RhaiRes et @crate::rhai_err dans ./lib.rs — le contrat
+    d'erreur propage par les setters asynchrones et aplati en chaines aux passerelles Rhai.
+  @kube::CustomResource, @kube::Resource, @kube::ResourceExt — le derive qui genere
+    @SystemInstance et la plomberie metadata/object-ref derriere le patching et
+    l'enregistrement d'evenements possedes par les macros.
+  @rhai::Engine et @rhai::Dynamic — le moteur sur lequel ce fichier enregistre la passerelle et
+    le type d'argument accepte des scripts de paquet.
 
 Exposes:
-  @SystemInstanceSpec — CRD spec struct with public fields @SystemInstanceSpec::jukebox,
-    @SystemInstanceSpec::category, @SystemInstanceSpec::package and
-    @SystemInstanceSpec::options (`@Option<@serde_json::Map<@String, @serde_json::Value>>`);
-    derives @Serialize, @Deserialize, @Clone, @Debug, @JsonSchema.
-  @SystemInstance — resource root generated by the @kube::CustomResource derive over
-    @SystemInstanceSpec, with fields `spec` (@SystemInstanceSpec) and `status`
-    (`@Option<@SystemInstanceStatus>`); derives @Serialize, @Deserialize, @Clone, @Debug and
-    @JsonSchema via the derive.
-  @ConditionsType — install-stage enum, exactly one variant per recorded stage: `Ready`,
-    `Installed`, `AgentStarted`, `CrdApplied`, `TofuInstalled`, `SystemApplied`, `RhaiApplied`;
-    derives @Serialize and @Deserialize as unit strings, @Eq and @PartialEq, @Clone, @Debug,
-    @JsonSchema, and @Default selecting `Ready`.
-  @ConditionsStatus — enum `True` or `False`, serialized as those strings, with @Default
-    selecting `True`; derives @Eq and @PartialEq, @Clone, @Debug, @JsonSchema.
-  @ApplicationCondition — one recorded condition with public fields
+  @SystemInstanceSpec — struct de spec CRD aux champs publics @SystemInstanceSpec::jukebox,
+    @SystemInstanceSpec::category, @SystemInstanceSpec::package et @SystemInstanceSpec::options
+    (`@Option<@serde_json::Map<@String, @serde_json::Value>>`) ; derives @Serialize,
+    @Deserialize, @Clone, @Debug, @JsonSchema.
+  @SystemInstance — racine de ressource generee par le derive @kube::CustomResource sur
+    @SystemInstanceSpec, avec les champs `spec` (@SystemInstanceSpec) et `status`
+    (`@Option<@SystemInstanceStatus>`) ; derives @Serialize, @Deserialize, @Clone, @Debug et
+    @JsonSchema via le derive.
+  @ConditionsType — enum des etapes d'installation, exactement une variante par etape
+    enregistree : `Ready`, `Installed`, `AgentStarted`, `CrdApplied`, `TofuInstalled`,
+    `SystemApplied`, `RhaiApplied` ; derives @Serialize et @Deserialize en chaines nues, @Eq et
+    @PartialEq, @Clone, @Debug, @JsonSchema, et @Default selectionnant `Ready`.
+  @ConditionsStatus — enum `True` ou `False`, serialise en ces chaines, avec @Default
+    selectionnant `True` ; derives @Eq et @PartialEq, @Clone, @Debug, @JsonSchema.
+  @ApplicationCondition — une condition enregistree avec champs publics
     @ApplicationCondition::last_transition_time (`@Option<@chrono::DateTime<@chrono::Utc>>`),
     @ApplicationCondition::message, @ApplicationCondition::condition_type,
-    @ApplicationCondition::status and @ApplicationCondition::generation (`@i64`); derives
-    @Eq and @PartialEq, compared field-by-field by the macro-owned dedup gate.
-  @ApplicationCondition::system_ko and @ApplicationCondition::system_ok — this module's
-    SystemApplied-stage constructors.
-  Constructors attached by @impl_condition_common!: @ApplicationCondition::new,
+    @ApplicationCondition::status et @ApplicationCondition::generation (`@i64`) ; derives @Eq
+    et @PartialEq, comparees champ par champ par la porte de deduplication posee par la macro.
+  @ApplicationCondition::system_ko et @ApplicationCondition::system_ok — les constructeurs de
+    l'etape SystemApplied de ce module.
+  Constructeurs attaches par @impl_condition_common! : @ApplicationCondition::new,
     @ApplicationCondition::ready_ok, @ApplicationCondition::ready_ko,
     @ApplicationCondition::installed_ok, @ApplicationCondition::installed_ko,
     @ApplicationCondition::agent_started, @ApplicationCondition::missing_package,
     @ApplicationCondition::missing_box, @ApplicationCondition::missing_requirement,
     @ApplicationCondition::tofu_ok, @ApplicationCondition::tofu_ko,
     @ApplicationCondition::rhai_ok, @ApplicationCondition::rhai_ko.
-  Constructors attached by @impl_condition_crds!: @ApplicationCondition::crd_ok and
-    @ApplicationCondition::crd_ko for @ConditionsType::CrdApplied.
-  @SystemInstanceStatus — status struct with public fields @SystemInstanceStatus::conditions,
+  Constructeurs attaches par @impl_condition_crds! : @ApplicationCondition::crd_ok et
+    @ApplicationCondition::crd_ko pour @ConditionsType::CrdApplied.
+  @SystemInstanceStatus — struct avec champs publics @SystemInstanceStatus::conditions,
     @SystemInstanceStatus::tag, @SystemInstanceStatus::digest, @SystemInstanceStatus::tfstate,
     @SystemInstanceStatus::rhaistate, @SystemInstanceStatus::systems
-    (`@Option<@Vec<@crate::Children>>`) and @SystemInstanceStatus::crds
-    (`@Option<@Vec<@String>>`); derives @Serialize, @Deserialize, @Clone, @Debug, @JsonSchema.
-  @SystemInstance::have_child — child-state probe.
-  @SystemInstance::set_status_ready, @SystemInstance::set_status_systems and
-    @SystemInstance::set_status_system_failed — the async system-stage status mutators.
-  @SystemInstance::rhai_set_status_systems and @SystemInstance::rhai_set_status_system_failed —
-    the synchronous Rhai bridges over those two mutators.
-  Methods attached by @impl_instance_common!: async @SystemInstance::get, @SystemInstance::list,
-    @SystemInstance::get_options_digest, @SystemInstance::get_tfstate,
+    (`@Option<@Vec<@crate::Children>>`) et @SystemInstanceStatus::crds
+    (`@Option<@Vec<@String>>`) ; derives @Serialize, @Deserialize, @Clone, @Debug, @JsonSchema.
+  @SystemInstance::have_child — sonde d'etat des enfants.
+  @SystemInstance::set_status_ready, @SystemInstance::set_status_systems et
+    @SystemInstance::set_status_system_failed — mutateurs d'etat asynchrones de l'etape systeme.
+  @SystemInstance::rhai_set_status_systems et @SystemInstance::rhai_set_status_system_failed —
+    les passerelles Rhai synchrones sur ces deux mutateurs.
+  Methodes attaches par @impl_instance_common! : async @SystemInstance::get,
+    @SystemInstance::list, @SystemInstance::get_options_digest, @SystemInstance::get_tfstate,
     @SystemInstance::get_rhaistate, @SystemInstance::set_tfstate,
     @SystemInstance::set_status_tofu_failed, @SystemInstance::set_rhaistate,
     @SystemInstance::set_status_rhai_failed, @SystemInstance::set_agent_started,
-    @SystemInstance::set_missing_box, @SystemInstance::set_missing_package and
-    @SystemInstance::set_missing_requirement; Rhai bridges @SystemInstance::rhai_get,
+    @SystemInstance::set_missing_box, @SystemInstance::set_missing_package et
+    @SystemInstance::set_missing_requirement ; passerelles Rhai @SystemInstance::rhai_get,
     @SystemInstance::rhai_list, @SystemInstance::get_metadata, @SystemInstance::get_spec,
     @SystemInstance::get_status, @SystemInstance::rhai_get_tfstate,
     @SystemInstance::rhai_get_rhaistate, @SystemInstance::rhai_set_status_ready,
     @SystemInstance::rhai_set_tfstate, @SystemInstance::rhai_set_status_tofu_failed,
     @SystemInstance::rhai_set_rhaistate, @SystemInstance::rhai_set_status_rhai_failed,
     @SystemInstance::rhai_set_agent_started, @SystemInstance::rhai_set_missing_box,
-    @SystemInstance::rhai_set_missing_package and @SystemInstance::rhai_set_missing_requirement.
-  Methods attached by @impl_instance_crds!: @SystemInstance::set_status_crds,
-    @SystemInstance::set_status_crd_failed, @SystemInstance::rhai_set_status_crds and
+    @SystemInstance::rhai_set_missing_package, @SystemInstance::rhai_set_missing_requirement.
+  Methodes attaches par @impl_instance_crds! : @SystemInstance::set_status_crds,
+    @SystemInstance::set_status_crd_failed, @SystemInstance::rhai_set_status_crds et
     @SystemInstance::rhai_set_status_crd_failed.
-  @system_rhai_register — installs the script-visible surface on a caller @rhai::Engine under
-    the registered type name `SystemInstance`: free functions `get_system_instance` ->
+  @system_rhai_register — installe la surface visible des scripts sur un @rhai::Engine de
+    l'appelant sous le nom de type enregistre `SystemInstance` : `get_system_instance` ->
     @SystemInstance::rhai_get, `list_system_instance` -> @SystemInstance::rhai_list,
     `options_digest` -> @SystemInstance::get_options_digest, `get_tfstate` ->
     @SystemInstance::rhai_get_tfstate, `get_rhaistate` -> @SystemInstance::rhai_get_rhaistate,
@@ -176,157 +176,157 @@ Exposes:
     @SystemInstance::rhai_set_tfstate, `set_status_tofu_failed` ->
     @SystemInstance::rhai_set_status_tofu_failed, `set_rhaistate` ->
     @SystemInstance::rhai_set_rhaistate, `set_status_rhai_failed` ->
-    @SystemInstance::rhai_set_status_rhai_failed; property getters `metadata` ->
+    @SystemInstance::rhai_set_status_rhai_failed ; accesseurs de proprietes `metadata` ->
     @SystemInstance::get_metadata, `spec` -> @SystemInstance::get_spec, `status` ->
     @SystemInstance::get_status.
 
 Accepts:
-  Install coordinates as free-form strings in @SystemInstanceSpec::jukebox,
-    @SystemInstanceSpec::category and @SystemInstanceSpec::package, plus
-    @SystemInstanceSpec::options as any JSON object map or @None — this file only digests
-    `options`, it never interprets its contents.
-  @SystemInstance::set_status_ready takes the installed `tag`: @String.
-  @SystemInstance::set_status_systems takes the applied `systems`: `@Vec<@crate::Children>`.
-  @SystemInstance::set_status_system_failed takes a human-readable `reason`: @String, with no
-    length or charset validation.
-  @SystemInstance::rhai_set_status_systems takes any @rhai::Dynamic that must JSON-round-trip
-    into `Vec<@crate::Children>` (camelCase keys `apiVersion`, `kind`, `name`, `namespace`).
-  @system_rhai_register takes a borrowed @rhai::Engine to decorate.
+  Les coordonnees d'installation en chaines libres dans @SystemInstanceSpec::jukebox,
+    @SystemInstanceSpec::category et @SystemInstanceSpec::package, plus
+    @SystemInstanceSpec::options comme toute map d'objet JSON ou @None — ce fichier ne fait que
+    digerer `options`, il n'interprete jamais son contenu.
+  @SystemInstance::set_status_ready prend le `tag` installe : @String.
+  @SystemInstance::set_status_systems prend les `systems` appliques : `@Vec<@crate::Children>`.
+  @SystemInstance::set_status_system_failed prend une `reason` lisible par un humain : @String,
+    sans validation de longueur ni de jeu de caracteres.
+  @SystemInstance::rhai_set_status_systems prend tout @rhai::Dynamic devant faire un aller-retour
+    JSON vers `Vec<@crate::Children>` (cles camelCase `apiVersion`, `kind`, `name`, `namespace`).
+  @system_rhai_register prend un @rhai::Engine emprunte a degrader.
 
 Returns:
-  Each async setter returns @crate::Result<@SystemInstance> whose `@Ok` carries the
-    server-merged @SystemInstance read back from @SystemInstance::patch_status.
-  The two in-file Rhai bridges return @crate::RhaiRes<@SystemInstance> wrapping the same object.
-  @SystemInstance::have_child returns a `@bool` per the probe rules above.
-  The registered `get_tfstate`/`get_rhaistate` return the decoded state string, or `""` when
-    no state is stored (@SystemInstance::rhai_get_tfstate and
-    @SystemInstance::rhai_get_rhaistate default the `@None`).
-  The registered `options_digest` returns the hex digest string directly, not a `@Result`.
-  The registered property getters return @rhai::Dynamic, and `status` is Rhai null when
-    @SystemInstanceStatus is `@None`.
+  Chaque setter asynchrone renvoie @crate::Result<@SystemInstance> dont le `@Ok` porte le
+    @SystemInstance fusionne par le serveur relu depuis @SystemInstance::patch_status.
+  Les deux passerelles Rhai internes rendent un @crate::RhaiRes<@SystemInstance> identique.
+  @SystemInstance::have_child renvoie un `@bool` selon les regles de sonde ci-dessus.
+  Les `get_tfstate`/`get_rhaistate` enregistres renvoient la chaine d'etat decodee, ou `""`
+    quand aucun etat n'est stocke (@SystemInstance::rhai_get_tfstate et
+    @SystemInstance::rhai_get_rhaistate mettent `""` par defaut sur le `@None`).
+  L'`options_digest` enregistre renvoie la chaine hexadecimale du digest, pas un `@Result`.
+  Les accesseurs de proprietes enregistres renvoient un @rhai::Dynamic, et `status` est null
+    cote Rhai quand @SystemInstanceStatus est `@None`.
 
 Raises:
-  @crate::Error::KubeError from @SystemInstance::patch_status when the status subresource call
-    fails — every async setter propagates it through `?`.
-  @crate::Error::KubeError from event publishing when @SystemInstance::send_event fails with a
-    @kube::Error variant other than `Api`.
-  @crate::Error::SerializationError when @SystemInstance::rhai_set_status_systems cannot convert
-    its @rhai::Dynamic argument.
-  Every Rhai bridge instead returns a @rhai::EvalAltResult produced by @crate::rhai_err — the
-    typed @crate::Error is flattened into its message string.
+  @crate::Error::KubeError depuis @SystemInstance::patch_status quand l'appel du sous-ressource
+    status echoue — chaque setter asynchrone le propage via `?`.
+  @crate::Error::KubeError depuis la publication d'evenement quand
+    @SystemInstance::send_event echoue avec une variante @kube::Error autre que `Api`.
+  @crate::Error::SerializationError quand @SystemInstance::rhai_set_status_systems ne peut pas
+    convertir son argument @rhai::Dynamic.
+  Chaque passerelle Rhai renvoie plutôt un @rhai::EvalAltResult produit par @crate::rhai_err —
+    le @crate::Error typé est aplati dans sa chaine de message.
 
 Handles:
-  Missing `metadata.generation` — recorded and defaulted to `1` by every setter and
-    constructor.
-  @SystemInstanceStatus absent, or `conditions` empty — the condition rebuild starts from an
-    empty set instead of failing.
-  A `Ready` condition already present when @SystemInstance::set_status_system_failed runs — it
-    is carried through and no @ApplicationCondition::ready_ko is appended.
-  @SystemInstanceSpec::options absent — @SystemInstance::set_status_ready still writes a
-    `digest` (of the empty string).
-  Failure reason longer than 1023 bytes — the event note is truncated while the stored condition
-    `message` keeps the full reason.
-  Event publishing answering a `kube::Error::Api` (for example on a terminating namespace) —
-    @SystemInstance::send_event logs it as a warning and the setter still completes `@Ok`.
+  `metadata.generation` absent — horodate et force a `1` par chaque setter et constructeur.
+  @SystemInstanceStatus absent, ou `conditions` vide — la reconstruction des conditions part
+    d'un ensemble vide au lieu d'echouer.
+  Une condition `Ready` deja presente quand @SystemInstance::set_status_system_failed s'execute
+    — elle est conservee et aucun @ApplicationCondition::ready_ko n'est ajoute.
+  @SystemInstanceSpec::options absent — @SystemInstance::set_status_ready ecrit quand meme un
+    `digest` (de la chaine vide).
+  Raison d'echec plus longue que 1023 octets — la note d'evenement est tronquee alors que le
+    `message` de la condition stockee garde la raison complete.
+  Publication d'evenement repondant un `kube::Error::Api` (par exemple sur un namespace en
+    cours de terminaison) — @SystemInstance::send_event le journalise en avertissement et le
+    setter termine quand meme `@Ok`.
 
 Tasks:
-  [ ] No in-file @tests module exists, so none of the Scenarios below has a mapping test yet;
-      cover them from these Scenario blocks under the project TTD rule when test work starts.
-  [?] @SystemInstance::set_status_system_failed selects the @ApplicationCondition::ready_ko
-      append by matching surviving conditions on type @ConditionsType::Ready only, ignoring
-      generation and @ConditionsStatus — a `Ready`/`True` from an older generation survives a
-      later failure, keeping the printed Ready column green while `Installed` turns `False`.
-      Decide later whether the match must also consider generation or status. The same pattern
-      exists in the macro-owned failure setters.
-  [?] @SystemInstance::set_status_system_failed truncates the event note by byte index with
-      @str::truncate(`1023`), which panics when the byte falls inside a multi-byte character of
-      a non-ASCII reason. Decide later whether truncation must be char-safe. The same pattern
-      exists in the macro-owned setters.
-  [?] @SystemInstance::set_status_ready and @SystemInstance::set_status_system_failed remove
-      every @ConditionsType::AgentStarted condition on each patch, so the agent-start trace
-      never survives a later stage. Confirm this eviction is intended.
-  [?] Wire-visible messages @ApplicationCondition::ready_ok and @ApplicationCondition::installed_ok
-      both carry `Installed succesfully` and @ApplicationCondition::system_ok carries
-      `Templates applied succesfully` (misspellings, duplicated text). They are recorded as-is;
-      decide later whether corrected strings are an acceptable CRD-visible change.
-  [?] @SystemInstance::have_child is asymmetric: `tfstate`/`rhaistate` as @Some of the empty
-      string count as a child, while @Some of an empty list in `systems`/`crds` does not.
-      Confirm the asymmetry is intended.
-  [?] @SystemInstance::set_status_ready has no idempotence gate (unlike the have_condition gate
-      in @SystemInstance::set_agent_started): a no-change re-run rewrites tag, digest, and
-      conditions. Decide later whether an equality gate is wanted.
-  [?] All Rhai bridges run async work through @tokio::task::block_in_place and
-      @tokio::runtime::Handle::block_on and therefore panic on a current-thread runtime; typed
-      @crate::Error is also flattened to a string at the bridge. Documented as behavior; decide
-      later whether the runtime requirement must be enforced or the bridges redesigned.
-  [?] Dérives @std::default::Default on @ConditionsType and @ConditionsStatus have no detectable
-      use repo-wide. Decide later whether they stay.
-  [?] The @SystemInstanceSpec struct doc `Describe a source of vynil packages jukebox` is
-      inherited from the `JukeBox` model and does not describe this CRD (the CRD doc string
-      itself is correct) — confirm the intended wording.
+  [ ] Aucun module @tests dans le fichier n'existe ; aucun des Scenarios ci-dessous n'a donc
+      aucun test de correspondance ; a couvrir depuis ces blocs sous la regle TTD du projet.
+  [?] @SystemInstance::set_status_system_failed ajoute @ApplicationCondition::ready_ko selon
+      la correspondance des conditions survivantes sur le seul type @ConditionsType::Ready,
+      en ignorant generation et @ConditionsStatus — un `Ready`/`True` d'une generation
+      anterieure survit a un echec posterieur, gardant la colonne Ready imprimee verte quand
+      `Installed` passe a `False`. Decider plus tard si la correspondance doit aussi considerer
+      generation ou statut. Motif identique dans les setters d'echec possedes par les macros.
+  [?] @SystemInstance::set_status_system_failed tronque la note d'evenement par index d'octets
+      avec @str::truncate(`1023`), ce qui panique quand l'octet tombe a l'interieur d'un
+      caractere multi-octets d'une raison non-ASCII. Decider plus tard si la troncature doit
+      etre sure en caracteres. Le meme motif existe dans les setters possedes par les macros.
+  [?] @SystemInstance::set_status_ready et @SystemInstance::set_status_system_failed suppriment
+      toute condition @ConditionsType::AgentStarted a chaque patch, donc la trace de demarrage
+      de l'agent ne survit jamais a une etape posterieure. Confirmer l'eviction voulue.
+  [?] Les messages wire d'@ApplicationCondition::ready_ok et
+      @ApplicationCondition::installed_ok portent `Installed succesfully`, comme
+      @ApplicationCondition::system_ok porte `Templates applied succesfully` (fautes
+      d'orthographe, texte duplique). Enregistres ; decider si corriger est acceptable en CRD.
+  [?] @SystemInstance::have_child est asymetrique : `tfstate`/`rhaistate` en @Some de la chaine
+      vide comptent comme un enfant, alors que @Some d'une liste vide dans
+      `systems`/`crds` ne le fait pas. Confirmer que l'asymetrie est voulue.
+  [?] @SystemInstance::set_status_ready n'a pas de porte d'idempotence (vs la porte
+      have_condition de @SystemInstance::set_agent_started) : une reexecution sans changement
+      reecrit tag, digest et conditions. Decider plus tard si une porte d'egalite est voulue.
+  [?] Toutes les passerelles Rhai executent le travail asynchrone via
+      @tokio::task::block_in_place et @tokio::runtime::Handle::block_on ; panique donc sur
+      un runtime current-thread ; le @crate::Error typé est aussi aplati en chaine a la
+      passerelle. Documente ; decider plus tard imposer le runtime ou les passerelles revisees.
+  [?] Les derives @std::default::Default sur @ConditionsType et @ConditionsStatus n'ont aucune
+      utilisation detectable dans tout le depot. Decider plus tard s'ils restent.
+  [?] La doc du struct @SystemInstanceSpec `Describe a source of vynil packages jukebox` est
+      heritee du modele `JukeBox` et ne decrit pas cette CRD (la chaine doc de la CRD elle-meme
+      est correcte) — confirmer le libelle voulu.
 
 Done when:
-  Every Scenario above has a passing in-file test and `cargo test -p common` is green.
+  Tout Scenario au-dessus a un test passant dans le fichier et `cargo test -p common` est vert.
 
 Scenario: Ready install closes with tag and digest
-  Given a @SystemInstance whose spec carries an options map, whose `metadata.generation` is
-    absent, and whose status holds one `CrdApplied`/`True` condition recorded at generation `3`
-  When @SystemInstance::set_status_ready is awaited with tag `1.2.3`
-  Then the merged status carries `tag` `1.2.3` and a `digest` equal to the value
-    @SystemInstance::get_options_digest returns for the same spec
-  And the patched `conditions` are exactly the carried-over `CrdApplied` record plus fresh
-    `Ready` and `Installed` conditions, both `True` at generation `1` with message
-    `Installed succesfully`
-  And a `Normal` event with reason `InstallSucceed` and action `Install` is published
-  None of these Scenarios has an in-file test yet; see the open task above.
+  Given un @SystemInstance dont le spec porte une map d'options, `metadata.generation` absent,
+    et dont le statut porte un enregistrement `CrdApplied`/`True` consigne a la generation `3`
+  When @SystemInstance::set_status_ready est attendue avec le tag `1.2.3`
+  Then le statut fusionne porte `tag` `1.2.3` et un `digest` egal a la valeur que renvoie
+    @SystemInstance::get_options_digest pour le meme spec
+  And les `conditions` patchees sont exactement l'enregistrement `CrdApplied` repris plus des
+    conditions fraiches `Ready` et `Installed`, toutes deux `True` a la generation `1` avec le
+    message `Installed succesfully`
+  And un evenement `Normal` de raison `InstallSucceed` et d'action `Install` est publie
+  Aucun de ces Scenarios n'a encore de test dans le fichier ; voir la tache ouverte ci-dessus.
 
 Scenario: Missing options still produces a digest
-  Given a @SystemInstance with @SystemInstanceSpec::options set to @None
-  When @SystemInstance::set_status_ready is awaited
-  Then the patched `digest` is @sha256::digest of the empty string
+  Given un @SystemInstance dont @SystemInstanceSpec::options est @None
+  When @SystemInstance::set_status_ready est attendue
+  Then le `digest` patche est @sha256::digest de la chaine vide
 
 Scenario: System apply records children, other stages untouched
-  Given a @SystemInstance whose status holds `TofuInstalled`/`True`, `RhaiApplied`/`False` and a
-    stale `SystemApplied` condition
-  When @SystemInstance::set_status_systems is awaited with two @crate::Children entries
-  Then the stale `SystemApplied` condition is replaced by one `True` condition of type
-    `SystemApplied` with message `Templates applied succesfully`
-  And the `TofuInstalled` and `RhaiApplied` records are carried over unchanged, timestamps
-    included
-  And `status.systems` holds exactly the two children and a `Normal` event is published with
-    note `Applied 2 Objects`, reason `SystemApplySucceed`, action `SystemApply`
+  Given un @SystemInstance dont le statut porte `TofuInstalled`/`True`, `RhaiApplied`/`False` et
+    un enregistrement `SystemApplied` perime
+  When @SystemInstance::set_status_systems est attendue avec deux entrees @crate::Children
+  Then l'enregistrement `SystemApplied` perime est remplace par un enregistrement `True` de
+    type `SystemApplied` avec le message `Templates applied succesfully`
+  And les enregistrements `TofuInstalled` et `RhaiApplied` sont repris sans changement, y
+    compris les horodatages
+  And `status.systems` porte exactement les deux enfants et un evenement `Normal` est publie
+    de note `Applied 2 Objects`, raison `SystemApplySucceed`, action `SystemApply`
 
 Scenario: System failure without a Ready condition marks all three
-  Given a @SystemInstance whose status holds no `Ready`-type condition at any generation
-  When @SystemInstance::set_status_system_failed is awaited with reason `boom`
-  Then the patched `conditions` carry `SystemApplied`/`False` and `Installed`/`False` records
-    with message `boom`, plus an appended `Ready`/`False` record with message
-    `No successful install`
-  And a `Warning` event is published with reason `SystemApplyFailed`, action `SystemApply` and
-    note `boom`
-  And the patched list drops every `AgentStarted` record, success or failure, along with any
-    stale `SystemApplied` record
+  Given un @SystemInstance dont le statut ne porte aucune condition `Ready`, a aucune generation
+  When @SystemInstance::set_status_system_failed est attendue avec la raison `boom`
+  Then les `conditions` patchees portent des enregistrements `SystemApplied`/`False` et
+    `Installed`/`False` avec le message `boom`, plus un enregistrement `Ready`/`False` ajoute
+    avec le message `No successful install`
+  And un evenement `Warning` est publie avec la raison `SystemApplyFailed`, l'action
+    `SystemApply` et la note `boom`
+  And la liste patchee supprime tout enregistrement `AgentStarted`, succes ou echec, ainsi que
+    tout enregistrement `SystemApplied` perime
 
 Scenario: System failure keeps a surviving Ready condition
-  Given a @SystemInstance whose status holds a `Ready`/`True` condition recorded at generation
-    `3` while `metadata.generation` now reads `4`
-  When @SystemInstance::set_status_system_failed is awaited with reason `boom`
-  Then no @ApplicationCondition::ready_ko is appended and the old `Ready`/`True` record at
-    generation `3` is carried through, so the printed Ready column keeps reporting the stale
-    success while `Installed` flips to `False`
+  Given un @SystemInstance dont le statut porte une condition `Ready`/`True` a la generation
+    `3` alors que `metadata.generation` indique desormais `4`
+  When @SystemInstance::set_status_system_failed est attendue avec la raison `boom`
+  Then aucun @ApplicationCondition::ready_ko n'est ajoute et l'ancien enregistrement
+    `Ready`/`True` a la generation `3` est conserve, donc la colonne Ready imprimee garde
+    le succes perime pendant qu'`Installed` bascule a `False`
 
 Scenario: Mis-shaped Rhai children list is rejected before any patch
-  Given a @rhai script calling the registered `set_status_systems` with a @rhai::Dynamic whose
-    entries lack the `kind` and `name` fields of @crate::Children
-  When @SystemInstance::rhai_set_status_systems runs
-  Then the call returns a @rhai::EvalAltResult carrying the serialized
-    @crate::Error::SerializationError message
-  And no status patch or event is attempted
+  Given un script @rhai appelant le `set_status_systems` enregistre avec un @rhai::Dynamic
+    dont les entrees n'ont pas les champs `kind` et `name` de @crate::Children
+  When @SystemInstance::rhai_set_status_systems s'execute
+  Then l'appel renvoie un @rhai::EvalAltResult portant le message serialise de
+    @crate::Error::SerializationError
+  And aucun patch de statut ni evenement n'est tente
 
 Scenario: Child-state probe
-  Given a @SystemInstance with no status at all, @SystemInstance::have_child answers `false`
-  But when only `rhaistate` or only `tfstate` is `@Some`, even the empty string, it answers
+  Given un @SystemInstance sans statut du tout, @SystemInstance::have_child repond `false`
+  But quand seul `rhaistate` ou seul `tfstate` est `@Some`, meme la chaine vide, elle repond
     `true`
-  And when `systems` and `crds` are both `@Some` of empty lists and no state is stored, it
-    answers `false`
-  And when `crds` is `@Some` of one entry, it answers `true`
+  And quand `systems` et `crds` sont tous deux @Some de listes vides et qu'aucun etat n'est
+    stocke, elle repond `false`
+  And quand `crds` est @Some d'une entree, elle repond `true`
