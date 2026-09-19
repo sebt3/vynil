@@ -1,252 +1,252 @@
 Spec: auth
 
 Purpose:
-  Turn one request's wire facts into the @Identity — a `user` string plus `groups` — that
-    ./authz.rs copies verbatim into a @SubjectAccessReview, via exactly two paths: the
-    front-proxy `X-Remote-User`/`X-Remote-Group` headers honoured only while the
-    `trust_request_header` flag is set, and an `Authorization: Bearer` token validated by a
-    cluster @TokenReview call; every failure is the unit @DiagError::AuthenticationRequired.
-    The file itself never inspects transport, TLS or certificates: the mandatory-mTLS
-    guarantee behind the header trust lies in @server::server::run_server, owned by
-    ./server.rs.
+  Convertir les faits fil d'une requête en l'@Identity — une chaîne `user` plus `groups` —
+    que ./authz.rs recopie verbatim dans un @SubjectAccessReview, via exactement deux chemins :
+    les en-têtes front-proxy `X-Remote-User`/`X-Remote-Group`, honorés seulement quand le flag
+    `trust_request_header` est posé, et un jeton `Authorization: Bearer` validé par un appel
+    @TokenReview du cluster ; chaque échec est l'unité @DiagError::AuthenticationRequired.
+    Le fichier lui-même n'inspecte jamais transport, TLS ni certificats : la garantie mTLS
+    obligatoire derrière la confiance header réside dans @server::server::run_server, propriété
+    de ./server.rs.
 
 Owns:
   ./auth.rs
 
 References:
-  ./error.sdd — the @DiagError vocabulary, and the `DIAG-006` / `401` mapping plus
-    @IntoResponse rendering of every failure this file raises.
-  ./config.sdd — the `trust_request_header` option and its `--trust-request-header` /
-    `DIAG_TRUST_REQUEST_HEADER` spellings; this file only consumes the resolved @bool.
-  ./server.rs — spec pending: the startup guardrail refusing the trust flag together with
-    `insecure_no_tls`, the client-cert-verifying mTLS built by @build_mtls_config, the
-    @instance_handler call site and the @RequestHeaders extractor that feeds this module.
-  ./authz.rs — spec pending: sole in-crate reader of @Identity.user and @Identity.groups.
-  /server/src/error.sdd, /common/src/context.sdd — approved calibration references.
+  ./error.sdd — le vocabulaire @DiagError, et le mapping `DIAG-006` / `401` ainsi que le rendu
+    @IntoResponse de chaque échec que ce fichier lève.
+  ./config.sdd — l'option `trust_request_header` et ses orthographes `--trust-request-header` /
+    `DIAG_TRUST_REQUEST_HEADER` ; ce fichier ne consomme que le @bool résolu.
+  ./server.rs — spec pending : le garde-fou de démarrage refusant le flag de confiance avec
+    `insecure_no_tls`, le mTLS vérifiant les certificats client construit par
+    @build_mtls_config, le site d'appel @instance_handler et l'extracteur @RequestHeaders qui
+    alimente ce module.
+  ./authz.rs — spec pending : seule lectrice in-crate de @Identity.user et @Identity.groups.
+  /server/src/error.sdd, /common/src/context.sdd — références de calibration approuvées.
 
 Must:
-  @request_header_identity is a pure parse with no trust decision, no cluster call and no
-    transport check: the first `X-Remote-User` occurrence must @to_str cleanly (visible
-    ASCII) and be non-empty else the result is @None even when groups are valid, and its
-    value is kept verbatim — no trim, no case fold; groups are the @get_all of every
-    `X-Remote-Group` occurrence in arrival order, each that @to_str cleanly, repeats and
-    empty strings kept, values with non-visible bytes skipped silently without failing the
-    parse, none at all yielding an empty @Vec. @HeaderMap lookup matches header names
-    case-insensitively per HTTP; `X-Remote-User` and `X-Remote-Group` are the canonical
-    front-proxy spellings and the only two names read.
-  @extract_identity consults @request_header_identity only when the `trust_request_header`
-    argument is literally `true`, and a @Some short-circuits: @AUTHORIZATION is never read,
-    no cluster call happens, and a `Bearer` token riding along is never examined. A `true`
-    flag whose parse yields @None continues exactly as `false` does; under `false` the
-    front-proxy headers are unread however well-formed, so this flag read is the module's
-    entire trust decision — no peer-certificate or transport fact is bound to it here (see
-    Tasks).
-  The Bearer path reads @AUTHORIZATION — first occurrence only — only after the header path
-    produced no identity: a value that fails @to_str yields @DiagError::AuthenticationRequired
-    with no malformed-vs-absent distinction; an identity comes only from the remainder of
-    @strip_prefix against the exact case-sensitive seven-byte prefix `Bearer ` trailing-space
-    included, so `bearer <t>`, `BEARER <t>`, `Bearer` without the space and any other scheme
-    end in @DiagError::AuthenticationRequired; acceptance logs nothing and echoes nothing.
-  @validate_token POSTs exactly one @TokenReview through @api::@Api::all with
-    @PostParams::default: @spec.token carries the @token byte-identical — `""` included,
-    never shape-checked — and that is the whole spec, `spec.audiences` never set, leaving
-    audience acceptance to the cluster's default; @kube::@Client is cloned per call with no
-    caching.
-  A @TokenReview verdict counts only as literal `true` in `status.authenticated`: identity
-    fields `username` and `groups` arrive verbatim or through @unwrap_or_default as `""` and
-    an empty @Vec — an `authenticated` reply omitting `username` still yields an accepted
-    @Identity with `user` `""` and nothing here rejects it — while a missing @status, or
-    @authenticated @None or @false, is refused.
-  The file's only two log statements live in @validate_token: @tracing::error! with
-    `TokenReview failed: {e}` carrying the raw @kube::@Error @Display when the POST
-    itself fails, and @tracing::warn! with `Token authentication failed` when the verdict
-    refuses — neither names the token, the presented identity or the caller; a successful
-    authentication logs nothing.
-  The failure is unitary: the only value both async entries @Err with is
-    @DiagError::AuthenticationRequired — header, token, byte-shape, cluster-outage and
-    refused-token legs are byte-identical on the wire (`401` `DIAG-006` per ./error.sdd) —
-    and a @kube::@Error from the POST is converted, not wrapped, so the @source chain
-    survives only in the error log line and no @DiagError::KubeError can come from here.
-  Certificate identity is parsed nowhere: no DN, no CN, no client-cert subject read exists
-    in this file — a reimplementation must not invent one — because verified apiserver
-    client-certificates authenticate the channel in ./server.rs, while callers authenticate
-    through header text or @TokenReview user info only.
-  Nothing here is an axum extractor: the file defines no @FromRequestParts impl; the
-    consumer clones headers through @server::server::@RequestHeaders and awaits
-    @extract_identity inside @instance_handler after route-shape validation and before
-    authorization, and the failing `?` reaches `401` through the @IntoResponse rendered in
-    ./error.sdd — header plumbing and call ordering are the consumer's contract.
+  @request_header_identity est un parse pur, sans décision de confiance, sans appel cluster et
+    sans vérification de transport : la première occurrence `X-Remote-User` doit @to_str
+    proprement (ASCII visible) et être non vide, sinon le résultat est @None même quand les
+    groups sont valides, et sa valeur est conservée verbatim — pas de trim, pas de case fold ;
+    les groups sont le @get_all de chaque occurrence `X-Remote-Group` dans l'ordre d'arrivée,
+    chacune devant @to_str proprement, répétitions et chaînes vides conservées, les valeurs
+    avec des octets non visibles ignorées en silence sans faire échouer le parse, l'absence
+    totale produisant un @Vec vide. La lookup dans @HeaderMap apparie les noms d'en-têtes de
+    façon insensible à la casse conformément à HTTP ; `X-Remote-User` et `X-Remote-Group`
+    sont les orthographes front-proxy canoniques et les deux seuls noms lus.
+  @extract_identity consulte @request_header_identity uniquement quand l'argument
+    `trust_request_header` est littéralement `true`, et un @Some court-circuite :
+    @AUTHORIZATION n'est jamais lu, aucun appel cluster n'a lieu, et un jeton `Bearer` présent
+    avec reste jamais examiné. Un flag `true` dont le parse donne @None continue exactement
+    comme sous `false` ; sous `false` les en-têtes front-proxy ne sont pas lus aussi
+    bien formés soient-ils, cette lecture du flag est donc la décision de confiance entière
+    du module — aucun fait de certificat pair ou de transport n'y est lié ici (voir Tasks).
+  Le chemin Bearer lit @AUTHORIZATION — première occurrence uniquement — seulement
+    après que le chemin en-têtes n'a produit aucune identité : une valeur qui échoue à @to_str
+    donne @DiagError::AuthenticationRequired sans distinction entre malformé et absent ; une
+    identité vient seulement du reste de @strip_prefix contre l'exact préfixe sensible à la
+    casse de sept octets `Bearer ` avec espace final inclus, donc `bearer <t>`, `BEARER <t>`,
+    `Bearer` sans l'espace et tout autre schéma finissent en @DiagError::AuthenticationRequired ; l'acceptation ne logue rien et ne renvoie rien.
+  @validate_token poste exactement un @TokenReview via @api::@Api::all avec
+    @PostParams::default : @spec.token porte le @token byte-identique — `""` compris, jamais
+    vérifié en forme — et c'est tout le spec, `spec.audiences` jamais défini, laissant
+    l'acceptation d'audience au défaut du cluster ; @kube::@Client est cloné par appel sans
+    mise en cache.
+  Un verdict de @TokenReview compte uniquement comme le `true` littéral dans
+    `status.authenticated` : les champs d'identité `username` et `groups` arrivent verbatim ou
+    via @unwrap_or_default comme `""` et un @Vec vide — une réponse `authenticated` omettant
+    `username` donne quand même une @Identity acceptée avec `user` `""` et rien ici ne la
+    rejette — tandis qu'un @status manquant, ou @authenticated @None ou @false, est refusé.
+  Les deux seules instructions de log du fichier vivent dans @validate_token : @tracing::error!
+    avec `TokenReview failed: {e}` portant le @kube::@Error @Display brut quand le POST
+    lui-même échoue, et @tracing::warn! avec `Token authentication failed` quand le verdict
+    refuse — ni l'un ni l'autre ne nomme le jeton, l'identité présentée ni l'appelant ; une
+    authentification réussie ne logue rien.
+  L'échec est unitaire : la seule valeur avec laquelle les deux entrées async @Err est
+    @DiagError::AuthenticationRequired — les voies header, jeton, forme d'octets, panne cluster
+    et jeton refusé sont byte-identiques sur le fil (`401` `DIAG-006` per ./error.sdd) — et un
+    @kube::@Error du POST est converti, pas wrappé, donc la chaîne @source ne survit que dans la ligne de log d'erreur et aucun @DiagError::KubeError ne peut venir d'ici.
+  L'identité par certificat n'est parsée nulle part : aucune lecture de DN, de CN, de sujet
+    de certificat client n'existe dans ce fichier — une réimplémentation ne doit pas en
+    inventer une — car les certificats client apiserver vérifiés authentifient le canal dans
+    ./server.rs, tandis que les appelants s'authentifient seulement par texte d'en-tête ou @TokenReview user info.
+  Rien ici n'est un extracteur axum : le fichier ne définit aucune impl @FromRequestParts ;
+    le consommateur clone les en-têtes via @server::server::@RequestHeaders et attend
+    @extract_identity dans @instance_handler après la validation de forme de route et avant
+    l'autorisation, et le `?` en échec atteint `401` via @IntoResponse rendu dans ./error.sdd — header plumbing et ordre d'appel sont le contrat du consommateur.
 
 Depends on:
-  @crate::error::@DiagError and its unit variant @DiagError::AuthenticationRequired —
-    ./error.rs as specified in ./error.sdd, the only error type produced here.
-  @kube::@Client, @kube::@Api and @api::@PostParams — kube `3.1.0` from /Cargo.toml; the
-    @create POST for @TokenReview is the module's only cluster access.
-  @k8s_openapi::api::authentication::v1::@TokenReview and @TokenReviewSpec — k8s-openapi
-    `0.27.1` from /Cargo.toml, the wire shape of the token path.
-  @axum `0.8` — @axum::http::@HeaderMap with @get, @get_all and @to_str, plus the
-    @AUTHORIZATION constant from @axum::http::header; the @HeaderValue::to_str visible-ASCII
-    rule decides which header bytes can become identity at all.
-  @tracing — @tracing::error! and @tracing::warn! for the two log statements in Must.
-  @std::string::@ToString and @option::@Option::unwrap_or_default / @bool::@unwrap_or — the
-    infallible defaulting that replaces any @unwrap or @expect.
+  @crate::error::@DiagError et sa variante unitaire @DiagError::AuthenticationRequired —
+    ./error.rs tel que spécifié dans ./error.sdd, le seul type d'erreur produit ici.
+  @kube::@Client, @kube::@Api et @api::@PostParams — kube `3.1.0` de /Cargo.toml ; le POST
+    @create de @TokenReview est le seul accès cluster du module.
+  @k8s_openapi::api::authentication::v1::@TokenReview et @TokenReviewSpec — k8s-openapi
+    `0.27.1` de /Cargo.toml, la forme fil du chemin jeton.
+  @axum `0.8` — @axum::http::@HeaderMap avec @get, @get_all et @to_str, plus la constante
+    @AUTHORIZATION de @axum::http::header ; la règle ASCII visible de @HeaderValue::to_str
+    décide quels octets d'en-tête peuvent devenir identité.
+  @tracing — @tracing::error! et @tracing::warn! pour les deux instructions de log de Must.
+  @std::string::@ToString et @option::@Option::unwrap_or_default / @bool::@unwrap_or — le
+    defaulting infaillible qui remplace tout @unwrap ou @expect.
 
 Exposes:
-  @Identity — `pub @struct` deriving @Debug and @Clone with two `pub` fields, `user`:
-    @std::string::@String and `groups`: @std::vec::@Vec<@std::string::@String>; `pub`
-    through `pub mod auth;` in ./lib.rs; reaches ./authz.rs SAR subjects and ./server.rs.
+  @Identity — un `pub @struct` dérivant @Debug et @Clone avec deux champs `pub`, `user` :
+    @std::string::@String et `groups` : @std::vec::@Vec<@std::string::@String> ; `pub` via
+    `pub mod auth;` dans ./lib.rs ; atteint les sujets SAR de ./authz.rs et ./server.rs.
   @extract_identity — `pub async fn(@client: &@kube::@Client, @headers:
     &@axum::http::@HeaderMap, @trust_request_header: @bool) -> @Result<@Identity,
-    @DiagError>`: the module's decision point, its only item used outside this file.
+    @DiagError>` : le point de décision du module, son seul item utilisé hors de ce fichier.
   @request_header_identity — @must_use `pub fn(@headers: &@axum::http::@HeaderMap) ->
-    @Option<@Identity>`: trust-free parse, kept `pub` though no in-crate caller besides
-    @extract_identity and the tests uses it.
+    @Option<@Identity>` : parse sans confiance, gardé `pub` bien qu'aucun appelant in-crate
+    à part @extract_identity et les tests ne l'utilise.
   @validate_token — `pub async fn(@client: &@kube::@Client, @token: &@std::primitive::@str)
-    -> @Result<@Identity, @DiagError>`: the @TokenReview round trip, likewise `pub` beyond
-    its single in-file caller.
+    -> @Result<@Identity, @DiagError>` : l'aller-retour @TokenReview, pareillement `pub`
+    au-delà de son unique appelant in-file.
 
 Accepts:
-  @extract_identity: a borrowed @kube::@Client that only the Bearer path touches — the
-    header path performs zero cluster I/O; @axum::http::@HeaderMap as-is with no shape
-    precondition; one @bool, the per-request entire trust authority, flowing here from
-    `Config.trust_request_header` through @crate::@AppState — the module reads no config.
-  @request_header_identity: @axum::http::@HeaderMap alone.
-  @validate_token: any @std::primitive::@str left after the `Bearer ` prefix, `""` included,
-    posted byte-identical; client reachability is never probed beforehand.
+  @extract_identity: un @kube::@Client emprunté que seul le chemin Bearer touche — le chemin
+    en-têtes effectue zéro I/O cluster ; @axum::http::@HeaderMap tel quel sans precondition
+    de forme ; un @bool, l'autorité de confiance entière du request, qui arrive ici depuis
+    `Config.trust_request_header` via @crate::@AppState — le module ne lit aucune config.
+  @request_header_identity: @axum::http::@HeaderMap seul.
+  @validate_token: tout @std::primitive::@str restant après le préfixe `Bearer `, `""`
+    compris, posté byte-identique ; l'accessibilité du client n'est jamais sondée avant.
 
 Returns:
-  @Ok(@Identity) from @extract_identity: the header identity whenever the flag is `true`
-    and `X-Remote-User` is clean visible-ASCII and non-empty, groups as presented in
-    arrival order and possibly empty; otherwise the token identity whenever @TokenReview
-    authenticated `true` — `user` `""` included when the cluster omitted `username`.
-  @request_header_identity: @Some of the verbatim user plus collected groups, or @None when
-    `X-Remote-User` is absent, non-visible-ASCII or empty.
-  @Err(@DiagError::AuthenticationRequired) for every remaining combination, rendered
-    `401` `DIAG-006` by ./error.sdd.
-  @Identity itself adds no method and no helper: @Debug is its sole output surface, and no
-    identity ever reaches a log from this module.
+  @Ok(@Identity) de @extract_identity: l'identité header chaque fois que le flag est `true`
+    et que `X-Remote-User` est un ASCII visible propre et non vide, groups tels présentés dans
+    l'ordre d'arrivée et possiblement vides ; sinon l'identité jeton chaque fois que @TokenReview
+    a authentifié `true` — `user` `""` compris quand le cluster omet `username`.
+  @request_header_identity: un @Some du user verbatim plus les groups collectés, ou @None
+    quand `X-Remote-User` est absent, non-visible-ASCII ou vide.
+  @Err(@DiagError::AuthenticationRequired) pour toute combinaison restante, rendu `401`
+    `DIAG-006` par ./error.sdd.
+  @Identity lui-même n'ajoute ni méthode ni helper: @Debug est sa seule surface de sortie,
+    et jamais aucune identité n'atteint un log depuis ce module.
 
 Raises:
-  @DiagError::AuthenticationRequired — the lone failure of @extract_identity and of
-    @validate_token, from: headers ignored (flag `false`) or refused (absent, empty or
-    non-visible `X-Remote-User`) while the Bearer path is missing an @AUTHORIZATION value,
-    any non-`Bearer `-prefixed value, a malformed value, a failed @TokenReview POST, or a
-    reply where `status`, `authenticated` or its @true value is missing.
-  No leg produces a message identifying itself, and no variant other than
-    @DiagError::AuthenticationRequired — @DiagError::InternalError and @DiagError::KubeError
-    never originate here even when the cluster is down.
-  No panic path exists: @unwrap and @expect appear nowhere outside the `#[cfg(test)]`
-    module, every option defaulting is total, and malformed @HeaderMap or @HeaderValue
-    input is refused, not fatal.
+  @DiagError::AuthenticationRequired — l'unique échec de @extract_identity et de
+    @validate_token, venant de : headers ignorés (flag `false`) ou refusés (absent, vide ou
+    non-visible `X-Remote-User`) tandis que le chemin Bearer manque de valeur @AUTHORIZATION,
+    toute valeur sans préfixe `Bearer `, une valeur malformée, un POST @TokenReview échoué,
+    ou une réponse où `status`, `authenticated` ou sa valeur @true manque.
+  Nulle voie ne produit un message s'identifiant elle-même, et nulle variante autre que
+    @DiagError::AuthenticationRequired — @DiagError::InternalError et @DiagError::KubeError
+    n'originent jamais ici même quand le cluster est en panne.
+  Aucune voie de panic n'existe : @unwrap et @expect n'apparaissent nulle part hors du module
+    `#[cfg(test)]`, tout defaulting d'option est total, et une entrée @HeaderMap ou
+    @HeaderValue malformée est refusée, pas fatale.
 
 Handles:
-  Repeated `authorization` occurrences — only the first is ever parsed.
-  `X-Remote-Group` occurrences with non-visible bytes — that occurrence drops, surviving
-    siblings keep their order.
-  Trust flag `true` with headers absent or refused — silent fall-through into the Bearer
-    path, indistinguishable to the client.
-  Co-present `X-Remote-User` and `Bearer` under the flag — the header identity wins outright
-    and the token is never validated.
-  An empty token after a valid prefix — forwarded verbatim, the cluster holds the decision.
-  A @TokenReview reply without @status — refused exactly like an explicit @false verdict.
+  Occurrences répétées de `authorization` — seule la première est jamais parsée.
+  Occurrences de `X-Remote-Group` avec des octets non visibles — cette occurrence tombe, les
+    frères survivants gardent leur ordre.
+  Flag de confiance `true` avec headers absents ou refusés — fall-through silencieux vers le
+    chemin Bearer, indiscernable pour le client.
+  `X-Remote-User` et `Bearer` co-présents sous le flag — l'identité header l'emporte d'emblée
+    et le jeton n'est jamais validé.
+  Un jeton vide après un préfixe valide — transmis verbatim, le cluster garde la décision.
+  Une réponse @TokenReview sans @status — refusée exactement comme un verdict @false explicite.
 
 Tasks:
-  [ ] Cover @request_header_identity details the three existing tests leave free: groups
-      without a user yielding @None; non-visible bytes in the user value yielding @None; a
-      missing `X-Remote-Group` yielding empty @groups; an empty-string group kept; a
-      non-visible group dropped while siblings survive.
-  [ ] Cover @extract_identity ordering and trust gating: under `false` a valid
-      `X-Remote-User` is ignored and a `Bearer` token still decides, and under `true` with
-      both sources the token is never validated and zero cluster call happens — every
-      @extract_identity test needs a constructible @kube::@Client (e.g. a fake-apiserver
-      @kube::@config::@Config) and the crate ships none: ./Cargo.toml @dev-dependencies is
-      empty.
-  [ ] Cover the Bearer-shape refusals — `Bearer` bare, `bearer <t>`, `Token <t>`, and a
-      non-visible-byte @AUTHORIZATION value all landing @DiagError::AuthenticationRequired
-      before any cluster call — plus the empty-`Bearer ` suffix reaching @validate_token.
-  [ ] Cover @validate_token verdicts against @TokenReview replies — `authenticated` `true`
-      with and without `username`/`groups`, `false`, missing @status, and a failing POST —
-      asserting the two log texts, blocked on the same missing fake-apiserver harness.
-  [?] The trust boundary proper: under `true` the file accepts whatever literal string
-      `X-Remote-User` carries with no further check, and safety rests entirely on
-      ./server.rs refusing to start the flag insecurely and pinning client-cert
-      verification — nothing at @extract_identity binds the parse to that verified channel,
-      so reuse over any other listener would silently permit impersonation. Decide later
-      whether the extractor itself must prove the mTLS peer or the config-level coupling
-      stays.
-  [?] A genuine `Bearer` credential co-present with trusted headers is discarded unexamined,
-      header presence pre-empting any cluster confirmation of it. Decide later whether the
-      header path cross-checks a presented token.
-  [?] An @Ok identity may carry `user` `""` when the cluster's `username` is omitted, and
-      that empty subject flows on into @SubjectAccessReview. Decide later whether
-      an empty `user` should be refused as @DiagError::AuthenticationRequired instead.
-  [?] A failing @TokenReview POST — cluster down, RBAC denial on `tokenreviews`, any
-    @kube::@Error — lands in the same client-failure lane as a bad token, masking
-    server-side misconfiguration at clients and dropping the @source chain outside the log.
-      Decide later whether transport failures become @DiagError::KubeError instead.
-  [?] The `Bearer ` prefix is byte- and case-exact, refusing `bearer <t>` / `BEARER <t>` /
-      spaceless `Bearer` although RFC 7235 scheme tokens are case-insensitive. Decide later
-      whether the parse loosens.
-  [?] Nothing logs a resolved identity and the refusal warn names no presented string, so
-      neither audit trails nor spoofing forensics are possible from this module's output.
-      Decide later whether an info/debug line carrying the resolved identity (or an
-      anonymized digest) is added.
-  [?] @validate_token and @request_header_identity are `pub` with no consumer outside this
-      file (in-crate only @extract_identity and @Identity are imported), against the
-      project's keep-public-surface-narrow rule. Decide later whether they become
+  [ ] Couvrir les détails de @request_header_identity que les trois tests existants laissent
+      libres : des groups sans user donnant @None ; des octets non visibles dans le user
+      donnant @None ; un `X-Remote-Group` manquant donnant un @groups vide ; un group chaîne
+      vide conservé ; un group non-visible tombé tandis que les frères survivent.
+  [ ] Couvrir l'ordonnancement de @extract_identity et le gating de confiance : sous `false`
+      un `X-Remote-User` valide est ignoré et un jeton `Bearer` décide quand même, et sous
+      `true` avec les deux sources le jeton n'est jamais validé et zéro appel cluster n'a lieu
+      — chaque test de @extract_identity a besoin d'un @kube::@Client constructible (p. ex. un
+      @kube::@config::@Config fake-apiserver) et le crate n'en livre aucun : les
+      @dev-dependencies de ./Cargo.toml sont vides.
+  [ ] Couvrir les refus de forme Bearer — `Bearer` nu, `bearer <t>`, `Token <t>`, et une valeur
+      @AUTHORIZATION en octets non visibles tombant tous sur @DiagError::AuthenticationRequired
+      avant tout appel cluster — plus le suffixe vide de `Bearer ` atteignant @validate_token.
+  [ ] Couvrir les verdicts de @validate_token contre des réponses @TokenReview — `authenticated`
+      `true` avec et sans `username`/`groups`, `false`, @status manquant, et un POST en échec —
+      en assertant les deux textes de log, bloqué sur le même harnais fake-apiserver manquant.
+  [?] La frontière de confiance proprement dite : sous `true` le fichier accepte toute chaîne
+      littérale que `X-Remote-User` porte sans autre vérification, et la sécurité repose
+      entièrement sur ./server.rs refusant de démarrer le flag insecurity et épinglant la
+      vérification de certificat client — rien dans @extract_identity ne lie le parse à ce
+      canal vérifié, donc une réutilisation sur tout autre listener permettrait
+      silencieusement l'usurpation. Décider plus tard si l'extracteur lui-même doit prouver le
+      pair mTLS ou si le couplage au niveau config reste.
+  [?] Un véritable jeton `Bearer` co-présent avec des headers de confiance est jeté sans
+      examen, la présence du header préemptant toute confirmation cluster de celui-ci. Décider
+      plus tard si le chemin header croise-vérifie un jeton présenté.
+  [?] Une identité @Ok peut porter `user` `""` quand le `username` du cluster est omis, et ce
+      sujet vide coule dans @SubjectAccessReview. Décider plus tard si un `user` vide devrait
+      être refusé comme @DiagError::AuthenticationRequired à la place.
+  [?] Un POST @TokenReview en échec — cluster en panne, refus RBAC sur `tokenreviews`, tout
+    @kube::@Error — tombe dans la même voie d'échec client qu'un mauvais jeton, masquant une
+    mauvaise configuration serveur chez les clients et perdant la chaîne @source hors du log.
+      Décider plus tard si les échecs de transport deviennent @DiagError::KubeError.
+  [?] Le préfixe `Bearer ` est exact en octets et en casse, refusant `bearer <t>` / `BEARER <t>` /
+      `Bearer` sans espace bien que les jetons de schéma RFC 7235 soient insensibles à la
+      casse. Décider plus tard si le parse s'assouplit.
+  [?] Rien ne logue une identité résolue et le warn de refus ne nomme aucune chaîne présentée,
+      donc ni pistes d'audit ni forensic d'usurpation ne sont possibles depuis la sortie de ce
+      module. Décider plus tard si une ligne info/debug portant l'identité résolue (ou un digest
+      anonymisé) est ajoutée.
+  [?] @validate_token et @request_header_identity sont `pub` sans consommateur hors de ce
+      fichier (in-crate seuls @extract_identity et @Identity sont importés), contre la règle
+      du projet keep-public-surface-narrow. Décider plus tard s'ils deviennent
       `pub(crate)`.
 
 Done when:
-  Every Scenario below maps to a passing test (the `[ ]` Tasks or their successors), the
-    `[?]` decisions above are recorded, and `cargo test -p server` is green.
+  Chaque Scenario ci-dessous correspond à un test passant (les Tasks `[ ]` ou leurs successeurs),
+    les décisions `[?]` ci-dessus sont enregistrées, et `cargo test -p server` est vert.
 
 Scenario: Front-proxy header identity is parsed verbatim
-  Given `X-Remote-User: alice` with `X-Remote-Group: g1` then `g2` appended
-  When @request_header_identity runs
-  Then @Some of the @Identity with `user` `alice` and @groups [`g1`, `g2`] in arrival order
+  Given `X-Remote-User: alice` avec `X-Remote-Group: g1` puis `g2` ajouté
+  When @request_header_identity tourne
+  Then un @Some de l'@Identity avec `user` `alice` et @groups [`g1`, `g2`] dans l'ordre d'arrivée
   Maps to test @parses_request_header_identity
-  But given no headers, or `X-Remote-User` of `""`, the result is @None
+  But sans headers, ou `X-Remote-User` à `""`, le résultat est @None
   Maps to test @no_identity_without_headers
   Maps to test @empty_remote_user_is_rejected
-  And the only-group, empty-group, dropped-group and details legs above have no mapped test.
+  And les voies only-group, empty-group, dropped-group et détails ci-dessus n'ont pas de test mappé.
 
 Scenario: Untrusted front-proxy headers are ignored
-  Given `X-Remote-User: alice`, a group header, and @trust_request_header `false`
-  When @extract_identity runs, with or without `Authorization: Bearer tok`
-  Then no header identity is ever returned
-  And every Bearer-shape refusal ends @DiagError::AuthenticationRequired
-  No mapped test exists.
+  Given `X-Remote-User: alice`, un header de group, et @trust_request_header `false`
+  When @extract_identity tourne, avec ou sans `Authorization: Bearer tok`
+  Then aucune identité header n'est jamais retournée
+  And tout refus de forme Bearer finit @DiagError::AuthenticationRequired
+  Aucun test mappé n'existe.
 
 Scenario: Trusted headers win over the token
-  Given @trust_request_header `true`, clean `X-Remote-User`/`X-Remote-Group` and
+  Given @trust_request_header `true`, `X-Remote-User`/`X-Remote-Group` propres et
     `Authorization: Bearer secret-token`
-  When @extract_identity runs
-  Then the header identity is returned, @AUTHORIZATION is untouched, zero @TokenReview is
-    sent and `secret-token` is never validated nor logged
-  No mapped test exists.
+  When @extract_identity tourne
+  Then l'identité header est retournée, @AUTHORIZATION n'est pas touchée, zéro @TokenReview
+    est envoyé et `secret-token` n'est jamais validé ni logué
+  Aucun test mappé n'existe.
 
 Scenario: Bearer prefix must match byte for byte
-  Given @trust_request_header `false` and @AUTHORIZATION values `Bearer abc`, `bearer abc`,
-    `Token abc` and `Bearer`
-  When @extract_identity parses each
-  Then the first continues into @validate_token with token `abc`
-  And the other three end @DiagError::AuthenticationRequired before any cluster call
-  No mapped test exists.
+  Given @trust_request_header `false` et des valeurs @AUTHORIZATION `Bearer abc`, `bearer abc`,
+    `Token abc` et `Bearer`
+  When @extract_identity parse chacune
+  Then la première continue dans @validate_token avec le jeton `abc`
+  And les trois autres finissent @DiagError::AuthenticationRequired avant tout appel cluster
+  Aucun test mappé n'existe.
 
 Scenario: TokenReview verdict shapes the identity
-  Given @TokenReview replies whose `status.authenticated` is `true` with `username`
-    `system:alice` and @groups [`dev`], `true` with both fields absent, `false`, @None, or a
-    missing @status, and one failing POST
-  When @validate_token maps each
-  Then the verdicts are an @Identity of `system:alice` / [`dev`]; an @Identity with `user`
-    `""` and empty @groups; @DiagError::AuthenticationRequired for the last three, the
-    refusals carrying the warn `Token authentication failed` and the failing POST the error
-    line `TokenReview failed: {e}` with the raw @kube::@Error text
-  No mapped test exists.
+  Given des réponses @TokenReview dont `status.authenticated` est `true` avec `username`
+    `system:alice` et @groups [`dev`], `true` avec les deux champs absents, `false`, @None, ou
+    un @status manquant, et un POST en échec
+  When @validate_token mappe chacun
+  Then les verdicts sont une @Identity de `system:alice` / [`dev`] ; une @Identity avec `user`
+    `""` et @groups vides ; @DiagError::AuthenticationRequired pour les trois derniers, les
+    refus portant le warn `Token authentication failed` et le POST en échec la ligne d'erreur
+    `TokenReview failed: {e}` avec le texte brut du @kube::@Error
+  Aucun test mappé n'existe.
 
 Example:
-  parsed header identity: @Identity fields `user: "alice"`, `groups: ["g1", "g2"]`
-  shared wire refusal for every failing leg: `DIAG-006: Authentication required - no valid
-    identity provided` with status `401`
-  token-path request shape: a @TokenReview whose `spec.token` equals the seven-byte prefix
-    stripped remainder of `Authorization`, `spec.audiences` absent
+  identité header parsée : champs @Identity `user: "alice"`, `groups: ["g1", "g2"]`
+  refus fil partagé pour chaque voie en échec : `DIAG-006: Authentication required - no valid
+    identity provided` avec le statut `401`
+  forme de requête du chemin jeton : un @TokenReview dont `spec.token` égale le reste de
+    `Authorization` après retrait du préfixe sept-octets, `spec.audiences` absent

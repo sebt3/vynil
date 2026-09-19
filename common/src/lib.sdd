@@ -1,13 +1,13 @@
 Spec: CommonLib
 
 Purpose:
-  Anchor the `common` crate: declare the module tree that forms the Vynil shared library and
-    own the crate-wide contract that tree shares — the error vocabulary @Error and the @Result
-    alias, the Rhai bridge @RhaiRes, @rhai_err and @rhai_err_str that maps that vocabulary into
-    Rhai strings, the small cross-module wire types @Children, @GlobalPublished and @Published,
-    the pinned @DEFAULT_AGENT_IMAGE, and the crate-root re-export surface that keeps the
-    `vynil-core` engines reachable from the old import paths. Module behaviour itself belongs to
-    each module spec, referenced below.
+  Ancrer le crate `common` : déclarer l'arborescence de modules qui forme la bibliothèque partagée
+    Vynil et porter le contrat à l'échelle du crate que cette arborescence partage — le vocabulaire
+    d'erreurs @Error et l'alias @Result, le pont Rhai @RhaiRes, @rhai_err et @rhai_err_str qui
+    projette ce vocabulaire en chaînes Rhai, les petits types de transport inter-modules @Children,
+    @GlobalPublished et @Published, @DEFAULT_AGENT_IMAGE épinglé, et la surface de ré-export à la
+    racine du crate qui garde les moteurs `vynil-core` accessibles depuis les anciens chemins
+    d'import. Le comportement de chaque module appartient à sa spec de module, référencée ci-dessous.
 
 Owns:
   ./lib.rs
@@ -16,73 +16,73 @@ References:
   ./context.sdd, ./handlebarshandler.sdd, ./k8smock.sdd, ./ttl_cache.sdd, ./instance_macros.sdd,
     ./instanceservice.sdd, ./instancesystem.sdd, ./instancetenant.sdd, ./jukebox.sdd,
     ./jukebox_file.sdd, ./rhaihandler.sdd, ./tools.sdd, ./vynilpackage.sdd, ./yamlhandler.sdd —
-    one per module declared by this file; each owns its module's behaviour.
-  /linting.sdd — the static-analysis harness whose per-crate `cfg_attr` form these crate
-    attributes carry.
+    un par module déclaré par ce fichier ; chacun porte le comportement de son module.
+  /linting.sdd — le harnais d'analyse statique dont ces attributs de crate portent la forme
+    `cfg_attr` par crate.
 
 Must:
-  Carry exactly the two crate attributes, in order:
+  Porter exactement les deux attributs de crate, dans l'ordre :
     `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]`
     `#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]`
-    Both lints are scoped to not(test), so the `cfg(test)` build runs without them.
-  Declare @context, @handlebarshandler, @k8smock, @ttl_cache, @instance_macros,
+    Les deux lints sont bornés à not(test), le build `cfg(test)` s'exécute donc sans eux.
+  Déclarer @context, @handlebarshandler, @k8smock, @ttl_cache, @instance_macros,
     @instanceservice, @instancesystem, @instancetenant, @jukebox, @jukebox_file, @rhaihandler,
-    @vynilpackage and @yamlhandler as `pub mod`, and @tools as plain `mod tools;` — @crate::tools
-    is crate-internal with no root re-export (@tools carries `pub` fns; see Tasks and
+    @vynilpackage et @yamlhandler en `pub mod`, et @tools en simple `mod tools;` — @crate::tools
+    est interne au crate, sans ré-export à la racine (@tools porte des fn `pub` ; voir Tasks et
     ./tools.sdd).
-  Carry `#[macro_use]` on @instance_macros. The status-condition macros themselves are
-    `#[macro_export]` and owned by ./instance_macros.sdd; the module is declared between the four
-    utility modules and the instance-model modules.
-  Give @Error its identity discipline as written: @Error::OpenSSL, @Error::UnsupportedKeyAlgorithm,
-    @Error::MissingInitVersion, @Error::CleanupJobFailed and @Error::CleanupInProgress embed the
-    structured ids `KEY-OPENSSL-001`, `KEY-ALGO-001`, `INIT-VERSION-001`, `CLEANUP-JOB-001` and
-    `CLEANUP-JOB-002` as literal message prefixes; every other variant relies on its prose
-    prefix; @Error::PasswordSpec and @Error::Core render no id of their own.
-  Render every @Error variant display exactly as the Exposes template; @Error::MethodFailed
-    renders only payloads `{0}` and `{1}`, never the third; only @Error::Core is
-    `#[error(transparent)]`, so it surfaces the @vynil_core::Error message verbatim.
-  Produce @Error::metric_label as @format!("{self:?}").to_lowercase() — the @Debug rendering
-    lowercased, so labels embed variant names and payload text; @Error::Core labels render as
-    lowercased `core(...)` over the inner @Debug, not the inner variant name.
-  Map exactly one @Error variant to each source error through `#[from]` as listed in Exposes;
-    @Error::JsonError is `#[source]`-only, so `?` on a @serde_json::Error can never produce it
-    and it exists solely as explicit construction.
-  Flatten @rhai_err to Display text only: @e.to_string(), then an explicit @drop of the @Error,
-    then the same @String → @Box<@rhai::EvalAltResult> conversion @rhai_err_str performs —
-    @rhai_err(e) and @rhai_err_str applied to the @ToString::to_string of the same error produce
-    the same box, and no variant identity or source chain survives either.
-  Define @Result<T, E = @Error> over @std::result::Result and @RhaiRes<T> as
-    @std::result::Result<@T, @Box<@rhai::EvalAltResult>> — the pre-@Error lane using the same box
-    @Error::RhaiError re-embeds in the opposite direction.
-  Wire-encode @Children, @GlobalPublished and @Published with @serde `rename_all = "camelCase"`
-    and no `skip_serializing_if` and no `deny_unknown_fields`: absent optionals serialize as
-    `null` and unknown input keys are ignored on deserialize.
-  Keep the re-export bindings name-only at crate root, preserving old import paths: getter and
-    setter are exported as a usable pair — @crate::get_client_name resolves through ./context.rs
-    and @crate::set_client_name through @vynil_core — so a caller can wire the core provider by
-    passing this getter to this setter directly from this crate.
-  Pin @DEFAULT_AGENT_IMAGE to the exact value `docker.io/sebt3/vynil-agent:0.7.7` (see Tasks for
-    the drift against the workspace version).
+  Porter `#[macro_use]` sur @instance_macros. Les macros de condition de statut sont elles-mêmes
+    `#[macro_export]` et appartiennent à ./instance_macros.sdd ; le module est déclaré entre les
+    quatre modules utilitaires et les modules du modèle d'instance.
+  Donner à @Error sa discipline d'identité telle qu'écrite : @Error::OpenSSL,
+    @Error::UnsupportedKeyAlgorithm, @Error::MissingInitVersion, @Error::CleanupJobFailed et
+    @Error::CleanupInProgress embarquent les ids structurés `KEY-OPENSSL-001`,
+    `KEY-ALGO-001`, `INIT-VERSION-001`, `CLEANUP-JOB-001` et `CLEANUP-JOB-002` en préfixes
+    littéraux ; les autres s'en tiennent à leur préfixe en prose ; @Error::PasswordSpec et @Error::Core n'en affichent aucun.
+  Rendre l'affichage de chaque variante @Error exactement comme le modèle d'Exposes ;
+    @Error::MethodFailed n'affiche que les payloads `{0}` et `{1}`, jamais le troisième ; seule
+    @Error::Core est `#[error(transparent)]`, elle montre donc le message @vynil_core::Error tel quel.
+  Produire @Error::metric_label comme @format!("{self:?}").to_lowercase() — le rendu @Debug
+    mis en minuscules : les labels embarquent noms de variante et texte des payloads ; les labels
+    @Error::Core s'affichent en `core(...)` minuscules sur le @Debug interne, pas le nom de variante interne.
+  Mapper exactement une variante @Error par erreur source via `#[from]` comme listé dans Exposes ;
+    @Error::JsonError est `#[source]` seulement, donc `?` sur une @serde_json::Error ne peut jamais
+    la produire ; elle n'existe que comme construction explicite.
+  Aplatir @rhai_err au seul texte de Display : @e.to_string(), puis un @drop explicite de l'@Error,
+    puis la même conversion @String → @Box<@rhai::EvalAltResult> que celle de @rhai_err_str —
+    @rhai_err(e) et @rhai_err_str appliqués au @ToString::to_string de la même erreur produisent
+    la même boîte, et aucune identité de variante ni chaîne de source n'y survit.
+  Définir @Result<T, E = @Error> sur @std::result::Result et @RhaiRes<T> comme la forme
+    @std::result::Result<@T, @Box<@rhai::EvalAltResult>> — la voie pré-@Error qui emploie la même
+    boîte que @Error::RhaiError ré-embarque dans le sens inverse.
+  Encoder en wire @Children, @GlobalPublished et @Published avec @serde `rename_all = "camelCase"`
+    sans `skip_serializing_if` ni `deny_unknown_fields` : optionnels absents en `null` et clés
+    inconnues en entrée ignorées à la désérialisation.
+  Garder les bindings de ré-export au seul nom à la racine du crate, en préservant les anciens
+    chemins d'import : getter et setter sont exportés comme une paire utilisable —
+    @crate::get_client_name se résout via ./context.rs et @crate::set_client_name via @vynil_core —
+    un appelant peut donc brancher le provider core en passant ce getter à ce setter depuis ce crate.
+  Épingler @DEFAULT_AGENT_IMAGE à la valeur exacte `docker.io/sebt3/vynil-agent:0.7.7` (voir Tasks
+    pour la dérive vis-à-vis de la version du workspace).
 
 Exposes:
-  @DEFAULT_AGENT_IMAGE — `pub static` of type `&'static str`, value
+  @DEFAULT_AGENT_IMAGE — `pub static` de type `&'static str`, valeur
     `docker.io/sebt3/vynil-agent:0.7.7`.
-  @Error — `pub enum` deriving @thiserror::Error and @Debug; the crate-wide error vocabulary;
-    variants with payload, conversion attribute and display template:
+  @Error — `pub enum` dérivant @thiserror::Error et @Debug ; le vocabulaire d'erreurs du crate ;
+    variantes avec payload, attribut de conversion et modèle d'affichage :
     @Error::SerializationError(@serde_json::Error, `#[from]`) — `SerializationError: {0}`
     @Error::YamlError(@String) — `YamlError: {0}`
     @Error::KubeError(@kube::Error, `#[from]`) — `K8s error: {0}`
     @Error::KubeWaitError(@kube::runtime::wait::Error, `#[from]`) — `K8s wait error: {0}`
     @Error::Elapsed(@tokio::time::error::Elapsed, `#[from]`) — `Elapsed wait error: {0}`
     @Error::FinalizerError(@Box<@kube::runtime::finalizer::Error<Self>>, `#[from]`) —
-      `Finalizer error: {0}`; boxed per the in-file comment because that @kube error embeds
-      @Error itself and the box breaks the cycle
+      `Finalizer error: {0}` ; emboîté selon le commentaire du fichier car cette erreur @kube
+      embarque @Error elle-même et que la boîte brise le cycle
     @Error::HbsTemplateError(@handlebars::TemplateError, `#[from]`) —
       `Registering template failed with error: {0}`
     @Error::HbsRenderError(@handlebars::RenderError, `#[from]`) — `Renderer error: {0}`
     @Error::RhaiError(@Box<@rhai::EvalAltResult>, `#[from]`) — `Rhai script error: {0}`
     @Error::ReqwestError(@reqwest::Error, `#[from]`) — `Reqwest error: {0}`
-    @Error::JsonError(@serde_json::Error, `#[source]` only) — `Json decoding error: {0}`
+    @Error::JsonError(@serde_json::Error, `#[source]` seul) — `Json decoding error: {0}`
     @Error::MethodFailed(@String, @u16, @String) — `{0} query failed: {1}`
     @Error::UnsupportedMethod — `Unsupported method`
     @Error::MissingScript(@std::path::PathBuf) — `Missing script {0}`
@@ -105,146 +105,146 @@ Exposes:
     @Error::CleanupJobFailed(@String) — `CLEANUP-JOB-001 Delete job failed for {0}`
     @Error::CleanupInProgress(@String) — `CLEANUP-JOB-002 Delete job still running for {0}`
     @Error::Other(@String) — `Error: {0}`
-    @Error::Core(@vynil_core::Error, `#[from]`, `#[error(transparent)]`) — inner message verbatim
-  @Error::metric_label — `pub` method taking `&self`, returning @String.
+    @Error::Core(@vynil_core::Error, `#[from]`, `#[error(transparent)]`) — message interne tel quel
+  @Error::metric_label — méthode `pub` prenant `&self` en récepteur, retournant @String.
   @Result — `pub` alias @Result<T, E = @Error> = @std::result::Result<T, E>.
   @RhaiRes — `pub` alias @RhaiRes<T> = @std::result::Result<T, @Box<@rhai::EvalAltResult>>.
   @rhai_err — `pub fn(@Error)` → @Box<@rhai::EvalAltResult>.
   @rhai_err_str — `pub fn(@String)` → @Box<@rhai::EvalAltResult>, `#[must_use]`.
   Modules @context, @handlebarshandler, @k8smock, @ttl_cache, @instance_macros,
     @instanceservice, @instancesystem, @instancetenant, @jukebox, @jukebox_file, @rhaihandler,
-    @vynilpackage, @yamlhandler `pub`; @tools private — behaviour of each owned by the
-    referenced spec.
-  Re-exports at crate root: @get_client_name from ./context.rs; from @vynil_core — @Semver,
+    @vynilpackage, @yamlhandler `pub` ; @tools privé — le comportement de chacun est porté par la
+    spec référencée.
+  Ré-exports à la racine du crate : @get_client_name depuis ./context.rs ; depuis @vynil_core — @Semver,
     @chronohandler (@vynil_core::chrono), @globhandler (@vynil_core::glob), @hasheshandlers
     (@vynil_core::hashes), @httphandler (@vynil_core::http), @httpmock (@vynil_core::http_mock),
-    @k8sgeneric, @k8sraw and @k8sworkload (all three aliasing the one @vynil_core::k8s module),
+    @k8sgeneric, @k8sraw et @k8sworkload (les trois aliasant le seul module @vynil_core::k8s),
     @ed25519handler (@vynil_core::key), @ocihandler, @passwordhandler, @register_k8s_generic,
-    @register_k8s_object, @register_k8s_raw, @s3handler, @semverhandler, @set_client_name and
+    @register_k8s_object, @register_k8s_raw, @s3handler, @semverhandler, @set_client_name et
     @shellhandler (@vynil_core::shell).
-  @Children — derives @Serialize, @Deserialize, @Eq, @PartialEq, @Clone, @Debug and
-    @schemars::JsonSchema; Rust fields @api_version, @kind, @name, @namespace render as wire
-    keys `apiVersion`, `kind`, `name`, `namespace`; @kind and @name are required @String, the
-    other two @Option<@String>.
-  @GlobalPublished — derives @Serialize, @Deserialize, @Eq, @PartialEq, @Clone, @Debug and
-    @schemars::JsonSchema; Rust fields @fqdn (@String, required) and @port (@u32, required)
-    render unchanged as wire keys `fqdn` and `port`.
-  @Published — derives @Serialize, @Deserialize, @Clone, @Debug and @schemars::JsonSchema — no
-    @Eq and no @PartialEq unlike the two above; Rust fields @key (@String, required), @tenant
+  @Children — dérive @Serialize, @Deserialize, @Eq, @PartialEq, @Clone, @Debug et
+    @schemars::JsonSchema ; les champs Rust @api_version, @kind, @name, @namespace rendent les
+    clés wire `apiVersion`, `kind`, `name`, `namespace` ; @kind et @name sont des @String requis, les
+    deux autres des @Option<@String>.
+  @GlobalPublished — dérive @Serialize, @Deserialize, @Eq, @PartialEq, @Clone, @Debug et
+    @schemars::JsonSchema ; les champs Rust @fqdn (@String, requis) et @port (@u32, requis) rendus
+    tels quels en clés wire `fqdn` et `port`.
+  @Published — dérive @Serialize, @Deserialize, @Clone, @Debug et @schemars::JsonSchema — pas
+    @Eq ni @PartialEq contrairement aux deux ci-dessus ; les champs Rust @key (@String, requis), @tenant
     (@Option<@String>), @service (@Option<@GlobalPublished>), @definition (@Option<@Children>)
-    render as wire keys `key`, `tenant`, `service`, `definition`.
+    rendus en clés wire `key`, `tenant`, `service`, `definition`.
 
 Accepts:
-  @rhai_err accepts any @Error by value; @rhai_err_str any @String; @Error::metric_label any
-    @Error receiver.
-  The three wire types deserialize JSON/serde-map objects with the listed camelCase keys,
-    requiring @kind and @name for @Children, @fqdn and @port for @GlobalPublished, and @key for
-    @Published; unknown keys are ignored.
-  This file itself branches on no input — every item is a definition, conversion or binding.
+  @rhai_err accepte toute @Error par valeur ; @rhai_err_str tout @String ; @Error::metric_label
+    tout récepteur @Error.
+  Les trois types wire désérialisent des objets JSON/serde-map avec les clés camelCase listées,
+    exigeant @kind et @name pour @Children, @fqdn et @port pour @GlobalPublished, et @key pour
+    @Published ; les clés inconnues sont ignorées.
+  Ce fichier ne branche sur aucune entrée — chaque item est définition, conversion ou binding.
 
 Returns:
-  @Error::metric_label returns the lowercased @Debug of the receiver, payload text included.
-  @rhai_err and @rhai_err_str return the Rhai error box carrying only the message text.
-  Serializing the wire types renders camelCase keys with `null` for absent optionals; each
-    derives @schemars::JsonSchema so it also contributes a JSON schema.
+  @Error::metric_label retourne le @Debug en minuscules du récepteur, texte des payloads inclus.
+  @rhai_err et @rhai_err_str retournent la boîte d'erreur Rhai ne portant que le texte du message.
+  Sérialiser les types wire rend les clés camelCase avec `null` pour les optionnels absents ;
+    chacun dérive @schemars::JsonSchema et contribue donc aussi un schéma JSON.
 
 Depends on:
-  @vynil_core — pinned `0.7.7` with features `k8s`, `oci`, `s3`, `fs`, `shell`, `password`
-    directly in /common/Cargo.toml (not workspace-inherited): the re-export surface and the
-    @Error::Core variant it makes transparent.
-  The payload crates each wrapped variant names — @kube, @tokio, @handlebars, @rhai, @reqwest,
-    @serde_json, @semver, @argon2, @bcrypt, @base64, @http, @openssl, @std — declared in
-    /common/Cargo.toml; @thiserror `2.0.3` powers the @Error derive; @serde and @schemars power
-    the wire derives.
+  @vynil_core — épinglé `0.7.7` avec les features `k8s`, `oci`, `s3`, `fs`, `shell`, `password`
+    directement dans /common/Cargo.toml (non hérité du workspace) : la surface de ré-export et la
+    variante @Error::Core qu'elle rend transparente.
+  Les crates de payload nommés par chaque variante wrappée — @kube, @tokio, @handlebars, @rhai, @reqwest,
+    @serde_json, @semver, @argon2, @bcrypt, @base64, @http, @openssl, @std — déclarées dans
+    /common/Cargo.toml ; @thiserror `2.0.3` alimente le derive @Error ; @serde et @schemars portent
+    les derives wire.
 
 Tasks:
-  [ ] Cover the display fixation of every variant: template prefixes, the @Error::TestFailure
-      counter format, the @Error::Core and @Error::PasswordSpec passthroughs, and the
-      @Error::MethodFailed payload-drop scenario below.
-  [ ] Cover @Error::metric_label: lowercasing, payload inclusion, and the `core(...)` rendering
-      of @Error::Core.
-  [ ] Cover @rhai_err and @rhai_err_str: box text equals the @Display of the @Error and the two
-      helpers agree on that text.
-  [ ] Cover @Error::JsonError construction: `?` on a @serde_json::Error yields
-      @Error::SerializationError only, and @Error::JsonError keeps its source reachable through
+  [ ] Couvrir la fixation d'affichage de chaque variante : préfixes des modèles, le format du
+      compteur @Error::TestFailure, les passe-plats @Error::Core et @Error::PasswordSpec, et le
+      scénario de drop de payload @Error::MethodFailed ci-dessous.
+  [ ] Couvrir @Error::metric_label : minuscules, inclusion des payloads, et le rendu
+      `core(...)` de @Error::Core.
+  [ ] Couvrir @rhai_err et @rhai_err_str : le texte de la boîte égale le @Display de l'@Error et
+      les deux helpers concordent sur ce texte.
+  [ ] Couvrir la construction de @Error::JsonError : `?` sur une @serde_json::Error donne
+      @Error::SerializationError seulement, et @Error::JsonError garde sa source joignable via
       @Error::source.
-  [ ] Cover the wire shape of @Children, @GlobalPublished and @Published: camelCase keys, `null`
-      for absent optionals, unknown keys ignored, required-field rejection.
-  [ ] Assert the variant vocabulary itself (count and names) so a renamed or dropped variant
-      fails a test, once the decisions below settle which variants are durable.
-  [?] @DEFAULT_AGENT_IMAGE stays `docker.io/sebt3/vynil-agent:0.7.7` while the workspace version
-      in /Cargo.toml is `0.7.10`, against the root rule that each crate's image stays consistent
-      with the workspace version. Decide later whether the tag locks to published releases and is
-      bumped separately or must track the workspace version.
-  [?] @Error::MethodFailed is constructed nowhere in the workspace and its third @String payload
-      never reaches the display message. Decide later whether the template gains `{2}` or the
-      variant is removed.
-  [?] @Error::PasswordSpec carries no id and has no construction site in the workspace today.
-      Decide later whether it takes a structured id and keeps its place.
-  [?] Only the five variants named in Must carry structured stable ids; the rest rely on unique
-      prose prefixes, and @Error::Core delegates identity to the opaque @vynil_core::Error
-      message. Decide later whether prose prefixes satisfy the project stable-id rule or the
-      `KEY-*`/`INIT-*`/`CLEANUP-*` scheme must be extended across the vocabulary.
-  [?] The `mod tools;` declaration is private while ./tools.rs marks its fns `pub` — the same
-      open decision recorded in ./tools.sdd; frozen as reachable only through @crate::tools until
-      decided.
-  [?] @Published derives neither @Eq nor @PartialEq while @Children and @GlobalPublished derive
-      @Eq. Decide later whether comparison-free is the intended status of the published-service
-      wire type.
-  [?] @k8sgeneric, @k8sraw and @k8sworkload alias the same @vynil_core::k8s module three times.
-      Decide later whether the split names are durable API or collapse to one alias.
-  [?] @Error::metric_label embeds full @Debug payload text, so the `error` label the operator
-      metrics emit carries unbounded values such as paths, job names and messages. Decide later
-      whether the label must stay variant-only.
+  [ ] Couvrir la forme wire de @Children, @GlobalPublished et @Published : clés camelCase, `null`
+      pour les optionnels absents, clés inconnues ignorées, rejet des champs requis.
+  [ ] Assertir le vocabulaire des variantes lui-même (nombre et noms) afin qu'une variante
+      renommée ou supprimée fasse échouer un test, une fois les décisions ci-dessous tranchées.
+  [?] @DEFAULT_AGENT_IMAGE reste `docker.io/sebt3/vynil-agent:0.7.7` alors que la version du
+      workspace dans /Cargo.toml est `0.7.10`, contre la règle racine voulant que l'image de
+      chaque crate reste cohérente avec la version du workspace. Décider plus tard si le tag se
+      verrouille sur les releases publiées et se pousse à part, ou doit suivre la version du workspace.
+  [?] @Error::MethodFailed n'est construite nulle part dans le workspace et son troisième payload
+      @String n'atteint jamais le message affiché. Décider plus tard si le modèle gagne `{2}` ou
+      si la variante est supprimée.
+  [?] @Error::PasswordSpec ne porte aucun id et n'a aucun site de construction dans le workspace
+      aujourd'hui. Décider plus tard si elle prend un id structuré et garde sa place.
+  [?] Seules les cinq variantes nommées dans Must portent des ids stables structurés ; les autres
+      comptent sur des préfixes en prose uniques, et @Error::Core délègue son identité au message
+      opaque de @vynil_core::Error. Décider plus tard si les préfixes en prose satisfont la règle
+      d'id stable du projet ou si le schéma `KEY-*`/`INIT-*`/`CLEANUP-*` doit s'étendre au vocabulaire.
+  [?] La déclaration `mod tools;` est privée alors que ./tools.rs marque ses fn `pub` — la même
+      décision ouverte consignée dans ./tools.sdd ; gelée comme n'atteignable que via @crate::tools
+      tant que non tranchée.
+  [?] @Published ne dérive ni @Eq ni @PartialEq alors que @Children et @GlobalPublished dérivent
+      @Eq. Décider plus tard si l'absence de comparaison est le statut voulu du type wire service
+      publié.
+  [?] @k8sgeneric, @k8sraw et @k8sworkload aliasent trois fois le même module @vynil_core::k8s.
+      Décider plus tard si les noms scindés sont une API durable ou doivent fondre en un seul alias.
+  [?] @Error::metric_label embarque le texte @Debug complet des payloads, si bien que le label
+      `error` des métriques opérateur porte des valeurs non bornées : chemins, noms de jobs,
+      messages. Décider plus tard si le label doit rester limité à la variante.
 
 Done when:
-  Every Scenario above has a passing mapped test in `common`, the Tasks coverage gaps are closed,
-    and `cargo test -p common` with clippy and fmt are green.
+  Chaque Scenario ci-dessus a un test mappé passant dans `common`, les trous de couverture des
+    Tasks sont comblés, et `cargo test -p common` avec clippy et fmt sont verts.
 
 Scenario: Display messages are fixed templates
-  Given each @Error variant constructed with payload text
-  When its @Display renders
-  Then the text is exactly the Exposes template with payloads interpolated, @Error::MethodFailed
-    still drops the third payload, and @Error::Core and @Error::PasswordSpec re-render their
-    inner text unchanged
-  No mapped test exists.
+  Given chaque variante @Error construite avec un texte de payload
+  When son @Display s'affiche
+  Then le texte est exactement le modèle d'Exposes avec payloads interpolés, @Error::MethodFailed
+    continue de dropper le troisième payload, et @Error::Core et @Error::PasswordSpec rendent leur
+    texte interne inchangé
+  Aucun test mappé n'existe.
 
 Scenario: metric_label lowercases the Debug rendering
-  Given @Error::MissingScript holding a @std::path::PathBuf `/etc/vynil/script.rhai`
-  When @Error::metric_label runs
-  Then the label is the @Debug form lowercased, `missingscript("/etc/vynil/script.rhai")`
-  And a @Error::Core receiver renders as lowercased `core(...)` over the inner @Debug rather than
-    a @vynil_core variant name
-  No mapped test exists.
+  Given @Error::MissingScript tenant un @std::path::PathBuf `/etc/vynil/script.rhai`
+  When @Error::metric_label s'exécute
+  Then le label est la forme @Debug en minuscules, `missingscript("/etc/vynil/script.rhai")`
+  And un récepteur @Error::Core s'affiche en `core(...)` en minuscules sur le @Debug interne plutôt que
+    le nom d'une variante @vynil_core
+  Aucun test mappé n'existe.
 
 Scenario: rhai_err flattens the typed error to runtime text
-  Given @Error::CleanupInProgress holding `job-1`
-  When @rhai_err maps it into the Rhai lane
-  Then the returned @Box<@rhai::EvalAltResult> carries exactly `CLEANUP-JOB-002 Delete job still running for job-1`
-  And no @Error variant identity or source chain is recoverable from the box
-  And @rhai_err_str on that same string produces the same box
-  No mapped test exists.
+  Given @Error::CleanupInProgress tenant `job-1`
+  When @rhai_err la projette dans la voie Rhai
+  Then la @Box<@rhai::EvalAltResult> retournée porte exactement `CLEANUP-JOB-002 Delete job still running for job-1`
+  And aucune identité de variante @Error ni chaîne de source n'est récupérable depuis la boîte
+  And @rhai_err_str sur cette même chaîne produit la même boîte
+  Aucun test mappé n'existe.
 
 Scenario: Wire types render camelCase with null for absent optionals
-  Given a @Children with @api_version and @namespace set to @Option::None
-  When it serializes
-  Then the keys are `apiVersion`, `kind`, `name`, `namespace` and the absent ones carry `null`
-  And deserializing an object without @kind or @name fails @Children, one without @fqdn or @port
-    fails @GlobalPublished, one without @key fails @Published, and unknown keys are ignored
-    everywhere
-  No mapped test exists.
+  Given un @Children dont @api_version et @namespace valent @Option::None
+  When il se sérialise
+  Then les clés sont `apiVersion`, `kind`, `name`, `namespace` et les absentes portent `null`
+  And désérialiser un objet sans @kind ou @name fait échouer @Children, sans @fqdn ou @port fait
+    échouer @GlobalPublished, sans @key fait échouer @Published ; les clés inconnues sont ignorées
+    partout
+  Aucun test mappé n'existe.
 
 Scenario: Only from-wrapped variants autoconvert
-  Given a @serde_json::Error propagating through `?` into a @crate::Result
-  When it converts
-  Then it becomes @Error::SerializationError, because that is the variant generated from
-    @serde_json::Error, and @Error::JsonError appears only through explicit construction with
-    its @serde_json::Error reachable via @Error::source
-  No mapped test exists.
+  Given une @serde_json::Error qui se propage via `?` dans un @crate::Result
+  When elle se convertit
+  Then elle devient @Error::SerializationError, car c'est la variante générée depuis
+    @serde_json::Error, et @Error::JsonError n'apparaît que par construction explicite, son
+    @serde_json::Error restant joignable via @Error::source
+  Aucun test mappé n'existe.
 
 Example:
   `@Error::CleanupJobFailed("job-1")` displays `CLEANUP-JOB-001 Delete job failed for job-1`
-  `@Error::MethodFailed("GET", 500, "detail")` displays `GET query failed: 500` — `detail`
-    never appears
-  `@Error::Other("boom")` displays `Error: boom`; the @Error::metric_label of
-    @Error::UnsupportedMethod is `unsupportedmethod`
+  `@Error::MethodFailed("GET", 500, "detail")` affiche `GET query failed: 500` — `detail`
+    n'apparaît jamais
+  `@Error::Other("boom")` affiche `Error: boom` ; le @Error::metric_label de
+    @Error::UnsupportedMethod est `unsupportedmethod`
