@@ -1,290 +1,290 @@
-# File spec for ./mod.rs — the lint MODEL and collector core of the ./ linting tree.
-# The pipeline order, CLI flags and the exit-1 verdict belong to ./../package/lint.sdd
-# (driver — reference shapes, never restate); rule semantics belong to the pending
-# sibling specs ./config.sdd, ./hbs_checker.sdd, ./rhai_checker.sdd.
-# Grouping note: this spec covers mod.rs only; the three declared submodules get their
-# own same-basename specs next, so no multi-file grouping is applied here.
+# Spéc de fichier pour ./mod.rs — le MODEL de lint et le noyau collecteur de l'arbre de linting ./.
+# L'ordre du pipeline, les flags CLI et le verdict exit-1 appartiennent à ./../package/lint.sdd
+# (driver — formes de référence, jamais reformulées) ; la sémantique des règles appartient aux
+# specs sœurs en attente ./config.sdd, ./hbs_checker.sdd, ./rhai_checker.sdd.
+# Note de regroupement : cette spec couvre uniquement mod.rs ; les trois sous-modules déclarés
+# auront leurs propres specs de même basename ensuite, donc aucun regroupement multi-fichiers ici.
 
 Spec: LintingModel
 
 Platform: Rust
 
 Purpose:
-  Own the shared lint vocabulary: the severity ladder @LintLevel, the finding value
-    object @LintFinding, the accumulating @LintResultCollector (verdict probe, relative-path
-    rebasing, filtered text and JSON report framing, level-less JUnit rollup), the raw-YAML
-    line locator @find_section_key_line_numbers and its `options` wrapper
-    @find_option_line_numbers, and the module tree that re-exports @LintConfig and
-    @parse_inline_disables out of ./config.rs. Every rule code, level assignment and
-    finding-producing branch lives at the producer call sites (driver or checkers); this
-    file defines only the shapes they fill and the renderings they print.
+  Possède le vocabulaire partagé du lint : l'échelle de sévérité @LintLevel, l'objet
+    valeur @LintFinding, le @LintResultCollector accumulateur (sonde de verdict, rebasing
+    des chemins relatifs, cadrage des rapports texte et JSON filtrés, agrégat JUnit sans
+    niveau), le localisateur de lignes YAML brut @find_section_key_line_numbers, son
+    wrapper `options` @find_option_line_numbers, et l'arbre de modules qui ré-exporte
+    @LintConfig et @parse_inline_disables depuis ./config.rs. Chaque code de règle,
+    affectation de niveau et branche émettant un finding vit chez les sites d'appel
+    producteurs (driver ou checkers) ; ce fichier ne définit que les formes remplies.
 
 References:
-  ./../package/lint.sdd — the driver and consumer: it calls @new, @add, @extend,
-    @has_errors, @prefix_files, @to_text, @to_json and @to_junit exactly once per run path,
-    and delegates the report framing (level tag, tally, JSON fields) plus the level-gate
-    arithmetic to this file; `--level` values arrive pre-mapped (All → @Info, Warn → @Warn,
-    Error → @Error) by the driver's @level_filter_to_lint_level, and the driver's
-    `--format` flag selects between `@to_text` and `@to_json`.
-  ./config.sdd — sibling spec pending (next to author): @LintConfig::load and
-    @resolve_level plus @parse_inline_disables behaviour; this file re-exports those two
-    names, and @resolve_level output feeding into built findings is its only consumption
-    shape frozen here.
-  ./hbs_checker.sdd and ./rhai_checker.sdd — sibling specs pending (next to author): both
-    import @LintFinding, @LintLevel, @LintConfig and @parse_inline_disables from
-    @crate::linting, return @Vec of findings from @check_file, and the hbs side issues one
-    shared @find_option_line_numbers call; their rule codes and levels are owned there.
-  ./../package/mod.sdd — the trap around the driver's @Err (exit 1); none of it here.
+  ./../package/lint.sdd — le driver et consommateur : il appelle @new, @add, @extend,
+    @has_errors, @prefix_files, @to_text, @to_json et @to_junit exactement une fois par
+    chemin d'exécution, et délègue à ce fichier le cadrage du rapport (tag de niveau,
+    tally, champs JSON) plus l'arithmétique du niveau-filtre ; les valeurs `--level`
+    arrivent pré-cartographiées (All → @Info, Warn → @Warn, Error → @Error) par
+    @level_filter_to_lint_level du driver, et son flag `--format` choisit entre `@to_text` et `@to_json`.
+  ./config.sdd — spec sœur en attente (à rédiger ensuite) : @LintConfig::load et
+    @resolve_level plus le comportement de @parse_inline_disables ; ce fichier ré-exporte
+    ces deux noms, et la sortie de @resolve_level alimentant les findings construits est
+    sa seule forme de consommation figée ici.
+  ./hbs_checker.sdd et ./rhai_checker.sdd — specs sœurs en attente (à rédiger ensuite) :
+    les deux importent @LintFinding, @LintLevel, @LintConfig et @parse_inline_disables depuis
+    @crate::linting, retournent un @Vec de findings depuis @check_file, et le côté hbs émet
+    un seul appel partagé @find_option_line_numbers ; codes de règles et niveaux possédés là-bas.
+  ./../package/mod.sdd — le piège autour de l'@Err (exit 1) du driver ; rien de tout cela ici.
 
 Depends on:
-  ./config.rs — the only submodule this file content-depends on (through the @pub use
-    re-export); its spec is ./config.sdd, pending.
-  @serde — derives on @LintLevel and @LintFinding.
-  @serde_json — the @json macro and @to_string_pretty drive the JSON rendering.
-  @junit_report — @ReportBuilder, @TestSuiteBuilder, @TestCase::failure and
-    @Duration::seconds as the only used paths of that crate.
+  ./config.rs — le seul sous-module dont ce fichier dépend en contenu (via la ré-export
+    @pub use) ; sa spec est ./config.sdd, en attente.
+  @serde — derives sur @LintLevel et @LintFinding.
+  @serde_json — le macro @json et @to_string_pretty pilotent le rendu JSON.
+  @junit_report — @ReportBuilder, @TestSuiteBuilder, @TestCase::failure et
+    @Duration::seconds comme seuls chemins utilisés de cette crate.
   @std — @fmt::Display, @fmt::Write, @path::PathBuf, @path::Path, @fs::read_to_string,
     @str::FromStr, @collections::BTreeMap.
-  The @str::parse and @serde deserialization paths of @LintLevel are exercised from the
-    ./config.rs YAML load lane, nowhere else in-crate.
+  Les chemins @str::parse et de désérialisation @serde de @LintLevel sont exercés depuis la
+    voie de chargement YAML de ./config.rs, nulle part ailleurs dans la crate.
 
 Exposes:
-  @LintLevel — @pub @Copy enum with exactly three variants in this declaration order:
-    @Info, @Warn, @Error; derives @Clone, @Debug, @PartialEq, @Eq, @PartialOrd, @Ord plus
-    @Serialize and @Deserialize with NO rename attributes, so the derived @Ord ranks
-    @Info < @Warn < @Error (discriminants 0 / 1 / 2 by declaration order) and serde speaks
-    the identifiers verbatim in both directions: `"Info"`, `"Warn"`, `"Error"`,
-    case-sensitive.
-  @Display for @LintLevel — the @Error variant prints `ERROR`, @Warn prints `WARN`,
-    @Info prints `INFO` (uppercase, 4–5 chars).
-  @FromStr for @LintLevel — @Err type @String; accepts any ASCII-case spelling of the
-    literals `error`, `warn`, `info` (whole-string lowercase compare, no trimming, so a
-    trailing space fails), otherwise @Err with `Unknown lint level: {s}` carrying the
-    caller's original spelling. Production-dead today (Tasks).
-  @LintFinding — @pub @Clone and @Debug struct, @Serialize plus @Deserialize; fields in
-    declaration order: @rule of @String (the `family/name` code — free-form text as far as
-    this file cares, no registry here), @level of @LintLevel, @file of @path::PathBuf
-    (real or virtual path as produced), @line of @Option wrapping @usize (`@None`
-    tolerated; `Some` values are 1-based by locator convention), @message of @String.
-    No @Ord — findings never sort.
-  @LintResultCollector — @pub struct with one private @Vec field of findings and NO public
-    accessor: raw findings leave only through the renderings below. @new is a @pub @const
-    fn; @add and @extend append; plus @has_errors, @prefix_files, @to_text, @to_json,
-    @to_junit; the manual @Default impl delegates to @new (same empty state).
-  @find_section_key_line_numbers taking @yaml_path and @section — @pub text scanner
-    returning @BTreeMap keyed by @String against @usize.
-  @find_option_line_numbers taking @yaml_path — @pub thin wrapper calling the scanner with
-    the section literal `options`; `options` is its only in-crate argument (Tasks).
-  Re-exports at the @crate::linting path: @LintConfig and @parse_inline_disables from
-    ./config.rs — both checker import sites bind through these, not through the config path.
-  @pub submodule declarations: @config, @hbs_checker, @rhai_checker (own specs pending).
+  @LintLevel — enum @pub @Copy avec exactement trois variantes dans cet ordre de déclaration :
+    @Info, @Warn, @Error ; derive @Clone, @Debug, @PartialEq, @Eq, @PartialOrd, @Ord ainsi que
+    @Serialize et @Deserialize sans AUCUN attribut rename, donc l'@Ord dérivé classe
+    @Info < @Warn < @Error (discriminants 0 / 1 / 2 par ordre de déclaration) et serde parle
+    les identifiants verbatim dans les deux sens : `"Info"`, `"Warn"`, `"Error"`,
+    sensible à la casse.
+  @Display pour @LintLevel — la variante @Error imprime `ERROR`, @Warn imprime `WARN`,
+    @Info imprime `INFO` (majuscules, 4–5 caractères).
+  @FromStr pour @LintLevel — type @Err @String ; accepte n'importe quelle casse ASCII des
+    littéraux `error`, `warn`, `info` (comparaison lowercase de la chaîne entière, sans trim,
+    donc un espace final échoue), sinon @Err avec `Unknown lint level: {s}` portant
+    l'orthographe d'origine de l'appelant. Mort en production aujourd'hui (Tasks).
+  @LintFinding — struct @pub @Clone et @Debug, @Serialize ainsi que @Deserialize ; champs dans
+    l'ordre de déclaration : @rule de type @String (le code `family/name` — texte libre
+    autant que ce fichier s'en soucie, pas de registre ici), @level de type @LintLevel,
+    @file de type @path::PathBuf (chemin réel ou virtuel tel que produit), @line de type
+    @Option encapsulant @usize (`@None` toléré ; valeurs `Some` en base 1 par convention
+    du localisateur), @message de type @String. Pas d'@Ord — les findings ne trient jamais.
+  @LintResultCollector — struct @pub avec un seul champ @Vec privé de findings et AUCUN
+    accesseur public : les findings bruts ne sortent que par les rendus ci-dessous. @new est
+    un @pub @const fn ; @add et @extend ajoutent ; plus @has_errors, @prefix_files,
+    @to_text, @to_json, @to_junit ; l'impl @Default manuelle délègue à @new (même état vide).
+  @find_section_key_line_numbers prenant @yaml_path et @section — scanner texte @pub
+    retournant un @BTreeMap indexé par @String vers @usize.
+  @find_option_line_numbers prenant @yaml_path — wrapper @pub fin appelant le scanner avec
+    le littéral de section `options` ; `options` est son seul argument in-crate (Tasks).
+  Ré-exports au chemin @crate::linting : @LintConfig et @parse_inline_disables depuis
+    ./config.rs — les deux sites d'import des checkers se lient via ceux-ci, pas via le chemin config.
+  Déclarations @pub de sous-modules : @config, @hbs_checker, @rhai_checker (leurs specs propres en attente).
 
 Accepts:
-  From @add and @extend: producer-built @LintFinding values — nothing is validated, so
-    unknown rule strings, `@None` lines and absolute files all flow through.
-  From @to_text and @to_json: one @LintLevel floor built by the caller's mapping; it gates
-    display only.
-  From @prefix_files: a base @path::Path joined onto the relative finding files.
-  From the locators: a path to raw YAML text on disk; the flow form `options: {…}` and the
-    block form both open the section, comment and blank traffic is tolerated.
-  From @to_junit, @has_errors, @new, @Default: nothing.
+  Depuis @add et @extend : des @LintFinding construits par les producteurs — rien n'est validé,
+    donc des chaînes de règles inconnues, des lignes `@None` et des fichiers absolus passent tels quels.
+  Depuis @to_text et @to_json : un plancher @LintLevel construit par la cartographie de
+    l'appelant ; il ne filtre que l'affichage.
+  Depuis @prefix_files : une base @path::Path jointe aux fichiers relatifs des findings.
+  Depuis les localisateurs : un chemin vers du texte YAML brut sur disque ; la forme flux
+    `options: {…}` et la forme bloc ouvrent toutes deux la section, commentaires et vides tolérés.
+  Depuis @to_junit, @has_errors, @new, @Default : rien.
 
 Returns:
-  @has_errors prints `true` iff `@any` finding satisfies `f.level` equal to the @Error
-    variant — an equality test, so @Warn and @Info never block; `false` on an empty
-    collector.
-  @to_text and @to_json return owned report @String per the Must framing entries (filter
-    applied to finding blocks and array, footer and summary never).
-  @to_junit returns the JUnit XML @String over the FULL set.
-  The locators return a @BTreeMap ordered lexicographically by key, value = the key line's
-    1-based number; empty map when the file cannot be read.
-  @FromStr returns either the matching variant or the @String error above.
+  @has_errors renvoie `true` ssi `@any` finding satisfait `f.level` égal à la variante
+    @Error — un test d'égalité, donc @Warn et @Info ne bloquent jamais ; `false` sur un
+    collecteur vide.
+  @to_text et @to_json retournent un @String de rapport possédé selon les entrées de cadrage
+    de Must (filtre appliqué aux blocs et tableau de findings, jamais au pied de page ni summary).
+  @to_junit retourne le @String XML JUnit sur l'ensemble COMPLET.
+  Les localisateurs retournent un @BTreeMap ordonné lexicographiquement par clé, valeur =
+    le numéro de ligne de la clé en base 1 ; carte vide quand le fichier ne peut être lu.
+  @FromStr retourne soit la variante correspondante, soit l'erreur @String ci-dessus.
 
 Raises:
-  @to_junit @panic at exactly two documented sites (the doc `# Panics` header): an
-    @write_xml failure yields `failed to write JUnit XML: {e}`; non-UTF-8 XML bytes yield
-    `JUnit XML is not valid UTF-8: {e}`. Both are argued unreachable for in-memory finding
-    data yet remain live panics.
-  @to_json on a serde failure yields the empty @String via @unwrap_or_default — no error,
-    an empty printed report (Tasks).
-  Everything else is infallible: guarded IO only, zero @unwrap and zero @expect calls, no
-    indexing, and line math through @saturating_add. The only non-panicking fallbacks are
-    `@unwrap_or("unknown")` inside @to_junit (unreachable, Tasks) and @unwrap_or_default in
-    @to_json.
+  @to_junit @panic à exactement deux sites documentés (l'en-tête de doc `# Panics`) : un
+    échec de @write_xml produit `failed to write JUnit XML: {e}` ; des octets XML non UTF-8
+    produisent `JUnit XML is not valid UTF-8: {e}`. Les deux sont argués inatteignables
+    pour des données de findings en mémoire mais restent des panics actifs.
+  @to_json sur un échec serde produit le @String vide via @unwrap_or_default — pas d'erreur,
+    un rapport imprimé vide (Tasks).
+  Tout le reste est infaillible : IO gardé, zéro @unwrap et zéro @expect, pas d'indexage,
+    et arithmétique de lignes via @saturating_add. Les seuls replis sans panic sont
+    `@unwrap_or("unknown")` dans @to_junit (inatteignable, Tasks) et @unwrap_or_default
+    dans @to_json.
 
 Handles:
-  `@line` of @None — text and JSON render the file with no `:` line suffix, JSON field
-    carries `null`.
-  Absolute finding files — @prefix_files leaves them untouched.
-  Rules with no `/` — @to_junit files them under a suite named for the whole rule string.
-  Missing or unreadable YAML in either locator — a silent empty map, so callers keep
-    `@None` line findings.
-  Duplicate keys inside a scanned section — the map's LATER line wins because @insert
-    overwrites; the lexicographic map order stays unrelated to file order.
-  Nested maps under a scanned key — lines deeper than the first observed key indent
-    contribute no entry but still participate in the end-the-block indent test.
+  `@line` à @None — texte et JSON rendent le fichier sans suffixe `:` de ligne, le champ
+    JSON porte `null`.
+  Fichiers de findings absolus — @prefix_files les laisse intouchés.
+  Règles sans `/` — @to_junit les range sous une suite nommée de la chaîne de règle entière.
+  YAML manquant ou illisible dans un localisateur — une carte vide silencieuse, donc les
+    appelants gardent des findings de ligne `@None`.
+  Clés dupliquées dans une section scannée — la ligne PLUS LOIN de la carte gagne car
+    @insert écrase ; l'ordre lexicographique de la carte reste sans rapport avec le fichier.
+  Cartes imbriquées sous une clé scannée — les lignes plus profondes que le premier indent
+    de clé observé n'apportent aucune entrée mais participent au test d'indent de fin de bloc.
 
 Must:
-  # Severity ladder (the load-bearing order)
-  The display gate is `f.level >= level_filter` on the derived @Ord — exact predicate:
-    filter @Info lets `Info, Warn, Error` pass; filter @Warn lets `Warn, Error` pass and
-    suppresses `Info`; filter @Error lets `Error` alone pass.
-  The blocking predicate stays equality against @Error (@has_errors); the filter value never
-    reaches it — display and verdict are independent lanes, matching the driver's
-    "display-only `--level`" freeze.
-  # Order and set semantics
-  Zero dedup, zero sorting, zero mutation of levels anywhere in this file: @add and
-    @extend append, @to_text and @to_json walk the @Vec in insertion order, so cross-rule
-    and cross-checker interleaving follows the driver's call order (frozen there). The only
-    re-map is @to_junit, which changes grouping but never within-suite content order.
-  This file defines NO rule-code registry: the rule code families observed across the tree
-    (`package/…`, `hbs/…`, `rhai/…`), their levels and enable/disable policy are producer
-    call-site literals; @to_junit only splits the first `/`-segment.
-  # Text framing (@to_text) — the rendering the driver delegates here
-  Per DISPLAYED finding, three lines: `[`, the level @Display string at minimum width 5
-    left-aligned, `] `, the rule, exactly two spaces, then `file:line` (bare `file` when
-    @None), newline; then exactly eight spaces plus the raw message, newline; then an empty
-    line. The tags therefore print as `[ERROR]`, `[WARN ]` and `[INFO ]`.
-  The footer always prints, even over zero displayed findings: `Résultat : N erreurS,
-    M warning` where S is `s` iff N is not 1, and the word `warning` never pluralizes; N
-    and M count ALL stored findings (full set, filter ignored) and @Info appears nowhere
-    in it.
-  # JSON framing (@to_json) — the --format json wire names
-  A pretty-printed object with exactly two top-level keys: `findings`, the array of the
-    DISPLAYED findings in insertion order, each object carrying the @LintFinding fields in
-    declaration order — `rule`, `level` (string `"Info"`, `"Warn"` or `"Error"`), `file`,
-    `line` (positive integer or `null`), `message` — and `summary`, the object
-    `{"errors": N, "warnings": M}` counted over the FULL set (same unfiltered semantics as
-    the text footer; @Info uncounted).
-  # JUnit rollup (@to_junit)
-  No level filter and no footer: every stored finding, @Info and @Warn included, becomes a
-    failure test case, and @file plus @line are dropped entirely.
-  Grouping: the suite name is the rule text before the first `/` (the whole rule when no
-    `/` exists), suites land in a @BTreeMap so they emit in lexicographic order, and cases
-    within a suite keep insertion order; the case name is the full rule (duplicates
-    allowed), @Duration::seconds(0) always, the failure type string is `lint`, and the
-    failure content is @message.
-  # Path rebasing (@prefix_files)
-  A finding whose @file is relative per @is_relative is rewritten to `base.join(file)`;
-    absolute ones pass through untouched; the rewrite is uniform over real files and the
-    driver's virtual `package.yaml#…` identities, so it can create OS paths that never
-    exist. A relative base keeps findings relative and a second call prepends again (not
-    idempotent; the driver single-calls it per run path, Tasks).
-  # Raw-YAML line locators (best-effort text scans, never parse YAML)
-  @find_section_key_line_numbers opens at the FIRST line whose left-trimmed text is exactly
-    `{section}:` or starts with `{section}: `; that header line's indent anchors the section.
-    The first content line after the header fixes a single key indent, and entries are
-    recorded ONLY from lines at exactly that indent — deeper (nested map) or shallower-yet-
-    still-inside lines contribute no entry.
-  The scanned block ends at the first content line whose indent is ≤ the header indent
-    (loop break), so exactly one section instance per file is scanned; blank and `#` comment
-    lines are skipped everywhere and never touch the indent bookkeeping.
-  A key is the run before the first `:` left-trimmed (quotes preserved), empty keys are
-    skipped, each kept key maps to its own 1-based line number via @saturating_add.
-    @find_option_line_numbers is precisely this against section `options`; the in-crate
-    consumers are the driver's @check_options and the unused-option report of
-    ./hbs_checker.rs (missing map key there means a finding with a @None line).
-  @config.rs seam frozen here: `override_` level values in `.vynil-lint.yaml` must be
-    spelled `Info`, `Warn`, `Error`, because @LintLevel has no serde rename, so a lowercase
-    level in the YAML rejects the WHOLE file back to defaults via the ./config.rs load lane
-    — while @Display prints uppercase words and @FromStr accepts any case of the lowercase
-    words: two separate case regimes on one field (Tasks).
+  # Échelle de sévérité (l'ordre porteur)
+  La porte d'affichage est `f.level >= level_filter` sur l'@Ord dérivé — prédicat exact :
+    le filtre @Info laisse passer `Info, Warn, Error` ; le filtre @Warn laisse passer
+    `Warn, Error` et supprime `Info` ; le filtre @Error ne laisse passer qu'`Error`.
+  Le prédicat bloquant reste l'égalité contre @Error (@has_errors) ; la valeur de filtre ne
+    l'atteint jamais — affichage et verdict sont des voies indépendantes, conformément au gel
+    du driver « `--level` d'affichage uniquement ».
+  # Ordre et sémantique d'ensemble
+  Zéro déduplication, zéro tri, zéro mutation de niveaux où que ce soit dans ce fichier : @add
+    et @extend ajoutent, @to_text et @to_json parcourent le @Vec dans l'ordre d'insertion, donc
+    l'entrelacement inter-règles et inter-checkers suit l'ordre d'appel du driver (figé là-bas).
+    Le seul réaménagement est @to_junit, qui change le groupement mais jamais l'ordre interne.
+  Ce fichier ne définit AUCUN registre de codes de règle : les familles de codes observées
+    dans l'arbre (`package/…`, `hbs/…`, `rhai/…`), leurs niveaux et leur politique
+    activation/désactivation sont des littéraux producteurs ; @to_junit ne découpe que `/`.
+  # Cadrage texte (@to_text) — le rendu que le driver délègue ici
+  Par finding AFFICHÉ, trois lignes : `[`, la chaîne @Display du niveau à largeur minimale 5
+    alignée à gauche, `] `, la règle, exactement deux espaces, puis `file:line` (`file` seul
+    quand @None), newline ; puis exactement huit espaces plus le message brut, newline ; puis
+    une ligne vide. Les tags s'impriment donc `[ERROR]`, `[WARN ]` et `[INFO ]`.
+  Le pied de page s'imprime toujours, même sur zéro finding affiché : `Résultat : N erreurS,
+    M warning` où S est `s` ssi N n'est pas 1, et le mot `warning` ne se pluralise jamais ;
+    N et M comptent TOUS les findings stockés (ensemble complet, filtre ignoré) et @Info
+    n'apparaît nulle part dedans.
+  # Cadrage JSON (@to_json) — les noms de fil du --format json
+  Un objet pretty-printed avec exactement deux clés de premier niveau : `findings`, le
+    tableau des findings AFFICHÉS dans l'ordre d'insertion, chaque objet portant les champs
+    @LintFinding dans l'ordre de déclaration — `rule`, `level` (chaîne `"Info"`, `"Warn"` ou
+    `"Error"`), `file`, `line` (entier positif ou `null`), `message` — et `summary`, l'objet
+    `{"errors": N, "warnings": M}` compté sur l'ensemble COMPLET (mêmes sémantiques non
+    filtrées que le pied de page texte ; @Info non compté).
+  # Agrégat JUnit (@to_junit)
+  Pas de filtre de niveau ni de pied de page : chaque finding stocké, @Info et @Warn inclus,
+    devient un cas de test en échec, et @file comme @line sont entièrement supprimés.
+  Groupement : le nom de suite est le texte de la règle avant le premier `/` (la règle
+    entière quand aucun `/` n'existe), les suites atterrissent dans un @BTreeMap donc elles
+    s'émettent en ordre lexicographique, et les cas d'une suite gardent l'ordre d'insertion ;
+    le nom du cas est la règle complète (duplicates permis), @Duration::seconds(0) toujours,
+    la chaîne de type d'échec est `lint`, et le contenu d'échec est @message.
+  # Rebasing de chemins (@prefix_files)
+  Un finding dont @file est relatif selon @is_relative est réécrit en `base.join(file)` ;
+    les absolus passent intouchés ; la réécriture est uniforme sur les fichiers réels et les
+    identités virtuelles `package.yaml#…` du driver, donc elle peut créer des chemins OS qui
+    n'existeront jamais. Une base relative garde les findings relatifs et un second appel
+    préfixe à nouveau (non idempotent ; le driver l'appelle une fois par chemin d'exécution, Tasks).
+  # Localisateurs de lignes YAML brut (scans texte best-effort, ne parsent jamais le YAML)
+  @find_section_key_line_numbers ouvre à la PREMIÈRE ligne dont le texte tronqué à gauche est
+    exactement `{section}:` ou commence par `{section}: ` ; l'indent de cette ligne d'en-tête
+    ancre la section. La première ligne de contenu après l'en-tête fige un indent de clé
+    unique, et les entrées sont enregistrées UNIQUEMENT depuis les lignes à exactement cet
+    indent — les plus profondes (carte imbriquée) ou moins profondes mais encore dedans n'apportent aucune entrée.
+  Le bloc scanné se termine à la première ligne de contenu dont l'indent est ≤ celui de
+    l'en-tête (break de boucle), donc exactement une instance de section par fichier est
+    scannée ; lignes vides et commentaires `#` ignorés partout, sans toucher la tenue des indents.
+  Une clé est la suite avant le premier `:` tronqué à gauche (guillemets préservés), les clés
+    vides sont ignorées, chaque clé conservée mappe vers son propre numéro de ligne en base 1
+    via @saturating_add. @find_option_line_numbers est exactement ceci contre la section
+    `options` ; les consommateurs in-crate sont @check_options du driver et le rapport
+    d'option inutilisée de ./hbs_checker.rs (clé absente là-bas = finding à ligne @None).
+  Couture ./config.rs figée ici : les valeurs de niveau `override_` dans `.vynil-lint.yaml`
+    doivent s'écrire `Info`, `Warn`, `Error`, car @LintLevel n'a pas de rename serde, donc un
+    niveau en minuscules dans le YAML REJETTE le FICHIER entier vers les défauts via la voie
+    de chargement ./config.rs — tandis que @Display imprime des mots en majuscules et @FromStr
+    accepte n'importe quelle casse des mots en minuscules : deux régimes de casse sur un champ (Tasks).
 
-Scenario: empty collector prints only the tally
+Scenario: le collecteur vide n'imprime que le décompte
   Given @LintResultCollector::new
-  When @to_text runs with filter @Info
-  Then the @String is the single tally line `Résultat : 0 erreur, 0 warning` and nothing
-    else
-  And @has_errors answers `false`
-  Mapped test @collector_has_no_errors_when_empty pins only the @has_errors arm; the
-    empty-set rendering has no test yet.
+  When @to_text tourne avec le filtre @Info
+  Then le @String est la seule ligne de décompte `Résultat : 0 erreur, 0 warning` et rien
+    d'autre
+  And @has_errors répond `false`
+  Test mappé @collector_has_no_errors_when_empty n'épingle que la branche @has_errors ; le
+    rendu sur ensemble vide n'a pas encore de test.
 
-Scenario: any Error blocks, everything else passes
-  Given a collector holding one finding at the @Error level added via @add
-  Then @has_errors answers `true`
-  But Given a warn-only, info-only or empty collector — @has_errors answers `false`
-  Mapped test @collector_detects_error_level covers the `true` arm only.
+Scenario: n'importe quel Error bloque, tout le reste passe
+  Given un collecteur tenant un finding au niveau @Error ajouté via @add
+  Then @has_errors répond `true`
+  But Given un collecteur warn-seul, info-seul ou vide — @has_errors répond `false`
+  Test mappé @collector_detects_error_level ne couvre que la branche `true`.
 
-Scenario: error filter hides lower findings but not the counts
-  Given one @Error finding `test/error` and one @Warn finding `test/warn` on `test.txt`
-  When @to_text runs with filter @Error
-  Then blocks print for `test/error` only, in insertion order
-  And the @String still counts 1 erreur and 1 warning in the footer despite @Warn being
-    hidden
-  Mapped test @to_text_filters_by_level asserts block presence and absence only; the
-    footer-counts-the-full-set behaviour is untested.
+Scenario: le filtre error masque les findings inférieurs mais pas les comptages
+  Given un finding @Error `test/error` et un finding @Warn `test/warn` sur `test.txt`
+  When @to_text tourne avec le filtre @Error
+  Then les blocs s'impriment pour `test/error` seul, dans l'ordre d'insertion
+  And le @String compte toujours 1 erreur et 1 warning au pied de page malgré @Warn
+    masqué
+  Test mappé @to_text_filters_by_level n'asserte que la présence et l'absence de blocs ; le
+    comportement « le pied de page compte l'ensemble complet » est non testé.
 
-Scenario: json report shows findings filtered and summary unfiltered
-  Given the same @Error plus @Warn mix run through @to_json with filter @Error
-  Then `findings` holds the one @Error object — fields `rule`, `"level": "Error"`, `file`,
-    `"line": 1`, `message` — while `summary` reads `{"errors": 1, "warnings": 1}`
-  No mapped test exists.
+Scenario: le rapport json montre les findings filtrés et le summary non filtré
+  Given le même mélange @Error plus @Warn passé dans @to_json avec le filtre @Error
+  Then `findings` contient le seul objet @Error — champs `rule`, `"level": "Error"`, `file`,
+    `"line": 1`, `message` — tandis que `summary` lit `{"errors": 1, "warnings": 1}`
+  Aucun test mappé n'existe.
 
-Scenario: junit files every level as a failure under its category
-  Given a `hbs/foo` @Error, a `rhai/bar` @Error and any lower-level finding
-  When @to_junit runs
-  Then suites `hbs` and `rhai` exist in lexicographic order with full-rule case names,
-    failure type `lint`, @Duration::seconds(0) and no `file` or `line` markers anywhere
-  But Given an @Info or @Warn finding — it appears identically as a failure case
-  Mapped test @to_junit_groups_by_category asserts suite and case-name presence only.
+Scenario: junit file chaque niveau comme échec sous sa catégorie
+  Given un `hbs/foo` @Error, un `rhai/bar` @Error et n'importe quel finding de niveau inférieur
+  When @to_junit tourne
+  Then les suites `hbs` et `rhai` existent en ordre lexicographique avec noms de cas en règle
+    complète, type d'échec `lint`, @Duration::seconds(0) et aucun marqueur `file` ni `line`
+  But Given un finding @Info ou @Warn — il apparaît identiquement comme cas en échec
+  Test mappé @to_junit_groups_by_category n'asserte que la présence des suites et noms de cas.
 
-Scenario: prefix_files rebases relative findings once
-  Given findings on the relative path `sub/x.hbs`, on the virtual `package.yaml#value_script`
-    and on one already-absolute path
-  When @prefix_files runs with base `@path::Path::new("./pkg")`
-  Then the two relative @file values become `./pkg/sub/x.hbs` and
-    `./pkg/package.yaml#value_script`, still relative so a second call would prepend again,
-    and the absolute one is unchanged
-  No mapped test exists.
+Scenario: prefix_files rebase une fois les findings relatifs
+  Given des findings sur le chemin relatif `sub/x.hbs`, sur le virtuel `package.yaml#value_script`
+    et sur un chemin déjà absolu
+  When @prefix_files tourne avec la base `@path::Path::new("./pkg")`
+  Then les deux valeurs @file relatives deviennent `./pkg/sub/x.hbs` et
+    `./pkg/package.yaml#value_script`, toujours relatifs donc un second appel préfixerait à
+    nouveau, et l'absolu reste inchangé
+  Aucun test mappé n'existe.
 
-Scenario: options line scan reads structure, never YAML semantics
-  Given a file with `options:` at indent 2 and keys at indent 4, one nested map two deeper,
-    a duplicate key later, comments and blank lines, plus a second `options:` section below
-  When @find_option_line_numbers runs
-  Then entries cover only the first block's indent-4 keys, the later duplicate wins its key,
-    nested children and the second section are absent, comments and blanks stay skipped
-  But Given an unreadable path — the map is empty, with no signal.
-  No mapped test exists.
+Scenario: le scan de lignes options lit la structure, jamais la sémantique YAML
+  Given un fichier avec `options:` à l'indent 2 et des clés à l'indent 4, une carte imbriquée
+    deux crans plus profond, une clé dupliquée plus loin, commentaires et lignes vides, plus une seconde section `options:` en dessous
+  When @find_option_line_numbers tourne
+  Then les entrées couvrent uniquement les clés indent-4 du premier bloc, le duplicate plus
+    loin gagne sa clé, enfants imbriqués et seconde section absents, commentaires et vides ignorés
+  But Given un chemin illisible — la carte est vide, sans signal.
+  Aucun test mappé n'existe.
 
 Example:
-  text block for a warn finding — note the level word padded to five inside the brackets:
+  Bloc texte pour un finding warn — noter le mot de niveau paddé à cinq dans les crochets :
     `[WARN ] package/unexpected-dir  pkg/vitals`
     `        Directory 'vitals' is not expected for System packages`
-  then one empty line per finding block, and after any number of blocks the single tally:
+  puis une ligne vide par bloc de finding, et après tout nombre de blocs le décompte unique :
     `Résultat : 2 erreurs, 1 warning`
 
 Tasks:
-  [ ] Add tests closing the unmapped behaviour frozen above: empty-set text rendering,
-      footer and summary counting the full set under an applied filter, the json
-      field-level wire shape (incl. `"line": null` and the capitalized `"level"`
-      strings), @prefix_files relative / absolute / second-call behaviour, the locator
-      indent, duplicate-key and unreadable matrix, @FromStr spelling rules and the
-      @Display round-trip, and @to_junit level-independence.
-  [?] @FromStr has no production caller anywhere in the workspace (config override maps go
-      through serde, the driver keeps its own `@LevelFilter`): keep for a future `--level`
-      env parse, or delete.
-  [?] Case regimes: @serde against @LintLevel requires the spelled identifiers
-      `Info`/`Warn`/`Error` — a lowercase `warn:` in `.vynil-lint.yaml` rejects the WHOLE
-      config file back to defaults — while @Display and @FromStr speak the lowercase words.
-      Decide whether @LintLevel gains a `rename_all = "lowercase"` serde attribute (wire
-      change against ./config.rs expectations).
-  [?] Footer and summary semantics: counts run over the full finding set while the bodies
-      are filtered; `erreur` pluralizes but `warning` never does; @Info is counted nowhere.
-      Freeze as-is or fix (CI parsing of tally and summary depends on it).
-  [?] @to_junit turns EVERY finding into a JUnit failure regardless of @Info or @Warn, and
-      drops @file and @line — acceptable for an all-or-nothing CI gate, or should levels
-      map to distinct case kinds and locations be encoded?
-  [?] `@unwrap_or("unknown")` inside @to_junit is unreachable (@str::split always yields at
-      least one segment): dead branch to remove, and rules with no `/` silently form a
-      full-rule-named suite — decide intended behaviour.
-  [?] @find_section_key_line_numbers is generalized over `section` yet only ever called
-      with `options`, opens the section at ANY indent depth (a nested `options:` matches by
-      mistake) and lets duplicate keys keep the last line: keep the generic helper for a
-      planned second section, or specialize it.
-  [?] @to_json's @unwrap_or_default prints a silent empty @String on serde failure
-      (practically impossible today — plain field types): acceptable as-is?
+  [ ] Ajouter des tests fermant les comportements non mappés figés ci-dessus : le rendu texte
+      sur ensemble vide, pied de page et summary comptant l'ensemble complet sous filtre
+      appliqué, la forme de fil au niveau des champs json (incl. `"line": null` et les chaînes
+      `"level"` capitalisées), les comportements relatif / absolu / second appel de
+      @prefix_files, la matrice indent, clé dupliquée et illisible des localisateurs, les règles
+      d'orthographe de @FromStr, le round-trip @Display et @to_junit indépendant du niveau.
+  [?] @FromStr n'a aucun appelant de production dans tout le workspace (les cartes de niveau
+      override de config passent par serde, le driver garde son propre `@LevelFilter`) : garder
+      pour un futur parse d'env `--level`, ou supprimer.
+  [?] Régimes de casse : @serde contre @LintLevel exige les identifiants écrits
+      `Info`/`Warn`/`Error` — un `warn:` en minuscules dans `.vynil-lint.yaml` rejette le
+      FICHIER de config entier vers les défauts — tandis que @Display et @FromStr parlent les
+      mots en minuscules. Décider si @LintLevel gagne un attribut serde `rename_all =
+      "lowercase"` (changement de fil contre les attentes de ./config.rs).
+  [?] Sémantiques du pied de page et du summary : les comptages courent sur l'ensemble complet
+      des findings tandis que les corps sont filtrés ; `erreur` se pluralise mais `warning`
+      jamais ; @Info n'est compté nulle part. Figer en l'état ou corriger (parsing CI dépend).
+  [?] @to_junit transforme CHAQUE finding en échec JUnit quel que soit @Info ou @Warn, et
+      supprime @file et @line — acceptable pour une CI tout-ou-rien, ou les niveaux devraient
+      mapper vers des kinds de cas distincts et les localisations être encodées ?
+  [?] `@unwrap_or("unknown")` dans @to_junit est inatteignable (@str::split produit toujours au
+      moins un segment) : branche morte à supprimer, et les règles sans `/` forment en silence
+      une suite nommée de la règle entière — décider le comportement voulu.
+  [?] @find_section_key_line_numbers est généralisé sur `section` mais n'est jamais appelé
+      qu'avec `options`, ouvre la section à N'IMPORTE QUELLE profondeur d'indent (un `options:`
+      imbriqué matche par erreur) et laisse les clés dupliquées garder la dernière ligne :
+      garder l'aide générique pour une seconde section planifiée, ou le spécialiser.
+  [?] Le @unwrap_or_default de @to_json imprime un @String vide silencieux en cas d'échec serde
+      (pratiquement impossible aujourd'hui — types de champs simples) : acceptable en l'état ?
 
 Done when:
-  Every scenario above maps to a passing named test, each `[?]` decision is recorded (then
-    honoured or amended in this spec), `cargo test` stays green, and `specdd lint` accepts
-    this file.
+  Chaque scénario ci-dessus correspond à un test nommé passant, chaque décision `[?]` est
+    consignée (puis honorée ou amendée dans cette spec), `cargo test` reste vert, et
+    `specdd lint` accepte ce fichier.
