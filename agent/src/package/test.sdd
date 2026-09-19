@@ -1,287 +1,333 @@
-# File spec for ./test.rs. The dispatcher, the log line and the exit-3 trap belong to
-# ./mod.sdd. The engine lives under ./../testing/ (its specs are pending); it is named
-# as collaborator here, never restated.
+# Spec de fichier pour ./test.rs. Le dispatcher, la ligne de log et le piège exit-3
+# appartiennent à ./mod.sdd. Le moteur vit sous ./../testing/ (ses specs sont en
+# attente) ; il est nommé ici comme collaborateur, jamais redécrit.
 
 Spec: PackageTest
 
 Platform: Rust
 
 Purpose:
-  The `agent package test` leaf — the offline, mock-only test-suite runner for a package
-    directory: gate `<package_dir>/tests`, build one @client::testing::TestHandler from the
-    four CLI directories plus one optional extra testset directory, then either print the
-    loaded test names (default), run the whole suite (`--all`) or one named test
-    (`--test-name`) through the engine's mocked Rhai interpreter (kubernetes-mock and
-    http-mock only — no cluster, no kind, no live API), print the summary in `text` or
-    `json`, optionally write a JUnit XML file and, for a single test only, dump the
-    objects the mock layer recorded as multi-document YAML, and fold every failing
-    assertion into one @Err @common::Error::TestFailure that ./mod.sdd traps as exit 3.
-  The `client::` import prefix is the agent crate's own library name (`[lib] name = "client"`
-    in /agent/Cargo.toml); @TestHandler resolves to ./../testing/handler.rs inside this crate.
+  La feuille `agent package test` — l'exécuteur de suites de tests hors-ligne, en
+    mode mock uniquement, pour un répertoire de package : contrôle
+    `<package_dir>/tests`, construit un @client::testing::TestHandler à partir des
+    quatre répertoires CLI plus un répertoire testset supplémentaire optionnel, puis
+    soit affiche les noms des tests chargés (défaut), soit exécute toute la suite
+    (`--all`) ou un test nommé (`--test-name`) via l'interpréteur Rhai mocké du moteur
+    (kubernetes-mock et http-mock uniquement — pas de cluster, pas de kind, pas
+    d'API live), affiche le résumé en `text` ou `json`, écrit éventuellement un
+    fichier JUnit XML et, pour un test unique uniquement, vide les objets enregistrés
+    par la couche mock en YAML multi-documents, puis consolide toute assertion en
+    échec en un seul @Err @common::Error::TestFailure que ./mod.sdd piège en exit 3.
+  Le préfixe d'import `client::` est le propre nom de bibliothèque du crate agent
+    (`[lib] name = "client"` dans /agent/Cargo.toml) ; @TestHandler se résout à
+    ./../testing/handler.rs dans ce crate.
 
 Owns:
   ./test.rs
 
 References:
-  ./mod.sdd — caller and exit lane: any @Err from @run is Display-logged
-    `Testing the package failed with: {e:}` via @tracing::error! then
-    @std::process::exit(3); this file itself neither logs nor exits.
+  ./mod.sdd — appelant et couloir de sortie : tout @Err de @run est journalisé en
+    Display `Testing the package failed with: {e:}` via @tracing::error! puis
+    @std::process::exit(3) ; ce fichier ne journalise ni ne sort de lui-même.
   ./../testing/mod.sdd, ./../testing/handler.sdd, ./../testing/result.sdd,
-    ./../testing/vyniltest.sdd, ./../testing/vyniltestset.sdd — the engine this leaf
-    drives; every one pending — cross-reference only, their behaviour is owned there.
-  /common/src/lib.sdd — @common::Error / @common::Result contract: @Error::MissingTestDirectory,
-    @Error::TestFailure, @Error::Stdio, @Error::YamlError and @Error::Core's transparent
-    wrap of `vynil-core` errors.
-  /common/src/yamlhandler.sdd — @yaml_all_serialize_to_string, the `vynil-core` `0.7.7`
-    multi-document YAML serializer used by the template-output dump.
-  /common/src/rhaihandler.sdd — @Dynamic, the value type the created-object sink carries.
-  /common/src/vynilpackage.sdd — @read_package_yaml and the package-type inference the
-    engine performs from `package.yaml` (this CLI carries no package-type flag).
-  /docs/cli.md — the documented `agent package test` synopsis and `MissingTestDirectory`
-    error notice the parent /agent/agent.sdd pins stable.
+    ./../testing/vyniltest.sdd, ./../testing/vyniltestset.sdd — le moteur que cette
+    feuille pilote ; chacun est en attente — références croisées seulement, leur
+    comportement est possédé là-bas.
+  /common/src/lib.sdd — le contrat @common::Error / @common::Result :
+    @Error::MissingTestDirectory, @Error::TestFailure, @Error::Stdio,
+    @Error::YamlError et @Error::Core avec son encapsulation transparente des erreurs
+    `vynil-core`.
+  /common/src/yamlhandler.sdd — @yaml_all_serialize_to_string, le sérialiseur YAML
+    multi-documents `vynil-core` `0.7.7` utilisé par le vidage de sortie template.
+  /common/src/rhaihandler.sdd — @Dynamic, le type de valeur que porte le collecteur
+    d'objets créés.
+  /common/src/vynilpackage.sdd — @read_package_yaml et l'inférence de type de
+    package que le moteur fait depuis `package.yaml` (cette CLI ne porte aucun flag
+    de type de package).
+  /docs/cli.md — le synopsis `agent package test` documenté et l'avis d'erreur
+    `MissingTestDirectory` que le parent /agent/agent.sdd gèle comme stable.
 
 Must:
-  Freeze the ten-argument clap surface exactly: `-p`/`--package-dir`/env `PACKAGE_DIRECTORY`
-    default `/tmp/package`; `-s`/`--script-dir`/env `SCRIPT_DIRECTORY` default
-    `./agent/scripts`; `-t`/`--template-dir`/env `TEMPLATE_DIRECTORY` default
-    `./agent/templates`; `-c`/`--config-dir`/env `CONFIG_DIR` default `.`;
-    `--testsets-dir` (no short)/env `TESTSETS_DIRECTORY`, optional @PathBuf, Rust field
-    @testset_dir; `--test-name`/env `TEST_NAME`, optional @String; `--all` boolean flag
-    with no short form and no env; `--format`, no env, `default_value = "text"`;
-    `--junit-output-filename` (no short)/env `JUNIT_OUTPUT_FILENAME`, optional @PathBuf;
-    `--template-output-filename` (no short)/env `TEMPLATE_OUTPUT_FILENAME`, optional
-    @PathBuf whose doc text reads `Template output filename (only available for a single
-    test)`. Every env-bound arg's value name equals its env name; resolution order is flag
-    over env over default; the relative defaults `./agent/scripts`, `./agent/templates`
-    and `.` bind against the process cwd at use time.
-  Accept under @format exactly `text` and `json` (the @clap::ValueEnum names, exact case;
-    the enum derives no @Default — the arg's `default_value` string arms the default), and
-    @format_results maps @OutputFormat::Json to @TestResultCollector::to_json and
-    @OutputFormat::Text to @TestResultCollector::to_text.
-  Gate everything before any load: @PathBuf::join("tests") of @package_dir must
-    @Path::is_dir — the directory is never created here — otherwise @Err
-    @Error::MissingTestDirectory carrying @package_dir itself, whose display
-    `Missing tests directory {0}` therefore names the package directory, not the
-    `<package_dir>/tests` path the gate actually checked.
-  Build the engine exactly once with @TestHandler::new(package_dir, script_dir,
-    config_dir, template_dir, @testset_dir wrapped in a one-element @Vec) — at most one
-    extra testset directory reaches the engine — and propagate every constructor @Err with
-    `?`: load of `<package_dir>/package.yaml`, the non-recursive `.yml`/`.yaml` file scan
-    of the extra testset directory (TestSet documents only) and of `<package_dir>/tests`
-    (Test and TestSet documents, selected by apiVersion `vinyl.solidite.fr/v1beta1` —
-    literal `vinyl` spelling — plus kind), and duplicate Test/TestSet names all abort in
-    the exit-3 trap before a summary line or a test name prints, in every mode including
-    list mode.
-  Select the mode at frozen precedence: `--all` over `--test-name` (both set runs the
-    whole suite and the name is silently ignored); neither set selects list mode, which
-    @println!s one @TestHandler::list_tests name per line in the engine's sorted order and
-    returns @Ok early — the summary, the verdict, junit and template lanes never run.
-  Run the all lane through @TestHandler::run_all_tests: engine order is ascending test-name
-    order (BTreeMap key order), each test gets its own fresh created-object sink that
-    never reaches this file, so `--template-output-filename` cannot be served here and is
-    silently ignored; then @println! @format_results and write `@to_junit` when
-    `--junit-output-filename` is set.
-  Run the single lane with a fresh @Arc<Mutex<Vec<Dynamic>>> sink handed to
-    @TestHandler::run_test(@test_name, &sink) as the sole channel through which the
-    mocked kubernetes layer returns the objects a test created; then print the summary,
-    write junit if requested, and when `--template-output-filename` is set lock the sink
-    recovering poison via @PoisonError::into_inner, @clone the vec, serialize the whole
-    list through @yaml_all_serialize_to_string — yielding one `---` document per object,
-    or an empty string for an empty sink — and @std::fs::write it (a run that creates no
-    objects leaves a zero-byte file).
-  Aggregate the verdict last, after the summary printed and every requested artifact
-    wrote: @TestResultCollector::all_passed false yields @Err
-    @Error::TestFailure(@total_failed, @total_asserts) — both arguments are assertion
-    counts — whose display `Tests failed: {0} failed out of {1} assertions` becomes the
-    body of ./mod.sdd's exit-3 line; engine-side errors never @Err out of
-    @run_test/@run_all_tests (both return `()` and record an internal failure as failed
-    assertions), so a failing suite leaves exactly this one synthetic @Err with summary
-    and artifacts already emitted.
-  Keep the posture mock and file-only: this file opens no kube client, never calls
-    @common::context::init_k8s, provisions no kind or live cluster, and takes all state
-    from files resolved by the engine directories; the created-object sink is the only
-    per-test state it sees or injects.
-  Write through exactly two channels — @println! to stdout for the summary and list mode —
-    and @std::fs::write (truncate-or-create, silent overwrite of existing files, parent
-    directories never created) for artifacts; allocate no temp directory and delete
-    nothing: artifacts written before a later @Err survive on disk.
+  Gèle exactement la surface clap à dix arguments : `-p`/`--package-dir`/env
+    `PACKAGE_DIRECTORY` défaut `/tmp/package` ; `-s`/`--script-dir`/env
+    `SCRIPT_DIRECTORY` défaut `./agent/scripts` ; `-t`/`--template-dir`/env
+    `TEMPLATE_DIRECTORY` défaut `./agent/templates` ; `-c`/`--config-dir`/env
+    `CONFIG_DIR` défaut `.` ; `--testsets-dir` (pas de court)/env
+    `TESTSETS_DIRECTORY`, @PathBuf optionnel, champ Rust @testset_dir ;
+    `--test-name`/env `TEST_NAME`, @String optionnel ; flag booléen `--all` sans
+    forme courte ni env ; `--format`, sans env, `default_value = "text"` ;
+    `--junit-output-filename` (pas de court)/env `JUNIT_OUTPUT_FILENAME`, @PathBuf
+    optionnel ; `--template-output-filename` (pas de court)/env
+    `TEMPLATE_OUTPUT_FILENAME`, @PathBuf optionnel dont le texte d'aide dit
+    `Template output filename (only available for a single test)`. Pour tout
+    argument lié à un env, le nom de valeur égale son nom d'env ; l'ordre de
+    résolution est flag puis env puis défaut ; les défauts relatifs
+    `./agent/scripts`, `./agent/templates` et `.` se résolvent contre le cwd du
+    process au moment de l'usage.
+  Accepte sous @format exactement `text` et `json` (les noms @clap::ValueEnum, casse
+    exacte ; l'enum ne dérive aucun @Default — la chaîne `default_value` de
+    l'argument arme le défaut), et @format_results mappe @OutputFormat::Json vers
+    @TestResultCollector::to_json et @OutputFormat::Text vers
+    @TestResultCollector::to_text.
+  Contrôle tout avant tout chargement : @PathBuf::join("tests") de @package_dir
+    doit passer @Path::is_dir — le répertoire n'est jamais créé ici — sinon @Err
+    @Error::MissingTestDirectory portant @package_dir lui-même, dont l'affichage
+    `Missing tests directory {0}` nomme donc le répertoire du package, pas le
+    chemin `<package_dir>/tests` réellement contrôlé par la gate.
+  Construit le moteur exactement une fois avec @TestHandler::new(package_dir,
+    script_dir, config_dir, template_dir, @testset_dir emballé dans un @Vec d'un
+    seul élément) — au plus un répertoire testset supplémentaire atteint le moteur —
+    et propage tout @Err du constructeur avec `?` : le chargement de
+    `<package_dir>/package.yaml`, le scan non récursif des fichiers `.yml`/`.yaml`
+    du répertoire testset supplémentaire (documents TestSet seulement) et de
+    `<package_dir>/tests` (documents Test et TestSet, sélectionnés par apiVersion
+    `vinyl.solidite.fr/v1beta1` — orthographe littérale `vinyl` — plus kind), et les
+    noms Test/TestSet dupliqués interrompent tout dans le piège exit-3 avant
+    l'affichage d'une ligne de résumé ou d'un nom de test, dans tous les modes y
+    compris le mode liste.
+  Sélectionne le mode à précédence gelée : `--all` prime sur `--test-name` (les
+    deux posés exécute toute la suite et le nom est silencieusement ignoré) ; aucun
+    posé sélectionne le mode liste, qui @println! un nom de
+    @TestHandler::list_tests par ligne dans l'ordre trié du moteur et revient @Ok
+    en avance — le résumé, le verdict, junit et le couloir template ne tournent
+    jamais.
+  Exécute le couloir all via @TestHandler::run_all_tests : l'ordre du moteur est
+    l'ordre ascendant des noms de tests (ordre des clés BTreeMap), chaque test
+    reçoit son propre collecteur d'objets créés tout neuf qui n'atteint jamais ce
+    fichier, si bien que `--template-output-filename` ne peut pas être servi ici et
+    est silencieusement ignoré ; puis @println! de @format_results et écriture de
+    `@to_junit` quand `--junit-output-filename` est posé.
+  Exécute le couloir mono-test avec un collecteur @Arc<Mutex<Vec<Dynamic>>> tout
+    neuf remis à @TestHandler::run_test(@test_name, &sink) comme seule voie par
+    laquelle la couche kubernetes mockée rend les objets créés par un test ; puis
+    affiche le résumé, écrit junit si demandé, et quand
+    `--template-output-filename` est posé verrouille le collecteur en récupérant le
+    poison via @PoisonError::into_inner, @clone le vec, sérialise toute la liste
+    via @yaml_all_serialize_to_string — produisant un document `---` par objet, ou
+    une chaîne vide pour un collecteur vide — et l'écrit avec @std::fs::write (une
+    exécution qui ne crée aucun objet laisse un fichier de zéro octet).
+  Agrège le verdict en dernier, après que le résumé fut affiché et chaque artefact
+    demandé écrit : @TestResultCollector::all_passed false produit @Err
+    @Error::TestFailure(@total_failed, @total_asserts) — les deux arguments sont des
+    comptes d'assertions — dont l'affichage `Tests failed: {0} failed out of {1}
+    assertions` devient le corps de la ligne exit-3 de ./mod.sdd ; les erreurs
+    internes au moteur ne sortent jamais en @Err de @run_test/@run_all_tests (ils
+    retournent `()` et enregistrent un échec interne comme assertions en échec),
+    donc une suite en échec laisse exactement ce seul @Err synthétique avec résumé
+    et artefacts déjà émis.
+  Garde la posture mock et fichiers seulement : ce fichier n'ouvre aucun client
+    kube, n'appelle jamais @common::context::init_k8s, ne provisionne aucun cluster
+    kind ou live, et prend tout son état des fichiers résolus par les répertoires du
+    moteur ; le collecteur d'objets créés est le seul état par test qu'il voit ou
+    injecte.
+  Écrit par exactement deux canaux — @println! vers stdout pour le résumé et le
+    mode liste — et @std::fs::write (tronque-ou-crée, écrasement silencieux des
+    fichiers existants, répertoires parents jamais créés) pour les artefacts ;
+    n'alloue aucun répertoire temporaire et ne supprime rien : les artefacts écrits
+    avant un @Err ultérieur survivent sur le disque.
 
 Must not:
-  Log its own failure or call @std::process::exit — the Display trap and exit 3 are
-    ./mod.sdd's; error identity here travels only inside @common::Error.
-  Abort the suite on the first failing assertion — every selected test runs to the end,
-    the summary and artifacts flush, and only then does the single aggregated @Err fire.
-  Reject an unknown `--test-name` as a usage error — it reaches the engine and comes back
-    as one failed `execution` assertion, not a @Err before the run.
-  Let @format touch anything but the stdout summary — the JUnit file is always `@to_junit`
-    XML and list mode always plain names, whatever `--format` says.
+  Ne journalise pas sa propre défaillance ni n'appelle @std::process::exit — le
+    piège Display et exit 3 sont ceux de ./mod.sdd ; l'identité d'erreur ne circule
+    ici qu'à l'intérieur de @common::Error.
+  N'interrompt pas la suite à la première assertion en échec — chaque test
+    sélectionné va jusqu'au bout, le résumé et les artefacts sont vidés, et
+    seulement alors le seul @Err agrégé se déclenche.
+  Ne rejette pas un `--test-name` inconnu comme erreur d'usage — il atteint le
+    moteur et revient comme un seul assert `execution` en échec, pas un @Err avant
+    l'exécution.
+  Ne laisse @format toucher autre chose que le résumé stdout — le fichier JUnit est
+    toujours du XML `@to_junit` et le mode liste toujours des noms bruts, quel que
+    soit ce que dit `--format`.
 
 Exposes:
-  @Parameters — `#[derive(@clap::Args, @Debug, @Serialize, @Deserialize)]` with ten
-    private fields (@package_dir, @script_dir, @template_dir, @config_dir, @testset_dir,
-    @test_name, @start_all behind `--all`, @format, @junit_output_filename,
-    @template_output_filename); outside this module they are reached only through
-    @Commands::Test in ./mod.rs.
-  @run — `pub fn @run(args: &@Parameters) -> @common::Result<@()>`; synchronous, sync
-    called by ./mod.sdd's exit-3 arm, awaited by nobody.
-  @OutputFormat — `pub enum` @Text/`@Json` with `#[value(name = "text")]`/
-    `#[value(name = "json")]` and `#[serde(rename_all = "snake_case")]`.
-  @PackageType — `pub enum` @Tenant/@Service/@System (default @System) deriving
-    @clap::ValueEnum, @Default and serde snake_case; nothing in @Parameters or anywhere
-    else in the crate references it (dead — Tasks).
-  All four are module-boundary public only: `mod test;` in ./mod.rs is private, so the
-    crate surface exports none of them.
+  @Parameters — `#[derive(@clap::Args, @Debug, @Serialize, @Deserialize)]` avec dix
+    champs privés (@package_dir, @script_dir, @template_dir, @config_dir,
+    @testset_dir, @test_name, @start_all derrière `--all`, @format,
+    @junit_output_filename, @template_output_filename) ; hors de ce module on n'y
+    accède que via @Commands::Test dans ./mod.rs.
+  @run — `pub fn @run(args: &@Parameters) -> @common::Result<@()>` ; synchrone,
+    appelé en sync par la branche exit-3 de ./mod.sdd, attendu par personne.
+  @OutputFormat — `pub enum` @Text/`@Json` avec `#[value(name = "text")]`/
+    `#[value(name = "json")]` et `#[serde(rename_all = "snake_case")]`.
+  @PackageType — `pub enum` @Tenant/@Service/@System (défaut @System) dérivant
+    @clap::ValueEnum, @Default et serde snake_case ; rien dans @Parameters ni
+    ailleurs dans le crate ne le référence (mort — Tasks).
+  Les quatre ne sont publics qu'à la frontière du module : `mod test;` dans
+    ./mod.rs est privé, donc la surface du crate n'en exporte aucun.
 
 Accepts:
-  A clap-parsed @Parameters by reference; the only existence check before parsing work is
-    the tests-directory gate — every @PathBuf is otherwise taken unvalidated.
-  Environment fallbacks for every env-bound argument while its flag is absent.
-  @test_name as an exact string matched against loaded Test names by the engine — no
-    pattern, glob or case-insensitive lane here.
+  Un @Parameters parsé par clap par référence ; le seul contrôle d'existence avant
+    le travail de parsing est la gate du répertoire tests — tout autre @PathBuf est
+    pris sans validation.
+  Les recours à l'environnement pour tout argument lié à un env tant que son flag
+    est absent.
+  @test_name comme chaîne exacte confrontée aux noms Test chargés par le moteur —
+    pas de patron, de glob ni de couloir insensible à la casse ici.
 
 Returns:
-  @Ok(()) after list mode prints its names (even zero of them), or after a run whose every
-    assert passed — an empty suite vacuously qualifies.
-  @Err — always ./mod.sdd's exit-3 trap; see Raises.
+  @Ok(()) après que le mode liste affiche ses noms (même zéro), ou après une
+    exécution dont chaque assert est passé — une suite vide satisfait vacuement.
+  @Err — toujours le piège exit-3 de ./mod.sdd ; voir Raises.
 
 Raises:
-  @Error::MissingTestDirectory(@std::path::PathBuf) — tests-directory gate, payload is
-    @package_dir (see Must).
-  Constructor @Errs propagated verbatim from @TestHandler::new (owned by
-    ./../testing/handler.sdd, pending): scan I/O as @Error::Stdio, unparseable documents
-    and duplicate Test/TestSet names as @Error::YamlError with `{file}: ` prefixed
-    messages, plus the @package.yaml read leg of /common/src/vynilpackage.sdd.
-  @Error::Stdio(@std::io::Error) — junit or template @std::fs::write failure (missing
-    parent directory first among them); on the single lane a junit failure skips the
-    template write and the verdict check alike.
-  @Error::Core over `vynil-core` @Error::YamlError — @yaml_all_serialize_to_string refusing
-    a recorded @Dynamic @serde_yaml cannot render.
-  @Error::TestFailure(@usize, @usize) — the aggregated verdict; failing individual tests
-    never surface as their own @Err.
-  No panic is expected from this file's code: the sink lock is poison-recovered, not
-    unwrapped; anything the engine panics on is outside this contract.
+  @Error::MissingTestDirectory(@std::path::PathBuf) — gate du répertoire tests, la
+    charge utile est @package_dir (voir Must).
+  @Err du constructeur propagés tels quels depuis @TestHandler::new (possédés par
+    ./../testing/handler.sdd, en attente) : les E/S de scan en @Error::Stdio, les
+    documents non analysables et les noms Test/TestSet dupliqués en
+    @Error::YamlError avec messages préfixés `{file}: `, plus la lecture de
+    @package.yaml décrite dans /common/src/vynilpackage.sdd.
+  @Error::Stdio(@std::io::Error) — échec de @std::fs::write de junit ou du template
+    (répertoire parent manquant en tête de liste) ; sur le couloir mono-test, un
+    échec junit saute l'écriture du template et la vérification du verdict
+    pareillement.
+  @Error::Core sur `vynil-core` @Error::YamlError — @yaml_all_serialize_to_string
+    refusant un @Dynamic enregistré que @serde_yaml ne peut rendre.
+  @Error::TestFailure(@usize, @usize) — le verdict agrégé ; les tests individuels
+    en échec ne remontent jamais comme leur propre @Err.
+  Aucun panic n'est attendu du code de ce fichier : le verrou du collecteur est
+    récupéré de poison, pas déballé ; tout ce sur quoi le moteur panique est hors
+    de ce contrat.
 
 Handles:
-  `tests` present but not a directory — same gate @Err as absent, no distinct branch.
-  Empty suite directory — list mode prints nothing and @Ok's; `--all` runs zero tests,
-    prints the zero-tally text summary, vacuously passes and exits 0.
-  Unknown @test_name — the summary shows a failing `execution` assert reading
-    `Test '<name>' not found`, then @Error::TestFailure(1, 1) drives exit 3.
-  Poisoned created-object lock — recovered through @PoisonError::into_inner, the value is
-    still dumped.
-  `--all` together with `--test-name` and `--template-output-filename` — all lane runs,
-    the name and the template file are silently ignored, no warning prints.
-  JUnit and template both set on the single lane — junit writes first; a subsequent
-    verdict @Err leaves both files on disk.
-  Duplicate TestSet name between the extra testset directory and the suite directory —
-    both merge into one engine map, so the collision @Err's construction and kills the
-    command pre-output.
+  `tests` présent mais pas un répertoire — même @Err de gate qu'absent, pas de
+    branche distincte.
+  Répertoire de suite vide — le mode liste n'affiche rien et @Ok ; `--all` exécute
+    zéro test, affiche le résumé texte à zéro, passe vacuement et sort 0.
+  @test_name inconnu — le résumé montre une assert `execution` en échec lisant
+    `Test '<name>' not found`, puis @Error::TestFailure(1, 1) pilote exit 3.
+  Verrou du collecteur d'objets créés empoisonné — récupéré via
+    @PoisonError::into_inner, la valeur est quand même vidée.
+  `--all` avec `--test-name` et `--template-output-filename` — le couloir all
+    tourne, le nom et le fichier template sont silencieusement ignorés, aucun
+    warning ne s'affiche.
+  JUnit et template tous les deux posés sur le couloir mono-test — junit écrit
+    d'abord ; un @Err de verdict subséquent laisse les deux fichiers sur le disque.
+  Nom TestSet dupliqué entre le répertoire testset supplémentaire et le répertoire
+    de suite — les deux fusionnent dans une seule map du moteur, donc la collision
+    @Err la construction et tue la commande avant toute sortie.
 
 Tasks:
-  [ ] Cover @run with tests — no #[cfg(test)] module exists in this file, nothing under
-      /agent/tests drives `agent package test`, and the only in-tree tests nearby sit in
-      ./../testing/result.rs; map each scenario to a same-named test: suite-gate-before-load,
-      default-mode-lists-plain-names, green-suite-exits-ok, failing-suite-prints-then-errs,
-      unknown-test-name-is-one-failed-assert, template-dump-is-multidoc-yaml with
-      template-dump-empty-suite-writes-zero-byte-file, all-wins-over-test-name-and-drops-template-file,
+  [ ] Couvrir @run par des tests — aucun module #[cfg(test)] n'existe dans ce
+      fichier, rien sous /agent/tests ne pilote `agent package test`, et les seuls
+      tests dans l'arbre alentour siègent dans ./../testing/result.rs ; mapper
+      chaque scénario à un test de même nom : suite-gate-before-load,
+      default-mode-lists-plain-names, green-suite-exits-ok,
+      failing-suite-prints-then-errs, unknown-test-name-is-one-failed-assert,
+      template-dump-is-multidoc-yaml avec
+      template-dump-empty-suite-writes-zero-byte-file,
+      all-wins-over-test-name-and-drops-template-file,
       junit-write-error-preempts-verdict, empty-suite-exits-zero.
-  [?] @PackageType is dead code — defined `pub` (Tenant/Service/System, default System) but
-      referenced by nothing here or in the crate; the package kind is inferred from
-      `package.yaml` by the engine. Decide to delete it or wire a real package-type flag.
-  [?] @OutputFormat exists twice in sibling modules — this file and ./lint.rs define
-      identical text/json enums independently. Decide whether one shared type serves both
-      leaves.
-  [?] `--template-output-filename` with `--all` is silently ignored although its help text
-      claims single-test scope, and @TestHandler::run_all_tests hides a per-test sink so no
-      all-run could ever answer it. Decide: reject the combination, or freeze silent
-      ignore in documentation.
-  [?] @TestHandler::validate_refs is never called from this leaf, so a Test referencing an
-      unknown TestSet lists and prints fine, then fails only as a per-test `execution`
-      assert. Decide whether list or load should pre-validate references.
-  [?] @Error::MissingTestDirectory carries @package_dir while the gate checked
-      `<package_dir>/tests`, so the exit-3 line can read `Missing tests directory
-      /tmp/package` — the exact missing path is never echoed. Decide the payload convention.
+  [?] @PackageType est du code mort — défini `pub` (Tenant/Service/System, défaut
+      System) mais référencé par rien ici ni dans le crate ; le genre de package
+      est inféré depuis `package.yaml` par le moteur. Décider de le supprimer ou
+      de câbler un vrai flag de type de package.
+  [?] @OutputFormat existe deux fois dans des modules frères — ce fichier et
+      ./lint.rs définissent des enums text/json identiques indépendamment. Décider
+      si un type partagé sert les deux feuilles.
+  [?] `--template-output-filename` avec `--all` est silencieusement ignoré bien que
+      son texte d'aide revendique la portée mono-test, et
+      @TestHandler::run_all_tests cache un collecteur par test donc aucune
+      exécution all ne pourra jamais y répondre. Décider : rejeter la combinaison,
+      ou geler l'ignorance silencieuse dans la documentation.
+  [?] @TestHandler::validate_refs n'est jamais appelé depuis cette feuille, donc un
+      Test référençant un TestSet inconnu se liste et s'affiche bien, puis échoue
+      seulement comme un assert `execution` par test. Décider si lister ou charger
+      devrait pré-valider les références.
+  [?] @Error::MissingTestDirectory porte @package_dir alors que la gate a contrôlé
+      `<package_dir>/tests`, donc la ligne exit-3 peut lire `Missing tests
+      directory /tmp/package` — le chemin exact manquant n'est jamais renvoyé.
+      Décider la convention de charge utile.
 
 Done when:
-  Every scenario carries a mapped passing test, the `[?]` decisions above are recorded, and
-    `cargo test -p agent`, clippy and `cargo +nightly fmt --check` stay green.
+  Chaque scénario porte un test mappé passant, les décisions `[?]` ci-dessus sont
+    enregistrées, et `cargo test -p agent`, clippy et
+    `cargo +nightly fmt --check` restent verts.
 
 Scenario: suite gate fires before any load
-  Given `-p /pkg` where `/pkg/tests` is absent or is a regular file
-  When @run runs
-  Then @Err @Error::MissingTestDirectory("/pkg") returns before @package.yaml is read,
-    @TestHandler::new runs or anything prints
-  And ./mod.sdd logs `Testing the package failed with: Missing tests directory /pkg` and
-    exits 3
-  No mapped test exists.
+  Given `-p /pkg` où `/pkg/tests` est absent ou est un fichier régulier
+  When @run tourne
+  Then @Err @Error::MissingTestDirectory("/pkg") revient avant que @package.yaml
+    soit lu, que @TestHandler::new tourne ou que quoi que ce soit s'affiche
+  And ./mod.sdd journalise `Testing the package failed with: Missing tests directory
+    /pkg` et sort 3
+  Aucun test mappé n'existe.
 
 Scenario: default mode lists plain names
-  Given a loaded suite and no `--all` and no `--test-name` (even `--format json`, even a
-    suite whose Tests reference an unknown TestSet)
-  When @run runs
-  Then each test name `@println!`s alone on its line, in sorted order, no summary line
-    prints, no artifact file is written
-  And @Ok returns and exit 0 follows whatever the verdict would be
-  A missing or unparseable `package.yaml` still errors here — build precedes listing.
-  No mapped test exists.
+  Given une suite chargée sans `--all` ni `--test-name` (même `--format json`, même
+    une suite dont des Tests référencent un TestSet inconnu)
+  When @run tourne
+  Then chaque nom de test s'@println! seul sur sa ligne, dans l'ordre trié, aucune
+    ligne de résumé ne s'affiche, aucun fichier artefact n'est écrit
+  And @Ok revient et exit 0 suit, quel que soit le verdict
+  Un `package.yaml` manquant ou non analysable erre quand même ici — la
+    construction précède le listage.
+  Aucun test mappé n'existe.
 
 Scenario: green suite prints summary and exits 0
-  Given `--all` over a suite whose asserts all pass
-  When @run runs
-  Then the `--format`-rendered summary (`text` blocks plus `Results: N passed, 0 failed,
-    N total`, or the `json` object) prints to stdout
-  And `--junit-output-filename` when given writes `@to_junit` XML with one suite per test
-  And @Ok returns; exit 0
-  No mapped test exists.
+  Given `--all` sur une suite dont toutes les asserts passent
+  When @run tourne
+  Then le résumé rendu selon `--format` (blocs `text` plus `Results: N passed, 0
+    failed, N total`, ou l'objet `json`) s'affiche sur stdout
+  And `--junit-output-filename` quand donné écrit du XML `@to_junit` avec un suite
+    par test
+  And @Ok revient ; exit 0
+  Aucun test mappé n'existe.
 
 Scenario: failing suite prints, artifacts flush, then one aggregated Err
-  Given `--all junit/template output` where some asserts fail
-  When @run runs
-  Then the full FAIL summary prints, the junit file exists on disk afterwards
-  And @Err @Error::TestFailure counts failed assertions over total assertions — `Tests
-    failed: 2 failed out of 5 assertions` — and exit 3 follows
-  But no engine-internal error ever reaches @Err — a test whose scripts crash still just
-    contributes failed asserts
-  No mapped test exists.
+  Given `--all junit/template output` où des asserts échouent
+  When @run tourne
+  Then le résumé FAIL complet s'affiche, le fichier junit existe sur le disque
+    ensuite
+  And @Err @Error::TestFailure compte les assertions en échec sur les assertions
+    totales — `Tests failed: 2 failed out of 5 assertions` — et exit 3 suit
+  But aucune erreur interne du moteur n'atteint jamais @Err — un test dont les
+    scripts crashent contribue juste des asserts en échec
+  Aucun test mappé n'existe.
 
 Scenario: unknown test name dies as a test, not as usage
-  Given `--test-name nope` over a loaded suite lacking it
-  When @run runs
-  Then the summary shows test `nope` with a failing `execution` assert reading
+  Given `--test-name nope` sur une suite chargée qui ne le contient pas
+  When @run tourne
+  Then le résumé montre le test `nope` avec un assert `execution` en échec lisant
     `Test 'nope' not found`
-  And @Err @Error::TestFailure(1, 1) exits 3 — clap accepted the name and no early
-    rejection happened
-  No mapped test exists.
+  And @Err @Error::TestFailure(1, 1) sort 3 — clap a accepté le nom et aucun rejet
+    précoce n'a eu lieu
+  Aucun test mappé n'existe.
 
 Scenario: single-test template dump is multi-document YAML
-  Given one `--test-name` run recording two created objects and
+  Given une exécution `--test-name` enregistrant deux objets créés et
     `--template-output-filename /out/dump.yaml`
-  When @run runs
-  Then `/out/dump.yaml` holds the two objects, each led by a `---` document marker, in
-    sink order
-  But Given a passing run that creates no objects — the file exists and is empty
-  And a missing `/out` directory fails as @Error::Stdio before the verdict check
-  No mapped test exists.
+  When @run tourne
+  Then `/out/dump.yaml` contient les deux objets, chacun précédé d'un marqueur de
+    document `---`, dans l'ordre du collecteur
+  But Given une exécution passante qui ne crée aucun objet — le fichier existe et
+    est vide
+  And un répertoire `/out` manquant échoue en @Error::Stdio avant la vérification
+    du verdict
+  Aucun test mappé n'existe.
 
 Scenario: all wins over name and drops the template lane
   Given `--all --test-name one --template-output-filename /dump.yaml`
-  When @run runs
-  Then every test runs (not just `one`), no `/dump.yaml` is ever written, no warning
-    prints
-  No mapped test exists.
+  When @run tourne
+  Then chaque test tourne (pas seulement `one`), aucun `/dump.yaml` n'est jamais
+    écrit, aucun warning ne s'affiche
+  Aucun test mappé n'existe.
 
 Scenario: empty suite vacuously passes
-  Given `<package_dir>/tests` existing but holding no matching documents, `--all`
-  When @run runs
-  Then stdout is exactly the zero tally `Results: 0 passed, 0 failed, 0 total` (plus
-    summary framing)
-  And @Ok returns and exit 0
-  No mapped test exists.
+  Given `<package_dir>/tests` existant mais ne contenant aucun document
+    correspondant, `--all`
+  When @run tourne
+  Then stdout est exactement le compteur à zéro `Results: 0 passed, 0 failed, 0
+    total` (plus l'encadrement du résumé)
+  And @Ok revient et exit 0
+  Aucun test mappé n'existe.
 
 Scenario: junit write failure preempts the verdict
-  Given a green-intent suite with `--junit-output-filename /nodir/report.xml` whose writes
-    fail as @Error::Stdio
-  When @run runs
-  Then @Err @Error::Stdio returns from the write — the all-passed verdict check is not
-    reached — and exit 3 prints `Testing the package failed with: Stdio error …`
-  No mapped test exists.
+  Given une suite d'intention verte avec `--junit-output-filename
+    /nodir/report.xml` dont les écritures échouent en @Error::Stdio
+  When @run tourne
+  Then @Err @Error::Stdio revient de l'écriture — la vérification all-passed du
+    verdict n'est pas atteinte — et exit 3 affiche `Testing the package failed
+    with: Stdio error …`
+  Aucun test mappé n'existe.
