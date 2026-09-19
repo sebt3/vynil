@@ -1,309 +1,316 @@
 Spec: ServiceRestoreCmd
 
 Purpose:
-  Back the `agent service restore` sub-command: build the Rhai engine over the
-    package, config, service and lib resolver directories, inject the parsed CLI
-    flags as the script variable `args`, then hand the whole restore work to the
-    Rhai module `restore`. This file reads and touches nothing else: no
-    @ServiceInstance fetch, no @set_service, no `instance` binding, no `context`
-    module call, no `status` write, no cluster call and no restore artifact at
-    all — a pure synchronous handoff. Diff-verified twin of ./backup.rs: the two
-    93-line files differ only at the two doc-comment words of the `namespace`
-    and `instance` flags (`to backup` → `to restore`) and at the fixed snippet,
-    where the module name is `restore` in all three positions; and of the
-    cross-kind twin ./../tenant/restore.rs, which differs only at the kind
-    segment `{script_dir}/tenant`. The flag block is ./install.sdd's ten-flag
-    shape verbatim — restore adds no snapshot-id, destination or repository
-    flag; the snapshot and restic repository arrive script-side as process
-    environment, never as CLI surface.
+  Prend en charge la sous-commande `agent service restore` : construire le moteur
+    Rhai sur les répertoires package, config, service et lib resolver, injecter
+    les flags CLI parsés comme variable script `args`, puis confier tout le
+    travail de restore au module Rhai `restore`. Ce fichier ne lit et ne touche
+    rien d'autre : pas de fetch @ServiceInstance, pas de @set_service, pas de
+    binding `instance`, pas d'appel au module `context`, pas d'écriture de
+    `status`, pas d'appel cluster et aucun artefact de restore du tout — pure
+    transmission synchrone. Jumeau vérifié par diff de ./backup.rs : les deux
+    fichiers de 93 lignes ne diffèrent que par les deux mots de doc-comment des
+    flags `namespace` et `instance` (`to backup` → `to restore`) et par le
+    snippet fixe, où le nom de module est `restore` aux trois positions ; et du
+    jumeau cross-kind ./../tenant/restore.rs, qui ne diffère que par le segment de
+    kind `{script_dir}/tenant`. Le bloc de flags est la forme en dix flags de
+    ./install.sdd verbatim — restore n'ajoute aucun flag snapshot-id, destination
+    ni repository ; le snapshot et le repository restic arrivent côté script par l'environnement du process, jamais comme surface CLI.
 
 References:
-  ./backup.sdd — the same-kind sibling whose body this file duplicates minus
-    the module name and the doc-comment words; the frozen notes there (sync
-    posture, flag-carried-unread, Dynamic discard, kind asymmetry) mirror here.
-  ./install.sdd, ./delete.sdd — the fetch-CR-plus-`context`-script shape this
-    lane deliberately drops; their open flag-contract tasks mirror here.
-  ./../tenant/restore.rs — the cross-kind twin, diff-verified identical except
-    the `tenant` kind segment; no spec yet.
+  ./backup.sdd — le frère de même kind dont ce fichier duplique le corps moins le
+    nom de module et les mots de doc-comment ; les notes gelées là-bas (posture sync,
+    flag-carried-unread, discard du Dynamic, asymétrie de kind) se reflètent ici.
+  ./install.sdd, ./delete.sdd — la forme fetch-CR-plus-script-`context` que cette
+    voie abandonne délibérément ; leurs tâches ouvertes sur le contrat des flags se reflètent ici.
+  ./../tenant/restore.rs — le jumeau cross-kind, vérifié par diff comme identique
+    sauf le segment de kind `tenant` ; pas encore de spec.
 
 Depends on:
-  /common/src/rhaihandler.sdd — @Script::new resolver semantics and live
-    registration set, @Script::eval error lane, @Script::set_dynamic (the
-    Deref'd core writer over the persistent @rhai::Scope), @Dynamic discard.
-  /common/src/lib.sdd — @common::Error variants, @common::Result and the
-    @common::DEFAULT_AGENT_IMAGE default of `agent_image`.
-  @clap @Args, @serde, @serde_json — flag parsing (flags, envs, defaults below)
-    and the derives behind the `args` JSON.
-  /agent/scripts/service/restore.rhai — the runtime handoff target the snippet
-    imports as `restore` under the default `--script-dir`; owned instead by
-    /agent/agent.sdd. Its `run` assembles the whole restore context script-side
-    through the lib module's `backup_context::from_args`: restic repository from
-    `BASE_REPO_URL`/`SUB_PATH`, the snapshot to restore from `RESTIC_SNAPSHOT`,
-    scale and database targets from `DEPLOYMENT_LIST`, `STATEFULSET_LIST`,
-    `SECRET_LIST`, `PG_LIST`, `MYSQL_LIST`, `MONGO_LIST`, `REDIS_LIST`, plus
-    `RESTIC_TAGS`, the `RESTIC_MAX_*` retention envs, `SCALE_TARGET` and
-    `INSECURE_TLS` — none of these names a CLI flag; unset envs resolve to
-    empty by the core @get_env.
-  ./mod.rs — the only caller: @context::init_k8s call (an inert no-op per
-    /common/src/context.sdd), then this arm's `unwrap_or_else` error lane
-    (tracing text and @process::exit(5), frozen by ./mod.sdd).
+  /common/src/rhaihandler.sdd — la sémantique de résolution @Script::new et le
+    jeu d'enregistrement live, la voie d'erreur @Script::eval, @Script::set_dynamic
+    (le writer core Deref'd sur le @rhai::Scope persistant), le discard du @Dynamic.
+  /common/src/lib.sdd — les variantes @common::Error, @common::Result et le
+    défaut @common::DEFAULT_AGENT_IMAGE de `agent_image`.
+  @clap @Args, @serde, @serde_json — le parsing des flags (flags, envs, défauts
+    ci-dessous) et les derives derrière le JSON `args`.
+  /agent/scripts/service/restore.rhai — la cible de handoff runtime que le
+    snippet importe comme `restore` sous le `--script-dir` par défaut ; propriété
+    de /agent/agent.sdd à la place. Son `run` assemble tout le contexte de
+    restore côté script via le `backup_context::from_args` du module lib : le
+    repository restic depuis `BASE_REPO_URL`/`SUB_PATH`, le snapshot à
+    restaurer depuis `RESTIC_SNAPSHOT`, les cibles de scale et de base de
+    données depuis `DEPLOYMENT_LIST`, `STATEFULSET_LIST`, `SECRET_LIST`,
+    `PG_LIST`, `MYSQL_LIST`, `MONGO_LIST`, `REDIS_LIST`, plus `RESTIC_TAGS`, les
+    envs de rétention `RESTIC_MAX_*`, `SCALE_TARGET` et
+    `INSECURE_TLS` — aucun de ces noms n'est un flag CLI ; les envs non définis se résolvent en vide par le @get_env du core.
+  ./mod.rs — l'unique appelant : l'appel @context::init_k8s (un no-op inerte par
+    /common/src/context.sdd), puis la voie d'erreur `unwrap_or_else` de cette
+    branche (texte de tracing et @process::exit(5), gelés par ./mod.sdd).
 
 Exposes:
-  @Parameters — clap @Args struct, also deriving @Debug, @Serialize and
-    @Deserialize; mounted by @service::Commands::Restore in ./mod.rs; all ten
-    fields private to this module, reached only by the derive code and by @run.
-  @run — @pub fn @run(@args: @&@Parameters) -> @common::Result<@()> — a plain
-    non-async function (unlike the awaited install and delete twins per
-    ./mod.sdd); the sole caller is @service::run (restore dispatch arm).
+  @Parameters — le struct clap @Args, dérivant aussi @Debug, @Serialize et
+    @Deserialize ; monté par @service::Commands::Restore dans ./mod.rs ; les dix
+    champs privés pour ce module, atteints seulement par le code du derive et par @run.
+  @run — @pub fn @run(@args: @&@Parameters) -> @common::Result<@()> — une simple
+    fonction non-async (à l'inverse des jumeaux install et delete attendus per
+    ./mod.sdd) ; l'unique appelant est @service::run (branche de dispatch restore).
 
 Accepts:
-  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, value name
-    `NAMESPACE`, @String, required (no `default_value`); doc comment the only
-    backup-twin text changed to `restore`; forwarded only — never read by this
-    file (contrast ./install.sdd where it keys the CR fetch).
-  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, value name
-    `INSTANCE`, @String, required; likewise forwarded but never read — the name
-    of an @ServiceInstance is never looked up here.
-  @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env
-    `VYNIL_NAMESPACE`, value name `VYNIL_NAMESPACE`, @String, required; never
-    read beyond serialization into `args`.
-  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`,
-    value name `PACKAGE_DIRECTORY`, @std::path::PathBuf, clap default
-    `/tmp/package`; read only to interpolate the first search directory.
-  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, value
-    name `SCRIPT_DIRECTORY`, @std::path::PathBuf, clap default
-    `./agent/scripts`; read only to interpolate the `service` and `lib` search
-    directories.
+  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, nom de valeur
+    `NAMESPACE`, @String, requis (pas de `default_value`) ; le doc-comment est le
+    seul texte du jumeau backup changé en `restore` ; seulement transmis, jamais lu
+    par ce fichier (contraste ./install.sdd où il clé le fetch du CR).
+  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, nom de valeur
+    `INSTANCE`, @String, requis ; pareillement transmis mais jamais lu — le nom
+    d'un @ServiceInstance n'est jamais cherché ici.
+  @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env `VYNIL_NAMESPACE`,
+    nom de valeur `VYNIL_NAMESPACE`, @String, requis ; jamais lu au-delà de sa
+    sérialisation dans `args`.
+  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, nom
+    de valeur `PACKAGE_DIRECTORY`, @std::path::PathBuf, défaut clap
+    `/tmp/package` ; lu seulement pour interpoler le premier répertoire de recherche.
+  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, nom de
+    valeur `SCRIPT_DIRECTORY`, @std::path::PathBuf, défaut clap
+    `./agent/scripts` ; lu seulement pour interpoler les répertoires de recherche
+    `service` et `lib`.
   @Parameters.template_dir — `-t` / `--template-dir`, env `TEMPLATE_DIRECTORY`,
-    value name `TEMPLATE_DIRECTORY`, @std::path::PathBuf, clap default
-    `./agent/templates`; present install-shape flag, read by nothing here or by
-    the snippet as evaluated.
-  @Parameters.agent_image — long-only `--agent-image`, env `AGENT_IMAGE`, value
-    name `AGENT_IMAGE`, @String, clap default @common::DEFAULT_AGENT_IMAGE, i.e.
-    `docker.io/sebt3/vynil-agent:0.7.7`; the other borrowed install-shape flag
-    with no reader in this lane.
-  @Parameters.tag — long-only `--tag`, env `TAG`, value name `TAG`, @String,
-    required; carried by the install flag shape, never parsed or used here.
-  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, value name
-    `CONFIG_DIR`, @std::path::PathBuf, clap default `.`; read to interpolate the
-    second search directory.
+    nom de valeur `TEMPLATE_DIRECTORY`, @std::path::PathBuf, défaut clap
+    `./agent/templates` ; flag présent de la forme install, lu par rien ici ni
+    par le snippet tel qu'évalué.
+  @Parameters.agent_image — long-only `--agent-image`, env `AGENT_IMAGE`, nom
+    de valeur `AGENT_IMAGE`, @String, défaut clap @common::DEFAULT_AGENT_IMAGE,
+    soit `docker.io/sebt3/vynil-agent:0.7.7` ; l'autre flag emprunté à la forme
+    install sans lecteur dans cette voie.
+  @Parameters.tag — long-only `--tag`, env `TAG`, nom de valeur `TAG`, @String,
+    requis ; porté par la forme de flags install, jamais parsé ni utilisé ici.
+  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, nom de valeur
+    `CONFIG_DIR`, @std::path::PathBuf, défaut clap `.` ; lu pour interpoler le
+    second répertoire de recherche.
   @Parameters.controller_values — long-only `--controller-values`, env
-    `CONTROLLER_VALUES`, value name `CONTROLLER_VALUES`, @String, clap default
-    the two-character string `{}`.
-  Runtime posture: invoked as a normal call from inside @service::run's async
-    task, so the whole script run executes on — and blocks — one tokio worker
-    thread; no runtime preconditions attach to this file (it touches no
-    @context state), in contrast to ./install.sdd whose @set_service demands a
-    multi-thread runtime.
+    `CONTROLLER_VALUES`, nom de valeur `CONTROLLER_VALUES`, @String, défaut clap la
+    chaîne de deux caractères `{}`.
+  Posture runtime : invoqué comme un appel normal depuis la tâche async de
+    @service::run, donc toute l'exécution du script s'exécute sur — et bloque —
+    un seul worker tokio ; aucun prérequis runtime ne s'attache à ce fichier (il
+    ne touche aucun état @context), à l'inverse de ./install.sdd dont le
+    @set_service exige un runtime multi-thread.
 
 Returns:
-  @Ok(@()) once the fixed eval snippet completes without a Rhai error — the
-    @Dynamic value the snippet returns is discarded by `let _ =`, never
-    inspected, so @Ok means only "the script ran to end".
+  @Ok(@()) une fois que le snippet d'eval fixe s'achève sans erreur Rhai — la
+    valeur @Dynamic que le snippet renvoie est jetée par `let _ =`, jamais
+    inspectée, donc @Ok ne veut dire que « the script ran to end ».
 
 Raises:
   @common::Error::SerializationError (Display `SerializationError: <serde
-    text>`) from the explicit @map_err when @serde_json::to_value(@Parameters)
-    fails on the derives; the only fallible step before the eval.
-  @common::Error::Core (wrapping @vynil_core::Error::RhaiError, Display
-    `Rhai script error: <rhai text>`) from the `?` on @Script::eval — a parse
-    error in the fixed snippet, a failed `restore` import in every search
-    directory, or any parse error / thrown error inside the `restore` module and
-    whatever it imports or import_runs.
-  Never @common::Error::KubeError, never the @panic! `cannot create the
-    Kubernetes client: {e}` of /common/src/context.sdd from Rust: this file
-    makes no cluster call, so no kube failure can originate here (contrast
-    ./install.sdd, where a missing CR is the first fallible step). Such panics
-    can still arrive only through registered functions a script itself calls
-    during the eval; a Rust panic there is not a catchable script error and
-    unwinds through this synchronous frame into the untouched-to-panics posture
-    frozen by ./mod.sdd.
+    text>`) du @map_err explicite quand @serde_json::to_value(@Parameters) échoue
+    sur les derives ; la seule étape faillible avant l'eval.
+  @common::Error::Core (encapsulant @vynil_core::Error::RhaiError, Display
+    `Rhai script error: <rhai text>`) du `?` sur @Script::eval — une erreur de
+    parse dans le snippet fixe, un import `restore` raté dans chaque répertoire
+    de recherche, ou toute erreur de parse / erreur lancée dans le module
+    `restore` et tout ce qu'il importe ou import_runs.
+  Jamais @common::Error::KubeError, jamais le @panic! `cannot create the
+    Kubernetes client: {e}` de /common/src/context.sdd depuis Rust : ce fichier
+    ne passe aucun appel cluster, donc aucune panne kube ne peut en provenir
+    (contraste ./install.sdd, où un CR manquant est la première étape faillible).
+    De telles panics ne peuvent arriver que via des fonctions enregistrées qu'un
+    script appelle lui-même pendant l'eval ; une panic Rust là n'est pas une
+    erreur de script catchable et se propage à travers cette frame synchrone
+    vers la posture untouched-to-panics gelée par ./mod.sdd.
 
 Handles:
-  @Err lane owned by the caller — @service::run logs `Restore of a package
-    failed with:` followed by the error Display through @tracing::error and
-    calls @process::exit(5); this file logs nothing and never exits.
-  Process context never set — no @set_* runs in this lane, so the
-    @VynilContext stays @VynilContext::None throughout and the script-visible
-    `vynil_owner()` answers its empty map (per /common/src/rhaihandler.sdd);
-    the restore context the scripts use comes from their own env-variable
-    assembly, not from this process.
-  Missing or gone @ServiceInstance — invisible here by construction: with no
-    fetch, the instance's existence cannot fail this lane; any behavior
-    tolerance to a missing instance is script-side (contrast ./delete.sdd's
-    hard exit-3 failure).
-  Absent resolver directories — the four search paths are never existence-
-    checked at construction; the failure only lands later as the
-    @common::Error::Core import error if no search dir holds `restore.rhai`.
-  Thrown script failures — a stage's `throw` (the shipped module throws on a
-    non-zero custom-script return code) arrives as the same @Err(@Core) with
-    the thrown text behind the `Rhai script error: ` prefix and rides the
-    exit-5 lane.
-  Restore artifacts — none in the Rust lane: the restic restore, maintenance
-    toggles, secret reloads and database re-seeds are all Rhai stage work; this
-    file produces no artifact and writes nothing to disk or cluster.
+  Voie @Err portée par l'appelant — @service::run journalise `Restore of a
+    package failed with:` suivi du Display de l'erreur via @tracing::error et
+    appelle @process::exit(5) ; ce fichier ne journalise rien et ne sort jamais.
+  Contexte process jamais posé — aucun @set_* ne tourne dans cette voie, donc le
+    @VynilContext reste @VynilContext::None partout et le `vynil_owner()` visible
+    du script répond sa carte vide (cf /common/src/rhaihandler.sdd) ; le
+    contexte de restore que les scripts utilisent vient de leur propre
+    assemblage par variables d'environnement, pas de ce process.
+  @ServiceInstance absent ou disparu — invisible ici par construction : sans
+    fetch, l'existence de l'instance ne peut faire échouer cette voie ; toute
+    tolérance à une instance manquante est côté script (contraste l'échec dur
+    exit-3 de ./delete.sdd).
+  Répertoires de résolution absents — les quatre chemins de recherche ne sont
+    jamais vérifiés à l'existence à la construction ; la panne ne tombe que plus
+    tard comme l'erreur d'import @common::Error::Core si aucun répertoire de
+    recherche ne contient `restore.rhai`.
+  Échecs de script lancés — le `throw` d'une étape (le module délivré lance sur
+    un code de retour de custom-script non nul) arrive comme le même @Err(@Core)
+    avec le texte lancé derrière le préfixe `Rhai script error: ` et suit la voie
+    exit-5.
+  Artefacts de restore — aucun dans la voie Rust : le restore restic, les
+    bascules de maintenance, les rechargements de secret et les re-seeds de bases
+    de données sont tout du travail d'étape Rhai ; ce fichier ne produit aucun
+    artefact et n'écrit rien sur disque ni cluster.
 
 Must:
-  Execute these steps in this order, with nothing between them: build the
-    interpreter, serialize and inject `args`, evaluate the snippet, return
-    @Ok — there is no fetch, publish or `instance`-inject step and none may be
-    inserted; only @Parameters.package_dir, @Parameters.config_dir and
-    @Parameters.script_dir are read by this file at all.
-  Build the interpreter with @Script::new on exactly four resolver directories
-    in this order: `{package_dir}/scripts`, `{config_dir}` (the directory
-    itself), `{script_dir}/service`, `{script_dir}/lib` — plain string
-    interpolation of @std::path::Display, so a path argument ending in `/`
-    doubles the separator; earlier entries win an `import`; the `service` kind
-    segment is hard-coded.
-  @Script::new brings the full live-cluster registration set — the same one
-    ./install.sdd and ./delete.sdd get (@service_rhai_register and the other
-    two kinds, http, s3, the jukebox and the k8s registrars), so the scripts
-    could self-fetch cluster state through registered bridges even though the
-    Rust lane never does.
-  Serialize @Parameters with @serde_json::to_value and inject it through
-    @Script::set_dynamic as the script variable named `args`; the JSON object
-    carries the ten declared snake_case keys `namespace`, `instance`,
+  Exécuter ces étapes dans cet ordre, sans rien entre elles : construire
+    l'interpréteur, sérialiser et injecter `args`, évaluer le snippet, renvoyer
+    @Ok — il n'y a pas d'étape fetch, publish ni d'injection d'`instance` et
+    aucune ne peut être insérée ; seuls @Parameters.package_dir,
+    @Parameters.config_dir et @Parameters.script_dir sont lus par ce fichier.
+  Construire l'interpréteur avec @Script::new sur exactement quatre répertoires
+    de résolution dans cet ordre : `{package_dir}/scripts`, `{config_dir}` (le
+    répertoire lui-même), `{script_dir}/service`, `{script_dir}/lib` — simple
+    interpolation de chaîne de @std::path::Display, donc un argument de chemin
+    finissant par `/` double le séparateur ; les entrées antérieures l'emportent
+    sur un `import` ; le segment de kind `service` est codé en dur.
+  @Script::new apporte le jeu d'enregistrement cluster-live complet — le même
+    que celui d'./install.sdd et ./delete.sdd (@service_rhai_register et les
+    deux autres kinds, http, s3, les registrars jukebox et k8s), donc les scripts
+    pourraient auto-fetch l'état cluster via les ponts enregistrés même si la
+    voie Rust ne le fait jamais.
+  Sérialiser @Parameters avec @serde_json::to_value et l'injecter via
+    @Script::set_dynamic comme variable script nommée `args` ; l'objet JSON
+    porte les dix clés snake_case déclarées `namespace`, `instance`,
     `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`,
-    `agent_image`, `tag`, `config_dir`, `controller_values` — install's exact
-    key set — with `controller_values` as a JSON string (its default renders
-    `"{}"`, still a string, not an object), `agent_image` as a string and the
-    @PathBufs as path text.
-  Evaluate the fixed two-statement snippet, nothing configurable in it:
-    `import("restore") as restore; restore::run(args);` — the only module name
-    the Rust lane names is `restore` (no `context` module, no `instance`
-    argument); the trailing `;` makes the result @rhai::Dynamic::UNIT,
-    discarded by `let _ =` while a failed evaluation still propagates through
-    `?`.
-  Keep @run non-async: @service::run calls it without awaiting (frozen
-    discipline in ./mod.sdd), and the synchronous call blocks its tokio worker
-    for the full duration of the script run.
-  Emit no log and no stdout/stderr.
+    `agent_image`, `tag`, `config_dir`, `controller_values` — le jeu exact
+    d'install — avec `controller_values` en chaîne JSON (son défaut rend `"{}"`,
+    toujours une chaîne, pas un objet), `agent_image` en chaîne et les @PathBuf
+    en texte de chemin.
+  Évaluer le snippet fixe de deux instructions, rien de configurable dedans :
+    `import("restore") as restore; restore::run(args);` — le seul nom de module
+    que nomme la voie Rust est `restore` (pas de module `context`, pas d'argument
+    `instance`) ; le `;` final rend le résultat @rhai::Dynamic::UNIT, jeté par
+    `let _ =` tandis qu'une évaluation en échec se propage quand même via `?`.
+  Garder @run non-async : @service::run l'appelle sans l'attendre (discipline
+    gelée dans ./mod.sdd), et l'appel synchrone bloque son worker tokio pour
+    toute la durée de l'exécution du script.
+  N'émettre aucun log ni stdout/stderr.
 
 Must not:
-  Copy the install/delete fetch shape: no @ServiceInstance::get call, no
-    @set_service, no `instance` or `context` binding here — a Rust-side read
-    would fabricate a KubeError (and a panic lane) the restore Job does not
-    have and would move script-side context assembly into this handoff.
-  Read `template_dir`, `agent_image`, `tag` or `controller_values` to steer
-    this lane, or gate on their contents: they are invisible to this file by
-    shape and reach the scripts only through `args`.
+  Reproduire la forme fetch install/delete : pas d'appel @ServiceInstance::get,
+    pas de @set_service, pas de binding `instance` ni `context` ici — une lecture
+    côté Rust fabriquerait une KubeError (et une voie de panic) que le Job
+    restore n'a pas et déplacerait l'assemblage du contexte côté script dans
+    cette transmission.
+  Lire `template_dir`, `agent_image`, `tag` ou `controller_values` pour piloter
+    cette voie, ou conditionner sur leur contenu : ils sont invisibles à ce
+    fichier par la forme et ne parviennent aux scripts que via `args`.
 
 Tasks:
-  [ ] Cover all six Scenarios with tests; no test invokes this @run —
-      /agent/tests/rhai_backup_redis.rs exercises restore-stage Rhai modules
-      (e.g. restore_redis) on mock engines over the tenant script dirs,
-      bypassing this Rust lane (same posture as ./backup.sdd's open coverage
-      task).
-  [?] Sync-vs-async freeze: install/delete are awaited, backup/restore are
-      synchronous (./mod.sdd). Sync is runtime-safe here only because the Rust
-      lane touches no @context state and fetches nothing from k8s — the process
-      context is not set, the scripts build their own from env — and the cost
-      is one blocked tokio worker for the whole restic restore. Decide whether
-      the sync handoff is the permanent intended shape (and whether it should
-      then grow a runtime precondition comment or an @spawn) rather than
-      leftover code awaiting an `.await`.
-  [?] No snapshot or destination flag exists: nothing in the ten flags names a
-      restic repository or a snapshot to restore — the shipped module takes
-      both from the `RESTIC_SNAPSHOT`, `BASE_REPO_URL` and `SUB_PATH` process
-      environment via its `backup_context::from_args` import. So
-      `agent service restore` only does meaningful work in an environment
-      already shaped like a dispatched restore Job. Confirm the CLI contract
-      intends snapshot-and-destination-by-environment, or add the flags.
-  [?] `namespace` and `instance` are required by clap yet read by no code here
-      (install/delete at least fetch with them), and `vynil_namespace`, `tag`,
-      `template_dir` and `agent_image` are likewise carried unread; the flag
-      block is install's verbatim. Confirm every flag's requiredness belongs to
-      the script-side `args` contract or relax this lane's surface (mirrors the
-      open tasks in ./install.sdd, ./delete.sdd and ./backup.sdd).
-  [?] `controller_values` reaches scripts as a JSON string even when it holds
-      `{}`, so every consumer must decode it — same open point as
-      ./install.sdd; settle once across the twin lanes.
-  [?] The eval @Dynamic is discarded (`let _ =` on a `;`-ended snippet), yet
-      the shipped module `return`s inside its custom `restore.sh` branch; that
-      path already `throw`s on a non-zero rc so what is discarded on success is
-      only `0` or the default path's UNIT. Confirm "snippet finished" is the
-      intended success signal.
-  [?] Dead script hooks visible through this lane: the shipped module calls
-      import_run on `restore_pre` and `restore_post`, but no such module exists
-      under /agent/scripts/service/ or any other search dir — the core
-      `import_run` shim swallows the miss to a debug log, so the before/after
-      restore hook points are inert in the shipped tree (backup's
-      `backup_pre`/`backup_post` calls share the gap). Confirm whether the
-      stages are owed modules or the calls are dead code.
-  [?] Kind asymmetry: backup/restore lanes exist only for service (this file)
-      and tenant (./../tenant/restore.rs); `./../system/` has none, and the
-      backup/restore pair is system's whole gap — while /agent/agent.sdd's
-      Purpose claims those operations for the three instance kinds and
-      /docs/cli.md's table lists the common flags but no exit-code entry for
-      exit 5. Confirm system has no restore by design (and correct the crate
-      wording) or that a lane is missing.
-  [?] @Deserialize on @Parameters has no deserialization site in the workspace
-      (the Rust lane only serializes it toward scripts). Same open point as
-      ./install.sdd; decide whether the derive stays.
+  [ ] Couvrir les six Scenarios par des tests ; aucun test n'invoque ce @run —
+      /agent/tests/rhai_backup_redis.rs exerce des modules Rhai d'étape de
+      restore (p. ex. restore_redis) sur des moteurs mock sur les répertoires de
+      scripts tenant, en contournant cette voie Rust (même posture que la tâche
+      de couverture ouverte de ./backup.sdd).
+  [?] Gel sync-vs-async : install/delete sont attendus, backup/restore sont
+      synchrones (./mod.sdd). Le synchrone n'est sans risque runtime que parce
+      que la voie Rust ne touche aucun état @context et ne fetch rien de k8s — le
+      contexte process n'est pas posé, les scripts se le construisent depuis
+      l'env — et le coût est un worker tokio bloqué pour tout le restore restic.
+      Décider si la transmission synchrone est la forme définitive voulue (et si
+      elle devrait alors gagner un commentaire de précondition runtime ou un
+      @spawn) plutôt qu'un reste de code attendant un `.await`.
+  [?] Aucun flag snapshot ni destination n'existe : rien dans les dix flags ne
+      nomme de repository restic ni de snapshot à restaurer — le module délivré
+      prend les deux de l'environnement process `RESTIC_SNAPSHOT`,
+      `BASE_REPO_URL` et `SUB_PATH` via son import `backup_context::from_args`.
+      Donc `agent service restore` ne fait un travail utile que dans un
+      environnement déjà façonné comme un Job restore dispatché. Confirmer que
+      le contrat CLI prévoit snapshot-et-destination-par-environnement, ou
+      ajouter les flags.
+  [?] `namespace` et `instance` sont requis par clap mais lus par aucun code ici
+      (install/delete font au moins un fetch avec eux), et `vynil_namespace`,
+      `tag`, `template_dir` et `agent_image` sont pareillement portés non lus ;
+      le bloc de flags est celui d'install verbatim. Confirmer que le
+      requiredness de chaque flag relève du contrat `args` côté script, ou
+      assouplir la surface de cette voie (reflète les tâches ouvertes de
+      ./install.sdd, ./delete.sdd et ./backup.sdd).
+  [?] `controller_values` parvient aux scripts en chaîne JSON même quand il porte
+      `{}`, donc tout consommateur doit le décoder — même point ouvert que
+      ./install.sdd ; à trancher une fois sur les voies jumelles.
+  [?] Le @Dynamic de l'eval est jeté (`let _ =` sur un snippet fini par `;`), or
+      le module délivré fait `return` dans sa branche custom `restore.sh` ; ce
+      chemin `throw` déjà sur un rc non nul, donc ce qui est jeté au succès n'est
+      que `0` ou l'UNIT du chemin par défaut. Confirmer que « snippet finished »
+      est le signal de succès voulu.
+  [?] Hooks de script morts visibles via cette voie : le module délivré appelle
+      import_run sur `restore_pre` et `restore_post`, mais aucun module pareil
+      n'existe sous /agent/scripts/service/ ni dans aucun autre répertoire de
+      recherche — le shim `import_run` du core avale le manque en un log debug,
+      donc les points de hook avant/après restore sont inertes dans l'arbre
+      délivré (les appels `backup_pre`/`backup_post` de backup partagent la
+      lacune). Confirmer si ces étapes doivent avoir des modules ou si les
+      appels sont du code mort.
+  [?] Asymétrie de kind : les voies backup/restore n'existent que pour service
+      (ce fichier) et tenant (./../tenant/restore.rs) ; `./../system/` n'en a
+      aucune, et la paire backup/restore est tout le gap de system — alors que le
+      Purpose de /agent/agent.sdd revendique ces opérations pour les trois kinds
+      d'instance et que le tableau de /docs/cli.md liste les flags communs mais
+      aucune entrée de code de sortie pour exit 5. Confirmer que system n'a pas
+      de restore par conception (et corriger le libellé du crate) ou qu'une voie
+      manque.
+  [?] @Deserialize sur @Parameters n'a aucun site de désérialisation dans le
+      workspace (la voie Rust ne fait que le sérialiser vers les scripts). Même
+      point ouvert que ./install.sdd ; décider si le derive reste.
 
 Done when:
-  The six Scenarios hold under tests pinning the four-dir resolver order, the
-    ten-key `args` JSON with `template_dir`/`agent_image`/`tag` present at
-    their defaults and `controller_values` as a string, the never-touches-the-
-    cluster posture, and the error-to-exit(5) lane.
+  Les six Scenarios tiennent sous des tests figeant l'ordre des quatre
+    répertoires de résolution, le JSON `args` à dix clés avec
+    `template_dir`/`agent_image`/`tag` présents à leurs défauts et
+    `controller_values` en chaîne, la posture sans-jamais-toucher-le-cluster, et
+    la voie error-to-exit(5).
 
 Scenario: full run hands off without touching the cluster
-  Given all required flags supplied (by flag or env) and `restore.rhai`
-    resolvable under `{script_dir}/service`
-  When @run is called synchronously from @service::run
-  Then @Script::new received the four search dirs `[package]/scripts`,
-    `[config]`, `[script]/service`, `[script]/lib` in that order
-  And only `args` is bound — no `instance` variable was injected and
-    @set_service never ran, so @VynilContext stays @VynilContext::None
-  Then the `restore` module's `run` executes with that args map and @run
-    returns @Ok(()) whatever the discarded @Dynamic was
-  And no @kube call and no file mutation originated from this file
+  Given tous les flags requis fournis (par flag ou env) et `restore.rhai`
+    résolvable sous `{script_dir}/service`
+  When @run est appelé synchroniquement depuis @service::run
+  Then @Script::new a reçu les quatre répertoires de recherche
+    `[package]/scripts`, `[config]`, `[script]/service`, `[script]/lib` dans cet ordre
+  And seule `args` est liée — aucune variable `instance` n'a été injectée et
+    @set_service ne s'est jamais exécuté, donc @VynilContext reste @VynilContext::None
+  Then le `run` du module `restore` s'exécute avec cette args map et @run
+    renvoie @Ok(()) quel que soit le @Dynamic jeté
+  And aucun appel @kube ni mutation de fichier n'est originaire de ce fichier
 
 Scenario: install-shape flags reach scripts at their defaults
-  Given a command line that sets `--namespace`, `--instance`,
-    `--vynil-namespace` and `--tag` but omits every defaulted flag
-  When @run serializes @Parameters into `args`
-  Then the object holds exactly the ten keys `namespace`, `instance`,
+  Given une ligne de commande qui pose `--namespace`, `--instance`,
+    `--vynil-namespace` et `--tag` mais omet tout flag par défaut
+  When @run sérialise @Parameters dans `args`
+  Then l'objet tient exactement les dix clés `namespace`, `instance`,
     `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`,
     `agent_image`, `tag`, `config_dir`, `controller_values`
-  And `package_dir` is `/tmp/package`, `script_dir` is `./agent/scripts`,
-    `template_dir` is `./agent/templates`, `agent_image` is
-    `docker.io/sebt3/vynil-agent:0.7.7`, `config_dir` is `.` and
-    `controller_values` is the JSON string `"{}"`
+  And `package_dir` vaut `/tmp/package`, `script_dir` vaut `./agent/scripts`,
+    `template_dir` vaut `./agent/templates`, `agent_image` vaut
+    `docker.io/sebt3/vynil-agent:0.7.7`, `config_dir` vaut `.` et
+    `controller_values` est la chaîne JSON `"{}"`
 
 Scenario: missing instance CR is invisible to this lane
-  Given no @ServiceInstance exists at the given namespace/name, the cluster is
-    unreachable, and yet `restore.rhai` plus what it imports resolve and
-    complete
-  When @run is called
-  Then @run returns @Ok(()) — @common::Error::KubeError cannot arise because no
-    lookup is performed
-  And the exit-5 lane is never entered
+  Given aucun @ServiceInstance n'existe au namespace/name donné, que le cluster
+    est injoignable, et pourtant que `restore.rhai` plus ce qu'il importe se
+    résolvent et achèvent
+  When @run est appelé
+  Then @run renvoie @Ok(()) — @common::Error::KubeError ne peut surgir car
+    aucune recherche n'est effectuée
+  And la voie exit-5 n'est jamais empruntée
 
 Scenario: restore module missing fails the eval
-  Given valid flags but no `restore.rhai` resolvable in any of the four
-    resolver directories
-  When @run evaluates the snippet
-  Then @Script::eval returns @Err(@common::Error::Core Display-prefixed
-    `Rhai script error:`) and @run propagates it unchanged
-  And @service::run logs `Restore of a package failed with:` carrying that text
-    at @tracing::error level and exits the process 5
+  Given des flags valides mais aucun `restore.rhai` résolvable dans aucun des
+    quatre répertoires de résolution
+  When @run évalue le snippet
+  Then @Script::eval renvoie @Err(@common::Error::Core à préfixe Display
+    `Rhai script error:`) et @run le propague inchangé
+  And @service::run journalise `Restore of a package failed with:` portant ce texte
+    au niveau @tracing::error et quitte le process 5
 
 Scenario: thrown stage failure rides the exit-5 lane
-  Given `restore.rhai` resolves and one stage throws inside the module (the
-    shipped module throws when a package-provided `restore.sh`,
-    `restore_prepare.sh`, `restore_secret.sh`, `restore_postgresql.sh` or
-    `restore_mysql.sh` returns non-zero)
-  When @run evaluates the snippet
-  Then the returned @Err(@Core) Display is `Rhai script error: ` followed by
-    the thrown text
-  And the exit-5 lane logs it and exits 5, with the process context still
+  Given que `restore.rhai` se résout et qu'une étape throw dans le module (le
+    module délivré throw quand un `restore.sh`, `restore_prepare.sh`,
+    `restore_secret.sh`, `restore_postgresql.sh` ou `restore_mysql.sh` fourni
+    par le package renvoie non nul)
+  When @run évalue le snippet
+  Then le Display du @Err(@Core) renvoyé est `Rhai script error: ` suivi du texte
+    lancé
+  And la voie exit-5 le journalise et sort avec 5, le contexte process restant
     @VynilContext::None
 
 Scenario: missing required flag never reaches Rust logic
-  Given `--instance` omitted and `INSTANCE` unset in the environment — same
-    lane for `--namespace` / `NAMESPACE`, `--vynil-namespace` /
-    `VYNIL_NAMESPACE` and `--tag` / `TAG`
-  When the binary parses @Parameters
-  Then clap exits with its usage error before @run starts — no interpreter is
-    built, and the exit-5 restore lane is never entered
+  Given `--instance` omis et `INSTANCE` non défini dans l'environnement — même
+    voie pour `--namespace` / `NAMESPACE`, `--vynil-namespace` /
+    `VYNIL_NAMESPACE` et `--tag` / `TAG`
+  When le binaire parse @Parameters
+  Then clap sort avec son erreur d'utilisation avant que @run ne démarre — aucun
+    interpréteur n'est construit, et la voie restore exit-5 n'est jamais empruntée
