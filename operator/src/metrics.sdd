@@ -1,302 +1,302 @@
 Spec: Metrics
 
 Purpose:
-  Instrument every Vynil reconcile with Prometheus data: four prefix-kept registries, one per
-    custom resource kind, each holding a reconcile-attempts counter, a failure counter
-    labelled by the @Error::metric_label text, and a duration histogram whose observations
-    carry an optional `trace_id` exemplar. Hand the registries out as @Arc fields so
-    @Manager::metrics (./manager.rs) can render them, and time a reconcile through the RAII
-    @ReconcileMeasurerBox and @ReconcileMeasurerInstance measurers, which observe the duration
-    exactly once when they drop.
+  Instrumenter chaque réconciliation Vynil avec des données Prometheus : quatre registres au
+    préfixe conservé, un par kind de ressource personnalisée, chacun portant un compteur de
+    tentatives de réconciliation, un compteur d'échecs étiqueté par le texte @Error::metric_label, et
+    un histogramme de durée dont les observations portent un exemplaire optionnel `trace_id`. Exposer
+    les registres comme champs @Arc pour que @Manager::metrics (./manager.rs) puisse les rendre, et
+    chronométrer une réconciliation via les mesureurs RAII @ReconcileMeasurerBox et
+    @ReconcileMeasurerInstance, qui observent la durée exactement une fois à leur drop.
 
 Owns:
   ./metrics.rs
 
 References:
-  ./telemetry.sdd — @get_trace_id supplies every @count_and_measure trace id today; its stub
-    returns @TraceId::INVALID, which keeps the exemplar lane this file offers dead.
-  /common/src/lib.sdd — the @Error vocabulary and @Error::metric_label whose lowercased
-    @Debug text becomes the `error` label; that spec's open `[?]` on unbounded labels applies
-    here directly.
+  ./telemetry.sdd — @get_trace_id fournit aujourd'hui l'id de trace de chaque @count_and_measure ; son stub
+    renvoie @TraceId::INVALID, ce qui maintient morte la voie d'exemplaire que ce fichier offre.
+  /common/src/lib.sdd — le vocabulaire @Error et @Error::metric_label dont le texte @Debug en
+    minuscules devient l'étiquette `error` ; le `[?]` ouvert de cette spec sur les étiquettes non
+    bornées s'applique ici directement.
   /common/src/jukebox.sdd, /common/src/instancesystem.sdd, /common/src/instanceservice.sdd,
-    /common/src/instancetenant.sdd — the four namespaced CR models whose metadata and spec
-    fields are read verbatim into label values.
-  ./manager.sdd, ./main.rs — specs pending; their owners read the four @Registry fields and
-    serve `/metrics`; this file serves nothing.
+    /common/src/instancetenant.sdd — les quatre modèles CR à namespace dont les métadonnées et
+    champs de spec sont lus tels quels en valeurs d'étiquettes.
+  ./manager.sdd, ./main.rs — specs en attente ; leurs propriétaires lisent les quatre champs @Registry
+    et servent `/metrics` ; ce fichier ne sert rien.
 
 Depends on:
-  @prometheus_client `0.24.0` (../Cargo.toml, locked `0.24.1`) — @Registry and @Unit,
-    @Counter, @Family, @HistogramWithExemplars, the @EncodeLabelSet derive, and the OpenMetrics
-    text encoder the @Arc registries eventually feed.
-  @kube (locked kube-core `3.1.0`, /Cargo.lock) — @kube::@ResourceExt with @name_any and
-    @namespace producing the identity label values.
-  @common — @Error and the CR types @JukeBox, @SystemInstance, @ServiceInstance and
+  @prometheus_client `0.24.0` (../Cargo.toml, verrouillé `0.24.1`) — @Registry et @Unit,
+    @Counter, @Family, @HistogramWithExemplars, le derive @EncodeLabelSet, et l'encodeur texte
+    OpenMetrics que les registres @Arc alimentent à terme.
+  @kube (kube-core verrouillé `3.1.0`, /Cargo.lock) — @kube::@ResourceExt avec @name_any et
+    @namespace produisant les valeurs d'étiquettes d'identité.
+  @common — @Error et les types CR @JukeBox, @SystemInstance, @ServiceInstance et
     @TenantInstance.
-  @opentelemetry `0.32.0` — @TraceId and @TraceId::INVALID crossing in from ./telemetry.rs.
-  `tokio` time — @tokio::time::@Instant, the monotonic std alias; @elapsed is the sole clock.
+  @opentelemetry `0.32.0` — @TraceId et @TraceId::INVALID venant de ./telemetry.rs.
+  l'heure `tokio` — @tokio::time::@Instant, l'alias monotone de std ; @elapsed est l'unique horloge.
 
 Must:
-  Stay crate-internal by module: ./lib.rs declares `mod metrics;` and re-exports only
-    @Metrics; every other type here is `pub` inside the private @crate::metrics path —
-    ./instance_common.rs and the three kind modules name @ReconcileMeasurerInstance in their
-    @InstanceKind surface, and the bin crate (a separate crate over lib `controller`) reaches
-    these metrics only as the @String returned by @Manager::metrics.
-  Build exactly four registries in @Metrics::default, prefix-only via
-    @Registry::with_prefix with the literal prefixes `jukebox_reconcile`,
-    `system_instance_reconcile`, `service_instance_reconcile` and
-    `tenant_instance_reconcile`, then wrap each in @Arc as @reg_box, @reg_sys, @reg_svc and
-    @reg_tnt; no const registry labels are set.
-  Register three families per kind before publishing — @register calls @register_with_unit
+  Rester interne à la crate par module : ./lib.rs déclare `mod metrics;` et ne réexporte que
+    @Metrics ; tout autre type ici est `pub` dans le chemin privé @crate::metrics —
+    ./instance_common.rs et les trois modules de kind nomment @ReconcileMeasurerInstance dans leur
+    surface @InstanceKind, et la crate bin (crate séparée sur la lib `controller`) n'atteint
+    ces métriques que comme le @String renvoyé par @Manager::metrics.
+  Construire exactement quatre registres dans @Metrics::default, au préfixe seul via
+    @Registry::with_prefix avec les préfixes littéraux `jukebox_reconcile`,
+    `system_instance_reconcile`, `service_instance_reconcile` et
+    `tenant_instance_reconcile`, puis envelopper chacun dans un @Arc comme @reg_box, @reg_sys, @reg_svc et
+    @reg_tnt ; aucune étiquette const de registre n'est posée.
+  Enregistrer trois familles par kind avant publication — @register appelle @register_with_unit
     (`"duration"`, help `"reconcile duration"`, @Unit::Seconds), @register (`"failures"`, help
-    `"reconciliation errors"`) and @register (`"runs"`, help `"reconciliations"`) in that
-    order, cloning each @Family handle into the registry, then returns the metric set unchanged.
-  Render through @prometheus_client `0.24.1` text encoding as prefix-joined names: the
-    `<prefix>_runs_total` and `<prefix>_failures_total` counters, and the
-    `<prefix>_duration_seconds` histogram (`# TYPE … histogram`, a `# UNIT … seconds` line,
-    `_bucket`, `_sum` and `_count` series); that encoder version emits no `# created` lines;
-    twelve families total across the four registries.
-  Set every duration histogram to the same nine sorted bounds
-    `[0.01, 0.1, 0.5, 1., 5., 15., 60., 120., 300.]` seconds in each kind's @Default via
-    @Family::new_with_constructor, so a
-    child histogram is born only when a new label set is first observed.
-  Measure duration identically in both measurer @Drop impls: elapsed integer millis from
-    `self.start.elapsed().as_millis()` cast with `as f64 / 1000.0` — integer truncation, so
-    sub-millisecond runs observe `0.0` — carried under
-    `#[allow(clippy::cast_precision_loss)]`, then
-    `.get_or_create(&self.labels).observe(duration, trace, None)` with the exemplar timestamp
-    pinned at @None; the @Clone of
-    @Family inside @count_and_measure is what lets @Drop write back into the registered
-    histogram.
-  Treat @Drop as the single writer of duration observations: normal end of scope, an early `?`
-    return and a panic unwind all drop the measurer and still record exactly one observation
-    whose value is the time since @count_and_measure was called.
-  Count a run, not a completion: @count_and_measure increments the runs counter immediately at
-    call inside the reconciles (./jukebox.rs @reconcile binds the measurer as `let _mes = …`,
-    ./instance_common.rs @run_with_finalizer binds it through @count_and_measure_metrics), so
-    an attempt that fails still counts; no success counter exists anywhere, making success
-    inferable only as runs minus failures.
-  Attach exemplars with exactly one label (@trace_id) — @count_and_measure converts the borrowed
-    @TraceId through the @TryFrom<&@TraceId> impl via `.ok()`; the impl compares with
-    @std::matches! and returns @Err(@Error::Other("Invalid trace ID")) for @TraceId::INVALID,
-    else @Ok carrying `id.to_string()`, which opentelemetry `0.32` renders as exactly 32
-    lowercase hex digits; the discarded @Err means a refused id silently yields no exemplar
-    while the observation itself is kept.
-  Label failures with the error text: @reconcile_failure performs one `.inc()` on the kind's
-    failures family with `error` set to @Error::metric_label of the caller's @Error, plus
-    `instance` (jukebox) or `name` and the spec strings (instances) per Exposes.
-  Label identity the kube-core `3.1.0` way: @name_any resolves the metadata @name, then
-    @generate_name, else the empty string — `3.1` never joins the namespace — and @namespace
-    is @Option of metadata.namespace, so nameless objects land on `""` values;
-    @prometheus_client encodes an @Option<@String> label as empty when @None; the instance
-    labels clone @spec.jukebox, @category and @package verbatim.
-  Grow series monotonically: @Family::get_or_create creates and stores a child permanently on
-    any unseen label set across runs, failures and duration; nothing here ever deletes,
-    rebases or caps a child, so series are unbounded by construction.
-  Serve all four kind registries from live call sites: the tenant @Default and @register run
-    inside @Metrics::default identically and ./instancetenant.rs invokes the tenant
-    @count_and_measure and @reconcile_failure exactly as ./instanceservice.rs and
-    ./instancesystem.rs do, so no shipped family encodes as metadata-only; the jukebox family
-    is driven by ./jukebox.rs @count_and_measure on its own reconcile entry.
-  Stay independent per @Metrics::default call: separate registries and counters, built once
-    per @Manager by ./manager.rs and fresh in ./jukebox.rs @make_test_ctx; satisfy the ./lib.rs
-    `deny(clippy::unwrap_used, clippy::expect_used)` with zero unwrap or expect sites — the
-    file's only failure is laundered through `.ok()`.
+    `"reconciliation errors"`) et @register (`"runs"`, help `"reconciliations"`) dans cet
+    ordre, clonant chaque poignée @Family dans le registre, puis renvoie le jeu de métriques inchangé.
+  Rendre via l'encodage texte @prometheus_client `0.24.1` en noms joints au préfixe : les
+    compteurs `<prefix>_runs_total` et `<prefix>_failures_total`, et l'histogramme
+    `<prefix>_duration_seconds` (`# TYPE … histogram`, une ligne `# UNIT … seconds`,
+    les séries `_bucket`, `_sum` et `_count`) ; cette version de l'encodeur n'émet pas de lignes
+    `# created` ; douze familles au total dans les quatre registres.
+  Fixer chaque histogramme de durée aux mêmes neuf bornes triées
+    `[0.01, 0.1, 0.5, 1., 5., 15., 60., 120., 300.]` secondes dans le @Default de chaque kind via
+    @Family::new_with_constructor, de sorte qu'un
+    histogramme enfant ne naît qu'à la première observation d'un nouveau jeu d'étiquettes.
+  Mesurer la durée identiquement dans les deux impls @Drop des mesureurs : les millisecondes entières
+    écoulées de `self.start.elapsed().as_millis()` converties par `as f64 / 1000.0` — troncature
+    entière, donc les runs sous la milliseconde observent `0.0` — portées sous
+    `#[allow(clippy::cast_precision_loss)]`, puis
+    `.get_or_create(&self.labels).observe(duration, trace, None)` avec l'horodatage d'exemplaire
+    épinglé à @None ; le @Clone de
+    @Family dans @count_and_measure est ce qui permet à @Drop de réécrire dans l'histogramme
+    enregistré.
+  Traiter @Drop comme l'unique rédacteur des observations de durée : fin normale de portée, un retour
+    précoce par `?` et un dépilement de panic dropent tous le mesureur et enregistrent quand même
+    exactement une observation dont la valeur est le temps écoulé depuis l'appel de @count_and_measure.
+  Compter une exécution, pas une fin : @count_and_measure incrémente le compteur de runs immédiatement
+    à l'appel dans les reconciles (./jukebox.rs @reconcile lie le mesureur comme `let _mes = …`,
+    ./instance_common.rs @run_with_finalizer le lie via @count_and_measure_metrics), donc une tentative
+    qui échoue compte quand même ; aucun compteur de succès n'existe nulle part, rendant le succès
+    seulement déductible comme runs moins failures.
+  Attacher les exemplaires avec exactement une étiquette (@trace_id) — @count_and_measure convertit le
+    @TraceId emprunté via l'impl @TryFrom<&@TraceId> par `.ok()` ; l'impl compare avec
+    @std::matches! et renvoie @Err(@Error::Other("Invalid trace ID")) pour @TraceId::INVALID,
+    sinon @Ok portant `id.to_string()`, que opentelemetry `0.32` rend comme exactement 32 chiffres
+    hexadécimaux minuscules ; le @Err jeté signifie qu'un id refusé donne silencieusement aucun exemplaire
+    tandis que l'observation elle-même est conservée.
+  Étiqueter les échecs avec le texte d'erreur : @reconcile_failure effectue un seul `.inc()` sur la
+    famille failures du kind avec `error` posé à @Error::metric_label de l'@Error de l'appelant, plus
+    `instance` (jukebox) ou `name` et les chaînes de la spec (instances) selon Exposes.
+  Étiqueter l'identité à la manière kube-core `3.1.0` : @name_any résout le @name des métadonnées, puis
+    @generate_name, sinon la chaîne vide — `3.1` ne joint jamais le namespace — et @namespace est
+    un @Option de metadata.namespace, donc les objets sans nom atterrissent sur des valeurs `""` ;
+    @prometheus_client encode une étiquette @Option<@String> comme vide quand @None ; les étiquettes
+    d'instance clonent @spec.jukebox, @category et @package tels quels.
+  Faire croître les séries de façon monotone : @Family::get_or_create crée et stocke un enfant
+    en permanence sur tout jeu d'étiquettes inédit dans runs, failures et duration ; rien ici ne
+    supprime, rebase ni borne un enfant, donc les séries sont non bornées par construction.
+  Servir les quatre registres de kinds depuis des sites d'appel vivants : le @Default et @register du
+    tenant s'exécutent dans @Metrics::default identiquement et ./instancetenant.rs invoque le
+    @count_and_measure et @reconcile_failure du tenant exactement comme ./instanceservice.rs et
+    ./instancesystem.rs, donc aucune famille livrée ne s'encode comme metadata-only ; la famille
+    jukebox est pilotée par ./jukebox.rs @count_and_measure sur sa propre entrée de reconcile.
+  Rester indépendant par appel @Metrics::default : registres et compteurs séparés, construits une fois
+    par @Manager par ./manager.rs et neufs dans ./jukebox.rs @make_test_ctx ; satisfaire le
+    `deny(clippy::unwrap_used, clippy::expect_used)` de ./lib.rs avec zéro site unwrap ou expect — la
+    seule défaillance du fichier est filtrée par `.ok()`.
 
 Must not:
-  Serve or encode: no endpoint, port, HTTP type or @encode_registry call lives here — even
-    the OpenMetrics `# EOF` termination of the `/metrics` body belongs to @Manager::metrics
-    and ./main.rs.
+  Servir ou encoder : aucun endpoint, port, type HTTP ni appel @encode_registry ne vit ici — même la
+    terminaison OpenMetrics `# EOF` du corps `/metrics` appartient à @Manager::metrics
+    et ./main.rs.
 
 Exposes:
-  @Metrics — `pub` struct deriving @Clone and @Debug with pub fields @jukebox
-    (@ReconcileMetricsJukebox), @system_instance, @service_instance, @tenant_instance, and the
-    export handles @reg_box, @reg_sys, @reg_svc and @reg_tnt, each @Arc<@Registry>; re-exported
-    at the controller crate root as the module's only externally nameable item; @Clone copies
-    live handles into the same registries.
-  @Default for @Metrics — constructs and registers all four kinds into their four prefixed
-    registries as Must pins.
-  @LabelBox — @EncodeLabelSet with one Rust field @name rendering label `name`, the jukebox
-    identity; derives @Clone, @Hash, @Eq, @Debug, @Default.
-  @LabelInstance — @EncodeLabelSet with fields @name, @namespace (@Option<@String>), @jukebox,
-    @category and @package rendering labels `name`, `namespace`, `jukebox`, `category`,
-    `package`; same derives; one type shared by all three instance kinds' runs and duration
-    families, so an instance whose `category` or `package` changes moves to fresh series.
-  @TraceLabel — @EncodeLabelSet with field @trace_id rendering `trace_id`; derives @Default
-    (empty string) but no call site uses it; implements @TryFrom<&@TraceId> with @Error = @Error
-    per the exemplar rule in Must.
-  @ErrorLabels — @EncodeLabelSet fields @instance and @error rendering `instance`, `error`;
-    derives @Clone, @Hash, @Eq and @Debug only, no @Default; the jukebox failures family.
-  @ErrorLabelsInstance — @EncodeLabelSet fields @name, @namespace, @jukebox, @category,
-    @package and @error rendering six labels — @LabelInstance's five plus `error`; no
-    @Default; the three instance failures families.
-  @ReconcileMeasurerBox and @ReconcileMeasurerInstance — `pub` structs deriving @Debug with
-    four private fields (@start of type @tokio::time::@Instant, private @labels, private @trace
-    as @Option<@TraceLabel>, private @metric family handle); unconstructable outside this file
-    and observation-free until @Drop; both @Drop impls are identical code over their label and
-    family types, so @ReconcileMeasurerInstance serves all three instance kinds.
-  The four same-shaped family sets — @ReconcileMetricsJukebox, @ReconcileMetricsSystemInstance,
-    @ReconcileMetricsTenantInstance and @ReconcileMetricsServiceInstance, `pub` structs with
-    pub fields @runs, @failures and @duration typed @Family<@LabelBox, @Counter>,
-    @Family<@ErrorLabels, @Counter> and @Family<@LabelBox, @HistogramWithExemplars<@TraceLabel>>
-    for the jukebox, with @LabelInstance and @ErrorLabelsInstance swapped in for the three
-    instance kinds.
-  `pub fn @register(self, r: &mut @Registry) -> Self` per set — the registration sequence in
-    Must; consumes and returns the same handles.
-  `pub fn @reconcile_failure(&self, doc, e: &@Error)` per set, doc typed @JukeBox,
-    @SystemInstance, @TenantInstance or @ServiceInstance respectively — one failures @inc()
-    with the label set Must describes.
-  `pub fn @count_and_measure(&self, doc, trace_id: &@TraceId) -> measurer` per set — one runs
-    @inc() on the kind's label set plus the started measurer.
+  @Metrics — structure `pub` dérivant @Clone et @Debug avec champs pub @jukebox
+    (@ReconcileMetricsJukebox), @system_instance, @service_instance, @tenant_instance, et les poignées
+    d'export @reg_box, @reg_sys, @reg_svc et @reg_tnt, chacune @Arc<@Registry> ; réexportée à la racine
+    de la crate controller comme seul item nomable en externe du module ; @Clone copie des poignées
+    vivantes vers les mêmes registres.
+  @Default pour @Metrics — construit et enregistre les quatre kinds dans leurs quatre registres à
+    préfixe comme le fixe Must.
+  @LabelBox — @EncodeLabelSet avec un seul champ Rust @name rendant l'étiquette `name`, l'identité
+    jukebox ; dérive @Clone, @Hash, @Eq, @Debug, @Default.
+  @LabelInstance — @EncodeLabelSet avec champs @name, @namespace (@Option<@String>), @jukebox,
+    @category et @package rendant les étiquettes `name`, `namespace`, `jukebox`, `category`,
+    `package` ; mêmes derives ; un type partagé par les familles runs et duration des trois kinds
+    d'instance, donc une instance dont `category` ou `package` change passe à des séries neuves.
+  @TraceLabel — @EncodeLabelSet avec champ @trace_id rendant `trace_id` ; dérive @Default
+    (chaîne vide) mais aucun site d'appel ne l'utilise ; implémente @TryFrom<&@TraceId> avec @Error = @Error
+    selon la règle d'exemplaire de Must.
+  @ErrorLabels — champs @EncodeLabelSet @instance et @error rendant `instance`, `error` ;
+    dérive @Clone, @Hash, @Eq et @Debug seulement, pas de @Default ; la famille failures jukebox.
+  @ErrorLabelsInstance — champs @EncodeLabelSet @name, @namespace, @jukebox, @category,
+    @package et @error rendant six étiquettes — les cinq de @LabelInstance plus `error` ; pas de
+    @Default ; les trois familles failures d'instances.
+  @ReconcileMeasurerBox et @ReconcileMeasurerInstance — structures `pub` dérivant @Debug avec
+    quatre champs privés (@start de type @tokio::time::@Instant, @labels privé, @trace privé
+    comme @Option<@TraceLabel>, poignée de famille @metric privée) ; inconstruisibles hors de ce fichier
+    et sans observation jusqu'@Drop ; les deux impls @Drop sont un code identique sur leurs types
+    d'étiquettes et de famille, donc @ReconcileMeasurerInstance sert les trois kinds d'instance.
+  Les quatre jeux de familles de même forme — @ReconcileMetricsJukebox, @ReconcileMetricsSystemInstance,
+    @ReconcileMetricsTenantInstance et @ReconcileMetricsServiceInstance, structures `pub` avec champs
+    pub @runs, @failures et @duration typés @Family<@LabelBox, @Counter>,
+    @Family<@ErrorLabels, @Counter> et @Family<@LabelBox, @HistogramWithExemplars<@TraceLabel>>
+    pour le jukebox, avec @LabelInstance et @ErrorLabelsInstance substitués pour les trois kinds
+    d'instance.
+  `pub fn @register(self, r: &mut @Registry) -> Self` par jeu — la séquence d'enregistrement de Must ;
+    consomme et renvoie les mêmes poignées.
+  `pub fn @reconcile_failure(&self, doc, e: &@Error)` par jeu, doc typé @JukeBox,
+    @SystemInstance, @TenantInstance ou @ServiceInstance respectivement — un seul @inc() de failures
+    avec le jeu d'étiquettes que Must décrit.
+  `pub fn @count_and_measure(&self, doc, trace_id: &@TraceId) -> measurer` par jeu — un seul
+    @inc() de runs sur le jeu d'étiquettes du kind plus le mesureur démarré.
 
 Accepts:
-  A registered @JukeBox, @SystemInstance, @ServiceInstance or @TenantInstance reference at
-    each @reconcile_failure or @count_and_measure call; @count_and_measure additionally needs a
-    borrowed @TraceId and nothing is retained beyond the family handles; @register borrows the
-    target @Registry mutably for the call only.
-  This module validates nothing: absent name, @generate_name or namespace become empty label
-    values, and any spec text — however free-form — becomes a label verbatim; the CR references
-    need not stay alive after the call. No config, env var or CRD field feeds this file
-    otherwise.
+  Une référence de @JukeBox, @SystemInstance, @ServiceInstance ou @TenantInstance enregistrée à
+    chaque appel @reconcile_failure ou @count_and_measure ; @count_and_measure demande de plus un
+    @TraceId emprunté et rien n'est retenu au-delà des poignées de famille ; @register emprunte le
+    @Registry cible de façon mutable pour le seul appel.
+  Ce module ne valide rien : un name, @generate_name ou namespace absent deviennent des valeurs
+    d'étiquettes vides, et tout texte de spec — aussi libre soit-il — devient une étiquette telle
+    quelle ; les références CR n'ont pas besoin de rester vivantes après l'appel. Aucune config,
+    variable d'env ni champ de CRD ne nourrit ce fichier par ailleurs.
 
 Returns:
-  @Metrics::default — a fully registered struct; every family child is still lazy, so an
-    untouched instance encodes as twelve HELP/TYPE stanzas, four `# UNIT … seconds` lines and
-    no samples, and @Clone hands those same live families to a second owner.
-  @count_and_measure — the runs increment is the side effect; the measurer has no public
-    accessor, so its only observable return is the one @Drop-time observation.
-  @register returns @Self carrying exactly the registered family handles; @reconcile_failure
-    returns @() after exactly one increment.
-  @TryFrom<&@TraceId> for @TraceLabel — @Ok carrying the 32-lowercase-hex id, or @Err per
-    Raises; @count_and_measure keeps only @Ok, as an @Option exemplar.
+  @Metrics::default — une structure entièrement enregistrée ; chaque enfant de famille reste paresseux,
+    donc une instance intacte s'encode en douze stances HELP/TYPE, quatre lignes `# UNIT … seconds`
+    et aucun sample, et @Clone remet ces mêmes familles vivantes à un second propriétaire.
+  @count_and_measure — l'incrément de runs est l'effet de bord ; le mesureur n'a pas
+    d'accessoire public, donc son seul retour observable est l'unique observation au @Drop.
+  @register renvoie @Self portant exactement les poignées de familles enregistrées ;
+    @reconcile_failure renvoie @() après exactement un incrément.
+  @TryFrom<&@TraceId> pour @TraceLabel — @Ok portant l'id en 32 hexadécimaux minuscules, ou @Err
+    selon Raises ; @count_and_measure ne garde que @Ok, comme exemplaire en @Option.
 
 Raises:
-  @Err(@Error::Other("Invalid trace ID")) from the sole fallible item, the
-    @TryFrom<&@TraceId> impl for @TraceLabel, on a @TraceId::INVALID receiver; @count_and_measure
-    discards it via `.ok()` — the refusal, its text and its missing project stable-id are never
-    visible anywhere (see Tasks).
-  Nothing else in the file is fallible: @Default, @register, @reconcile_failure,
-    @count_and_measure and both @Drop impls cannot return or propagate any error, and the fixed
-    sorted bucket list forecloses the prometheus-client bucket-layout panic; no input produces a
-    panic.
+  @Err(@Error::Other("Invalid trace ID")) du seul élément faillible, l'impl
+    @TryFrom<&@TraceId> pour @TraceLabel, sur un récepteur @TraceId::INVALID ; @count_and_measure
+    le jette via `.ok()` — le refus, son texte et son stable-id projet manquant ne sont jamais
+    visibles nulle part (voir Tasks).
+  Rien d'autre dans le fichier n'est faillible : @Default, @register, @reconcile_failure,
+    @count_and_measure et les deux impls @Drop ne peuvent renvoyer ni propager d'erreur, et la liste
+    fixe de buckets triés ferme la porte au panic de disposition de buckets de prometheus-client ;
+    aucune entrée ne produit de panic.
 
 Handles:
-  @TraceId::INVALID — the @get_trace_id stub's only output — refused to @None exemplar, so
-    today every observation across all four kinds lands exemplar-free; the @Ok arm exists but
-    no real id ever reaches it in shipped builds.
-  New label combinations on any family — a fresh @Family child is created and kept; repeats
-    reuse the existing child; any two instances whose five instance labels collide share one
-    child.
-  A reconcile that returns early or panics — the in-scope measurer drops mid-way and its
-    shorter duration is still observed against the already-counted run.
-  Absent metadata — `name` and `instance` empty through the @None fallback chain of @name_any,
-    `namespace` empty through the @Option label encoding.
-  Tenant traffic — children appear through the ./instancetenant.rs @count_and_measure and
-    @reconcile_failure call sites exactly like the other kinds.
+  @TraceId::INVALID — seule sortie du stub @get_trace_id — refusé en exemplaire @None, donc
+    aujourd'hui chaque observation des quatre kinds arrive sans exemplaire ; la branche @Ok existe
+    mais aucun id réel n'y parvient dans les builds livrés.
+  Nouvelles combinaisons d'étiquettes sur toute famille — un nouvel enfant @Family est créé et
+    gardé ; les répétitions réutilisent l'enfant existant ; deux instances dont les cinq
+    étiquettes d'instance entrent en collision partagent un seul enfant.
+  Un reconcile qui revient tôt ou panique — le mesureur en portée drope à mi-chemin et sa
+    durée plus courte est quand même observée sur le run déjà compté.
+  Métadonnées absentes — `name` et `instance` vides via la chaîne de repli @None de @name_any,
+    `namespace` vide via l'encodage d'étiquette @Option.
+  Trafic tenant — les enfants apparaissent via les sites d'appel @count_and_measure et
+    @reconcile_failure de ./instancetenant.rs exactement comme les autres kinds.
 
 Tasks:
-  [ ] Map coverage from the Scenarios below: @Metrics::default inventory (names, help strings,
-      units, bucket bounds, metadata-only encoding) through a throwaway registry; the immediate
-      runs increment in @count_and_measure; the @Drop observation with `0.0` truncation under
-      1 ms; both @TryFrom arms; @reconcile_failure label content and same-error series reuse;
-      and cross-kind independence. No test anywhere in the workspace asserts a
-      metric value today — ./jukebox.rs @make_test_ctx builds a @Metrics but never reads it
-      back.
-  [?] The failures `error` label is @Error::metric_label — full lowercased @Debug with payload
-      text (paths, URLs, job names) — so failures series are unbounded by error detail, the
-      decision already `[?]` in /common/src/lib.sdd. Decide here too whether to shorten the
-      label to the variant name.
-  [?] The free-text `category`, `package` and `jukebox` labels plus `name` and `namespace` make
-      runs and duration cardinality grow with every CR and every spec edit, permanently, and
-      nothing prunes series after an instance is deleted. Decide later whether that churn is
-      acceptable for a low-scale selfhosted controller.
-  [?] `runs` counts attempts at entry, not outcomes, and no success counter exists, so the
-      parent ./operator.sdd Must promising "success/failure counters" is unsatisfiable by this
-      inventory — success stays inferred. Decide the success semantics, then the metric set.
-  [?] The parent's "last-event timestamp" metric is implemented nowhere in this file, nor as a
-      gauge anywhere. Decide later whether to add it or drop the parent wording.
-  [?] With @get_trace_id hardcoded to @TraceId::INVALID (the ./telemetry.sdd `[?]`), every
-      exemplar, the @TryFrom @Ok arm and the whole `trace_id` label are dead on production
-      paths. Resolve jointly with that stub decision.
-  [?] @Error::Other("Invalid trace ID") carries no stable unique id (project rule) and is
-      silently laundered by `.ok()`, never logged or counted. Decide later whether refused ids
-      deserve a visible counter.
-  [?] On a kube upgrade the label values shift silently: the cached kube-core `4.0.0` makes
-      @name_any return `"namespace name"` for the four namespaced CRs, renaming every existing
-      `name` and `instance` series. Decide later whether to pre-join the namespace and pin
-      kube.
-  [?] @Metrics derives @Clone, duplicating live handles into the same registries, while
-      ./manager.rs stores it as @Arc<@Metrics> and nothing clones today. Decide whether the
-      @Clone derive stays.
+  [ ] Cartographier la couverture depuis les Scenarios ci-dessous : inventaire de @Metrics::default
+      (noms, chaînes help, unités, bornes de buckets, encodage metadata-only) via un registre
+      jetable ; l'incrément immédiat de runs dans @count_and_measure ; l'observation @Drop avec la
+      troncature `0.0` sous 1 ms ; les deux branches @TryFrom ; le contenu d'étiquettes de
+      @reconcile_failure et la réutilisation de série sur même erreur ; et l'indépendance entre
+      kinds. Aucun test nulle part dans le workspace ne vérifie une valeur de métrique
+      aujourd'hui — ./jukebox.rs @make_test_ctx construit un @Metrics mais ne le relit jamais.
+  [?] L'étiquette `error` de failures est @Error::metric_label — le @Debug complet en minuscules
+      avec le texte du payload (chemins, URL, noms de jobs) — donc les séries failures sont non
+      bornées par le détail d'erreur, la décision déjà `[?]` dans /common/src/lib.sdd. Décider ici
+      aussi de raccourcir ou non l'étiquette au nom du variant.
+  [?] Les étiquettes en texte libre `category`, `package` et `jukebox` plus `name` et `namespace`
+      font croître la cardinalité de runs et duration à chaque CR et chaque edit de spec,
+      permanentement, et rien ne taille les séries après suppression d'une instance. Décider plus
+      tard si ce churn est acceptable pour un controller selfhosté à faible échelle.
+  [?] `runs` compte les tentatives à l'entrée, pas les issues, et aucun compteur de succès n'existe,
+      donc le Must parent ./operator.sdd promettant "success/failure counters" est insatisfaisable
+      par cet inventaire — le succès reste déduit. Décider la sémantique du succès, puis le jeu.
+  [?] La métrique "last-event timestamp" du parent n'est implémentée nulle part dans ce fichier, ni
+      comme un gauge nulle part. Décider plus tard de l'ajouter ou d'abandonner la formulation parent.
+  [?] Avec @get_trace_id figé à @TraceId::INVALID (le `[?]` de ./telemetry.sdd), chaque exemplaire,
+      la branche @Ok de @TryFrom et toute l'étiquette `trace_id` sont morts sur les chemins de
+      production. Résoudre conjointement avec cette décision de stub.
+  [?] @Error::Other("Invalid trace ID") ne porte aucun id unique stable (règle du projet) et est
+      blanchi silencieusement par `.ok()`, jamais loggé ni compté. Décider plus tard si les ids
+      refusés méritent un compteur visible.
+  [?] Lors d'une montée de kube les valeurs d'étiquettes glissent en silence : le kube-core `4.0.0`
+      en cache fait renvoyer à @name_any `"namespace name"` pour les quatre CR à namespace,
+      renommant chaque série `name` et `instance` existante. Décider plus tard de pré-joindre le
+      namespace et d'épingler kube.
+  [?] @Metrics dérive @Clone, dupliquant des poignées vivantes dans les mêmes registres, alors que
+      ./manager.rs le stocke comme @Arc<@Metrics> et rien ne le clone aujourd'hui. Décider si le
+      derive @Clone reste.
 
 Done when:
-  Every Scenario has a green mapped test or a decided `[?]` Task, the cardinality and success
-    decisions are recorded, and `cargo test -p operator` with clippy, fmt and `specdd lint` are
-    green.
+  Chaque Scenario a un test mappé vert ou une tâche `[?]` décidée, les décisions de cardinalité et
+    de succès sont consignées, et `cargo test -p operator` avec clippy, fmt et `specdd lint` sont
+    verts.
 
 Scenario: Fresh metrics expose metadata only
-  Given a @Metrics::default with no reconcile ever run
-  When its four registries are text-encoded
-  Then each registry carries exactly its prefixed runs and failures counters plus the
-    `<prefix>_duration_seconds` histogram in the Must shape — twelve HELP/TYPE stanzas and
-    four UNIT lines, with `0.24.1` adding no `# created` lines — and not one sample line
-  No mapped test exists.
+  Given un @Metrics::default sans reconcile jamais exécuté
+  When ses quatre registres sont encodés en texte
+  Then chaque registre porte exactement ses compteurs runs et failures préfixés plus l'histogramme
+    `<prefix>_duration_seconds` dans la forme de Must — douze stances HELP/TYPE et quatre lignes
+    UNIT, sans que `0.24.1` n'ajoute de lignes `# created` — et pas une seule ligne de sample
+  Aucun test mappé n'existe.
 
 Scenario: A JukeBox reconcile counts then measures
-  Given ./jukebox.rs @reconcile binding @count_and_measure for a JukeBox whose metadata name
-    is `vynil-box`
-  When @count_and_measure runs
-  Then the child for `name="vynil-box"` of `jukebox_reconcile_runs_total` incs immediately,
-    before any reconcile work
-  And when the reconcile ends and the measurer drops, one observation equal to integer
-    milliseconds divided by `1000` — truncated, so a 400 microsecond reconcile observes `0.0` —
-    lands on `jukebox_reconcile_duration_seconds` under the same labels
-  And the same @Drop path serves the three instance kinds through @ReconcileMeasurerInstance
-    with the five-label @LabelInstance set
-  No mapped test exists.
+  Given ./jukebox.rs @reconcile liant @count_and_measure pour un JukeBox dont le nom de
+    métadonnées est `vynil-box`
+  When @count_and_measure s'exécute
+  Then l'enfant de `name="vynil-box"` de `jukebox_reconcile_runs_total` inc immédiatement, avant
+    tout travail de reconcile
+  And quand le reconcile se termine et que le mesureur drop, une observation égale aux millisecondes
+    entières divisées par `1000` — tronquée, donc un reconcile de 400 microsecondes observe `0.0` —
+    atterrit sur `jukebox_reconcile_duration_seconds` sous les mêmes étiquettes
+  And le même chemin @Drop sert les trois kinds d'instance via @ReconcileMeasurerInstance avec le
+    jeu @LabelInstance à cinq étiquettes
+  Aucun test mappé n'existe.
 
 Scenario: Invalid or absent trace drops the exemplar only
-  Given @get_trace_id handing @count_and_measure @TraceId::INVALID — the value every shipped
-    call sees today
-  When the measurer drops
-  Then the observation is recorded normally but with no exemplar, because @TryFrom refused
-    with @Error::Other("Invalid trace ID") and `.ok()` discarded it
-  But with any valid 32-digit id the observation would attach a `# EXEMPLAR` on its bucket
-    line labelled `trace_id` — the lane no shipped build reaches
-  No mapped test exists.
+  Given @get_trace_id remettant à @count_and_measure @TraceId::INVALID — la valeur que chaque appel
+    livré voit aujourd'hui
+  When le mesureur drop
+  Then l'observation est enregistrée normalement mais sans exemplaire, parce que @TryFrom a refusé
+    avec @Error::Other("Invalid trace ID") et que `.ok()` l'a jeté
+  But avec n'importe quel id valide à 32 chiffres l'observation attacherait un `# EXEMPLAR` sur sa
+    ligne de bucket étiquetée `trace_id` — la voie qu'aucun build livré n'atteint
+  Aucun test mappé n'existe.
 
 Scenario: Failures label by the full error text
-  Given a reconcile failing with @Error::Other("boom") for jukebox `vynil-box` through the
-    failure path calling @reconcile_failure
-  When the increment lands
-  Then exactly one growth on the child with `instance="vynil-box"` and `error` literally
-    `other("boom")` — the @Error::metric_label lowercased @Debug
-  And a failure whose @Debug payload differs (second message, path or job name) opens a
-    brand-new permanent series while byte-identical text reuses the existing child
-  And for the instance kinds the same increment goes to `<prefix>_failures_total` under the
-    six @ErrorLabelsInstance labels
-  No mapped test exists.
+  Given un reconcile échouant avec @Error::Other("boom") pour le jukebox `vynil-box` via le chemin
+    d'échec appelant @reconcile_failure
+  When l'incrément tombe
+  Then exactement une croissance sur l'enfant avec `instance="vynil-box"` et `error` littéralement
+    `other("boom")` — le @Debug en minuscules de @Error::metric_label
+  And un échec dont le payload @Debug diffère (second message, chemin ou nom de job) ouvre une
+    série neuve permanente ; un texte identique octet pour octet réutilise l'enfant existant
+  And pour les kinds d'instance le même incrément va vers `<prefix>_failures_total` sous les six
+    étiquettes @ErrorLabelsInstance
+  Aucun test mappé n'existe.
 
 Scenario: Instance kinds never share samples
-  Given the three instance @Family sets are separate objects — shared by @Clone of the label
-    types only — living in distinct registries
-  When a @SystemInstance and a @ServiceInstance reconcile with all five label values identical
-  Then each kind's own `<prefix>_runs_total` child grows independently and the shared
-    @LabelInstance, @ErrorLabelsInstance and @ReconcileMeasurerInstance types cross no boundary
-  No mapped test exists.
+  Given que les trois jeux @Family d'instances sont des objets séparés — partagés par @Clone des
+    seuls types d'étiquettes — vivant dans des registres distincts
+  When un @SystemInstance et un @ServiceInstance se réconcilient avec cinq étiquettes identiques
+  Then l'enfant `<prefix>_runs_total` propre à chaque kind croît indépendamment et les types partagé
+    @LabelInstance, @ErrorLabelsInstance et @ReconcileMeasurerInstance ne franchissent aucun seuil
+  Aucun test mappé n'existe.
 
 Scenario: All kind registries expose children after reconciles
-  Given jukes, systems, services and tenants each reconciled at least once in a shipped build
-    (the tenant leg runs through ./instancetenant.rs @reconcile/@error_policy)
-  When the exposition is scraped
-  Then all four `<prefix>_runs_total` families carry at least one child and no shipped family
-    is metadata-only
-  No mapped test exists.
+  Given des jukes, systems, services et tenants chacun réconcilié au moins une fois dans un build
+    livré (la jambe tenant passe par ./instancetenant.rs @reconcile/@error_policy)
+  When l'exposition est scrapée
+  Then les quatre familles `<prefix>_runs_total` portent chacune au moins un enfant et aucune
+    famille livrée n'est metadata-only
+  Aucun test mappé n'existe.
 
 Example:
-  exposition head of one counted-kind histogram:
+  début d'exposition d'un histogramme de kind compté :
     `# HELP jukebox_reconcile_duration_seconds reconcile duration`
     `# TYPE jukebox_reconcile_duration_seconds histogram`
     `# UNIT jukebox_reconcile_duration_seconds seconds`
-  hypothetical failures child today: child of `instance="vynil-box"` where `error` holds
+  enfant failures hypothétique aujourd'hui : enfant de `instance="vynil-box"` où `error` porte
     `other("boom")`
-  valid-trace exemplar value shape: `trace_id` holding `80e1af3fb7e645135287ed5b6e99f252`
+  forme de valeur d'exemplaire de trace valide : `trace_id` portant `80e1af3fb7e645135287ed5b6e99f252`
