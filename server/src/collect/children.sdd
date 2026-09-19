@@ -1,261 +1,261 @@
 Spec: children
 
 Purpose:
-  Assemble one package instance's child inventory together with live cluster state for the
-    diagnostic API's `children` endpoint: read the requested instance CRD by kind, flatten every
-    @Children record out of all child-carrying `status` categories from its serialized form, then
-    for each child fetch its live Kubernetes object for the five supported kinds, anonymize it
-    through @scrub_json, and build one @ChildWithState per child plus the payload-wide redaction
-    tally. A failed child-object read degrades that entry to a null @state without failing the
-    call; a failed instance read or a failed scrub aborts the whole call.
+  Assembler l'inventaire des enfants d'une instance de package avec l'état live du cluster pour
+    l'endpoint `children` de l'API de diagnostic : lire le CRD d'instance demandé selon kind, aplatir chaque
+    enregistrement @Children de toutes les catégories `status` portant des enfants depuis sa forme sérialisée,
+    puis pour chaque enfant récupérer son objet Kubernetes live pour les cinq kinds pris en charge,
+    l'anonymiser via @scrub_json, et construire un @ChildWithState par enfant plus le total de
+    caviardage du payload. La lecture ratée d'un objet enfant dégrade cette entrée vers un @state null
+    sans faire échouer l'appel ; la lecture ratée de l'instance ou un scrub raté avorte l'appel entier.
 
 Owns:
   ./children.rs
 
 References:
-  ./dto.sdd — @ChildWithState and @ScrubStats are this file's output types; their wire shapes and
-    the `X-Diag-Redactions` header coupling live there.
-  ./error.sdd — the exit lane: only @DiagError::UnknownKind, @DiagError::KubeError and
-    @DiagError::SerializationError ever leave this file; their statuses and ids are owned there.
-  ./anonymize.sdd — the @scrub_json contract: value/regex masking, per-call Secret listing over
-    both namespaces, and the @serde_json::@Error lane this file's `?` converts to
+  ./dto.sdd — @ChildWithState et @ScrubStats sont les types de sortie de ce fichier ; leurs formes
+    wire et l'accouplement de l'en-tête `X-Diag-Redactions` y sont spécifiés.
+  ./error.sdd — la voie de sortie : seuls @DiagError::UnknownKind, @DiagError::KubeError et
+    @DiagError::SerializationError quittent jamais ce fichier ; leurs statuts et ids y sont possédés.
+  ./anonymize.sdd — le contrat @scrub_json : masquage valeur/regex, listings de Secret par appel sur
+    les deux namespaces, et la voie @serde_json::@Error que le `?` de ce fichier convertit en
     @DiagError::SerializationError.
-  ./state.sdd — the client arriving as the @get_children argument is the @AppState.client handle
-    cloned by ./server.rs; the server identity whose RBAC decides which child reads fail is
-    specified there.
+  ./state.sdd — le client arrivant comme argument de @get_children est la handle @AppState.client
+    clonée par ./server.rs ; l'identité du serveur dont la RBAC décide quelles lectures d'enfants
+    échouent y est spécifiée.
   /common/src/instancetenant.sdd, /common/src/instanceservice.sdd, /common/src/instancesystem.sdd —
-    the CRD models read here: which `status` keys hold @crate::Children lists per kind, and
-    `services` holding @crate::Published instead.
-  /common/src/lib.sdd — the @Children wire gate (`kind` and `name` required) that
-    @extract_children_from_json accepts or rejects by.
+    les modèles CRD lus ici : quelles clés `status` portent des listes @crate::Children selon le
+    kind, et `services` portant @crate::Published à la place.
+  /common/src/lib.sdd — la porte wire @Children (`kind` et `name` requis) que
+    @extract_children_from_json accepte ou rejette.
 
 Must:
-  Kind dispatch is exact and case-sensitive on the three lowercase plurals `tenantinstances`,
-    `serviceinstances`, `systeminstances`; every other @kind string returns
-    @DiagError::UnknownKind before this file issues any cluster read.
-  All cluster reads are point reads: one @Api::namespaced + @Api::get of `name` in `namespace` for
-    the instance, one @Api::get of @Children::name per child — no `list`, no `watch`, no
-    @ListParams, no label or field selector exists anywhere in this file (the Secret lists happen
-    inside @scrub_json, owned by ./anonymize.rs).
-  Child extraction is kind-agnostic and JSON-driven: after the typed read the instance is
-    serialized and the seven @CHILD_CATEGORIES keys are read in declaration order — `befores`,
-    `vitals`, `scalables`, `others`, `posts`, `systems`, `services` — each category only when
-    present and an array, each entry only when it deserializes as @Children; `crds` is not a
-    category and an absent or non-object `status` yields zero children.
-  The seven-category union serves all three CRDs from one code path — `systems` is
-    @SystemInstance-only and the in-file comment pins that omitting it once dropped every
-    @SystemInstance child — yet extraction never filters by the read kind: a tenant `status`
-    carrying a `systems` array, or a system `status` carrying `befores`, is read just the same.
-  Child-state lookup dispatches on the exact @Children::kind strings `Deployment`,
-    `StatefulSet`, `DaemonSet`, `Service`, `ConfigMap`; group and version are hardcoded by the
-    @k8s_openapi types (@api::apps::v1 for the first three, @api::core::v1 for the last two) and
-    @Children::api_version is never consulted, so a child declared in another group is fetched
-    from the hardcoded one.
-  Per-child fetch scope: the namespace is @Children::namespace when @Some — the empty string
-    included, used verbatim — otherwise the instance `namespace`; an successfully fetched object
-    is handed to @scrub_json with that resolved child namespace plus the caller's
-    `vynil_namespace`, and its masked @serde_json::@Value becomes @ChildWithState::state.
-  Every extracted child yields exactly one @ChildWithState { child, state } in output order —
-    category-declaration order, then in-array order; status duplicates produce duplicate entries,
-    and no step ever dedupes or drops the child itself, even when its state is lost.
-  A child-object read failing with any @kube::Error — `404`, RBAC `403`, decode — or a kind
-    outside the five known kinds degrades to @None state plus @ScrubStats::default() and the call
-    still completes @Ok with every other child assembled.
-  The tally is exactly sum: per child @ScrubStats::distinct and @ScrubStats::occurrences are
-    folded in with @saturating_add, so degraded and unknown-kind children contribute zeroes and
-    the returned @ScrubStats describes the full returned payload.
-  This file owns no cache, TTL, informer or global state: every @get_children call re-reads the
-    instance, re-reads every child and re-collects secrets (one @scrub_json Secret sweep per
-    masked child, per ./anonymize.sdd); children are processed sequentially in output order, and
-    the first hard failure anywhere aborts the whole call.
+  La dispatch de kind est exacte et sensible à la casse sur les trois pluriels minuscules
+    `tenantinstances`, `serviceinstances`, `systeminstances` ; toute autre chaîne @kind renvoie
+    @DiagError::UnknownKind avant que ce fichier n'émette la moindre lecture cluster.
+  Toutes les lectures cluster sont des lectures ponctuelles : un @Api::namespaced + @Api::get de `name` dans `namespace` pour
+    l'instance, un @Api::get de @Children::name par enfant — aucun `list`, aucun `watch`, aucun
+    @ListParams, aucun sélecteur de labels ou de champs n'existe nulle part dans ce fichier (les listings
+    de Secret ont lieu dans @scrub_json, possédé par ./anonymize.rs).
+  L'extraction d'enfants est indépendante du kind et pilotée par JSON : après la lecture typée, l'instance est
+    sérialisée et les sept clés @CHILD_CATEGORIES sont lues dans l'ordre de déclaration — `befores`,
+    `vitals`, `scalables`, `others`, `posts`, `systems`, `services` — chaque catégorie seulement si
+    présente et tableau, chaque entrée seulement si elle se désérialise en @Children ; `crds` n'est pas une
+    catégorie et un `status` absent ou non-objet produit zéro enfant.
+  L'union des sept catégories sert les trois CRDs depuis un seul chemin de code — `systems` est propre à
+    @SystemInstance et le commentaire dans le fichier rappelle que l'omettre a déjà fait perdre tous les
+    enfants de @SystemInstance — pourtant l'extraction ne filtre jamais selon le kind lu : un `status` de
+    tenant portant un tableau `systems`, ou un `status` de système portant `befores`, est lu de même.
+  La recherche d'état d'enfant dispatche sur les chaînes @Children::kind exactes `Deployment`,
+    `StatefulSet`, `DaemonSet`, `Service`, `ConfigMap` ; le groupe et la version sont codés en dur par les
+    types @k8s_openapi (@api::apps::v1 pour les trois premiers, @api::core::v1 pour les deux derniers) et
+    @Children::api_version n'est jamais consulté, si bien qu'un enfant déclaré dans un autre groupe est
+    récupéré depuis celui codé en dur.
+  Périmètre de récupération par enfant : le namespace est @Children::namespace quand @Some — la chaîne
+    vide comprise, utilisée telle quelle — sinon le `namespace` de l'instance ; un objet récupéré avec
+    succès est transmis à @scrub_json avec le namespace d'enfant résolu plus le `vynil_namespace` de
+    l'appelant, et sa @serde_json::@Value masquée devient @ChildWithState::state.
+  Chaque enfant extrait produit exactement un @ChildWithState { child, state } dans l'ordre de sortie —
+    ordre de déclaration des catégories, puis ordre dans le tableau ; les doublons de statut produisent des entrées
+    doublonnées, et aucune étape ne déduplique ni ne retire l'enfant lui-même, même quand son état est perdu.
+  La lecture d'un objet enfant échouant avec n'importe quel @kube::Error — `404`, RBAC `403`, décodage — ou un
+    kind hors des cinq kinds connus se dégrade en @None state plus @ScrubStats::default() et l'appel
+    se termine quand même @Ok avec tous les autres enfants assemblés.
+  Le total est exactement une somme : @ScrubStats::distinct et @ScrubStats::occurrences sont
+    pliés par enfant avec @saturating_add, si bien que les enfants dégradés et de kind inconnu contribuent des zéros et
+    que le @ScrubStats renvoyé décrit le payload complet renvoyé.
+  Ce fichier ne possède aucun cache, TTL, informer ni état global : chaque appel @get_children relit
+    l'instance, relit chaque enfant et recollette les secrets (une passe de Secret @scrub_json par enfant
+    masqué, selon ./anonymize.sdd) ; les enfants sont traités séquentiellement dans l'ordre de sortie, et
+    la première défaillance dure n'importe où avorte l'appel entier.
 
 Depends on:
-  @kube `3.1.0` — @kube::Client and @kube::@api::Api (versions locked in /Cargo.lock); only the
-    @namespaced constructor and @get are used, and the client is cloned per @Api build.
-  @k8s_openapi `0.27.1` — @Deployment, @StatefulSet, @DaemonSet, @Service, @ConfigMap as the five
-    fetchable child types and their hardcoded group/version.
-  @crate::anonymize::scrub_json in ./anonymize.rs — the mask-and-tally step every successfully
-    fetched child passes through.
-  @crate::dto::@ChildWithState and @crate::dto::@ScrubStats in ./dto.rs — output shapes, with
-    @ScrubStats::default as the degraded-entry and accumulator seed.
-  @crate::error::@DiagError in ./error.rs — the return lane, plus the @From-derived
-    @DiagError::SerializationError conversion the `?` legs use.
-  @common — @Children from /common/src/lib.rs and the @TenantInstance, @ServiceInstance,
-    @SystemInstance CRDs from /common/src/instancetenant.rs, /common/src/instanceservice.rs,
+  @kube `3.1.0` — @kube::Client et @kube::@api::Api (versions verrouillées dans /Cargo.lock) ; seuls le
+    constructeur @namespaced et @get sont utilisés, et le client est cloné par @Api construit.
+  @k8s_openapi `0.27.1` — @Deployment, @StatefulSet, @DaemonSet, @Service, @ConfigMap comme les cinq
+    types d'enfants récupérables et leur groupe/version codés en dur.
+  @crate::anonymize::scrub_json dans ./anonymize.rs — l'étape de masquage et de comptage par laquelle
+    passe chaque enfant récupéré avec succès.
+  @crate::dto::@ChildWithState et @crate::dto::@ScrubStats dans ./dto.rs — formes de sortie, avec
+    @ScrubStats::default comme amorce de l'accumulateur et des entrées dégradées.
+  @crate::error::@DiagError dans ./error.rs — la voie de retour, plus la conversion
+    @DiagError::SerializationError dérivée de @From qu'utilisent les jambes `?`.
+  @common — @Children depuis /common/src/lib.rs et les CRDs @TenantInstance, @ServiceInstance,
+    @SystemInstance depuis /common/src/instancetenant.rs, /common/src/instanceservice.rs,
     /common/src/instancesystem.rs.
-  @serde_json — @to_value of instance and fetched object, @from_value per category entry;
-    @serde::Serialize is the generic bound @extract_children_from_instance serializes through.
+  @serde_json — @to_value de l'instance et de l'objet récupéré, @from_value par entrée de catégorie ;
+    @serde::Serialize est la borne générique par laquelle @extract_children_from_instance sérialise.
 
 Exposes:
-  Full public surface — `pub mod children;` in ./collect/mod.rs under `pub mod collect;` in
-    /server/src/lib.rs; consumers are ./server.rs (`children` endpoint, via
-    `@crate::collect::children::get_children`) and ./logs.rs (@get_instance_children over
-    @all_children_from_status):
+  Surface publique complète — `pub mod children;` dans ./collect/mod.rs sous `pub mod collect;` dans
+    /server/src/lib.rs ; les consommateurs sont ./server.rs (endpoint `children`, via
+    `@crate::collect::children::get_children`) et ./logs.rs (@get_instance_children via
+    @all_children_from_status) :
   @get_children — `pub async fn @get_children(client: &@kube::Client, kind: &@str, namespace:
     &@str, name: &@str, vynil_namespace: &@str) -> @Result<(Vec<@ChildWithState>, @ScrubStats),
-    @DiagError>`; the complete instance-children assembly, doc-commented to fail with
-    @DiagError::UnknownKind or the Kubernetes/serialization error of a failing read.
+    @DiagError>` ; l'assemblage complet des enfants de l'instance, documenté comme échouant avec
+    @DiagError::UnknownKind ou l'erreur Kubernetes/sérialisation d'une lecture en échec.
   @all_children_from_status — `#[must_use] pub fn @all_children_from_status(instance_json:
-    &@serde_json::@Value) -> Vec<@Children>`; the shared category flattener reused by ./logs.rs so
-    both collectors flatten identically.
-  Everything else is private to this module: @get_tenant_children, @get_service_children and
-    @get_system_children (`async fn` each, same `(&@kube::Client, &@str, &@str) ->
-    @Result<Vec<@Children>, @DiagError>` shape), @CHILD_CATEGORIES (the seven literals),
-    @extract_children_from_instance (over `&(impl @serde::Serialize + @std::fmt::Debug)`),
-    @extract_children_from_json and @get_child_state (returning
+    &@serde_json::@Value) -> Vec<@Children>` ; l'aplatisseur de catégories partagé réutilisé par ./logs.rs afin
+    que les deux collecteurs aplatissent identiquement.
+  Tout le reste est privé au module : @get_tenant_children, @get_service_children et
+    @get_system_children (`async fn` chacun, même forme `(&@kube::Client, &@str, &@str) ->
+    @Result<Vec<@Children>, @DiagError>`), @CHILD_CATEGORIES (les sept littéraux),
+    @extract_children_from_instance (sur `&(impl @serde::Serialize + @std::fmt::Debug)`),
+    @extract_children_from_json et @get_child_state (renvoyant
     `@Result<(Option<@serde_json::@Value>, @ScrubStats), @DiagError>`).
 
 Accepts:
-  @get_children takes a live borrowed @kube::Client plus four free-form @str borrows: `kind` is
-    matched raw against the three plurals (./server.rs restricts it and validates DNS forms
-    upstream, but this function re-gates `kind` and validates nothing else), `namespace` and `name`
-    go verbatim into the instance get and the child-namespace fallback, `vynil_namespace` reaches
-    only @scrub_json as the second Secret-collection namespace.
-  @all_children_from_status accepts any @serde_json::@Value; only a `status` key that is an object
-    is ever inspected.
-  No instance shape is preconditioned: missing `status`, all-absent categories and empty arrays
-    are ordinary @Ok inputs yielding an empty inventory.
+  @get_children prend un @kube::Client emprunté vivant plus quatre emprunts @str libres : `kind` est
+    comparé brut aux trois pluriels (./server.rs le restreint et valide les formes DNS en amont,
+    mais cette fonction re-gate `kind` et ne valide rien d'autre), `namespace` et `name`
+    partent verbatim dans le get de l'instance et le fallback de namespace d'enfant, `vynil_namespace`
+    n'atteint que @scrub_json comme second namespace de collecte des Secret.
+  @all_children_from_status accepte n'importe quelle @serde_json::@Value ; seule une clé `status` qui
+    est un objet est jamais inspectée.
+  Aucune forme d'instance n'est préconditionnée : `status` manquant, catégories toutes absentes et
+    tableaux vides sont des entrées @Ok ordinaires produisant un inventaire vide.
 
 Returns:
-  @Ok of `(Vec<@ChildWithState>, @ScrubStats)` — one entry per extracted child, in the order fixed
-    under `Must`, @state @Some(scrubbed object) for fetched-and-masked children and @None
-    otherwise, the tally summed over all of them; ./server.rs renders the vector as the `200`
-    `application/json` body and the tally into `X-Diag-Redactions` (./dto.sdd), where @None
-    serializes as an explicit `"state":null` key.
-  An instance with no children returns an empty vector with an all-zero @ScrubStats, not an error
-    — the endpoint answers `200` with `[]`.
-  @all_children_from_status returns a possibly-empty Vec and never fails.
+  @Ok de `(Vec<@ChildWithState>, @ScrubStats)` — une entrée par enfant extrait, dans l'ordre fixé sous
+    `Must`, @state @Some(objet scrubbé) pour les enfants récupérés-et-masqués et @None
+    sinon, le total sommé sur tous ; ./server.rs rend le vecteur comme le corps `200`
+    `application/json` et le total dans `X-Diag-Redactions` (./dto.sdd), où @None
+    se sérialise en clé explicite `"state":null`.
+  Une instance sans enfants renvoie un vecteur vide avec un @ScrubStats tous zéros, pas une
+    erreur — l'endpoint répond `200` avec `[]`.
+  @all_children_from_status renvoie un Vec possiblement vide et ne échoue jamais.
 
 Raises:
-  @DiagError::UnknownKind — any `kind` outside the three plurals, raised before any cluster call.
-  @DiagError::KubeError — every @kube::Error from the instance get in @get_tenant_children,
-    @get_service_children or @get_system_children, mapped explicitly by
-    `@map_err(@DiagError::KubeError)`; the call @Errs whole — a Kubernetes-side `404` for a
-    vanished instance (racing ./server.rs's existence pre-check) still travels as `500`-lane
-    @DiagError::KubeError, never as @DiagError::InstanceNotFound (./error.sdd).
-  @DiagError::SerializationError — from @get_child_state only: @serde_json::to_value of a fetched
-    child object failing, or @scrub_json @Err (masked text no longer re-parsing, ./anonymize.sdd);
-    `?` aborts the call discarding the vector already built — no partial inventory is ever
-    delivered.
-  Not raised here, despite touching this data path: child-get failures, entry-level @serde_json
-    rejects and the instance-serialization fallback all stay internal (Handles).
+  @DiagError::UnknownKind — tout `kind` hors des trois pluriels, levé avant tout appel cluster.
+  @DiagError::KubeError — chaque @kube::Error issu du get de l'instance dans @get_tenant_children,
+    @get_service_children ou @get_system_children, mappé explicitement par
+    `@map_err(@DiagError::KubeError)` ; l'appel @Errs en entier — un `404` côté Kubernetes pour
+    une instance évaporée (en course avec le pré-contrôle d'existence de ./server.rs) voyage encore en voie
+    `500` comme @DiagError::KubeError, jamais comme @DiagError::InstanceNotFound (./error.sdd).
+  @DiagError::SerializationError — de @get_child_state seulement : @serde_json::to_value d'un objet
+    enfant récupéré en échec, ou @scrub_json @Err (le texte masqué ne se reparse plus, ./anonymize.sdd) ;
+    `?` avorte l'appel en jetant le vecteur déjà construit — aucun inventaire partiel n'est jamais
+    livré.
+  Non levées ici, malgré ce chemin de données : échecs du get d'enfant, rejets @serde_json au niveau
+    entrée et fallback de sérialisation d'instance restent tous internes (Handles).
 
 Handles:
-  Child read failures in bulk — objects deleted after recording, RBAC refused, name drifted: the
-    consumer sees the child with `"state":null` and no reason; deleted, forbidden and
-    never-fetchable entries are indistinguishable on the wire.
-  Unsupported child kinds — `Pod`, `Job`, `Secret`, lowercase `deployment`, anything — short-circuit
-    to @None with zero stats and zero cluster calls.
-  Status-shape drift — a category holding a non-array, or entries of the @Published shape the
-    typed contract actually stores under `services`, fails the @Children gate and is dropped
-    silently by @extract_children_from_json's @filter_map.
-  Instance serialization failure — @extract_children_from_instance's @unwrap_or_default turns it
-    into zero children and a normal run (the doc comment calls the failure unrealistic; Tasks).
-  Mid-run abort — the n-th child failing @scrub_json discards children 1..n-1 that were already
-    masked and tallied.
+  Échecs de lecture d'enfants en masse — objets supprimés après enregistrement, RBAC refusé, nom dérivé : le
+    consommateur voit l'enfant avec `"state":null` et sans raison ; les entrées supprimées, interdites et
+    jamais récupérables sont indiscernables sur le wire.
+  Kinds d'enfant non pris en charge — `Pod`, `Job`, `Secret`, `deployment` minuscule, quoi que ce soit —
+    court-circuités vers @None avec stats nulles et zéro appel cluster.
+  Dérive de forme du statut — une catégorie portant un non-tableau, ou des entrées de la forme @Published que le
+    contrat typé stocke réellement sous `services`, échoue la porte @Children et est supprimée
+    silencieusement par l'@filter_map de @extract_children_from_json.
+  Échec de sérialisation d'instance — l'@unwrap_or_default de @extract_children_from_instance le tourne
+    en zéro enfant et un run normal (le doc-comment qualifie l'échec d'irréaliste ; Tasks).
+  Avortage en cours de run — l'enfant n-ième échouant @scrub_json jette les enfants 1..n-1 déjà
+    masqués et comptabilisés.
 
 Tasks:
-  [ ] No `#[cfg(test)]` module exists in this file and the server crate has no integration test
-      files today; cover all Scenarios below from these blocks under the project TTD rule once a
-      cluster double exists (the server crate's dev-dependencies are empty, per ./anonymize.sdd).
-  [?] @Children::api_version is ignored by child dispatch — all five fetches use the group/version
-      hardcoded in the @k8s_openapi types, and the in-file comment concedes a "simplified
-      approach"; e.g. a child declared `mygroup/v1/Service` is fetched from @api::core::v1 and
-      then degrades to @None. Decide later whether api_version routes dispatch.
-  [?] The `services` category is typed @Vec<@crate::Published> in both CRDs that carry it, a
-      @Published object never passes the @Children gate, and @Published::definition is nested and
-      never read — so the category yields children only for hand-authored or legacy-shaped
-      status. Decide later whether it stays, goes, or flattens `definition`.
-  [?] Child-read swallowing is total: `404`, RBAC `403` and decode errors alike land as
-      `"state":null` with no reason on the wire and no log line — a server missing get-RBAC on the
-      five kinds reads to clients as "every child vanished". Decide later whether per-child status
-      belongs on the wire.
-  [?] Instance-serialization failure silently yields zero children via @unwrap_or_default instead
-      of @DiagError::SerializationError; the doc comment argues the failure is unreachable.
-      Decide later whether it propagates.
-  [?] Sequential N+1 with no cache or consistency snapshot: per request the file issues 1 instance
-      get plus up to 1 child get and 2 Secret lists (@scrub_json's sweep) per fetched child, so a
-      30-child instance costs ~90 round trips with a window in which the inventory can drift.
-      Decide later whether batching, caching or a snapshot belongs here.
-  [?] Extraction is kind-agnostic, so foreign categories on a written-back status are honoured
-      (a `systems` array on a @TenantInstance ships as children); the fix-of-record comment froze
-      the union deliberately. Decide later whether categories should be filtered per kind.
-  [?] The doc comment of @get_children says it returns the Kubernetes/serialization error raised
-      "while reading the instance and its children", but child-get errors never propagate —
-      only scrub/serialize ones do. Reconcile wording with the degradation contract.
+  [ ] Aucun module `#[cfg(test)]` n'existe dans ce fichier et le crate server n'a aujourd'hui aucun fichier
+      d'intégration de test ; couvrir tous les Scenarios ci-dessous depuis ces blocs selon la règle TTD du projet, dès qu'un
+      double de cluster existe (les dev-dependencies du crate server sont vides, selon ./anonymize.sdd).
+  [?] @Children::api_version est ignoré par la dispatch d'enfant — les cinq récupérations utilisent le groupe/version
+      codé en dur dans les types @k8s_openapi, et le commentaire dans le fichier concède une "simplified
+      approach" ; p. ex. un enfant déclaré `mygroup/v1/Service` est récupéré depuis @api::core::v1 et
+      se dégrade alors en @None. Décider plus tard si api_version route la dispatch.
+  [?] La catégorie `services` est typée @Vec<@crate::Published> dans les deux CRDs qui la portent, un
+      objet @Published ne passe jamais la porte @Children, et @Published::definition est imbriqué et
+      jamais lu — donc la catégorie ne produit des enfants que pour un statut écrit à la main ou de
+      forme legacy. Décider plus tard si elle reste, part, ou aplatit `definition`.
+  [?] L'avalement des lectures d'enfant est total : `404`, RBAC `403` et erreurs de décodage atterrissent tous en
+      `"state":null` sans raison sur le wire ni ligne de log — un serveur sans RBAC de get sur les
+      cinq kinds se lit pour les clients comme "tous les enfants ont disparu". Décider plus tard si un statut
+      par enfant a sa place sur le wire.
+  [?] L'échec de sérialisation d'instance produit silencieusement zéro enfant via @unwrap_or_default au lieu
+      de @DiagError::SerializationError ; le doc-comment soutient que l'échec est inatteignable.
+      Décider plus tard s'il se propage.
+  [?] N+1 séquentiel sans cache ni instantané de cohérence : par requête le fichier émet 1
+      get d'instance plus jusqu'à 1 get d'enfant et 2 listings de Secret (la passe de @scrub_json) par enfant récupéré, si bien
+      qu'une instance de 30 enfants coûte ~90 allers-retours avec une fenêtre où l'inventaire peut dériver.
+      Décider plus tard si batching, cache ou instantané ont leur place ici.
+  [?] L'extraction est indépendante du kind, si bien que les catégories étrangères sur un statut réécrit sont honorées
+      (un tableau `systems` sur un @TenantInstance part comme enfants) ; le commentaire fix-of-record a gelé
+      l'union délibérément. Décider plus tard si les catégories devraient être filtrées par kind.
+  [?] Le doc-comment de @get_children dit qu'il renvoie l'erreur Kubernetes/sérialisation levée
+      "en lisant l'instance et ses enfants", mais les erreurs du get d'enfant ne se propagent jamais —
+      seules celles de scrub/sérialisation le font. Réconcilier le libellé avec le contrat de dégradation.
 
 Done when:
-  Every Scenario below maps to a green test in `server`, the `[?]` decisions above are recorded,
-    and `cargo test -p server` with `cargo clippy --all-targets -- -D warnings` and
-    `cargo +nightly fmt --check` stays green.
+  Chaque Scenario ci-dessous correspond à un test vert dans `server`, les décisions `[?]` ci-dessus sont consignées,
+    et `cargo test -p server` avec `cargo clippy --all-targets -- -D warnings` et
+    `cargo +nightly fmt --check` reste vert.
 
 Scenario: Kind routes, everything else fails pre-call
-  Given @get_children with kind `systeminstances`
-  When it runs
-  Then exactly one namespaced @Api::get of the @SystemInstance by `name` in `namespace` is issued
-    and extraction reads that JSON's categories
-  Given kind `TenantInstances` with a capital T, or `pods`, or `""`
-  Then @DiagError::UnknownKind is returned and no cluster read happens at all
-  No mapped test exists.
+  Given @get_children de kind `systeminstances`
+  When il s'exécute
+  Then un seul @Api::get namespaced du @SystemInstance par `name` dans `namespace` est émis
+    et l'extraction lit les catégories de ce JSON
+  Given le kind `TenantInstances` avec un T majuscule, ou `pods`, ou `""`
+  Then @DiagError::UnknownKind est renvoyé et aucune lecture cluster n'a lieu du tout
+  Aucun test mappé n'existe.
 
 Scenario: Categories flatten in declaration order across one status
-  Given a @TenantInstance status holding `befores` [A,B], `posts` [C] and a foreign `systems` [D]
-    of @Children-shaped entries, plus a `services` array holding one @Published-shaped object
-  When @all_children_from_status runs
-  Then the vector is A, B, C, D — category order `befores`/`vitals`/`scalables`/`others`/`posts`/
-    `systems`/`services`, in-array order within each
-  And the @Published-shaped entry contributes nothing — missing `kind`/`name` drops it silently
-  No mapped test exists.
+  Given un statut @TenantInstance tenant `befores` [A,B], `posts` [C] et un `systems` étranger [D]
+    d'entrées de forme @Children, plus un tableau `services` tenant un objet de forme @Published
+  When @all_children_from_status s'exécute
+  Then le vecteur est A, B, C, D — ordre de catégories `befores`/`vitals`/`scalables`/`others`/`posts`/
+    `systems`/`services`, ordre dans le tableau au sein de chacun
+  And l'entrée de forme @Published ne contribue rien — `kind`/`name` manquant la jette silencieusement
+  Aucun test mappé n'existe.
 
 Scenario: Child namespace wins, instance namespace falls back
-  Given a child with @Children::namespace `tenant-a` while the instance `namespace` is `team-a`
-  When @get_child_state runs for it
-  Then the object get is namespaced to `tenant-a` and @scrub_json receives `tenant-a`, not `team-a`
-  And a child with @None namespace is instead fetched — and scrubbed — in `team-a`
-  No mapped test exists.
+  Given un enfant avec @Children::namespace `tenant-a` alors que le `namespace` de l'instance est `team-a`
+  When @get_child_state s'exécute pour lui
+  Then le get de l'objet est namespaced vers `tenant-a` et @scrub_json reçoit `tenant-a`, pas `team-a`
+  And un enfant avec namespace @None est à la place récupéré — et scrubbé — dans `team-a`
+  Aucun test mappé n'existe.
 
 Scenario: Missing child degrades to a null state, response still completes
-  Given an instance whose recorded `Deployment` child object returns `404` from its get while a
-    second child fetches fine
-  When @get_children runs
-  Then the call @Oks with both entries present, the missing one carrying @None @state and adding
-    zeroes to the tally, and only the fetched child's stats summed
-  No mapped test exists.
+  Given une instance dont l'objet enfant `Deployment` enregistré renvoie `404` à son get tandis qu'un
+    second enfant se récupère bien
+  When @get_children s'exécute
+  Then l'appel @Oks avec les deux entrées présentes, celle manquante portant @None @state et ajoutant
+    des zéros au total, et seuls les stats de l'enfant récupéré sommées
+  Aucun test mappé n'existe.
 
 Scenario: Unsupported child kind costs zero calls
-  Given a recorded child of kind `Job`
-  When @get_child_state runs
-  Then no API request is made for it and the result is (@None, @ScrubStats::default())
-  No mapped test exists.
+  Given un enfant enregistré de kind `Job`
+  When @get_child_state s'exécute
+  Then aucune requête API n'est faite pour lui et le résultat est (@None, @ScrubStats::default())
+  Aucun test mappé n'existe.
 
 Scenario: Scrub abort discards the partial inventory
-  Given two children where the first masks cleanly and the second's masked text no longer
-    re-parses as JSON
-  When @get_children runs
-  Then @Err(@DiagError::SerializationError) is returned — the first child's already-built
-    @ChildWithState is discarded and the caller receives no partial list
-  No mapped test exists.
+  Given deux enfants où le premier se masque proprement et où le texte masqué du second ne se
+    reparse plus comme JSON
+  When @get_children s'exécute
+  Then @Err(@DiagError::SerializationError) est renvoyé — l'@ChildWithState déjà construit du
+    premier enfant est jeté et l'appelant ne reçoit aucune liste partielle
+  Aucun test mappé n'existe.
 
 Scenario: Instance read failure fails the whole call
-  Given the kind-matched instance get failing (deleted mid-request, or RBAC-refined)
-  When @get_children runs
-  Then the call @Errs as @DiagError::KubeError with no vector at all — contrasting the child lane,
-    which never fails the call
-  No mapped test exists.
+  Given le get de l'instance appariée par kind en échec (supprimé en cours de requête, ou restreint par RBAC)
+  When @get_children s'exécute
+  Then l'appel @Errs en @DiagError::KubeError sans aucun vecteur — en contraste avec la voie enfant,
+    qui ne fait jamais échouer l'appel
+  Aucun test mappé n'existe.
 
 Scenario: Hostile status shapes are total, not fatal
-  Given JSON values with no `status`, a `status` that is a string, and @Children-shaped objects
-    stored under unlisted keys such as `crds`
-  When @all_children_from_status runs
-  Then each yields an empty Vec — only the seven listed keys of an object `status`, only when they
-    carry arrays, are ever read
-  No mapped test exists.
+  Given des valeurs JSON sans `status`, un `status` qui est une chaîne, et des objets de forme @Children
+    stockés sous des clés non listées telles que `crds`
+  When @all_children_from_status s'exécute
+  Then chacun produit un Vec vide — seules les sept clés listées d'un `status` objet, seulement quand elles
+    portent des tableaux, sont jamais lues
+  Aucun test mappé n'existe.
 
 Example:
-  A `Deployment` child plus an unsupported `Job` child render from ./server.rs as
+  Un enfant `Deployment` plus un enfant `Job` non pris en charge rendus depuis ./server.rs comme
     `[{"child":{"apiVersion":"apps/v1","kind":"Deployment","name":"web","namespace":"tenant-a"},"state":{ …masked object… }}`
-    plus `{"child":{"apiVersion":"batch/v1","kind":"Job","name":"hook","namespace":null},"state":null}`
-    — the `Job` never reaches the cluster, so its @None namespace fallback to the instance
-    namespace is never even consumed
-  Both counters saturate: @ScrubStats::default() folded per child keeps `distinct=0;occurrences=0`
-    when every child degraded — the endpoint still answers `200` with that header
+    auxquels s'ajoute `{"child":{"apiVersion":"batch/v1","kind":"Job","name":"hook","namespace":null},"state":null}`
+    — le `Job` n'atteint jamais le cluster, si bien que son fallback de namespace @None vers le
+    namespace de l'instance n'est même jamais consommé
+  Les deux compteurs saturent : @ScrubStats::default() plié par enfant garde `distinct=0;occurrences=0`
+    quand chaque enfant est dégradé — l'endpoint répond quand même `200` avec cet en-tête
