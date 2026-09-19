@@ -3,79 +3,80 @@ Spec: RunCmd
 Platform: Rust
 
 Purpose:
-  Back the `agent run` sub-command: execute one Rhai script file standalone, with the
-    script's own directory and the agent script library on the module search path. It is
-    the developer-facing "run this script now" entry, outside any package lifecycle.
+  Supporte la sous-commande `agent run` : exécuter un fichier de script Rhai seul, avec
+    son répertoire et la bibliothèque de scripts de l'agent sur le chemin de recherche
+    des modules. Entrée développeur « exécuter ce script maintenant », hors cycle de vie.
 
 Exposes:
-  @Parameters — clap `Args`, `Debug`; both fields private to this module.
-  @run — validates the script path, builds the interpreter, executes the file.
+  @Parameters — clap `Args`, `Debug` ; les deux champs privés pour ce module.
+  @run — valide le chemin du script, construit l'interpréteur, exécute le fichier.
 
 Accepts:
-  @Parameters.script — `-f` / `--file`, @env `SCRIPT`, value name `SCRIPT`, a @PathBuf.
+  @Parameters.script — `-f` / `--file`, @env `SCRIPT`, value name `SCRIPT`, un @PathBuf.
   @Parameters.script_dir — `-s` / `--script-dir`, @env `SCRIPT_DIRECTORY`, value name
-    `SCRIPT_DIRECTORY`, @PathBuf, clap @default_value `./agent/scripts` (a literal
-    string, resolved relative to the process CWD at interpretation time).
+    `SCRIPT_DIRECTORY`, @PathBuf, clap @default_value `./agent/scripts` (chaîne
+    littérale, résolue relativement au CWD du processus à l'interprétation).
 
 Returns:
-  @common::Result of @(): @Ok on a completed run; the @run_file error propagates via
-    `?` otherwise.
+  @common::Result de @() : @Ok sur une exécution terminée ; l'erreur de @run_file se
+    propage via `?` sinon.
 
 Raises:
-  @common::Error::MissingScript carrying the cloned @PathBuf — sole self-minted error,
-    when @Parameters.script is not an existing regular file at check time (a directory
-    or symlink-to-directory also fails @Path::is_file).
-  Propagated @common::Error from @Script::run_file — parse or runtime failure inside
-    the script, unmapped and unwrapped.
+  @common::Error::MissingScript portant le @PathBuf cloné — seule erreur auto-émise,
+    quand @Parameters.script n'est pas un fichier régulier existant au contrôle (un
+    répertoire ou un lien symbolique vers un répertoire échoue aussi à @Path::is_file).
+  @common::Error propagée de @Script::run_file — échec d'analyse ou d'exécution dans
+    le script, ni cartographiée ni empaquetée.
 
 Handles:
-  Script with no parent directory (a bare `foo.rhai` relative path yields `""` from
-    @Path::parent fallback via @std::path::Path::new("")).
-  @Err arm — ./main.sdd logs `{e:}` through @tracing::error and exits the process 1;
-    nothing here calls @process::exit.
+  Script sans répertoire parent (un chemin relatif nu `foo.rhai` donne `""` par le
+    repli de @Path::parent via @std::path::Path::new("")).
+  Branche @Err — ./main.sdd journalise `{e:}` via @tracing::error et termine le
+    processus avec 1 ; rien ici n'appelle @process::exit.
 
 Must:
-  Check @Path::is_file on the raw @Parameters.script before touching the interpreter;
-    no search, no extension requirement, no readability probe.
-  Build @common::rhaihandler::Script::new with exactly two search dirs in this order:
-    the script's parent directory (@to_string_lossy), then
-    `{script_dir}/lib` formatted via @PathBuf::display — the `lib` segment is appended
-    by plain string concat, so a @script_dir ending in `/` yields a doubled separator.
-  Discard @run_file's returned @Dynamic with `let _ =` while still propagating its
-    @Err through `?`: script values are never observed, script failures always are.
-  Emit no output of its own; all stdout/stderr comes from the script or logging.
+  Vérifier @Path::is_file sur le @Parameters.script brut avant de toucher l'interpréteur ;
+    aucune recherche, aucune exigence d'extension, aucune sonde de lisibilité.
+  Construire @common::rhaihandler::Script::new avec exactement deux répertoires de
+    recherche dans cet ordre : le répertoire parent du script (@to_string_lossy), puis
+    `{script_dir}/lib` formaté via @PathBuf::display — le segment `lib` est ajouté par
+    simple concaténation, donc un @script_dir finissant par `/` double le séparateur.
+  Jeter la @Dynamic retournée par @run_file avec `let _ =` tout en propageant son
+    @Err via `?` : les valeurs du script ne sont jamais observées, ses échecs toujours.
+  N'émettre aucune sortie propre ; tout stdout/stderr vient du script ou des logs.
 
 Depends on:
-  ../common/src/rhaihandler.sdd — @Script::new search-path semantics and @run_file.
-  ../common/src/lib.sdd — @Error::MissingScript variant and its Display text.
-  ./main.sdd — the only caller (`Run` dispatch arm, exit-1 error lane).
+  ../common/src/rhaihandler.sdd — sémantique du chemin de recherche de @Script::new
+    et @run_file.
+  ../common/src/lib.sdd — la variante @Error::MissingScript et son texte Display.
+  ./main.sdd — l'appelant unique (branche de dispatch `Run`, voie d'erreur exit-1).
 
-Scenario: missing script file
-  Given `RunCmd` and @Parameters.script pointing at a non-existent path or a directory
-  When @run is invoked
-  Then @tracing::error logs `"{:?} is not a file"` with the path
-  And @run returns @Error::MissingScript holding the same @PathBuf
-  And no interpreter is constructed
+Scenario: fichier script manquant
+  Given `RunCmd` et @Parameters.script pointant vers un chemin inexistant ou un répertoire
+  When @run est invoqué
+  Then @tracing::error journalise `"{:?} is not a file"` avec le chemin
+  And @run retourne @Error::MissingScript portant le même @PathBuf
+  And aucun interpréteur n'est construit
 
-Scenario: script runs with parent and lib dirs on the search path
-  Given @Parameters.script naming an existing file `dir/app.rhai` and @script_dir `sd`
-  When @run is invoked
-  Then @Script::new receives search dirs `["dir", "sd/lib"]` in that order
-  And a successful @run_file yields @Ok(()) regardless of the discarded @Dynamic
+Scenario: le script tourne avec les répertoires parent et lib sur le chemin de recherche
+  Given @Parameters.script nommant un fichier existant `dir/app.rhai` et @script_dir `sd`
+  When @run est invoqué
+  Then @Script::new reçoit les répertoires `["dir", "sd/lib"]` dans cet ordre
+  And un @run_file réussi donne @Ok(()) quelle que soit la @Dynamic jetée
 
-Scenario: script error propagates untouched
-  Given @Parameters.script naming a file whose execution fails inside the interpreter
-  When @run reaches `let _ = rhai.run_file(...)?`
-  Then the @Err surfaces from @run unchanged for main's exit-1 lane
+Scenario: l'erreur du script se propage intacte
+  Given @Parameters.script nommant un fichier dont l'exécution échoue dans l'interpréteur
+  When @run atteint `let _ = rhai.run_file(...)?`
+  Then l'@Err ressort de @run inchangée pour la voie exit-1 de main
 
 Tasks:
-  [ ] Decide later whether the `let _ =` discard of the script's final value is wanted
-      or the value should gate success/logging.
-  [ ] Decide later whether @script_dir should be validated (exists, is a directory)
-      before building the interpreter; today a wrong @script_dir only fails if the
-      script actually imports from it.
-  [ ] Cover the three scenarios with tests; `run.rs` has no `#[cfg(test)]` module and
-      no test invokes @run.
+  [ ] Décider plus tard si le rejet `let _ =` de la valeur finale du script est voulu
+      ou si la valeur doit conditionner succès/logging.
+  [ ] Décider plus tard si @script_dir doit être validé (existe, est un répertoire)
+      avant de construire l'interpréteur ; aujourd'hui un mauvais @script_dir ne fait
+      échouer que si le script y importe réellement.
+  [ ] Couvrir les trois scénarios par des tests ; `run.rs` n'a pas de module
+      `#[cfg(test)]` et aucun test n'invoque @run.
 
 Done when:
-  The three scenarios hold under tests and the search-path order stays frozen.
+  Les trois scénarios tiennent sous tests et l'ordre du chemin de recherche reste figé.

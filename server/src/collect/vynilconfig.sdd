@@ -1,215 +1,230 @@
 Spec: vynilconfig
 
 Purpose:
-  Serve the diagnostic API's `vynilconfig` item: one point read of the `vynil` @ConfigMap in the
-    server's `vynil_namespace`, that object's string `data` map re-serialized to YAML by
-    @serde_yaml::to_string, that text masked through @scrub_yaml over the request `namespace`'s
-    and the `vynil_namespace`'s Secrets, and the masked-text-plus-@ScrubStats pair handed back to
-    /server/src/server.rs for the `application/yaml` body and the `X-Diag-Redactions` header. An
-    absent ConfigMap, an unreadable one and one with empty `data` all answer the empty document
-    `---` with zero counters — never an error.
+  Sert l'élément `vynilconfig` de l'API de diagnostic : une lecture ponctuelle du @ConfigMap
+    `vynil` dans le `vynil_namespace` du serveur, la map `data` de chaînes de cet objet
+    resérialisée en YAML par @serde_yaml::to_string, ce texte masqué via @scrub_yaml sur les
+    Secrets du `namespace` de la requête et du `vynil_namespace`, et le couple texte masqué +
+    @ScrubStats restitué à /server/src/server.rs pour le corps `application/yaml` et l'en-tête
+    `X-Diag-Redactions`. Un ConfigMap absent, illisible ou au `data` vide répondent tous le
+    document vide `---` avec des compteurs à zéro — jamais une erreur.
 
 Owns:
   ./vynilconfig.rs
 
 References:
-  ../dto.sdd — @ScrubStats is this file's second return slot; the `X-Diag-Redactions` grammar and
-    its field-name coupling to /server/src/server.rs @add_scrub_header are owned there.
-  ../error.sdd — the exit lane is exactly one variant, @DiagError::YamlError; its `DIAG-500`/`500`
-    rendering is owned there.
-  ../anonymize.sdd — the @scrub_yaml contract relied on verbatim: raw-text value/regex masking, the
-    per-call Secret sweep of both namespaces with silently swallowed list failures, and the
-    pass-1-only counter semantics returned here untouched.
-  ../state.sdd — the client arriving as the @get_vynil_config argument is the @AppState.client
-    cloned by /server/src/server.rs, `vynil_namespace` is @AppState.config.vynil_namespace (default
-    `vynil-system`), and `namespace` is the URL `{ns}` segment; the server identity whose own RBAC
-    decides whether the ConfigMap read succeeds is specified there.
-  /common/src/context.sdd — approved calibration reference; the @kube::Config::infer client-build
-    and discovery semantics behind that identity are documented there.
+  ../dto.sdd — @ScrubStats est le second slot de retour de ce fichier ; la grammaire de
+    `X-Diag-Redactions` et son couplage de nom de champ avec @add_scrub_header de
+    /server/src/server.rs y sont possédés.
+  ../error.sdd — la voie de sortie est exactement une variante, @DiagError::YamlError ; son rendu
+    `DIAG-500`/`500` y est possédé.
+  ../anonymize.sdd — le contrat @scrub_yaml utilisé tel quel : masquage valeur/regex sur texte
+    brut, le balayage par appel des Secrets des deux namespaces avec les échecs de liste avalés
+    en silence, et la sémantique des compteurs du seul pass-1 restituée ici sans retouche.
+  ../state.sdd — le client arrivé comme argument @get_vynil_config est le @AppState.client cloné
+    par /server/src/server.rs, `vynil_namespace` est @AppState.config.vynil_namespace (défaut
+    `vynil-system`), et `namespace` est le segment d'URL `{ns}` ; l'identité du serveur dont les
+    propres RBAC décident si la lecture du ConfigMap réussit y est spécifiée.
+  /common/src/context.sdd — référence d'étalonnage approuvée ; la construction de client
+    @kube::Config::infer et la sémantique de découverte derrière cette identité y sont
+    documentées.
 
 Must:
-  Cluster access is exactly one point read: @Api::namespaced(client.clone(), `vynil_namespace`)
-    then @Api::get of the fixed object-name literal `vynil`, typed as @k8s_openapi
-    @api::core::v1::@ConfigMap — no list, no watch, no @ListParams, no selector anywhere, and the
-    object name is never derived from configuration; the request `namespace` never scopes a read.
-  Only @ConfigMap::data reaches the output: the @Option @std::collections::@BTreeMap of
-    @String-@String pairs is taken through @unwrap_or_default, so @ConfigMap::binary_data,
-    @metadata (name, namespace, labels, annotations) and every other field of the object never
-    surface, and keys serialize in @BTreeMap ascending order with values verbatim.
-  The `---` answer has exactly two producers and both bypass @scrub_yaml entirely — and so issue
-    zero Secret-list traffic: the ConfigMap @get failing (the catch-all @Err arm) and the
-    ConfigMap carrying absent or empty `data` (the @is_empty short-circuit, returning before any
-    serialization). The literal is the three bytes `---`, a valid empty YAML document.
-  Non-empty `data` runs the fixed assembly @serde_yaml::to_string → @scrub_yaml(text, client,
-    `namespace`, `vynil_namespace`); nothing parses YAML here — this file is a YAML producer whose
-    output is then masked as opaque text, and whatever bytes @scrub_yaml returns ship unexamined,
-    even if masking broke the document's parseability (the text-lane effects are owned by
-    ../anonymize.sdd).
-  Redaction is wholly delegated: this file holds no key-name rule, no field allowlist and no notion
-    of what is a secret — a config value survives verbatim unless it equals a Secret value
-    collected from the two namespaces or matches the JWT/Bearer/PEM regexes, and the @ScrubStats
-    returned are @scrub_yaml's counters with no local adjustment.
-  The server reads with its own identity and rights; `namespace` reaches @scrub_yaml unvalidated
-    and unchecked against the caller — /server/src/server.rs has already enforced the DNS-form
-    check, the kind/item allowlists and authentication for the request, but the `vynilconfig` item
-    is generic tier (@is_instance_scoped_item answers false in ../authz.rs), so no
-    @SubjectAccessReview and no instance-existence check gate this payload.
-  The file owns no cache, TTL, informer or global state and performs no write: every
-    @get_vynil_config call re-reads the ConfigMap and, on the non-empty path, re-collects Secrets
-    through @scrub_yaml.
+  L'accès au cluster est exactement une lecture ponctuelle : @Api::namespaced(client.clone(),
+    `vynil_namespace`) puis @Api::get du nom d'objet littéral fixe `vynil`, typé comme
+    @k8s_openapi @api::core::v1::@ConfigMap — pas de list, pas de watch, pas de @ListParams, pas
+    de selector nulle part, et le nom d'objet n'est jamais dérivé de la configuration ; le
+    `namespace` de la requête ne délimite jamais une lecture.
+  Seul @ConfigMap::data atteint la sortie : l'@Option @std::collections::@BTreeMap de paires
+    @String-@String est pris via @unwrap_or_default, donc @ConfigMap::binary_data, @metadata
+    (name, namespace, labels, annotations) et tout autre champ de l'objet n'affleurent jamais,
+    et les clés se sérialisent en ordre ascendant @BTreeMap avec les valeurs verbatim.
+  La réponse `---` a exactement deux producteurs et les deux contournent @scrub_yaml
+    entièrement — et n'émettent donc aucun trafic de liste de Secrets : l'@get du ConfigMap en
+    échec (l'arme fourre-tout @Err) et le ConfigMap portant un `data` absent ou vide (le
+    court-circuit @is_empty, revenant avant toute sérialisation). Le littéral est les trois
+    octets `---`, un document YAML vide valide.
+  Un `data` non vide exécute l'assemblage fixe @serde_yaml::to_string → @scrub_yaml(text, client,
+    `namespace`, `vynil_namespace`) ; rien ne parse le YAML ici — ce fichier est un producteur
+    YAML dont la sortie est ensuite masquée comme texte opaque, et les octets que @scrub_yaml
+    renvoie partent sans examen, même si le masquage cassait la parseabilité du document (les
+    effets de la voie texte sont possédés par ../anonymize.sdd).
+  Le masquage est totalement délégué : ce fichier ne détient aucune règle de nom de clé, aucune
+    allowlist de champs ni notion de ce qui est un secret — une valeur de config survit verbatim
+    sauf si elle égale une valeur de Secret collectée dans les deux namespaces ou correspond aux
+    regex JWT/Bearer/PEM, et les @ScrubStats restitués sont les compteurs de @scrub_yaml sans
+    ajustement local.
+  Le serveur lit avec sa propre identité et ses droits ; `namespace` atteint @scrub_yaml sans
+    validation ni contrôle contre l'appelant — /server/src/server.rs a déjà appliqué le contrôle
+    de forme DNS, les allowlists de type/élément et l'authentification pour la requête, mais
+    l'élément `vynilconfig` est de niveau générique (@is_instance_scoped_item répond false dans
+    ../authz.rs), donc aucun @SubjectAccessReview ni contrôle d'existence d'instance ne garde
+    cette charge utile.
+  Le fichier ne détient aucun cache, TTL, informer ni état global et n'écrit jamais : chaque
+    appel @get_vynil_config relit le ConfigMap et, sur la voie non vide, re-collecte les Secrets
+    via @scrub_yaml.
 
 Depends on:
-  @kube `3.1.0` (/Cargo.lock) — @kube::Client and @kube::@api::@Api; only the @namespaced
-    constructor and @get with default parameters are used, and the client is cloned once per call
-    into the @Api.
-  @k8s_openapi `0.27.1` (/Cargo.lock) — @api::core::v1::@ConfigMap as the read type; only its
-    @data field is ever touched.
-  @serde_yaml `0.9` (/server/Cargo.toml) — @serde_yaml::to_string, the serializer rendering the
-    `data` map; no YAML deserialization exists here.
-  @crate::anonymize::scrub_yaml in ../anonymize.rs — the infallible mask-and-tally pass over the
-    serialized text.
-  @crate::dto::@ScrubStats in ../dto.rs — the output shape, plus @ScrubStats::default as the seed
-    returned by both `---` paths and as the @Ok pair's second slot.
-  @crate::error::@DiagError in ../error.rs — the return lane and the @DiagError::YamlError
-    constructor built by the @map_err leg.
+  @kube `3.1.0` (/Cargo.lock) — @kube::Client et @kube::@api::@Api ; seuls le constructeur
+    @namespaced et @get avec paramètres par défaut sont utilisés, et le client est cloné une
+    fois par appel dans l'@Api.
+  @k8s_openapi `0.27.1` (/Cargo.lock) — @api::core::v1::@ConfigMap comme type de lecture ; seul
+    son champ @data est touché.
+  @serde_yaml `0.9` (/server/Cargo.toml) — @serde_yaml::to_string, le sérialiseur qui rend la
+    map `data` ; aucune désérialisation YAML n'existe ici.
+  @crate::anonymize::scrub_yaml dans ../anonymize.rs — le passage infaillible de masquage et
+    comptage sur le texte sérialisé.
+  @crate::dto::@ScrubStats dans ../dto.rs — la forme de sortie, plus @ScrubStats::default comme
+    graine restituée par les deux voies `---` et comme second slot de la paire @Ok.
+  @crate::error::@DiagError dans ../error.rs — la voie de retour et le constructeur
+    @DiagError::YamlError construit par la branche @map_err.
 
 Exposes:
-  @get_vynil_config — the file's only `pub` item and the whole surface, shaped
+  @get_vynil_config — le seul item `pub` du fichier et toute la surface, façonné
     pub async fn @get_vynil_config(client: &@kube::@Client, `vynil_namespace`: &@str,
       `namespace`: &@str) -> @Result<(@std::string::@String, @ScrubStats), @DiagError>,
-    doc-commented with an `# Errors` section, reachable as
-    @crate::collect::vynilconfig::get_vynil_config through `pub mod vynilconfig;` in ./mod.rs and
-    `pub mod collect;` in /server/src/lib.rs.
-  No typed configuration model — nothing named like a cluster-config DTO is defined or
-    reconstructed here; what is exposed is the raw serialized @ConfigMap::data text of the cluster's
-    secret material and nothing else, so secret-bearing values are masked only where the
-    @scrub_yaml collection fires and leak elsewhere by ../anonymize.sdd's rule set.
-  Sole consumer: the `vynilconfig` arm of /server/src/server.rs @instance_handler, which passes
-    (@AppState.client, @AppState.config.vynil_namespace, URL `{ns}`), renders the @Ok text through
-    @yaml_response as `200` with content type `application/yaml`, and attaches the tally through
-    @add_scrub_header; both `---` paths still get the all-zero redaction header.
+    commenté en doc avec une section `# Errors`, atteignable comme
+    @crate::collect::vynilconfig::get_vynil_config via `pub mod vynilconfig;` dans ./mod.rs et
+    `pub mod collect;` dans /server/src/lib.rs.
+  Pas de modèle de configuration typé — rien nommé comme un DTO de config de cluster n'est
+    défini ou reconstruit ici ; ce qui est exposé est le texte brut sérialisé de @ConfigMap::data
+    portant le matériel secret du cluster et rien d'autre, donc les valeurs secrètes ne sont
+    masquées que là où la collection @scrub_yaml s'applique et fuient ailleurs selon le jeu de
+    règles de ../anonymize.sdd.
+  Seul consommateur : la branche `vynilconfig` de @instance_handler de /server/src/server.rs,
+    qui passe (@AppState.client, @AppState.config.vynil_namespace, `{ns}` de l'URL), rend le
+    texte @Ok via @yaml_response en `200` avec le type de contenu `application/yaml`, et attache
+    le comptage via @add_scrub_header ; les deux voies `---` reçoivent quand même l'en-tête de
+    masquage tout-zéros.
 
 Accepts:
-  @client — a borrowed @kube::Client cloned once into the @Api; the identity's rights on core/v1
-    @ConfigMap in `vynil_namespace` decide whether data is ever seen, and every read failure
-    degrades silently (Handles).
-  `vynil_namespace` — both the read namespace and @scrub_yaml's second Secret-collection
-    namespace; the caller passes @AppState.config.vynil_namespace; taken verbatim with no
-    validation, so an empty or wrong value simply misses the object.
-  `namespace` — the URL `{ns}` segment, DNS-form-validated only upstream; its single use is as
-    @scrub_yaml's primary Secret-collection namespace — no read of this namespace is ever issued.
-  No shape precondition on the object: absent `data`, empty `data` and arbitrary key/value
-    content are ordinary @Ok inputs.
+  @client — un @kube::Client emprunté cloné une fois dans l'@Api ; les droits de l'identité sur
+    core/v1 @ConfigMap dans `vynil_namespace` décident si les données sont déjà vues, et chaque
+    échec de lecture dégénère en silence (Handles).
+  `vynil_namespace` — à la fois le namespace de lecture et le second namespace de collection de
+    Secrets de @scrub_yaml ; l'appelant passe @AppState.config.vynil_namespace ; pris verbatim
+    sans validation, donc une valeur vide ou fausse manque simplement l'objet.
+  `namespace` — le segment `{ns}` de l'URL, validé en forme DNS seulement en amont ; son seul
+    usage est comme namespace primaire de collection de Secrets de @scrub_yaml — aucune lecture
+    de ce namespace n'est jamais émise.
+  Aucune précondition de forme sur l'objet : `data` absent, `data` vide et contenu clé/valeur
+    arbitraire sont des entrées @Ok ordinaires.
 
 Returns:
-  Non-empty `data`: @Ok of (@masked text, @ScrubStats) — the @serde_yaml rendering of the map
-    (ascending keys, scalar `key: value` lines) with the @scrub_yaml masking applied and that
-    pass-1 tally attached, so pattern-pass redactions report zero counters on masked text
-    (../anonymize.sdd).
-  Absent or unreadable ConfigMap, absent or empty `data`: @Ok of (`"---"`, @ScrubStats::default())
-    — an empty YAML document, `200`/`application/yaml` and the all-zero header at the caller.
+  `data` non vide : @Ok de (@masked text, @ScrubStats) — le rendu @serde_yaml de la map (clés
+    ascendantes, lignes scalaires `key: value`) avec le masquage @scrub_yaml appliqué et ce
+    comptage de pass-1 attaché, donc les masquages du pass de patterns rapportent des compteurs
+    à zéro sur le texte masqué (../anonymize.sdd).
+  ConfigMap absent ou illisible, `data` absent ou vide : @Ok de (`"---"`,
+    @ScrubStats::default()) — un document YAML vide, `200`/`application/yaml` et l'en-tête
+    tout-zéros chez l'appelant.
 
 Raises:
-  @DiagError::YamlError — the only raisable variant, on @serde_yaml::to_string of the `data` map
-    via explicit @map_err, rendered `DIAG-500`/`500` (../error.sdd); for a string-keyed,
-    string-valued @BTreeMap the arm is practically unreachable on the locked `0.9` build (Tasks
-    `[!]`).
-  Not raised despite the doc comment's claim: @DiagError::KubeError never leaves — every
-    @kube::Error from the @get is consumed by the catch-all arm.
-  No panic path: the file contains no @unwrap, @expect or @panic (the @unwrap_or_default leg
-    defaults, never aborts).
+  @DiagError::YamlError — la seule variante levable, sur @serde_yaml::to_string de la map `data`
+    via @map_err explicite, rendu `DIAG-500`/`500` (../error.sdd) ; pour une @BTreeMap de clés
+    et valeurs de chaînes, l'arme est pratiquement inaccessible sur le build `0.9` verrouillé
+    (Tasks `[?]`).
+  Pas levé malgré l'affirmation du commentaire doc : @DiagError::KubeError ne sort jamais —
+    chaque @kube::Error du @get est consommé par l'arme fourre-tout.
+  Aucune voie de panique : le fichier ne contient aucun @unwrap, @expect ou @panic (la branche
+    @unwrap_or_default met un défaut, n'interrompt jamais).
 
 Handles:
-  Every read failure — `404` absent, RBAC `403`, transport, decode — lands at the same
-    (`"---"`, zero) answer the in-file "ConfigMap absent → empty document" comment describes, so a
-    server missing ConfigMap get rights reads to clients as a configless cluster (Tasks `[?]`).
-  Four wire-identical outcomes: object absent, read refused, `data` @None and `data: {}` all
-    render as the empty document with the all-zero redaction header.
-  Caller-chosen mask scope on a cluster-wide payload: any authenticated caller names an arbitrary
-    DNS-valid `namespace` in the URL (generic tier, nothing binds it to the caller), and that
-    choice decides which tenant's Secret values may redact this answer.
-  Secret material stored in @ConfigMap::binary_data is outside the contract entirely — never read,
-    never decoded, never masked, simply absent from the payload.
-  Values that merely look secret by key name (`password: hunter2` with `hunter2` collected
-    nowhere) pass through verbatim — masking is value-driven upstream, never key-driven here.
+  Chaque échec de lecture — `404` absent, RBAC `403`, transport, décodage — aboutit à la même
+    réponse (`"---"`, zéros) que décrit le commentaire in-fichier « ConfigMap absent → document
+    vide », donc un serveur sans droits de get sur le ConfigMap se lit auprès des clients comme
+    un cluster sans config (Tasks `[?]`).
+  Quatre résultats identiques sur le fil : objet absent, lecture refusée, `data` @None et
+    `data: {}` se rendent tous comme le document vide avec l'en-tête de masquage tout-zéros.
+  Portée de masquage choisie par l'appelant sur une charge utile cluster-wide : tout appelant
+    authentifié nomme un `namespace` DNS-valide arbitraire dans l'URL (niveau générique, rien
+    ne le lie à l'appelant), et ce choix décide quelles valeurs de Secrets de quel tenant
+    peuvent masquer cette réponse.
+  Le matériel secret stocké dans @ConfigMap::binary_data est hors contrat entièrement — jamais
+    lu, jamais décodé, jamais masqué, simplement absent de la charge utile.
+  Les valeurs qui semblent secrètes juste par nom de clé (`password: hunter2` avec `hunter2`
+    collecté nulle part) passent verbatim — le masquage est piloté par la valeur en amont,
+    jamais par la clé ici.
 
 Tasks:
-  [ ] No `#[cfg(test)]` module exists in this file and the server crate has no integration test
-      files; cover all Scenarios below from these blocks once a cluster double exists
-      (dev-dependencies are empty, per ../anonymize.sdd).
-  [!] The @DiagError::YamlError lane looks dead: @serde_yaml::to_string over a string/`@BTreeMap`
-      of plain strings has no failure mode to map, so the function's only `?` leg never fires and
-      the @Err result is unreachable today. Decide with Tasks' doc-comment `[?]` whether the
-      signature collapses or the defensive arm stays.
-  [?] The catch-all @Err(_) swallows RBAC refusals, transport and decode failures as "absent"
-      while the in-file comment pins only the absent case — an RBAC-broken server answers `---`
-      exactly like a configless cluster. Decide later whether only `404` degrades and other
-      failures surface as @DiagError::KubeError.
-  [?] The doc comment promises "the @DiagError raised by the `ConfigMap` read or YAML
-      serialization", but read errors never propagate — only the near-unreachable serialization
-      arm can. Reconcile the wording with the degradation contract (with the `[!]` above if the
-      arm collapses).
-  [?] Generic-tier exposure of cluster config: no @SubjectAccessReview gates `vynilconfig`
-      (../authz.rs) and the caller-named `namespace` picks the Secret-sweep scope of the mask —
-      complementing the Secret-probe oracle deferred in ../anonymize.sdd. Decide later whether
-      this item gains its own authorization or whether the mask scope moves to the server
-      identity.
-  [?] @ConfigMap::binary_data is silently ignored — binary-stored values never surface and never
-      scrub on this endpoint. Decide later whether they join the payload or stay out of contract
-      deliberately.
+  [ ] Aucun module `#[cfg(test)]` n'existe dans ce fichier et le crate server n'a aucun fichier
+      d'intégration de test ; couvrir tous les Scenarios ci-dessous depuis ces blocs dès qu'un
+      double de cluster existe (les dev-dependencies sont vides, selon ../anonymize.sdd).
+  [?] La voie @DiagError::YamlError semble morte : @serde_yaml::to_string sur une `@BTreeMap`
+      chaîne/chaîne de chaînes simples n'a aucun mode d'échec à mapper, donc la seule branche
+      `?` de la fonction ne se déclenche jamais et le résultat @Err est inaccessible aujourd'hui.
+      Décider avec le `[?]` de commentaire doc des Tasks si la signature s'effondre ou si
+      l'arme défensive reste.
+  [?] L'@Err(_) fourre-tout avale les refus RBAC, les échecs de transport et de décodage comme
+      « absent » alors que le commentaire in-fichier n'épingle que le cas absent — un serveur au
+      RBAC cassé répond `---` exactement comme un cluster sans config. Décider plus tard si seul
+      `404` dégénère et si les autres échecs remontent en @DiagError::KubeError.
+  [?] Le commentaire doc promet « the @DiagError raised by the `ConfigMap` read or YAML
+      serialization », mais les erreurs de lecture ne se propagent jamais — seule la branche de
+      sérialisation quasi-inaccessible le peut. Réconcilier le libellé avec le contrat de
+      dégénérescence (avec le `[?]` ci-dessus si la branche s'effondre).
+  [?] Exposition de niveau générique de la config du cluster : aucun @SubjectAccessReview ne
+      garde `vynilconfig` (../authz.rs) et le `namespace` nommé par l'appelant choisit la portée
+      du balayage de Secrets du masquage — complétant l'oracle de sonde de Secrets différé dans
+      ../anonymize.sdd. Décider plus tard si cet élément gagne sa propre autorisation ou si la
+      portée de masquage passe à l'identité du serveur.
+  [?] @ConfigMap::binary_data est silencieusement ignoré — les valeurs stockées en binaire ne
+      remontent jamais et ne sont jamais masquées sur ce point final. Décider plus tard si elles
+      rejoignent la charge utile ou restent hors contrat délibérément.
 
 Done when:
-  Every Scenario below maps to a green test in `server`, the `[?]`/`[!]` decisions above are
-    recorded, and `cargo test -p server` with `cargo clippy --all-targets -- -D warnings` and
-    `cargo +nightly fmt --check` stays green.
+  Chaque Scenario ci-dessous correspond à un test vert dans `server`, les décisions
+    `[?]`/`[?]` ci-dessus sont consignées, et `cargo test -p server` avec
+    `cargo clippy --all-targets -- -D warnings` et `cargo +nightly fmt --check` reste vert.
 
 Scenario: Present ConfigMap masks, counts travel, reads stay in vynil namespace
-  Given a get of `vynil` in `vynil_namespace` succeeding with `data` entries out of alphabetical
-    order, one value equal to a collected Secret value
-  When @get_vynil_config runs
-  Then exactly one @Api::get is issued and only into `vynil_namespace`, the text is the @serde_yaml
-    rendering with ascending keys, the Secret-equal value arrives masked, and the returned
-    @ScrubStats are @scrub_yaml's tally untouched
+  Given un get de `vynil` dans `vynil_namespace` réussissant avec des entrées `data` hors ordre
+    alphabétique, une valeur égale à une valeur de Secret collectée
+  When @get_vynil_config s'exécute
+  Then exactement un @Api::get est émis et seulement dans `vynil_namespace`, le texte est le
+    rendu @serde_yaml à clés ascendantes, la valeur égale au Secret arrive masquée, et les
+    @ScrubStats restitués sont le comptage de @scrub_yaml sans retouche
   No mapped test exists.
 
 Scenario: Every read failure answers the empty document
-  Given the ConfigMap @get failing with `404`, with RBAC `403`, and with a transport error
-  When @get_vynil_config runs in each case
-  Then all three @Ok with (`"---"`, @ScrubStats::default()), the caller answering `200`
-    `application/yaml` with `X-Diag-Redactions: distinct=0;occurrences=0`, and no Secret list is
-    ever issued because @scrub_yaml never runs
-  And @DiagError::KubeError raises never despite the doc comment
+  Given le @get du ConfigMap échouant avec `404`, avec un `403` RBAC, et avec une erreur de
+    transport
+  When @get_vynil_config s'exécute dans chaque cas
+  Then les trois @Ok avec (`"---"`, @ScrubStats::default()), l'appelant répondant `200`
+    `application/yaml` avec `X-Diag-Redactions: distinct=0;occurrences=0`, et aucune liste de
+    Secrets n'est jamais émise car @scrub_yaml ne s'exécute jamais
+  And @DiagError::KubeError ne se lève jamais malgré le commentaire doc
   No mapped test exists.
 
 Scenario: Empty data short-circuits before any masking
-  Given a ConfigMap found with `data` @None and another with `data: {}`
-  When @get_vynil_config runs
-  Then both @Ok (`"---"`, @ScrubStats::default()) with no serialization and no Secret traffic,
-    indistinguishable on the wire from the absent-object answer
+  Given un ConfigMap trouvé avec `data` @None et un autre avec `data: {}`
+  When @get_vynil_config s'exécute
+  Then les deux @Ok (`"---"`, @ScrubStats::default()) sans sérialisation ni trafic de Secrets,
+    indiscernables sur le fil de la réponse objet absent
   No mapped test exists.
 
 Scenario: URL namespace steers masking only, never a read
-  Given URL `{ns}` `tenant-a` while @AppState.config.vynil_namespace is `vynil-system` and a
-    Secrets-carrying `tenant-a`
-  When @get_vynil_config runs
-  Then the @get hits `vynil-system`, and @scrub_yaml receives `tenant-a` plus `vynil-system` —
-    `tenant-a`'s Secret values can redact this cluster-wide payload on the generic tier although
-    no object in `tenant-a` is ever read
+  Given `{ns}` de l'URL `tenant-a` alors que @AppState.config.vynil_namespace est `vynil-system`
+    et un `tenant-a` porteur de Secrets
+  When @get_vynil_config s'exécute
+  Then le @get frappe `vynil-system`, et @scrub_yaml reçoit `tenant-a` plus `vynil-system` — les
+    valeurs de Secrets de `tenant-a` peuvent masquer cette charge utile cluster-wide sur le
+    niveau générique bien qu'aucun objet de `tenant-a` ne soit jamais lu
   No mapped test exists.
 
 Scenario: Value matching decides what vanishes
-  Given `data` holds `db_url` whose value equals a collected Secret, `jwt_header` holding an `eyJ…`
-    token, and `password: hunter2` with `hunter2` collected nowhere
-  When @get_vynil_config runs
-  Then `db_url`'s value is masked and counted, `jwt_header`'s token is masked but the counters stay
-    zero (pattern pass is invisible, ../anonymize.sdd), and `password: hunter2` ships verbatim —
-    key names earn no masking
+  Given `data` contient `db_url` dont la valeur égale un Secret collecté, `jwt_header` portant
+    un jeton `eyJ…`, et `password: hunter2` avec `hunter2` collecté nulle part
+  When @get_vynil_config s'exécute
+  Then la valeur de `db_url` est masquée et comptée, le jeton de `jwt_header` est masqué mais
+    les compteurs restent à zéro (le pass de patterns est invisible, ../anonymize.sdd), et
+    `password: hunter2` part verbatim — les noms de clé ne méritent aucun masquage
   No mapped test exists.
 
 Example:
-  Pre-scrub text for `data` = {`level`: `info`, `sa_token`: `eyJAAA.BBB.CCC`}: `level: info` then
-    the `sa_token` line — ascending keys; after @scrub_yaml the token line reads the marker
-    `<anonymized>` while /server/src/server.rs still answers a
-    `X-Diag-Redactions: distinct=0;occurrences=0` header because no collected Secret matched
-  Empty answer on the wire: body `---`, content type `application/yaml`, header
+  Texte avant masquage pour `data` = {`level`: `info`, `sa_token`: `eyJAAA.BBB.CCC`} :
+    `level: info` puis la ligne `sa_token` — clés ascendantes ; après @scrub_yaml la ligne du
+    jeton affiche le marqueur `<anonymized>` tandis que /server/src/server.rs répond encore un
+    en-tête `X-Diag-Redactions: distinct=0;occurrences=0` car aucun Secret collecté n'a matché
+  Réponse vide sur le fil : corps `---`, type de contenu `application/yaml`, en-tête
     `X-Diag-Redactions: distinct=0;occurrences=0`
