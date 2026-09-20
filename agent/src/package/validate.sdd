@@ -1,197 +1,197 @@
-# File spec for ./validate.rs. The sibling lint spec is cross-referenced for the check
-# division; the Rhai script lane is a packaged asset owned by /agent/agent.sdd.
+# Spec fichier de ./validate.rs. La spec lint sibling est référencée croisée pour la division
+# des checks ; la lane script Rhai est un asset packagé possédé par /agent/agent.sdd.
 
 Spec: PackageValidate
 
 Platform: Rust
 
 Purpose:
-  The `agent package validate` leaf: run the shipped Rhai `validate` module against the
-    source tree's package.yaml. The Rust side only assembles the Rhai engine, injects
-    @Parameters as the script variable `args`, evaluates `import("validate")` plus
-    `validate::run(args)`, and hands any script failure back as @common::Result::Err for
-    the caller's exit-4 trap; the manifest-schema checking itself lives in the script lane.
+  La feuille `agent package validate` : lancer le module Rhai `validate` livré contre le
+    package.yaml de l'arborescence source. Le côté Rust assemble seulement le moteur Rhai, injecte
+    @Parameters comme la variable script `args`, évalue `import("validate")` plus
+    `validate::run(args)`, et rend toute défaillance du script en @common::Result::Err pour
+    le trap exit-4 de l'appelant ; la vérification du schéma du manifeste, elle, vit dans la lane script.
 
 Owns:
   ./validate.rs
 
 References:
-  ./mod.sdd — caller and exit lane: every @Err from @run prints
-    `The package failed to validate: {e:}` via @tracing::error! then
-    @std::process::exit(4); this file logs nothing and never exits.
-  ./lint.sdd — pending sibling spec, cross-reference only: lint owns the tree/structure
-    and template-script findings, this leaf the manifest schema gate (see `Must not`).
-  /agent/scripts/packages/validate.rhai — the module today's `validate` import resolves to
-    (asset owned by /agent/agent.sdd scripts tree, its own spec pending); the checks
-    frozen below read through it.
+  ./mod.sdd — appelant et voie de sortie : chaque @Err de @run affiche
+    `The package failed to validate: {e:}` via @tracing::error! puis
+    @std::process::exit(4) ; ce fichier ne logge rien et ne sort jamais.
+  ./lint.sdd — spec sibling en attente, référencée croisée seulement : lint possède les constatations
+    arborescence/structure et template-script, cette feuille le gate de schéma du manifeste (voir `Must not`).
+  /agent/scripts/packages/validate.rhai — le module que résout l'import `validate` aujourd'hui
+    (asset possédé par l'arborescence scripts de /agent/agent.sdd, sa propre spec en attente) ; les
+    checks gelés ci-dessous se lisent à travers lui.
 
 Must:
-  Build the engine as @common::rhaihandler::Script::new over resolver dirs appended in
-    exactly this order: `<source>/scripts`, `<script-dir>/packages`, `<script-dir>/lib` —
-    strings via @PathBuf::to_string_lossy @Display formatting, never existence-checked; first
-    resolver dir holding a `validate` module wins, so a package-authored
-    `<source>/scripts/validate.rhai` shadows the shipped module for its own validation.
-  Inject @Parameters as the script global `args` through the Deref'd
-    @vynil_core::engine::Script::set_dynamic: a JSON map of the two private fields under key
-    names `source` and `script_dir` (path text), visible to this @Script's later evaluations;
-    the shipped module reads only `args.source` and builds the manifest path by `+`-joined
-    concatenation, so a trailing separator in the flag value yields a doubled slash.
-  Evaluate exactly one snippet — `import("validate") as validate;` then
-    `validate::run(args);` — discard the resulting @rhai::Dynamic via @let, and return
-    @Ok(@common::Result type unit); the verdict channel is script error versus completion,
-    never an inspected return value.
-  Leave every user-visible text to the caller trap: no @println, no @tracing call, and no
-    filesystem or cluster write from this lane; the checks performed are strictly the
-    imported module's — for the shipped script that is `<source>/package.yaml` readable at
-    all, then key presence `apiVersion`/`kind`/`metadata`, `metadata` string members
-    `name`/`category`/`type`, `options`-is-map, `requirements`-is-array-or-absent, then a
-    strict @read_package_yaml model re-read, then the @validate_options shape gate.
+  Construire le moteur comme @common::rhaihandler::Script::new sur des resolver dirs ajoutés dans
+    exactement cet ordre : `<source>/scripts`, `<script-dir>/packages`, `<script-dir>/lib` —
+    chaînes via le formatage @Display de @PathBuf::to_string_lossy, jamais vérifiées en existence ; le
+    premier resolver dir portant un module `validate` gagne, donc un
+    `<source>/scripts/validate.rhai` écrit par le package éclipse le module livré pour sa propre validation.
+  Injecter @Parameters comme global script `args` via le @vynil_core::engine::Script::set_dynamic
+    Deref'd : une carte JSON des deux champs privés sous les noms de clé `source` et
+    `script_dir` (texte de chemin), visible des évaluations ultérieures de ce @Script ;
+    le module livré ne lit que `args.source` et construit le chemin du manifeste par
+    concaténation jointe par `+`, donc un séparateur de fin dans la valeur du flag produit un slash doublé.
+  Évaluer exactement un extrait — `import("validate") as validate;` puis
+    `validate::run(args);` — jeter le @rhai::Dynamic résultant via @let, et rendre
+    @Ok(unitaire du type @common::Result) ; le canal de verdict est erreur de script versus
+    achèvement, jamais une valeur de retour inspectée.
+  Laisser tout texte visible par l'utilisateur au trap de l'appelant : pas de @println, pas d'appel
+    @tracing, et aucune écriture filesystem ou cluster depuis cette lane ; les checks effectués
+    sont strictement ceux du module importé — pour le script livré : `<source>/package.yaml`
+    lisible tout court, puis présence des clés `apiVersion`/`kind`/`metadata`, membres string de
+    `metadata` `name`/`category`/`type`, `options`-est-une-map, `requirements`-est-tableau-ou-absent,
+    puis re-lecture sur le modèle strict @read_package_yaml, puis le gate de forme @validate_options.
 
 Must not:
-  Run structure, directory-layout, file-presence, Handlebars or Rhai-quality checks —
-    lint scans that (`./lint.sdd`); validate reads no file and walks no tree itself.
-  Initialize a cluster context (@common::context::init_k8s) or reach the engine's k8s, http, s3
-    or OCI registrations as part of this contract — @Script::new installs them, but the
-    validate flow is offline, matching ./mod.sdd's no-init-at-dispatch posture.
+  Lancer des checks de structure, d'agencement de répertoires, de présence de fichiers,
+    Handlebars ou de qualité Rhai — lint scanne cela (`./lint.sdd`) ; validate ne lit aucun fichier et n'arpente aucune arborescence lui-même.
+  Initialiser un contexte cluster (@common::context::init_k8s) ou atteindre les enregistrements k8s,
+    http, s3 ou OCI du moteur dans le cadre de ce contrat — @Script::new les installe, mais le
+    flux validate est hors-ligne, cohérent avec la posture no-init-at-dispatch de ./mod.sdd.
 
 Depends on:
-  @common::rhaihandler::Script (/common/src/rhaihandler.sdd) — @Script::new
-    resolver/engine assembly and @Script::eval's error conversion; the Deref'd core
-    `set_dynamic` injection leg carries core's own unwraps.
-  @common::Result and @common::Error::SerializationError (/common/src/lib.sdd) — the return
-    lane and the sole explicit error mapping.
-  /common/src/vynilpackage.sdd — script names `read_package_yaml`, `validate_options` and
-    the @VynilPackageSource / @Schema acceptance they enforce.
-  /common/src/yamlhandler.sdd and `vynil-core` `0.7.7` — `yaml_decode` and `file_read` come
-    from the core generic set installed by @Script::new (attributed per rhaihandler.sdd),
-    not from this file.
-  @clap::Args, @serde::Serialize, @serde_json, @std::path::PathBuf — flag glue and the
-    args-map injection.
-  ./mod.sdd — the only caller of @run.
+  @common::rhaihandler::Script (/common/src/rhaihandler.sdd) — assemblage
+    resolver/moteur de @Script::new et conversion d'erreur de @Script::eval ; la jambe
+    d'injection core Deref'd de `set_dynamic` porte les propres unwraps de core.
+  @common::Result et @common::Error::SerializationError (/common/src/lib.sdd) — la voie de
+    retour et la seule conversion d'erreur explicite.
+  /common/src/vynilpackage.sdd — les noms script `read_package_yaml`, `validate_options` et
+    l'acceptation @VynilPackageSource / @Schema qu'ils imposent.
+  /common/src/yamlhandler.sdd et `vynil-core` `0.7.7` — `yaml_decode` et `file_read` viennent
+    du jeu core générique installé par @Script::new (attribué selon rhaihandler.sdd),
+    pas de ce fichier.
+  @clap::Args, @serde::Serialize, @serde_json, @std::path::PathBuf — glue de flags et
+    injection de la carte args.
+  ./mod.sdd — le seul appelant de @run.
 
 Exposes:
-  @Parameters — `#[derive(@clap::Args, @Debug, @serde::Serialize, @serde::Deserialize)]`
-    struct with both fields private, so the `args` JSON map is the only channel by which the
-    script sees them; `@Debug` serves the @Debug derive on @Commands in ./mod.sdd.
-    Field `source` — doc help `Source directory`, short `-o`, long `--source`,
-    env `SOURCE`, value name `SOURCE`, default `/src`; the `-o` short is why source is not
-    `-s` (see Tasks).
-    Field `script_dir` — doc help `Agent script directory`, short `-s`, long
-    `--script-dir`, env `SCRIPT_DIRECTORY`, value name `SCRIPT_DIRECTORY`, default
-    `./agent/scripts` — the same env name and default the lint leaf uses for the same dir.
-  @run — `pub fn @run(@args: &@Parameters) -> @common::Result<@()>`; sync like every
-    package leaf (./mod.sdd).
+  @Parameters — struct `#[derive(@clap::Args, @Debug, @serde::Serialize, @serde::Deserialize)]`
+    avec les deux champs privés, donc la carte JSON `args` est le seul canal par lequel le
+    script les voit ; `@Debug` sert le derive @Debug de @Commands dans ./mod.sdd.
+    Champ `source` — aide doc `Source directory`, court `-o`, long `--source`,
+    env `SOURCE`, nom de valeur `SOURCE`, défaut `/src` ; le court `-o` est pourquoi
+    source n'est pas `-s` (voir Tasks).
+    Champ `script_dir` — aide doc `Agent script directory`, court `-s`, long
+    `--script-dir`, env `SCRIPT_DIRECTORY`, nom de valeur `SCRIPT_DIRECTORY`, défaut
+    `./agent/scripts` — le même nom d'env et le même défaut que la feuille lint pour la même dir.
+  @run — `pub fn @run(@args: &@Parameters) -> @common::Result<@()>` ; synchrone comme chaque
+    feuille package (./mod.sdd).
 
 Accepts:
-  A clap-parsed @Parameters by reference; paths are taken as given, relative or absolute,
-    with no existence, type or UTF-8 validation — a missing manifest or unresolvable
-    `SCRIPT_DIRECTORY` fails later as a script error, never as an input error here.
-  Non-UTF-8 path components degrade via @PathBuf lossy rendering into both the resolver
-    strings and the `args.source` text the script concatenates.
+  Un @Parameters parsé par clap, passé par référence ; les chemins sont pris tels quels, relatifs
+    ou absolus, sans validation d'existence, de type ou d'UTF-8 — un manifeste absent ou un
+    `SCRIPT_DIRECTORY` non résolvable échoue plus tard en erreur de script, jamais en erreur d'entrée ici.
+  Des composantes de chemin non-UTF-8 se dégradent via le rendu lossy de @PathBuf dans les
+    chaînes resolver et le texte `args.source` que le script concatène.
 
 Returns:
-  @Ok with the module's unit value discarded — silent success, no stdout or stderr from
-    this file; whether the process then exits 0 is ./../main.rs's lane (spec pending).
+  @Ok avec la valeur unitaire du module jetée — succès silencieux, pas de stdout ni stderr de
+    ce fichier ; que le processus sorte alors en 0 est la lane de ./../main.rs (spec en attente).
 
 Raises:
-  @common::Error::SerializationError — explicit @map_err on the @serde_json::to_value of
-    @Parameters; the value is two pathname strings, so no input reaching here through clap
-    drives that leg in practice (see Tasks).
-  @common::Error::Core wrapping the core Rhai error from @Script::eval, display prefixed
-    `Rhai script error: ` (conversion frozen by rhaihandler.sdd), covering: the `validate`
-    import unresolvable in all three resolver dirs or failing to parse; script throws from
-    the shipped module (`You should set your apiVersion`, `You should set your kind`,
+  @common::Error::SerializationError — @map_err explicite sur le @serde_json::to_value de
+    @Parameters ; la valeur est deux chaînes de noms de chemin, donc aucune entrée atteignant ici via
+    clap ne pilote cette jambe en pratique (voir Tasks).
+  @common::Error::Core enveloppant l'erreur Rhai core de @Script::eval, affichage préfixé
+    `Rhai script error: ` (conversion gelée par rhaihandler.sdd), couvrant : l'import `validate`
+    non résolvable dans les trois resolver dirs ou échouant à parser ; les levées script du
+    module livré (`You should set your apiVersion`, `You should set your kind`,
     `No metadata defined in package.yaml`, `No metadata.{key} defined in package.yaml`,
     `metadata.{key} should be a string`, `options should be a map.`,
-    `requirements should be an array.`); `file_read` stdio failure when
-    `<source>/package.yaml` is missing or unreadable; `yaml_decode` parse failure; the
-    strict serde-model rejection (`read_package_yaml` adding required
-    `metadata.description`, `metadata.features`, the `type` enum values and requirement
-    shapes); and the `validate_options` rejection (`Json decoding error: …`, gate owned by
+    `requirements should be an array.`) ; l'échec stdio de `file_read` quand
+    `<source>/package.yaml` est absent ou illisible ; l'échec de parse de `yaml_decode` ; la
+    réjection stricte du modèle serde (`read_package_yaml` ajoutant requis
+    `metadata.description`, `metadata.features`, les valeurs de l'enum `type` et les formes de
+    requirement) ; et la réjection de `validate_options` (`Json decoding error: …`, gate possédé par
     /common/src/vynilpackage.sdd).
-  A @set_dynamic panic channel exists through the Deref'd core method's internal unwraps
-    (rhaihandler.sdd), unreachable from this file because only an already-built JSON value
-    is injected.
+  Un canal de panic @set_dynamic existe via les unwraps internes de la méthode core Deref'd
+    (rhaihandler.sdd), inatteignable depuis ce fichier car seule une valeur JSON déjà construite
+    est injectée.
 
 Handles:
-  The discarded @rhai::Dynamic last value of `validate::run(args)` — completion alone marks
-    success, whatever the module returns (`yaml` map in the shipped script's case).
-  Absent `requirements` key — the module silently assigns `[]` to its decoded copy, which
-    @run discards; the strict re-read still demands the key (Tasks records the effect).
-  A package-local `validate` module — resolves first by resolver order and replaces the
-    shipped checks entirely, no diagnostics about the shadowing.
-  All failure branches converge: no logging, no partial output, nothing to clean up —
-    this file mutates no state.
+  La dernière valeur @rhai::Dynamic jetée de `validate::run(args)` — l'achèvement seul marque le
+    succès, quelle que soit la valeur rendu par le module (une carte `yaml` dans le cas du script livré).
+  Clé `requirements` absente — le module affecte silencieusement `[]` à sa copie décodée, que
+    @run jette ; la re-lecture stricte exige quand même la clé (Tasks consigne l'effet).
+  Un module `validate` local au package — se résout en premier par l'ordre de résolution et
+    remplace entièrement les checks livrés, sans diagnostic sur l'éclipse.
+  Toutes les branches d'échec convergent : pas de log, pas de sortie partielle, rien à nettoyer —
+    ce fichier ne mute aucun état.
 
 Tasks:
-  [ ] Cover @run with tests for the scenarios below: no #[cfg(test)] module exists in this
-      file and no integration test drives `package validate` (the `validate` text in
-      agent/tests is unrelated fixture data).
-  [?] The `source` flag answers to short `-o` while every sibling uses `-s` only for
-      script dir; decide whether `-o` is frozen or a `-S`-style short is added.
-  [?] @Parameters derives @serde::Deserialize that nothing consumes — fields are private
-      and the only serde use is @Serialize; decide whether the derive stays or goes.
-  [?] "Validate a package" is schema-shaped only: any non-empty `apiVersion`/`kind` string
-      passes (values are never compared to `vynil.solidite.fr/v1` / `Package`), empty
-      metadata strings pass, and no file-presence or directory rule is checked — the gate
-      is weaker than the name promises. Decide with ./lint.sdd which checks each command
-      owns.
-  [?] The resolver order makes `<source>/scripts/validate.rhai` a total override of the
-      shipped validation — decide whether that is an intended authoring extension or needs
-      to be locked to the packaged scripts.
-  [?] The script's defaulting of a missing `requirements` key into the decoded map is dead
-      — @run re-reads the file through the serde model, which lists `requirements` as
-      required — so the lenient lane silently rescues nothing; decide whether the model
-      gains a serde default or the script drop is removed.
-  [?] @common::Error::SerializationError is mapped but unreachable for clap-built args of
-      two path fields; decide whether the map_err stays as defensive code.
+  [ ] Couvrir @run de tests pour les scénarios ci-dessous : aucun module #[cfg(test)] n'existe
+      dans ce fichier et aucun test d'intégration ne pilote `package validate` (le texte
+      `validate` dans agent/tests est des données de fixture sans rapport).
+  [?] Le flag `source` répond au court `-o` alors que chaque sibling n'emploie `-s` que pour
+      script dir ; décider si `-o` est gelé ou si un court façon `-S` est ajouté.
+  [?] @Parameters derive @serde::Deserialize que rien ne consomme — les champs sont privés
+      et le seul usage de serde est @Serialize ; décider si le derive reste ou part.
+  [?] "Validate a package" n'est que de forme schéma : toute chaîne `apiVersion`/`kind` non vide
+      passe (les valeurs ne sont jamais comparées à `vynil.solidite.fr/v1` / `Package`), les chaînes
+      metadata vides passent, et aucune règle de présence de fichier ou de répertoire n'est vérifiée — le
+      gate est plus faible que son nom ne le promet. Décider avec ./lint.sdd quels checks chaque
+      commande possède.
+  [?] L'ordre de résolution fait de `<source>/scripts/validate.rhai` un remplacement total de la
+      validation livrée — décider si c'est une extension d'auteur voulue ou s'il faut le verrouiller
+      sur les scripts packagés.
+  [?] Le défaut du script posant une clé `requirements` manquante dans la carte décodée est mort
+      — @run relit le fichier via le modèle serde, qui liste `requirements` comme
+      requis — donc la lane clémente ne sauve rien silencieusement ; décider si le modèle
+      gagne un défaut serde ou si le drop du script est retiré.
+  [?] @common::Error::SerializationError est mappé mais inatteignable pour des args construits par
+      clap à deux champs de chemin ; décider si le map_err reste comme code défensif.
 
 Done when:
-  The scenarios below carry mapped tests for both the silent-@Ok and the error-to-exit-4
-    lanes, the script-boundary decisions above are recorded, and `cargo test -p agent` with
-    clippy and fmt stay green.
+  Les scénarios ci-dessous portent des tests mappés pour les deux lanes @Ok silencieux et
+    erreur-vers-exit-4, les décisions de frontière script ci-dessus sont consignées, et `cargo test -p agent`
+    avec clippy et fmt restent verts.
 
 Scenario: compliant package validates silently
-  Given a source tree whose package.yaml satisfies every shipped-script throw plus the
-    strict @VynilPackageSource model and the options shape gate
-  When @run executes
-  Then @Ok is returned with no output written by this file, and ./mod.sdd's trap never fires
-  No mapped test exists.
+  Given une arborescence source dont le package.yaml satisfait chaque levée du script livré
+    plus le modèle strict @VynilPackageSource et le gate de forme des options
+  When @run s'exécute
+  Then @Ok est rendu sans aucune sortie écrite par ce fichier, et le trap de ./mod.sdd ne se déclenche jamais
+  Aucun test mappé n'existe.
 
 Scenario: metadata throw surfaces verbatim through the exit-4 trap
-  Given a package.yaml with no `apiVersion` key
-  When @run executes
-  Then @run returns @Err displaying `Rhai script error: ` over `You should set your apiVersion`
-  And ./mod.sdd logs `The package failed to validate: {e:}` and exits with code 4
-  No mapped test exists.
+  Given un package.yaml sans clé `apiVersion`
+  When @run s'exécute
+  Then @run rend @Err affichant `Rhai script error: ` sur `You should set your apiVersion`
+  And ./mod.sdd logge `The package failed to validate: {e:}` et sort avec le code 4
+  Aucun test mappé n'existe.
 
 Scenario: missing manifest is a script read failure not an input check
-  Given a source directory holding no package.yaml
-  When @run executes under the default `--source /src` or any other path
-  Then the @Err is the `file_read` stdio failure converted by @Script::eval — this leaf adds
-    no dedicated missing-manifest case, so the message is generic rather than
-    `Missing package manifest` as lint renders it
-  No mapped test exists.
+  Given un répertoire source ne contenant pas de package.yaml
+  When @run s'exécute sous le `--source /src` par défaut ou tout autre chemin
+  Then l'@Err est l'échec stdio de `file_read` converti par @Script::eval — cette feuille
+    n'ajoute pas de cas manifeste-absent dédié, donc le message est générique plutôt que
+    `Missing package manifest` comme lint le rend
+  Aucun test mappé n'existe.
 
 Scenario: package shadow module replaces the whole check
-  Given `<source>/scripts/validate.rhai` with a `run(args)` body that throws nothing, over a
-    package.yaml the shipped module would reject
-  When @run executes
-  Then the package's own module resolves first and @Ok is returned — shipped checks bypassed,
-    shadowing unlogged
-  No mapped test exists.
+  Given un `<source>/scripts/validate.rhai` dont le corps de `run(args)` ne lève rien, sur un
+    package.yaml que le module livré rejetterait
+  When @run s'exécute
+  Then le module propre au package se résout en premier et @Ok est rendu — checks livrés
+    court-circuités, éclipse non loggée
+  Aucun test mappé n'existe.
 
 Scenario: misconfigured script dir fails even a valid package
-  Given `SCRIPT_DIRECTORY` pointing at a tree with no packages/validate.rhai and no
-    package-local shadow, and an otherwise fully valid package.yaml
-  When @run executes
-  Then the import fails and @Err surfaces an import/module error — an environment mistake is
-    indistinguishable from a bad package at the CLI
-  No mapped test exists.
+  Given un `SCRIPT_DIRECTORY` pointant sur une arborescence sans packages/validate.rhai et sans
+    éclipse locale au package, et un package.yaml sinon entièrement valide
+  When @run s'exécute
+  Then l'import échoue et @Err fait surface une erreur d'import/module — une erreur d'environnement
+    est indistinguable d'un mauvais package à la CLI
+  Aucun test mappé n'existe.
 
 Example:
-  defaults inject `args` = `{"source":"/src","script_dir":"./agent/scripts"}` and resolver
+  les défauts injectent `args` = `{"source":"/src","script_dir":"./agent/scripts"}` et les resolver
     dirs `/src/scripts`, `./agent/scripts/packages`, `./agent/scripts/lib`
-  a flag pair as `agent package validate -o ./pkg -s ../scripts` feeds resolver dirs
-    `./pkg/scripts`, `../scripts/packages`, `../scripts/lib` and manifest path
-    `./pkg/package.yaml`
+  une paire de flags comme `agent package validate -o ./pkg -s ../scripts` alimente les resolver dirs
+    `./pkg/scripts`, `../scripts/packages`, `../scripts/lib` et le chemin du
+    manifeste `./pkg/package.yaml`
