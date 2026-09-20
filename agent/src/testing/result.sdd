@@ -1,236 +1,236 @@
-# File spec for ./result.rs. The engine's in-memory result accumulator and its three
-# renderers. Execution and assert production live in ./handler.rs (spec pending); the CLI
-# verdict lane that consumes this type lives in ./../package/test.sdd and is not restated.
+# Spec fichier de ./result.rs. L'accumulateur de résultats en mémoire du moteur et ses trois
+# renderer. L'exécution et la production des asserts vivent dans ./handler.rs (spec en attente) ; la
+# file de verdict CLI qui consomme ce type vit dans ./../package/test.sdd et n'est pas réexprimée.
 
 Spec: TestResult
 
 Platform: Rust
 
 Purpose:
-  Accumulate one ordered record per executed Vynil test — its name, the @VynilAssertResult
-    outcomes its scripts produced, and its wall-clock duration — behind @TestHandler, and
-    render the whole suite on demand in three frozen shapes: a `text` console block, a
-    `json` machine document, and JUnit XML. The counters it derives (@total_tests,
-    @total_asserts, @total_passed, @total_failed) plus @all_passed are the entire verdict
-    input of `agent package test`, folded there into exit 0 or
+  Accumuler un enregistrement ordonné par test Vynil exécuté — son nom, les résultats
+    @VynilAssertResult produits par ses scripts, et sa durée temps réel — derrière @TestHandler, et
+    restituer toute la suite à la demande en trois formes figées : un bloc console `text`, un
+    document machine `json`, et du JUnit XML. Les compteurs qu'il dérive (@total_tests,
+    @total_asserts, @total_passed, @total_failed) plus @all_passed constituent toute
+    l'entrée du verdict de `agent package test`, repliés là en exit 0 ou
     @common::Error::TestFailure.
-    This file runs nothing, returns no @common::Error, and writes no file.
+    Ce fichier n'exécute rien, ne retourne aucun @common::Error et n'écrit aucun fichier.
 
 Owns:
   ./result.rs
 
 References:
-  ./../package/test.sdd — the driver that froze this file's call shapes: @to_text/@to_json
-    picked by `--format` via @format_results, @to_junit always written to
-    `--junit-output-filename`, and @all_passed/@total_failed/@total_asserts feeding
-    @Error::TestFailure(failed_asserts, total_asserts) — both arguments assert counts.
-  ./handler.sdd — pending; @./handler.rs is the only producer: one @TestResultCollector::new
-    per handler and one @add(@String, @Vec<@VynilAssertResult>, @std::time::Duration) per
-    test with an @Instant::elapsed duration, every crash pre-folded into failed asserts.
-  ./mod.rs — `pub mod result` plus the crate-visible `pub use result::TestResultCollector`,
-    reached through /agent/src/lib.rs's `pub mod testing` as client-side @TestResultCollector;
-    @TestResult itself is public only through the `result` module path.
-  ./vyniltestset.sdd — pending; @VynilAssertResult is this file's only foreign record type.
+  ./../package/test.sdd — le driver qui a figé les formes d'appel de ce fichier : @to_text/@to_json
+    choisis par `--format` via @format_results, @to_junit toujours écrit dans
+    `--junit-output-filename`, et @all_passed/@total_failed/@total_asserts alimentant
+    @Error::TestFailure(failed_asserts, total_asserts) — les deux arguments sont des comptes d'asserts.
+  ./handler.sdd — en attente ; @./handler.rs est le seul producteur : un @TestResultCollector::new
+    par handler et un @add(@String, @Vec<@VynilAssertResult>, @std::time::Duration) par
+    test avec une durée @Instant::elapsed, chaque crash pré-replié dans les asserts échoués.
+  ./mod.rs — `pub mod result` plus le `pub use result::TestResultCollector` visible du crate,
+    atteint via le `pub mod testing` de /agent/src/lib.rs comme @TestResultCollector côté client ;
+    @TestResult lui-même n'est public que par le chemin du module `result`.
+  ./vyniltestset.sdd — en attente ; @VynilAssertResult est le seul type d'enregistrement étranger de ce fichier.
 
 Depends on:
   junit-report `0.9.0` — @junit_report::ReportBuilder, @junit_report::TestSuiteBuilder,
-    @junit_report::TestCase, @junit_report::Duration and the `write_xml` writer; its exact
-    output shape is verified against the resolved versions (declaration, attribute order,
-    attribute-value escaping, compact one-line rendering).
-  `serde`/`serde_json` — @TestResult's @Serialize and @serde_json::to_string_pretty.
+    @junit_report::TestCase, @junit_report::Duration et le writer `write_xml` ; sa forme de
+    sortie exacte est vérifiée contre les versions résolues (déclaration, ordre des attributs,
+    échappement des valeurs d'attribut, rendu compact sur une ligne).
+  `serde`/`serde_json` — le @Serialize de @TestResult et @serde_json::to_string_pretty.
 
 Must:
-  Keep @TestResultCollector an append-only @Vec of @TestResult in call order: @add pushes
-    the record untouched — no dedup, no sort, no validation — and every renderer mirrors
-    insertion order exactly, because the ordered contract belongs to the caller
-    (./../package/test.sdd freezes name-sorted insertion).
-  Derive every counter fresh from the stored records on each call, never from side
-    counters: @total_tests is the record count (a @const fn), @total_asserts sums assert
-    vector lengths, @total_passed and @total_failed split the flat assert multiset on
-    @VynilAssertResult.passed, so @total_passed + @total_failed == @total_asserts for
-    every possible sequence.
-  Fix @all_passed exactly: true iff every assert of every record passed — vacuously true
-    for an empty collector and for a zero-assert record, so an empty test can never turn
-    the suite red.
-  Freeze @to_text: per record a header `Test: {test_name} ({secs:.3}s)` with
-    @std::time::Duration::as_secs_f64 at three fixed decimals; per assert a two-space line
-    `  [PASS] ...` or `  [FAIL] ...` reading `  [{status}] {name} ({description}): {message}`
-    only when description is @Some and non-empty, else `  [{status}] {name}: {message}`; a
-    blank line after every record including the last and including zero-assert records;
-    then one final tally line `Results: {total_passed} passed, {total_failed} failed, {total_asserts} total`
-    appended even for a zero-record collector. @std::fmt::Write
-    errors are unreachable on @String and every @writeln! result is dropped with `let _ =`.
-  Freeze @to_json: a @serde_json::to_string_pretty object with keys `tests` (the
-    insertion-ordered @TestResult array: `test_name`, `asserts` as
-    `{name, description, passed, message}` with @None description rendered as JSON null,
-    `duration` as seconds @f64 through the private @serialize_duration @serde
-    serialize_with — `@Duration::ZERO` renders as `0.0`) and `summary` with
-    `total_tests`/`total_asserts`/`passed`/`failed`; output has no trailing newline.
-  Freeze @to_junit against junit-report `0.9.0` as one compact line: the declaration
-    `<?xml version="1.0" encoding="utf-8"?>` immediately followed by `<testsuites>`, self
-    closed as `<testsuites/>` for an empty collector, and otherwise one `<testsuite>` per
-    record in call order with attributes in order `id` (0-based render index), `name` =
-    test name, `package` = `testsuite/{test_name}`, `tests` = record assert count,
-    `errors` = always `0` (@junit_report::TestCase::error is never constructed),
-    `failures` = failed-assert count, `hostname` = always `localhost`, `timestamp` =
-    Rfc3339 UTC captured at render time, `time` = f64 seconds of the summed testcase
-    times rendered by @f64::to_string (`0.0` prints `0`).
-  Split each record's duration into one equal whole-nanosecond share per testcase: the
-    @u128 nanosecond count divided by @usize::max(assert_count, 1) through @u128::checked_div
-    (whole division truncates, and the @max guard makes the checked divisor never zero),
-    with the seconds component saturating to @i64::MAX and the
-    nanoseconds component to @i32::MAX — every testcase of one record carries the same
-    `time`, a suite's `time` is share × count rather than the raw duration (a 4ns
-    two-assert test prints `0.000000002` twice; a 3ns two-assert test prints `1e-9`
-    shares and `0.000000002` suite total, losing the remainder), and the
-    `max(_, 1)` guard only feeds the division never used by a zero-assert record.
-  Render the testcase `name` as @VynilAssertResult.name — never the test name — and set no
-    `classname`/`file` attribute; a passed assert emits a self-closed `<testcase>`, a
-    failed one a self-closed child `<failure type="assertion" message="{assert.message}"/>`
-    with no body (@junit_report::TestCase::failure leaves cause unset, so CDATA never
-    appears); description is dropped entirely from this format. The writer escapes
-    attribute values (`&` `<` `>` `"` `'` become entity references — verified against the
-    resolved dependency), so hostile names and messages stay well-formed XML.
-  Rebuild all output on every call from only the stored records: @to_junit constructs a
-    fresh @junit_report::ReportBuilder each call, so repeated calls differ solely in the
-    suite `timestamp` field.
+  Garder @TestResultCollector comme un @Vec de @TestResult en append-only dans l'ordre d'appel :
+    @add empile l'enregistrement intact — sans dédup, sans tri, sans validation — et chaque renderer
+    reproduit exactement l'ordre d'insertion, car le contrat ordonné appartient à l'appelant
+    (./../package/test.sdd gèle une insertion triée par nom).
+  Dériver chaque compteur à neuf depuis les enregistrements stockés à chaque appel, jamais depuis
+    des compteurs annexes : @total_tests est le nombre d'enregistrements (une @const fn), @total_asserts
+    somme les longueurs des vecteurs d'asserts, @total_passed et @total_failed partitionnent le
+    multiset plat des asserts selon @VynilAssertResult.passed, donc @total_passed + @total_failed == @total_asserts
+    pour toute séquence possible.
+  Figer @all_passed exactement : true ssi chaque assert de chaque enregistrement est passé — vrai par
+    vacuité pour un collector vide et pour un enregistrement sans assert, donc un test vide ne peut
+    jamais mettre la suite au rouge.
+  Figer @to_text : par enregistrement un en-tête `Test: {test_name} ({secs:.3}s)` avec
+    @std::time::Duration::as_secs_f64 à trois décimales fixes ; par assert une ligne à deux espaces
+    `  [PASS] ...` ou `  [FAIL] ...` lisant `  [{status}] {name} ({description}): {message}`
+    seulement quand la description est @Some et non vide, sinon `  [{status}] {name}: {message}` ; une
+    ligne blanche après chaque enregistrement, y compris le dernier et les enregistrements sans assert ;
+    puis une ligne finale de décompte `Results: {total_passed} passed, {total_failed} failed, {total_asserts} total`
+    ajoutée même pour un collector vide. Les erreurs @std::fmt::Write sont inatteignables
+    sur @String et chaque résultat de @writeln! est écarté avec `let _ =`.
+  Figer @to_json : un objet @serde_json::to_string_pretty avec les clés `tests` (le tableau
+    @TestResult ordonné par insertion : `test_name`, `asserts` sous la forme
+    `{name, description, passed, message}` où une description @None se rend en null JSON,
+    `duration` en secondes @f64 via le serialize_with @serde privé @serialize_duration — `@Duration::ZERO`
+    se rend `0.0`) et `summary` avec `total_tests`/`total_asserts`/`passed`/`failed` ;
+    la sortie n'a aucun newline final.
+  Figer @to_junit contre junit-report `0.9.0` comme une seule ligne compacte : la déclaration
+    `<?xml version="1.0" encoding="utf-8"?>` immédiatement suivie de `<testsuites>`, auto
+    fermée en `<testsuites/>` pour un collector vide, sinon un `<testsuite>` par enregistrement
+    dans l'ordre d'appel avec les attributs dans l'ordre `id` (index de rendu 0-based), `name` =
+    nom du test, `package` = `testsuite/{test_name}`, `tests` = nombre d'asserts de l'enregistrement,
+    `errors` = toujours `0` (@junit_report::TestCase::error n'est jamais construit),
+    `failures` = nombre d'asserts échoués, `hostname` = toujours `localhost`, `timestamp` =
+    Rfc3339 UTC capté à l'heure du rendu, `time` = secondes f64 des temps de testcase sommés,
+    rendu par @f64::to_string (`0.0` affiche `0`).
+  Répartir la durée de chaque enregistrement en une part whole-nanosecond égale par testcase : le
+    compte de nanosecondes @u128 divisé par @usize::max(assert_count, 1) via @u128::checked_div
+    (la division entière tronque, et le garde @max fait que le diviseur vérifié n'est jamais nul),
+    la composante secondes sature à @i64::MAX et la
+    composante nanosecondes à @i32::MAX — chaque testcase d'un enregistrement porte le même
+    `time`, le `time` d'une suite est part × compte plutôt que la durée brute (un test de 4ns
+    à deux asserts affiche `0.000000002` deux fois ; un test de 3ns à deux asserts affiche des parts
+    `1e-9` et un total de suite `0.000000002`, le reste est perdu), et le garde
+    `max(_, 1)` n'alimente que la division jamais utilisée par un enregistrement sans assert.
+  Rendre le `name` du testcase comme @VynilAssertResult.name — jamais le nom du test — et ne poser aucun
+    attribut `classname`/`file` ; un assert passé émet un `<testcase>` auto-fermé, un échoué un
+    enfant auto-fermé `<failure type="assertion" message="{assert.message}"/>`
+    sans corps (@junit_report::TestCase::failure laisse cause non posée, donc CDATA n'apparaît
+    jamais) ; la description est entièrement supprimée de ce format. Le writer échappe les valeurs
+    d'attribut (`&` `<` `>` `"` `'` deviennent des références d'entité — vérifié contre la
+    dépendance résolue), donc noms et messages hostiles restent du XML bien formé.
+  Reconstruire toute sortie à chaque appel depuis les seuls enregistrements stockés : @to_junit construit
+    un @junit_report::ReportBuilder flambant neuf à chaque appel, donc des appels répétés ne diffèrent
+    que par le champ `timestamp` de la suite.
 
 Exposes:
-  @TestResult — `#[derive(@Clone, @Debug, @Serialize)]` record, three pub fields:
+  @TestResult — enregistrement `#[derive(@Clone, @Debug, @Serialize)]`, trois champs pub :
     @test_name: @String, @asserts: @Vec<@VynilAssertResult>, @duration:
-    @std::time::Duration marked `#[serde(serialize_with = "serialize_duration")]`;
-    publicly constructible (the collector enforces nothing) and crate-visible only via
-    the `result` module path, not the ./mod.rs re-export.
-  @TestResultCollector — `#[derive(@Clone, @Debug)]` struct over a private results @Vec;
-    @const @new and the @Default impl both build the empty collector; the sole mutator is
+    @std::time::Duration marqué `#[serde(serialize_with = "serialize_duration")]` ;
+    publiquement constructible (le collector n'impose rien) et visible du crate seulement via
+    le chemin du module `result`, pas le ré-export de ./mod.rs.
+  @TestResultCollector — struct `#[derive(@Clone, @Debug)]` sur un @Vec results privé ;
+    @const @new et l'impl @Default construisent tous deux le collector vide ; le seul mutateur est
     @add(@test_name: @String, @asserts: @Vec<@VynilAssertResult>, @duration:
-    @std::time::Duration) -> @(); readers @total_tests (const), @total_asserts,
+    @std::time::Duration) -> @() ; lecteurs @total_tests (const), @total_asserts,
     @total_passed, @total_failed -> @usize, @all_passed -> @bool, @to_text, @to_json,
-    @to_junit -> @String — every reader @&self and `#[must_use]`.
-  Crate surface: client-side @TestResultCollector via `pub use` in ./mod.rs and /agent/src/lib.rs.
+    @to_junit -> @String — chaque lecteur @&self et `#[must_use]`.
+  Surface du crate : @TestResultCollector côté client via `pub use` dans ./mod.rs et /agent/src/lib.rs.
 
 Accepts:
-  Data only, through @add: any name string (duplicates allowed), any asserts @Vec
-    (empty, mixed, all-failed) of caller-built @VynilAssertResult values, any duration
-    from @Duration::ZERO upward (huge values saturate only inside @to_junit). No update,
-    delete, lookup or query-by-name path exists — records are append-only and final.
-  No format, flag or configuration input: the `--format` choice lives with the caller.
+  Des données seulement, via @add : n'importe quelle chaîne de nom (doublons permis), n'importe quel
+    @Vec d'asserts (vide, mixte, tous-échoués) de valeurs @VynilAssertResult construites par
+    l'appelant, toute durée à partir de @Duration::ZERO (les valeurs énormes ne saturent que dans
+    @to_junit). Aucun chemin update, delete, lookup ou lookup-par-nom n'existe — les enregistrements sont
+    append-only et définitifs. Aucune entrée de format, flag ou configuration : le choix `--format` vit chez l'appelant.
 
 Returns:
-  Freshly rendered @String values (three shapes above) and derived @usize/@bool counters;
-    every reader is pure — @&self, no mutation, no caching.
+  Des @String fraîchement rendus (les trois formes ci-dessus) et des compteurs @usize/@bool dérivés ;
+    chaque lecteur est pur — @&self, pas de mutation, pas de cache.
 
 Raises:
-  No error type at all: failed asserts are data here, and the aggregated
-    @common::Error::TestFailure is the caller's per ./../package/test.sdd.
-  Two doc-only-unreachable @panic!s in @to_junit (@Report::write_xml failing into an
-    in-memory @Vec and @std::str::from_utf8 rejecting the produced bytes), claimed in its
-    `# Panics` doc-comment to be impossible for in-memory @String data; see Tasks.
-  @to_json cannot fail outward by design: a @serde_json serialization error is collapsed
-    to the empty string — a silent fallback, not a panic and not an error value.
+  Aucun type d'erreur du tout : les asserts échoués sont ici de la donnée, et l'erreur agrégée
+    @common::Error::TestFailure revient à l'appelant selon ./../package/test.sdd.
+  Deux @panic! inatteignables selon la doc seulement dans @to_junit (@Report::write_xml échouant dans un
+    @Vec en mémoire et @std::str::from_utf8 refusant les octets produits), tenus pour impossibles
+    pour des données @String en mémoire d'après le doc-comment `# Panics` ; voir Tasks.
+  @to_json ne peut échouer vers l'extérieur par conception : une erreur de sérialisation @serde_json
+    est réduite à la chaîne vide — un repli silencieux, ni panique ni valeur d'erreur.
 
 Handles:
-  Zero records — text is only `Results: 0 passed, 0 failed, 0 total`, json is an object
-    with `"tests": []` and a zero `summary`, junit is the declaration plus `<testsuites/>`,
-    all counters read `0` and @all_passed is true — this trio is what lets
-    ./../package/test.sdd's empty-suite path exit 0.
-  Zero-assert record — text prints header plus blank line with no assert lines, json
-    `"asserts": []`, junit a self-closed `<testsuite>` with `tests="0"` `time="0"`;
-    @all_passed unaffected (vacuous pass).
-  description @Some at @String::new — text treats it as absent via the `!desc.is_empty()`
-    guard; json still prints the empty string; junit ignores it.
-  Duplicate test names across @add calls — separate records, separate text blocks, json
-    entries and testsuites; deduplication belongs to the loader in ./handler.rs.
-  Durations beyond seconds @i64::MAX — @to_junit saturates the split components while
-    @to_text/@to_json still render the true float seconds.
+  Zéro enregistrement — le texte n'est que `Results: 0 passed, 0 failed, 0 total`, le json un objet
+    avec `"tests": []` et un `summary` à zéro, le junit la déclaration plus `<testsuites/>`,
+    tous les compteurs lisent `0` et @all_passed vaut true — c'est ce trio qui permet au chemin
+    suite-vide de ./../package/test.sdd de sortir 0.
+  Enregistrement sans assert — le texte affiche l'en-tête plus une ligne blanche sans ligne d'assert, le
+    json `"asserts": []`, le junit un `<testsuite>` auto-fermé avec `tests="0"` `time="0"` ;
+    @all_passed inchangé (réussite par vacuité).
+  description @Some sur un @String::new — le texte la traite comme absente via le garde `!desc.is_empty()` ;
+    le json affiche quand même la chaîne vide ; le junit l'ignore.
+  Noms de test dupliqués entre appels @add — enregistrements séparés, blocs texte, entrées json
+    et testsuites distincts ; la déduplication appartient au loader ./handler.rs.
+  Durées au-delà de @i64::MAX secondes — @to_junit sature les composantes de la partition alors
+    que @to_text/@to_json continuent de rendre les vraies secondes flottantes.
 
 Must not:
-  Sort, deduplicate or re-emit records out of insertion order in any renderer — output
-    order is the caller's ordered-suite contract (./../package/test.sdd expects its own
-    BTreeMap insertion order to survive verbatim).
-  Produce a @common::Error, an exit status or a log line — folding counters into
-    @Error::TestFailure after the driver wrote artifacts and summary is
-    ./../package/test.sdd's single-error posture; a verdict error minted here would break
-    the frozen print-then-err sequence.
+  Trier, dédupliquer ou réémettre des enregistrements hors de l'ordre d'insertion dans un renderer —
+    l'ordre de sortie est le contrat de suite ordonnée de l'appelant (./../package/test.sdd attend que
+    son propre ordre d'insertion BTreeMap survive tel quel).
+  Produire un @common::Error, un statut de sortie ou une ligne de log — replier les compteurs dans
+    @Error::TestFailure après que le driver a écrit artifacts et résumé est la posture d'erreur unique
+    ./../package/test.sdd ; une erreur de verdict émise ici briserait la séquence
+    print-then-err figée.
 
 Tasks:
-  [ ] Map the unmapped scenarios below to same-named tests, extending the six existing ones:
-      zero-assert-record-vacuously-passes, text-shape-desc-parens-blank-lines-and-fixed-decimals
-      (a full-string check over today's contains-only to_text_contains_results_summary),
+  [ ] Cartographier les scenarios sans test ci-dessous vers des tests du même nom, en étendant les six
+      existants : zero-assert-record-vacuously-passes, text-shape-desc-parens-blank-lines-and-fixed-decimals
+      (un contrôle de chaîne complète là où to_text_contains_results_summary ne fait que du contains),
       json-shape-keys-null-description-and-float-duration,
       junit-one-suite-per-test-with-escaped-failure-element,
       junit-time-equal-nanos-share-and-suite-sum, junit-empty-collector-renders-empty-testsuites.
-  [?] @to_junit's two @panic! paths are documented-unreachable, yet a panic would abort the
-      process where ./../package/test.sdd's exit-3 trap cannot catch it — one regression
-      away from a crash instead of a clean exit 3. Decide: keep the documented panics or
-      degrade to a marker string / @Result.
-  [?] @to_json collapses a serialization failure to `""`, so the driver would print an
-      empty summary indistinguishable from a rendering bug. Decide whether a loud failure
-      is preferable to the silent empty string.
-  [?] A zero-assert record counts as a passing test (@all_passed vacuous) and shows as an
-      empty junit suite — decide whether a recorded test that produced no asserts should
-      instead flag as a harness problem.
-  [?] JUnit `timestamp` reflects @to_junit call time, not the test run — @add stores only
-      the elapsed @std::time::Duration, so real per-test start times never reach the
-      report. Decide whether CI consumers need genuine timestamps.
+  [?] Les deux chemins @panic! de @to_junit sont documentés inatteignables, mais une panique
+      avorterait le processus là où le piège exit-3 de ./../package/test.sdd ne peut pas l'attraper —
+      à une regression d'un crash au lieu d'un exit 3 propre. Décider : garder les paniques documentées
+      ou dégrader vers une chaîne marqueur / @Result.
+  [?] @to_json réduit un échec de sérialisation à `""`, donc le driver afficherait un résumé vide
+      impossible à distinguer d'un bug de rendu. Décider si un échec bruyant est préférable à la
+      chaîne vide silencieuse.
+  [?] Un enregistrement sans assert compte comme un test réussi (@all_passed par vacuité) et se montre
+      comme une suite junit vide — décider si un test enregistré sans aucun assert devrait plutôt être
+      signalé comme un problème de harnais.
+  [?] Le `timestamp` JUnit reflète l'heure d'appel de @to_junit, pas l'exécution des tests — @add ne stocke
+      que la @std::time::Duration écoulée, donc les vraies heures de début par test n'atteignent
+      jamais le rapport. Décider si les consommateurs de la CI ont besoin de vrais timestamps.
 
 Done when:
-  Every scenario has a passing same-named (or explicitly mapped) test and the `[?]`
-    decisions above are recorded, with `cargo test -p agent` and the static harness green.
+  Chaque scenario a un test du même nom (ou explicitement cartographié) qui passe et les décisions `[?]`
+    ci-dessus sont actées, avec `cargo test -p agent` et le harnais statique au vert.
 
 Scenario: empty collector is vacuously green
-  Given @TestResultCollector::new with nothing added
-  Then @all_passed is true — test @all_passed_empty_collector (the counters staying `0` and
-    the three zero renderers carry no mapped test yet)
+  Given @TestResultCollector::new sans rien ajouté
+  Then @all_passed est true — test @all_passed_empty_collector (les compteurs restant à `0` et les
+    trois renderer zéro n'ont pas encore de test cartographié)
 
 Scenario: all_passed folds every record's every assert
-  Given one recorded test holding two passing asserts — true, test
+  Given un test enregistré contenant deux asserts passants — true, test
     @all_passed_when_all_asserts_pass
-  Given one passing and one failing assert, or two failing asserts — false in both mixes,
+  Given un assert passant et un échoué, ou deux asserts échoués — false dans les deux mélanges,
     tests @all_passed_false_when_one_assert_fails, @all_passed_false_when_all_asserts_fail
 
 Scenario: counters partition the flat assert set
-  Given one test with asserts a passing and b, c failing
-  Then @total_failed is `2` and @total_passed is `1` — test @total_failed_counts_only_failed;
-    @total_tests/@total_asserts have no mapped test
+  Given un test dont l'assert a passe et les asserts b, c échouent
+  Then @total_failed vaut `2` et @total_passed vaut `1` — test @total_failed_counts_only_failed ;
+    @total_tests/@total_asserts n'ont pas de test cartographié
 
 Scenario: text summary renders blocks, blank separators and the tally line
-  Given one recorded test `t1` at @Duration::ZERO with @passing_assert(a) and
-    @failing_assert(b) — helper names from the in-file test module
-  Then the text is `Test: t1 (0.000s)`, then `  [PASS] a: ok`, then `  [FAIL] b: no match`,
-    then one empty line, then `Results: 1 passed, 1 failed, 2 total` — each line newline-terminated
-  Test @to_text_contains_results_summary covers this weakly via contains on `Results:`,
-    `1 passed`, `1 failed`; the exact framing has no mapped test yet.
+  Given un test enregistré `t1` à @Duration::ZERO avec @passing_assert(a) et
+    @failing_assert(b) — noms des helpers du module de test interne au fichier
+  Then le texte est `Test: t1 (0.000s)`, puis `  [PASS] a: ok`, puis `  [FAIL] b: no match`,
+    puis une ligne vide, puis `Results: 1 passed, 1 failed, 2 total` — chaque ligne terminée par un newline
+  Le test @to_text_contains_results_summary couvre cela faiblement via contains sur `Results:`,
+    `1 passed`, `1 failed` ; le cadrage exact n'a pas encore de test cartographié.
 
 Scenario: description annotates the text line only
-  Given an assert whose description is @Some non-empty
-  Then text adds the parenthesized description before the message colon —
+  Given un assert dont la description est @Some non vide
+  Then le texte ajoute la description entre parenthèses avant le deux-points du message —
     `  [PASS] {name} ({description}): {message}`
-  But Given @None or an empty description — text uses the plain `name: message` form
-  And json keeps the raw `description` value (non-null stays a string) and junit renders neither form
-  No mapped test exists.
+  But Given @None ou une description vide — le texte utilise la forme nue `name: message`
+  And le json garde la valeur brute de `description` (non-null reste une chaîne) et le junit ne rend aucune des formes
+  Aucun test cartographié n'existe.
 
 Scenario: json document keys and null description
-  Given a two-assert zero-duration test with @None descriptions
-  Then @to_json pretty-prints `tests` with `test_name`, `asserts` (each entry
-    `{name, description, passed, message}` — description rendered `null`) and `duration`
-    as `0.0`, plus `summary` with `total_tests`, `total_asserts`, `passed`, `failed`
-  No mapped test exists.
+  Given un test de deux asserts à durée nulle avec des descriptions @None
+  Then @to_json rend joliment `tests` avec `test_name`, `asserts` (chaque entrée
+    `{name, description, passed, message}` — description rendue `null`) et `duration` en
+    `0.0`, plus `summary` avec `total_tests`, `total_asserts`, `passed`, `failed`
+  Aucun test cartographié n'existe.
 
 Scenario: junit renders one suite per test with escaped failure detail
-  Given one recorded test with one passing and one failing assert, the failure message
-    containing `&`, `<`, `"` characters
-  Then the document is declaration plus one `<testsuite>` with `name`/`package`
+  Given un test enregistré avec un assert passant et un échoué, dont le message d'échec
+    contient les caractères `&`, `<`, `"`
+  Then le document est la déclaration plus un `<testsuite>` avec `name`/`package`
     `testsuite/{name}`, `tests="2"`, `errors="0"`, `failures="1"`, `hostname="localhost"`,
-    a render-time `timestamp` and the summed `time`
-  And the failed assert becomes `<failure type="assertion" message="…"/>` with the
-    specials escaped as entity references, testcase `name` being the assert name
-  No mapped test exists.
+    un `timestamp` à l'heure de rendu et le `time` sommé
+  And l'assert échoué devient `<failure type="assertion" message="…"/>` avec les
+    caractères spéciaux échappés en références d'entité, le `name` du testcase étant le nom de l'assert
+  Aucun test cartographié n'existe.
 
 Scenario: junit time is the equal whole-nanosecond share
-  Given a 4ns record with two asserts — both testcases `time="0.000000002"`, suite
+  Given un enregistrement de 4ns avec deux asserts — les deux testcases `time="0.000000002"`, suite
     `time="0.000000004"`
-  Given a 3ns record with two asserts — shares floor to 1ns each; suite time is the share
-    sum, not the stored duration
-  Given a zero-assert record — a self-closed `<testsuite>` with `tests="0"` and `time="0"`
-  No mapped test exists.
+  Given un enregistrement de 3ns avec deux asserts — les parts planchent à 1ns chacune ; le time de suite
+    est la somme des parts, pas la durée stockée
+  Given un enregistrement sans assert — un `<testsuite>` auto-fermé avec `tests="0"` et `time="0"`
+  Aucun test cartographié n'existe.

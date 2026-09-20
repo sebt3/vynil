@@ -1,236 +1,236 @@
 Spec: TenantInstallCmd
 
 Purpose:
-  Back the `agent tenant install` sub-command: resolve one @TenantInstance by namespace
-    and name, publish it as the process-wide owner context and as the Rhai variable
-    `instance`, inject the parsed CLI flags as the Rhai variable `args`, then hand the
-    whole install work to the Rhai modules `context` and `install`. This file runs no
-    install stage itself: no jukebox resolve, no download, no template render off
-    `template_dir`, no `status` write — it only prepares the engine and hands off.
-  Twin: near-clone of ./../service/install.sdd — an actual `diff` of the two source
-    files shows exactly two deltas: the `use` line (@set_tenant/@TenantInstance over
-    @set_service/@ServiceInstance, the same calls appearing at the identical call sites)
-    and the `{script_dir}/tenant` search-dir segment; flags, snippet, the remaining
-    three search directories and the step order are identical.
+  Prend en charge la sous-commande `agent tenant install` : résoudre un @TenantInstance par namespace
+    et nom, le publier comme contexte propriétaire du processus et comme variable Rhai
+    `instance`, injecter les flags CLI parsés comme variable Rhai `args`, puis confier
+    toute l'installation aux modules Rhai `context` et `install`. Ce fichier n'exécute
+    lui-même aucune étape d'installation : pas de résolution jukebox, pas de téléchargement, pas
+    de rendu depuis `template_dir`, pas d'écriture de `status` — il prépare le moteur et transmet.
+  Jumeau : quasi-clone de ./../service/install.sdd — un vrai `diff` des deux fichiers
+    source ne montre que deux deltas : la ligne `use` (@set_tenant/@TenantInstance au lieu
+    de @set_service/@ServiceInstance, les mêmes appels aux mêmes sites d'appel)
+    et le segment de répertoire de recherche `{script_dir}/tenant` ; flags, snippet, les
+    trois autres répertoires de recherche et l'ordre des étapes sont identiques.
 
 References:
-  ./../service/install.sdd — the diff-verified twin; its open `[?]` tasks on the shared
-    flag shape are mirrored here by cross-reference only.
+  ./../service/install.sdd — le jumeau vérifié par diff ; ses tâches `[?]` ouvertes sur la
+    forme partagée des flags ne sont reprises ici que par référence croisée.
 
 Depends on:
-  /common/src/rhaihandler.sdd — @Script::new resolver semantics and registration set,
-    @Script::eval error lane, @Script::set_dynamic, @Script::ctx.
-  /common/src/instancetenant.sdd — @TenantInstance and the @TenantInstance::get lookup
-    this file awaits (attached by @impl_instance_common! per
-    /common/src/instance_macros.sdd), and the registered bridges the scripts use for
-    status writes.
-  /common/src/context.sdd — @set_tenant store semantics and runtime preconditions.
-  /common/src/lib.sdd — @common::Error variants, @common::Result and the
-    @common::DEFAULT_AGENT_IMAGE default of `agent_image`.
-  @clap @Args, @serde, @serde_json — flag parsing (flags, envs, defaults below) and the
-    derives behind the `args` JSON.
-  /agent/scripts/tenant/context.rhai and /agent/scripts/tenant/install.rhai — runtime
-    handoff targets the snippet imports under the default `--script-dir`; owned instead
-    by /agent/agent.sdd and unspecified here.
-  ./mod.rs — the only caller: @context::init_k8s call, then this arm's
-    `unwrap_or_else` error lane (tracing text and @process::exit(1), frozen by ./mod.sdd).
+  /common/src/rhaihandler.sdd — sémantique de résolution et jeu d'enregistrement de @Script::new,
+    voie d'erreur de @Script::eval, @Script::set_dynamic, @Script::ctx.
+  /common/src/instancetenant.sdd — @TenantInstance et la recherche @TenantInstance::get
+    qu'attend ce fichier (attachée par @impl_instance_common! selon
+    /common/src/instance_macros.sdd), et les ponts enregistrés que les scripts utilisent
+    pour écrire les statuts.
+  /common/src/context.sdd — sémantique de stockage de @set_tenant et prérequis runtime.
+  /common/src/lib.sdd — variantes de @common::Error, @common::Result et la valeur par
+    défaut @common::DEFAULT_AGENT_IMAGE de `agent_image`.
+  @clap @Args, @serde, @serde_json — analyse des flags (flags, envs, défauts ci-dessous) et les
+    derives derrière le JSON `args`.
+  /agent/scripts/tenant/context.rhai et /agent/scripts/tenant/install.rhai — cibles runtime
+    du relais que le snippet importe sous le `--script-dir` par défaut ; propriété de
+    /agent/agent.sdd et non spécifiées ici.
+  ./mod.rs — le seul appelant : appel de @context::init_k8s, puis la voie d'erreur de cette
+    branche `unwrap_or_else` (texte tracing et @process::exit(1), gelés par ./mod.sdd).
 
 Exposes:
-  @Parameters — clap @Args struct, also deriving @Debug, @Serialize and @Deserialize;
-    mounted by @tenant::Commands::Install in ./mod.rs; all ten fields private to this
-    module, reached only by the derive code and by this file.
-  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()>; the sole
-    caller is @tenant::run (install dispatch arm).
+  @Parameters — struct clap @Args, dérivant aussi @Debug, @Serialize et @Deserialize ;
+    montée par @tenant::Commands::Install dans ./mod.rs ; les dix champs privés de ce
+    module, atteints uniquement par le code des derives et par ce fichier.
+  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()> ; le seul
+    appelant est @tenant::run (branche de dispatch install).
 
 Accepts:
-  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, value name `NAMESPACE`,
-    @String, required (no `default_value`).
-  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, value name `INSTANCE`,
-    @String, required; names the CR to fetch and is never validated here.
+  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, nom de valeur `NAMESPACE`,
+    @String, requis (pas de `default_value`).
+  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, nom de valeur `INSTANCE`,
+    @String, requis ; nomme le CR à récupérer et n'est jamais validé ici.
   @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env `VYNIL_NAMESPACE`,
-    value name `VYNIL_NAMESPACE`, @String, required; never read in this file beyond
-    serialization into `args`.
-  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, value name
-    `PACKAGE_DIRECTORY`, @std::path::PathBuf, clap default `/tmp/package`.
-  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, value name
-    `SCRIPT_DIRECTORY`, @std::path::PathBuf, clap default `./agent/scripts`.
-  @Parameters.template_dir — `-t` / `--template-dir`, env `TEMPLATE_DIRECTORY`, value
-    name `TEMPLATE_DIRECTORY`, @std::path::PathBuf, clap default `./agent/templates`;
-    carried also by the service twin, absent from the system lane, read by nothing in
-    this Rust lane.
-  @Parameters.agent_image — long-only `--agent-image`, env `AGENT_IMAGE`, value name
-    `AGENT_IMAGE`, @String, clap default @common::DEFAULT_AGENT_IMAGE, i.e.
-    `docker.io/sebt3/vynil-agent:0.7.7`; the other flag shared with the service twin.
-  @Parameters.tag — long-only `--tag`, env `TAG`, value name `TAG`, @String, required;
-    forwarded verbatim in `args`, never parsed or validated as a version here.
-  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, value name
-    `CONFIG_DIR`, @std::path::PathBuf, clap default `.`.
-  @Parameters.controller_values — long-only `--controller-values`, env
-    `CONTROLLER_VALUES`, value name `CONTROLLER_VALUES`, @String, clap default the
-    two-character string `{}`.
-  Implicit runtime precondition: a live tokio multi-thread runtime (from @main's
-    @tokio::main), because @context::set_tenant crosses state with
-    @tokio::task::block_in_place; @context::init_k8s already ran in @tenant::run before
-    this file is entered and is inert either way.
+    nom de valeur `VYNIL_NAMESPACE`, @String, requis ; jamais lu dans ce fichier au-delà
+    de sa sérialisation dans `args`.
+  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, nom de valeur
+    `PACKAGE_DIRECTORY`, @std::path::PathBuf, défaut clap `/tmp/package`.
+  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, nom de valeur
+    `SCRIPT_DIRECTORY`, @std::path::PathBuf, défaut clap `./agent/scripts`.
+  @Parameters.template_dir — `-t` / `--template-dir`, env `TEMPLATE_DIRECTORY`, nom de
+    valeur `TEMPLATE_DIRECTORY`, @std::path::PathBuf, défaut clap `./agent/templates` ;
+    porté aussi par le jumeau service, absent de la voie system, lu par personne dans
+    cette voie Rust.
+  @Parameters.agent_image — `--agent-image` (long seul), env `AGENT_IMAGE`, nom de valeur
+    `AGENT_IMAGE`, @String, défaut clap @common::DEFAULT_AGENT_IMAGE, c'est-à-dire
+    `docker.io/sebt3/vynil-agent:0.7.7` ; l'autre flag partagé avec le jumeau service.
+  @Parameters.tag — `--tag` (long seul), env `TAG`, nom de valeur `TAG`, @String, requis ;
+    transféré tel quel dans `args`, jamais parsé ni validé comme version ici.
+  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, nom de valeur
+    `CONFIG_DIR`, @std::path::PathBuf, défaut clap `.`.
+  @Parameters.controller_values — `--controller-values` (long seul), env
+    `CONTROLLER_VALUES`, nom de valeur `CONTROLLER_VALUES`, @String, défaut clap : la
+    chaîne de deux caractères `{}`.
+  Prérequis runtime implicite : un runtime tokio multi-thread actif (celui de @main via
+    @tokio::main), car @context::set_tenant fait passer l'état au travers de
+    @tokio::task::block_in_place ; @context::init_k8s a déjà tourné dans @tenant::run avant
+    d'entrer dans ce fichier et reste inerte dans les deux cas.
 
 Returns:
-  @Ok(@()) once the fixed eval snippet completes without a Rhai error — the @Dynamic
-    value the snippet returns is discarded, never inspected.
+  @Ok(@()) une fois le snippet eval fixe terminé sans erreur Rhai — la valeur @Dynamic
+    renvoyée par le snippet est jetée, jamais inspectée.
 
 Raises:
-  @common::Error::KubeError from @TenantInstance::get when the API server rejects the
-    lookup — missing `TenantInstance` (kube `NotFound` mapped whole, never defaulted),
-    wrong namespace, Forbidden — the first fallible step; nothing was published to
-    context or scripts when it fails.
-  @common::Error::SerializationError from the explicit @map_err when
-    @serde_json::to_value(@Parameters) fails on the derives.
-  @common::Error::Core (transparent over @vynil_core::Error::RhaiError, Display
-    `Rhai script error: <rhai text>`) from the `?` on @Script::eval — a parse error in
-    the fixed snippet or any parse error / thrown error inside the imported `context`
-    or `install` modules.
-  The context-owned @panic! `cannot create the Kubernetes client: {e}` surfaces through
-    @TenantInstance::get via @get_client_async when no kubeconfig or in-cluster
-    configuration resolves.
-  Panics from @context::set_tenant on a current-thread runtime or no runtime at all
-    (contract in /common/src/context.sdd), not catchable by the parent `?` lane.
+  @common::Error::KubeError depuis @TenantInstance::get quand le serveur API rejette la
+    recherche — `TenantInstance` manquant (`NotFound` kube mappé en entier, jamais defaulté),
+    mauvais namespace, Forbidden — la première étape faillible ; rien n'a été publié
+    dans le contexte ou les scripts quand elle échoue.
+  @common::Error::SerializationError depuis le @map_err explicite quand
+    @serde_json::to_value(@Parameters) échoue sur les derives.
+  @common::Error::Core (transparent sur @vynil_core::Error::RhaiError, Display
+    `Rhai script error: <rhai text>`) depuis le `?` sur @Script::eval — une erreur de parse dans
+    le snippet fixe ou toute erreur de parse / erreur levée dans les modules importés `context`
+    ou `install`.
+  Le @panic! propriété du contexte `cannot create the Kubernetes client: {e}` remonte via
+    @TenantInstance::get par @get_client_async quand ni kubeconfig ni configuration
+    in-cluster ne se résout.
+  Panics de @context::set_tenant sur un runtime current-thread ou sans aucun runtime
+    (contrat dans /common/src/context.sdd), non rattrapables par la voie `?` parente.
 
 Handles:
-  @Err lane owned by the caller — @tenant::run logs `Installing a package failed with:`
-    followed by the error Display through @tracing::error and calls @process::exit(1);
-    this file logs nothing and never exits, so a failed install leaves no status marker
-    written by this lane.
-  Failed lookup or failed eval after `@set_tenant` already ran — the process context
-    keeps the @VynilContext::TenantInstance variant for the remaining process lifetime
-    (which ends in the exit(1)).
-  Already-installed instance — no branch on `status` here: a rerun refetches the CR and
-    replays both Rhai modules; any idempotence is script-side.
-  Absent resolver directories — the four search paths are never existence-checked at
-    construction; the failure only lands later as the @common::Error::Core import error
-    if no search dir holds `context.rhai` / `install.rhai`.
-  Flags with no local reader (`vynil_namespace`, `tag`, `template_dir`, `agent_image`,
-    `controller_values`) — their only observable use is the `args` JSON the scripts
-    consume; template rendering off `template_dir` is script-side work.
+  Voie @Err propriété de l'appelant — @tenant::run journalise `Installing a package failed with:`
+    suivi du Display de l'erreur via @tracing::error et appelle @process::exit(1) ;
+    ce fichier ne journalise rien et ne sort jamais, si bien qu'une installation échouée
+    ne laisse aucun marqueur de statut écrit par cette voie.
+  Recherche ou eval échoués alors que `@set_tenant` a déjà tourné — le contexte du
+    processus garde la variante @VynilContext::TenantInstance pour le reste de sa vie
+    (qui se termine par le exit(1)).
+  Instance déjà installée — pas de branchement sur `status` ici : une relance récupère
+    à nouveau le CR et rejoue les deux modules Rhai ; toute idempotence est côté script.
+  Répertoires de résolution absents — les quatre chemins de recherche ne sont jamais
+    vérifiés à la construction ; l'échec ne tombe que plus tard comme erreur d'import @common::Error::Core
+    si aucun répertoire de recherche ne contient `context.rhai` / `install.rhai`.
+  Flags sans lecteur local (`vynil_namespace`, `tag`, `template_dir`, `agent_image`,
+    `controller_values`) — leur seul usage observable est le JSON `args` que consomment
+    les scripts ; le rendu de templates depuis `template_dir` est un travail côté script.
 
 Must:
-  Execute these steps in this order, with nothing between them: build the interpreter,
-    fetch the CR, publish context, inject `instance`, serialize and inject `args`,
-    evaluate the snippet, return @Ok.
-  Build the interpreter with @Script::new on exactly four resolver directories in this
-    order: `{package_dir}/scripts`, `{config_dir}` (the directory itself),
-    `{script_dir}/tenant`, `{script_dir}/lib` — plain string interpolation of
-    @std::path::Display, so a path argument ending in `/` doubles the separator; earlier
-    entries win an `import`.
-  @Script::new brings the full registration set — including @tenant_rhai_register, so
-    the scripts hold `get_tenant_instance`, `set_status_ready`, `get_tenant_name`,
-    `get_tenant_services_names` and the whole @TenantInstance bridge — plus http, s3,
-    the other two instance kinds, the jukebox and the k8s registrars.
-  Fetch the CR with @TenantInstance::get taking clones of @Parameters.namespace and
-    @Parameters.instance — one named-object read in the given namespace, never a list,
-    watch or create; an absent instance is an @Err, not a bootstrap path.
-  Publish the fetched CR twice from the fetched value and one clone: @set_tenant stores
-    the clone as the process owner context, and @rhai::Scope::set_value on @Script::ctx
-    moves the original into the script variable named `instance`.
-  Serialize @Parameters with @serde_json::to_value and inject it through
-    @Script::set_dynamic as the script variable named `args`; the JSON object carries
-    the declared snake_case keys `namespace`, `instance`, `vynil_namespace`,
+  Exécuter ces étapes dans cet ordre, sans rien entre elles : construire l'interpréteur,
+    récupérer le CR, publier le contexte, injecter `instance`, sérialiser et injecter `args`,
+    évaluer le snippet, retourner @Ok.
+  Construire l'interpréteur avec @Script::new sur exactement quatre répertoires de
+    résolution dans cet ordre : `{package_dir}/scripts`, `{config_dir}` (le répertoire
+    lui-même), `{script_dir}/tenant`, `{script_dir}/lib` — interpolation de chaîne simple de
+    @std::path::Display, donc un argument de chemin finissant par `/` double le séparateur ;
+    les premières entrées l'emportent sur un `import`.
+  @Script::new apporte le jeu d'enregistrement complet — y compris @tenant_rhai_register,
+    donc les scripts tiennent `get_tenant_instance`, `set_status_ready`, `get_tenant_name`,
+    `get_tenant_services_names` et tout le pont @TenantInstance — plus http, s3,
+    les deux autres sortes d'instances, le jukebox et les registrars k8s.
+  Récupérer le CR avec @TenantInstance::get prenant des clones de @Parameters.namespace et
+    @Parameters.instance — une seule lecture d'objet nommé dans le namespace donné, jamais
+    liste, watch ou create ; une instance absente est un @Err, pas un chemin bootstrap.
+  Publier deux fois le CR à partir de la valeur récupérée et d'un clone : @set_tenant stocke
+    le clone comme contexte owner du processus, et @rhai::Scope::set_value sur @Script::ctx
+    déplace l'original dans la variable de script nommée `instance`.
+  Sérialiser @Parameters avec @serde_json::to_value et l'injecter via
+    @Script::set_dynamic comme variable de script nommée `args` ; l'objet JSON porte les
+    clés snake_case déclarées `namespace`, `instance`, `vynil_namespace`,
     `package_dir`, `script_dir`, `template_dir`, `agent_image`, `tag`, `config_dir`,
-    `controller_values` — `controller_values` as a JSON string (its default renders
-    `"{}"`, still a string, not an object), `agent_image` as a string and the @PathBufs
-    as path text.
-  Evaluate the fixed four-statement snippet, nothing configurable in it:
+    `controller_values` — `controller_values` comme chaîne JSON (son défaut rend
+    `"{}"`, toujours une chaîne, pas un objet), `agent_image` comme chaîne et les @PathBuf
+    comme texte de chemin.
+  Évaluer le snippet fixe de quatre instructions, sans rien de configurable dedans :
     `import("context") as ctx; let context = ctx::run(instance, args);
-    import("install") as install; install::run(instance, context);` — `context` script
-    first, its returned map becoming the `install::run` second argument; `install` runs
-    second and last; the snippet's @Dynamic result is discarded by `let _ =` while a
-    failed evaluation still propagates through `?`.
-  Perform no cluster mutation of its own: every `status` or event write happens inside
-    the Rhai modules through the registered @TenantInstance bridge; this file only
-    reads the CR.
-  Emit no log and no stdout/stderr.
+    import("install") as install; install::run(instance, context);` — le script `context`
+    d'abord, sa map retournée devenant le second argument de `install::run` ; `install`
+    tourne en second et en dernier ; le résultat @Dynamic du snippet est jeté par `let _ =`
+    alors qu'une évaluation échouée se propage quand même via `?`.
+  N'effectuer aucune mutation de cluster elle-même : toute écriture de `status` ou
+    d'événement a lieu dans les modules Rhai via le pont @TenantInstance enregistré ; ce
+    fichier ne lit que le CR.
+  N'émettre ni log ni stdout/stderr.
 
 Must not:
-  Resolve the package through @JukeBox, pull an OCI artifact, or create or unpack
-    anything under @Parameters.package_dir — package content must already be on disk
-    when this subcommand starts.
-  Render templates or apply manifests from Rust: `template_dir` reaches the scripts only
-    through `args`, so reading it to steer this lane would move script work here.
-  Interpret `tag` or `controller_values`, or gate on their contents.
+  Résoudre le package via @JukeBox, tirer un artefact OCI, ou créer ou dépaqueter
+    quoi que ce soit sous @Parameters.package_dir — le contenu du package doit déjà être
+    sur disque quand cette sous-commande démarre.
+  Rendre des templates ou appliquer des manifestes depuis Rust : `template_dir` ne parvient
+    aux scripts que via `args`, donc le lire pour piloter cette voie déplacerait ici le travail des scripts.
+  Interpréter `tag` ou `controller_values`, ou filtrer sur leur contenu.
 
 Tasks:
-  [ ] Cover all six Scenarios with tests; no test invokes this @run —
-      /agent/tests/rhai_lifecycle.rs exercises only the service `context`/`install`
-      Rhai modules on a mock engine; no tenant equivalent exists.
-  [?] The fetched @TenantInstance spec carries `jukebox`/`category`/`package` coordinates
-      naming a cluster-scoped @JukeBox, yet this namespaced lane neither resolves nor
-      existence-checks it — resolution is entirely script-side. Decide whether the
-      tenant install contract should pin the jukebox to one scope/guard its absence
-      before handoff, or the scripts own that question.
-  [?] The tenant context this lane installs activates the @VynilContext::TenantInstance
-      branch of @get_labels — a per-apply cluster namespace read whose failures are
-      swallowed to `""` (/common/src/context.sdd open task); confirm the install
-      contract is meant to depend on that runtime tenant-label resolution.
-  [?] Twin-mirrored open questions: the flag-shape drift against
-      /agent/src/system/install.sdd, the required-but-unread flags, the `controller_values`
-      JSON string, the discarded eval @Dynamic, the script-only idempotence, the
-      `--agent-image` default pin and the @Deserialize derive with no deserialization
-      site are all unresolved in ./../service/install.sdd Tasks on the byte-identical
-      shared surface; keep those decisions in lockstep there rather than re-deciding here.
+  [ ] Couvrir les six Scenarios par des tests ; aucun test n'invoque ce @run —
+      /agent/tests/rhai_lifecycle.rs n'exerce que les modules Rhai service `context`/`install`
+      sur un moteur mock ; aucun équivalent tenant n'existe.
+  [?] La spec du @TenantInstance récupéré porte des coordonnées `jukebox`/`category`/`package`
+      nommant un @JukeBox de scope cluster, mais cette voie namespacée ne le résout ni ne
+      vérifie son existence — la résolution est entièrement côté script. Décider si le
+      contrat d'installation tenant doit épingler le jukebox à un scope/garantir son absence avant le relais, ou si les scripts possèdent cette question.
+  [?] Le contexte tenant que cette voie installe active la branche @VynilContext::TenantInstance
+      de @get_labels — une lecture de namespace cluster par apply dont les échecs sont
+      avalés en `""` (tâche ouverte de /common/src/context.sdd) ; confirmer que le contrat
+      d'installation est censé dépendre de cette résolution runtime de label tenant.
+  [?] Questions ouvertes miroir-du-jumeau : la divergence de forme des flags contre
+      /agent/src/system/install.sdd, les flags requis-mais-non-lus, la chaîne JSON de
+      `controller_values`, l'@Dynamic d'eval jeté, l'idempotence réservée aux scripts,
+      l'épinglage du défaut de `--agent-image` et le derive @Deserialize sans site de
+      désérialisation sont tous non résolus dans les Tasks de ./../service/install.sdd sur
+      la surface partagée identique au byte près ; garder ces décisions en lockstep là-bas
+      plutôt que de re-décider ici.
 
 Done when:
-  The six Scenarios hold under tests pinning resolver-path order, the ten-key `args`
-    JSON with `controller_values` as a string and `template_dir`/`agent_image` present at
-    their defaults, and the error-to-exit(1) lane.
+  Les six Scenarios tiennent sous des tests épinglant l'ordre des chemins de résolution,
+    le JSON `args` à dix clés avec `controller_values` comme chaîne et
+    `template_dir`/`agent_image` présents à leurs défauts, et la voie erreur-vers-exit(1).
 
 Scenario: full run hands off in order
-  Given all required flags supplied (by flag or env), an existing namespaced
-    @TenantInstance named by @Parameters.instance, and `context.rhai` plus
-    `install.rhai` resolvable under `{script_dir}/tenant`
-  When @run is awaited
-  Then @Script::new received the four search dirs `[package]/scripts`, `[config]`,
-    `[script]/tenant`, `[script]/lib` in that order
-  And before the eval, the process owner context is the tenant variant (via
-    @set_tenant) and `instance` and `args` are bound
-  Then the `context` module's `run` executes before the `install` module's `run`,
-    receiving (`instance`, `args`), and the built `context` value is what
-    `install::run` receives
-  And @run returns @Ok(()) whatever the discarded @Dynamic was
+  Given tous les flags requis fournis (par flag ou env), un @TenantInstance namespaced
+    existant nommé par @Parameters.instance, et `context.rhai` plus
+    `install.rhai` résolvables sous `{script_dir}/tenant`
+  When @run est attendu
+  Then @Script::new a reçu les quatre répertoires de recherche `[package]/scripts`,
+    `[config]`, `[script]/tenant`, `[script]/lib` dans cet ordre
+  And avant l'eval, le contexte owner du processus est la variante tenant (via
+    @set_tenant) et `instance` et `args` sont liés
+  Then le `run` du module `context` s'exécute avant le `run` du module `install`,
+    recevant (`instance`, `args`), et la valeur `context` construite est ce que
+    `install::run` reçoit
+  And @run retourne @Ok(()) quel que soit le @Dynamic jeté
 
 Scenario: shared template flags reach scripts at their defaults
-  Given a command line that sets the required flags but omits `-t`/`--template-dir` and
+  Given une ligne de commande qui pose les flags requis mais omet `-t`/`--template-dir` et
     `--agent-image`
-  When @run serializes @Parameters into `args`
-  Then the object holds exactly the ten keys `namespace`, `instance`,
+  When @run sérialise @Parameters dans `args`
+  Then l'objet tient exactement les dix clés `namespace`, `instance`,
     `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`, `agent_image`,
     `tag`, `config_dir`, `controller_values`
-  And `template_dir` is `./agent/templates`, `agent_image` is
-    `docker.io/sebt3/vynil-agent:0.7.7` and `controller_values` is the JSON string `"{}"`
+  And `template_dir` vaut `./agent/templates`, `agent_image` vaut
+    `docker.io/sebt3/vynil-agent:0.7.7` et `controller_values` est la chaîne JSON `"{}"`
 
 Scenario: missing CR fails before any handoff
-  Given no @TenantInstance exists at that namespace/name — or its read is Forbidden
-  When @run is awaited
-  Then the @TenantInstance::get `?` returns @Err(@common::Error::KubeError)
-  And @set_tenant never ran (context stays @VynilContext::None), `instance`/`args` were
-    never injected and the snippet never evaluated
-  And @tenant::run logs `Installing a package failed with:` carrying the KubeError text
-    at @tracing::error level and exits the process 1
+  Given aucun @TenantInstance n'existe à ce namespace/name — ou sa lecture est Forbidden
+  When @run est attendu
+  Then le `?` de @TenantInstance::get retourne @Err(@common::Error::KubeError)
+  And @set_tenant n'a jamais tourné (le contexte reste @VynilContext::None), `instance`/`args`
+    n'ont jamais été injectés et le snippet n'a jamais été évalué
+  And @tenant::run journalise `Installing a package failed with:` portant le texte KubeError
+    au niveau @tracing::error et quitte le processus avec 1
 
 Scenario: missing required flag never reaches Rust logic
-  Given `--namespace` omitted and `NAMESPACE` unset in the environment
-  When the binary parses @Parameters
-  Then clap exits with its usage error before @run starts — no interpreter, no cluster
-    read, and the exit-1 install lane is never entered
+  Given `--namespace` omis et `NAMESPACE` non défini dans l'environnement
+  When le binaire parse @Parameters
+  Then clap sort avec son erreur d'usage avant que @run démarre — pas d'interpréteur, pas
+    de lecture cluster, et la voie exit-1 d'installation n'est jamais entrée
 
 Scenario: import failure after the CR is already published
-  Given a valid @TenantInstance but neither `context.rhai` nor `install.rhai` present in
-    any of the four resolver directories
-  When @run evaluates the snippet
-  Then @Script::eval returns @Err(@common::Error::Core Display-prefixed
+  Given un @TenantInstance valide mais ni `context.rhai` ni `install.rhai` présents dans
+    aucun des quatre répertoires de résolution
+  When @run évalue le snippet
+  Then @Script::eval retourne @Err(@common::Error::Core au Display préfixé
     `Rhai script error:`)
-  And the process context still holds the tenant variant when the exit(1) lane fires
+  And le contexte du processus tient toujours la variante tenant quand la voie exit(1) se déclenche
 
 Scenario: rerun over an installed instance
-  Given a @TenantInstance whose `status.conditions` already carry `Ready`/`True` and
-    `Installed`/`True` from a previous run
-  When @run is invoked again with the same flags
-  Then the CR is refetched and both modules replay from the top — this file skips
-    nothing based on `status`
+  Given un @TenantInstance dont `status.conditions` portent déjà `Ready`/`True` et
+    `Installed`/`True` d'une exécution précédente
+  When @run est invoqué de nouveau avec les mêmes flags
+  Then le CR est récupéré à nouveau et les deux modules se rejouent depuis le début — ce
+    fichier ne saute rien selon `status`
