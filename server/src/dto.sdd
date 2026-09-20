@@ -1,200 +1,200 @@
 Spec: Dto
 
 Purpose:
-  Own the wire contract of the `vynil-server` diagnostic API as plain serde DTOs: the JSON shapes
-    ./server.rs serializes into HTTP responses — cluster inventory (@ClusterInfo with @NodeInfo and
-    @StorageClassInfo), platform package inventory (@PackagesState with @PackageState), instance
-    children with live state (@ChildWithState), redaction tallies (@ScrubStats), the currently
-    unused anonymization envelope (@AnonymizedResponse) and the popularity tally (@PopularityContest
-    with @JukeboxCategory). Pure data — no functions, no validation, no custom serde impls; every
-    observable of this file is what serializing and deserializing these shapes produces. A reader
-    must be able to regenerate the exact JSON payloads and the exact serde accept/reject boundary
-    from this spec alone.
+  Porter le contrat filaire de l'API de diagnostic de `vynil-server` sous forme de DTOs
+    serde bruts : les formes JSON que ./server.rs sérialise dans les réponses HTTP — inventaire du
+    cluster (@ClusterInfo avec @NodeInfo et @StorageClassInfo), inventaire des paquets plateforme
+    (@PackagesState avec @PackageState), enfants d'instance avec état live (@ChildWithState),
+    compteurs de rédactions (@ScrubStats), l'enveloppe d'anonymisation inutilisée à ce jour
+    (@AnonymizedResponse) et le compteur de popularité (@PopularityContest avec @JukeboxCategory).
+    Données pures — aucune fonction, aucune validation, aucune implémentation serde personnalisée.
+    Chaque observable de ce fichier est ce que produisent sérialiser/désérialiser ces formes. Un lecteur
+    doit régénérer depuis cette seule spec les chargeurs JSON exacts et la frontière exacte d'acceptation/rejet de serde.
 
 Owns:
   ./dto.rs
 
 Depends on:
-  @common::Children from /common/src/lib.rs — embedded by @ChildWithState.child; its
-    `#[serde(rename_all = "camelCase")]` wire (`apiVersion`, `kind`, `name`, `namespace` with
-    `kind` and `name` required) is specified by /common/src/lib.sdd and re-emitted unchanged inside
-    this crate's payloads.
-  @serde derives (@Serialize / @Deserialize), @serde_json::Value and @std::collections::BTreeMap —
-    versions locked in /Cargo.lock.
+  @common::Children de /common/src/lib.rs — embarqué par @ChildWithState.child ; son fil
+    `#[serde(rename_all = "camelCase")]` (`apiVersion`, `kind`, `name`, `namespace` avec `kind` et
+    `name` requis) est spécifié par /common/src/lib.sdd et réémis inchangé dans les chargeurs de ce
+    crate.
+  Dérivations @serde (@Serialize / @Deserialize), @serde_json::Value et @std::collections::BTreeMap —
+    versions verrouillées dans /Cargo.lock.
 
 Must:
-  Serialize every struct with keys exactly equal to the snake_case Rust field names: `nodes`,
-    `distribution`, `kubernetes_version`, `vynil_version`, `storage_classes`, `ingress_classes`;
-    `name`, `roles`, `instance_type`, `arch`, `os`, `kubelet_version`; `name`, `provisioner`,
-    `is_default`; `items`; `kind`, `namespace`, `name`, `package`, `tag`, `ready`; `child`, `state`;
-    `distinct`, `occurrences`; `data`, `scrub_stats`; `jukeboxes`; `categories`. No container or
-    field in the file carries any serde attribute — no `rename`, no `rename_all`, no
-    `skip_serializing_if`, no `default`, no `deny_unknown_fields` — so nothing moves.
-  Emit struct keys in field-declaration order, and keep @None @Option fields present as explicit
-    `null` on serialize (no skip attribute exists); deserialization then accepts either an omitted
-    or a `null` key for every @Option — a deserialize-then-reserialize cycle is stable only because
-    serialization always re-emits the key.
-  Nest @common::Children's camelCase wire inside @ChildWithState's snake_case envelope: `child` is
-    the snake_case key, its value always renders `apiVersion` (and `namespace`) in camelCase — the
-    only camelCase island in this file's payloads (see Tasks).
-  Pass @ChildWithState.state through untyped: @Option<@serde_json::Value> with no schema, no
-    inspection, any JSON tree survives unchanged.
-  Serialize @PopularityContest deterministically: both @std::collections::BTreeMap levels
-    (@PopularityContest.jukeboxes and @JukeboxCategory.categories) iterate in key order, so jukebox,
-    category and package keys land alphabetically and the body is byte-stable whatever the builder's
-    insertion order in ./collect/popularity_contest.rs.
-  Keep counts integral: @u32 for the package counts inside @JukeboxCategory maps, @usize for
-    @ScrubStats.distinct and @ScrubStats.occurrences; the locked @serde_json boundary rejects
-    floats, negatives and numeric strings against them.
-  Derive @Default for @ScrubStats only — all other DTOs must be built field-by-field — and note the
-    field-name coupling: ./server.rs @add_scrub_header hardcodes the `X-Diag-Redactions` grammar
-    `distinct={distinct};occurrences={occurrences}`, so renaming a field silently renames the header
-    keys. The counters count redactions produced by ./anonymize.rs: @distinct is the number of
-    distinct secret values that matched at least once, @occurrences the total replacements.
-  Ship @AnonymizedResponse<@T> outbound-only: unlike every other DTO it derives no @Deserialize,
-    and its @Debug / @Clone are derived bounds on @T; the wire object is `data` (the serialized @T)
-    followed by `scrub_stats`, with no in-crate inbound counterpart. Nothing constructs it today
-    (see Tasks).
-  Contribute no schema to the cluster: no @schemars / @JsonSchema derive exists here, unlike
-    @common::Children which carries @JsonSchema for its CRD-side duty; these shapes are
-    server-HTTP-only.
+  Sérialiser chaque struct avec des clés exactement égales aux noms de champs Rust snake_case :
+    `nodes`, `distribution`, `kubernetes_version`, `vynil_version`, `storage_classes`,
+    `ingress_classes` ; `name`, `roles`, `instance_type`, `arch`, `os`, `kubelet_version` ; `name`,
+    `provisioner`, `is_default` ; `items` ; `kind`, `namespace`, `name`, `package`, `tag`, `ready` ;
+    `child`, `state` ; `distinct`, `occurrences` ; `data`, `scrub_stats` ; `jukeboxes` ; `categories`.
+    Aucun conteneur ni champ du fichier ne porte d'attribut serde — rien ne bouge : pas de `rename`,
+    pas de `rename_all`, pas de `skip_serializing_if`, pas de `default`, pas de `deny_unknown_fields`.
+  Émettre les clés des structs dans l'ordre de déclaration des champs, et garder les champs @Option
+    à @None présents comme `null` explicite à la sérialisation (aucun attribut skip n'existe) ; la
+    désérialisation accepte alors une clé omise ou `null` pour chaque @Option — un cycle
+    désérialisation-puis-sérialisation n'est stable que car la sérialisation réémet toujours la clé.
+  Nicher le fil camelCase de @common::Children dans l'enveloppe snake_case de @ChildWithState :
+    `child` est la clé snake_case, sa valeur rend toujours `apiVersion` (et `namespace`) en camelCase —
+    la seule île camelCase des chargeurs de ce fichier (voir Tasks).
+  Faire passer @ChildWithState.state sans typage : @Option<@serde_json::Value> sans schéma, sans
+    inspection, tout arbre JSON survit inchangé.
+  Sérialiser @PopularityContest de façon déterministe : les deux niveaux @std::collections::BTreeMap
+    (@PopularityContest.jukeboxes et @JukeboxCategory.categories) itèrent par ordre de clés, si bien
+    que les clés jukebox, catégorie et paquet arrivent par ordre alphabétique et que le corps est
+    stable en octets quel que soit l'ordre d'insertion du builder dans ./collect/popularity_contest.rs.
+  Garder les compteurs entiers : @u32 pour les comptes de paquets dans les maps @JukeboxCategory,
+    @usize pour @ScrubStats.distinct et @ScrubStats.occurrences ; la frontière @serde_json verrouillée
+    rejette flottants, négatifs et chaînes numériques à leur encontre.
+  Dériver @Default pour @ScrubStats uniquement — tous les autres DTOs doivent être construits champ
+    par champ — et noter le couplage des noms de champs : ./server.rs @add_scrub_header code en dur la
+    grammaire `X-Diag-Redactions` `distinct={distinct};occurrences={occurrences}` ; renommer un champ
+    renomme donc en silence les clés de l'en-tête ; les compteurs comptent les rédactions de
+    ./anonymize.rs : @distinct = valeurs secrètes distinctes matchées ≥ 1 fois, @occurrences = total des remplacements.
+  Embarquer @AnonymizedResponse<@T> en sortie uniquement : contrairement à tous les autres DTOs il ne
+    dérive pas @Deserialize, et ses @Debug / @Clone sont des contraintes dérivées sur @T ; l'objet
+    filaire est `data` (le @T sérialisé) suivi de `scrub_stats`, sans vis-à-vis entrant dans le crate.
+    Rien ne le construit aujourd'hui (voir Tasks).
+  Ne contribuer aucun schéma au cluster : aucune dérivation @schemars / @JsonSchema ici, à la
+    différence de @common::Children qui porte @JsonSchema pour son office côté CRD ; ces formes sont
+    réservées au HTTP du serveur.
 
 Exposes:
-  @ClusterInfo — struct, derives @Serialize / @Deserialize / @Debug / @Clone; fields in declaration
-    order: @nodes → @Vec<@NodeInfo>, @distribution → @String, @kubernetes_version → @String,
+  @ClusterInfo — struct, dérive @Serialize / @Deserialize / @Debug / @Clone ; champs dans l'ordre de
+    déclaration : @nodes → @Vec<@NodeInfo>, @distribution → @String, @kubernetes_version → @String,
     @vynil_version → @Option<@String>, @storage_classes → @Vec<@StorageClassInfo>,
     @ingress_classes → @Vec<@String>.
-  @NodeInfo — same derives; @name → @String, @roles → @Vec<@String>, @instance_type →
+  @NodeInfo — mêmes dérivations ; @name → @String, @roles → @Vec<@String>, @instance_type →
     @Option<@String>, @arch → @Option<@String>, @os → @Option<@String>, @kubelet_version →
     @Option<@String>.
-  @StorageClassInfo — same derives; @name → @String, @provisioner → @String, @is_default → @bool.
-  @PackagesState — same derives; @items → @Vec<@PackageState>.
-  @PackageState — same derives; @kind → @String (free-form discriminator; the `ServiceInstance` /
-    `SystemInstance` literals come from ./collect/packages.rs and are not validated here),
-    @namespace → @String, @name → @String, @package → @String, @tag → @Option<@String>,
+  @StorageClassInfo — mêmes dérivations ; @name → @String, @provisioner → @String, @is_default → @bool.
+  @PackagesState — mêmes dérivations ; @items → @Vec<@PackageState>.
+  @PackageState — mêmes dérivations ; @kind → @String (discriminant à forme libre ; les littéraux
+    `ServiceInstance` / `SystemInstance` viennent de ./collect/packages.rs et ne sont pas validés
+    ici), @namespace → @String, @name → @String, @package → @String, @tag → @Option<@String>,
     @ready → @bool.
-  @ChildWithState — same derives; @child → @common::Children, @state → @Option<@serde_json::Value>.
-  @ScrubStats — same four derives plus @Default (@distinct and @occurrences start at `0`);
+  @ChildWithState — mêmes dérivations ; @child → @common::Children, @state → @Option<@serde_json::Value>.
+  @ScrubStats — mêmes quatre dérivations plus @Default (@distinct et @occurrences démarrent à `0`) ;
     @distinct → @usize, @occurrences → @usize.
-  @AnonymizedResponse<@T> — generic struct, derives @Serialize / @Debug / @Clone only;
+  @AnonymizedResponse<@T> — struct générique, ne dérive que @Serialize / @Debug / @Clone ;
     @data → @T, @scrub_stats → @ScrubStats.
-  @PopularityContest — struct, derives @Serialize / @Deserialize / @Debug / @Clone; @jukeboxes →
-    @std::collections::BTreeMap<@String, @JukeboxCategory> keyed by `JuKebox` name.
-  @JukeboxCategory — same derives; @categories →
-    @std::collections::BTreeMap<@String, @std::collections::BTreeMap<@String, @u32>>, category →
-    package → instance count.
-  Full file surface: the ten types above are all @pub, reachable outside the crate because
-    /server/src/lib.rs declares `pub mod dto;`; in-crate consumers are ./server.rs (JSON bodies and
-    the `X-Diag-Redactions` header) and the ./collect/ builders.
+  @PopularityContest — struct, dérive @Serialize / @Deserialize / @Debug / @Clone ; @jukeboxes →
+    @std::collections::BTreeMap<@String, @JukeboxCategory> indexé par nom de `JuKebox`.
+  @JukeboxCategory — mêmes dérivations ; @categories →
+    @std::collections::BTreeMap<@String, @std::collections::BTreeMap<@String, @u32>>, catégorie →
+    paquet → nombre d'instances.
+  Surface complète du fichier : les dix types ci-dessus sont tous @pub, atteignables hors du crate
+    car /server/src/lib.rs déclare `pub mod dto;` ; les consommateurs internes sont ./server.rs (corps
+    JSON et en-tête `X-Diag-Redactions`) et les builders des ./collect/.
 
 Accepts:
-  Deserialization input per struct is one JSON object over the frozen keys; required keys are the
-    non-@Option fields: @ClusterInfo `nodes`, `distribution`, `kubernetes_version`,
-    `storage_classes`, `ingress_classes`; @NodeInfo `name`, `roles`; @StorageClassInfo all three keys;
-    @PackagesState `items`; @PackageState `kind`, `namespace`, `name`, `package`, `ready`;
-    @ChildWithState `child` — whose @Children object itself requires camelCase `kind` and `name` —
-    with `state` optional; @ScrubStats `distinct` and `occurrences`; @PopularityContest `jukeboxes`;
-    @JukeboxCategory `categories`. No inbound JSON at all parses as @AnonymizedResponse.
-  Unknown keys are dropped silently at every nesting level; a JSON object repeating one struct field
-    key is rejected as a duplicate field by @serde_json, while repeated keys inside a @BTreeMap
-    object resolve last-wins per @serde_json map semantics.
+  L'entrée de désérialisation par struct est un objet JSON sur les clés figées ; les clés requises
+    sont les champs non-@Option : @ClusterInfo `nodes`, `distribution`, `kubernetes_version`,
+    `storage_classes`, `ingress_classes` ; @NodeInfo `name`, `roles` ; @StorageClassInfo les trois
+    clés ; @PackagesState `items` ; @PackageState `kind`, `namespace`, `name`, `package`, `ready` ;
+    @ChildWithState `child` — dont l'objet @Children exige lui-même `kind` et `name` en camelCase —
+    avec `state` optionnel ; @ScrubStats `distinct` et `occurrences` ; @PopularityContest `jukeboxes` ;
+    @JukeboxCategory `categories`. Aucun JSON entrant ne se parse comme @AnonymizedResponse.
+  Les clés inconnues sont silencieusement ignorées à chaque niveau d'imbrication ; un objet JSON
+    répétant une clé de champ de struct est rejeté comme champ dupliqué par @serde_json, tandis que
+    les clés répétées dans un objet @BTreeMap se résolvent en last-wins selon la sémantique map @serde_json.
 
 Returns:
-  Serialization output is the HTTP bodies ./server.rs serves as `application/json` through
-    @axum::Json: @ClusterInfo, @PackagesState, @PopularityContest and a @Vec<@ChildWithState>; every
-    struct renders declaration-ordered keys, empty @Vec as `[]`, empty @BTreeMap as `{}`, @None as
-    explicit `null`.
-  @ScrubStats renders body-embedded as `{"distinct":N,"occurrences":M}`; for the
-    state / config / log endpoints ./server.rs instead renders it as the `X-Diag-Redactions` header
-    and the payload itself leaves this file as YAML or text.
+  La sortie de sérialisation est les corps HTTP que ./server.rs sert en `application/json` via
+    @axum::Json : @ClusterInfo, @PackagesState, @PopularityContest et un @Vec<@ChildWithState> ;
+    chaque struct rend ses clés dans l'ordre de déclaration, un @Vec vide comme `[]`, un @BTreeMap
+    vide comme `{}`, @None comme `null` explicite.
+  @ScrubStats rendu dans le corps donne `{"distinct":N,"occurrences":M}` ; pour les endpoints
+    state / config / log, ./server.rs le rend plutôt en en-tête `X-Diag-Redactions` et le chargeur
+    lui-même quitte ce fichier en YAML ou en texte.
 
 Raises:
-  Nothing — the file holds no functions. Wire failures stay in the caller lane as @serde_json
-    errors originating from these derives: missing required key (the message names the field), float
-    / negative / numeric-string against @u32 or @usize, wrong type against a scalar, @Vec,
-    @BTreeMap or the @Children object, duplicate struct field keys.
+  Rien — le fichier ne contient aucune fonction. Les échecs filaire restent dans la voie de
+    l'appelant sous forme d'erreurs @serde_json issues de ces dérivations : clé requise manquante
+    (le message nomme le champ), flottant / négatif / chaîne numérique contre @u32 ou @usize, type
+    erroné contre un scalaire, un @Vec, un @BTreeMap ou l'objet @Children, clés de champs dupliquées.
 
 Handles:
-  Arbitrary content inside @ChildWithState.state — any JSON tree passes through schema-free; only
-    the ./collect/ producers and ./anonymize.rs scrubbing constrain what actually arrives.
-  Unconstrained text in @PackageState.kind, @tag and every @String field — stored and re-emitted
-    verbatim, never trimmed, parsed or validated here.
+  Contenu arbitraire dans @ChildWithState.state — tout arbre JSON passe sans schéma ; seuls les
+    producteurs des ./collect/ et le scrubbing de ./anonymize.rs contraignent ce qui arrive vraiment.
+  Texte non contraint dans @PackageState.kind, @tag et chaque champ @String — stocké et réémis mot
+    pour mot, jamais tronqué, parsé ni validé ici.
 
 Tasks:
-  [ ] Cover every scenario below with in-file serde tests — this file has no tests today: declaration
-      order with explicit `null` rendering, the camelCase @ChildWithState island, @PopularityContest
-      byte-stability, @ScrubStats::default() rendering, the accept side (omitted / `null` / unknown
-      keys) and the reject side (missing required key, duplicate struct key, `1.5`, `-1`, `"5"` on
-      the counters).
-  [?] @AnonymizedResponse<@T> is dead code — never constructed workspace-wide, unparseable inbound
-      (no @Deserialize), and the redaction contract actually ships as @ScrubStats plus the
-      `X-Diag-Redactions` header in ./server.rs. Decide later whether to retire the envelope or make
-      an endpoint serve it as body.
-  [?] The mixed casing inside one @ChildWithState object — snake_case outer keys, camelCase
-      `apiVersion` from @common::Children under `child` — forces clients to parse two conventions in
-      the same payload. Decide later whether the server should carry its own snake_case child DTO.
-  [?] Count widths are unfixed: @u32 popularity counts versus @usize scrub counters, whose accepted
-      JSON range is target-width dependent, so one payload can parse on a 64-bit build yet not a
-      32-bit one. Decide later whether both should be fixed-width.
-  [?] @PackageState.kind stays a free-form @String discriminator — nothing stops a producer shipping
-      a typo on the wire. Decide later whether it becomes an enum.
+  [ ] Couvrir chaque scénario ci-dessous par des tests serde dans le fichier — ce fichier n'a aucun
+      test aujourd'hui : ordre de déclaration avec rendu `null` explicite, l'île camelCase
+      @ChildWithState, la stabilité en octets de @PopularityContest, le rendu de
+      @ScrubStats::default(), le côté acceptation (clés omises / `null` / inconnues) et le côté rejet
+      (clé requise manquante, clé de struct dupliquée, `1.5`, `-1`, `"5"` sur les compteurs).
+  [?] @AnonymizedResponse<@T> est du code mort — jamais construit dans tout le workspace, non
+      parsable en entrée (pas de @Deserialize), et le contrat de rédaction navigue en réalité comme
+      @ScrubStats plus l'en-tête `X-Diag-Redactions` dans ./server.rs. Décider plus tard s'il faut
+      retirer l'enveloppe ou faire un endpoint la servir en corps.
+  [?] Le casing mixte dans un objet @ChildWithState — clés externes snake_case, `apiVersion`
+      camelCase de @common::Children sous `child` — force les clients à parser deux conventions dans
+      le même chargeur. Décider plus tard si le serveur doit porter son propre DTO enfant snake_case.
+  [?] Largeurs de compte non figées : comptes de popularité en @u32 contre compteurs de scrub en
+      @usize, dont la plage JSON acceptée dépend de la largeur de la cible, si bien qu'un chargeur
+      peut parser sur un build 64 bits mais pas 32 bits — décider plus tard si les deux passent en largeur fixe.
+  [?] @PackageState.kind reste un discriminant @String à forme libre — rien n'empêche un producteur
+      d'émettre une coquille sur le fil. Décider plus tard s'il devient un enum.
 
 Done when:
-  Every Scenario has a mapped passing test, the Tasks coverage entry is closed and its `[?]`
-    decisions recorded, and `cargo test -p server` with clippy and fmt stays green.
+  Chaque Scenario a un test passant mappé, l'entrée de couverture des Tasks est fermée et ses
+    décisions `[?]` consignées, et `cargo test -p server` avec clippy et fmt reste vert.
 
-Scenario: ClusterInfo renders null for every absent optional
-  Given a @ClusterInfo of one @NodeInfo whose four optional facts are @None, @vynil_version @None
-    and empty @storage_classes / @ingress_classes
-  When @serde_json serializes it
-  Then the object is `{"nodes":[{…,"instance_type":null,"arch":null,"os":null,"kubelet_version":null}],"distribution":"…","kubernetes_version":"…","vynil_version":null,"storage_classes":[],"ingress_classes":[]}` —
-    declaration order, snake_case, no key skipped
-  No mapped test exists.
+Scenario: ClusterInfo rend null pour chaque optionnel absent
+  Given un @ClusterInfo d'un seul @NodeInfo dont les quatre faits optionnels sont @None,
+    @vynil_version @None et @storage_classes / @ingress_classes vides
+  When @serde_json le sérialise
+  Then l'objet est `{"nodes":[{…,"instance_type":null,"arch":null,"os":null,"kubelet_version":null}],"distribution":"…","kubernetes_version":"…","vynil_version":null,"storage_classes":[],"ingress_classes":[]}` —
+    ordre de déclaration, snake_case, aucune clé sautée
+  Aucun test mappé n'existe.
 
-Scenario: ChildWithState nests a camelCase Children under a snake_case key
-  Given a @ChildWithState whose @child has @api_version and @namespace @None with kind `Deployment`
-    and name `web`, and @state @None
-  When it serializes
-  Then the exact bytes are `{"child":{"apiVersion":null,"kind":"Deployment","name":"web","namespace":null},"state":null}`
-  And deserializing that object back requires `kind` and `name` inside `child` and yields the same
-    tree
-  No mapped test exists.
+Scenario: ChildWithState niche un Children camelCase sous une clé snake_case
+  Given un @ChildWithState dont l'@child a @api_version et @namespace @None avec kind `Deployment`
+    et name `web`, et @state @None
+  When il sérialise
+  Then les octets exacts sont `{"child":{"apiVersion":null,"kind":"Deployment","name":"web","namespace":null},"state":null}`
+  And redésérialiser cet objet exige `kind` et `name` dans `child` et rend le même
+    arbre
+  Aucun test mappé n'existe.
 
-Scenario: Counters reject non-integers
-  Given a popularity payload with package count `1.5`, `-1` or `"5"`, and a @ScrubStats payload with
-    `distinct` as `"1"`
-  When @serde_json deserializes @PopularityContest and @ScrubStats
-  Then every one is an invalid-type error — no coercion, no silent zero
-  No mapped test exists.
+Scenario: Les compteurs rejettent les non-entiers
+  Given un chargeur de popularité avec un compte de paquet `1.5`, `-1` ou `"5"`, et un chargeur
+    @ScrubStats avec `distinct` valant `"1"`
+  When @serde_json désérialise @PopularityContest et @ScrubStats
+  Then chacun est une erreur de type invalide — aucune coercition, aucun zéro silencieux
+  Aucun test mappé n'existe.
 
-Scenario: Missing required key names the field
-  Given a @ClusterInfo payload holding every key except `distribution`
-  When it deserializes
-  Then the @serde_json error names the missing field, while the same payload may still omit
-    `vynil_version` without failing
-  No mapped test exists.
+Scenario: Une clé requise manquante nomme le champ
+  Given un chargeur @ClusterInfo portant toutes les clés sauf `distribution`
+  When il se désérialise
+  Then l'erreur @serde_json nomme le champ manquant, tandis que le même chargeur peut encore omettre
+    `vynil_version` sans échouer
+  Aucun test mappé n'existe.
 
-Scenario: PopularityContest renders byte-identical regardless of insertion order
-  Given two @PopularityContest carrying the same jukebox, category and package set inserted in
-    different orders
-  When both serialize
-  Then the JSON bytes are identical — `jukeboxes`, `categories` and package keys sorted at all
-    three map levels
-  No mapped test exists.
+Scenario: PopularityContest rend des octets identiques quel que soit l'ordre d'insertion
+  Given deux @PopularityContest portant le même jeu de jukebox, catégories et paquets insérés dans
+    des ordres différents
+  When les deux sérialisent
+  Then les octets JSON sont identiques — clés `jukeboxes`, `categories` et paquets triées aux trois
+    niveaux de map
+  Aucun test mappé n'existe.
 
-Scenario: AnonymizedResponse is one-way
-  Given an @AnonymizedResponse<@PackagesState> with empty @items, @distinct `1` and @occurrences `2`
-  When it serializes
-  Then the JSON is `{"data":{"items":[]},"scrub_stats":{"distinct":1,"occurrences":2}}`
-  And no deserialization of that text into @AnonymizedResponse exists in the crate — `data` and
-    `scrub_stats` can only be re-read as separate hand-parsed shapes
-  No mapped test exists.
+Scenario: AnonymizedResponse est unidirectionnel
+  Given un @AnonymizedResponse<@PackagesState> avec @items vide, @distinct `1` et @occurrences `2`
+  When il sérialise
+  Then le JSON est `{"data":{"items":[]},"scrub_stats":{"distinct":1,"occurrences":2}}`
+  And aucune désérialisation de ce texte vers @AnonymizedResponse n'existe dans le crate — `data` et
+    `scrub_stats` ne peuvent être relus que comme des formes séparées parsées à la main
+  Aucun test mappé n'existe.
 
 Example:
-  @PackagesState body: `{"items":[{"kind":"SystemInstance","namespace":"vynil-system","name":"longhorn","package":"longhorn","tag":"1.3.2","ready":false}]}` —
-    `tag` renders `null` when the instance status carries no tag
-  @PopularityContest body: `{"jukeboxes":{"longhorn":{"categories":{"storage":{"longhorn":3}}}}}`
-  @ChildWithState body: `[{"child":{"apiVersion":"apps/v1","kind":"Deployment","name":"web","namespace":"tenant-a"},"state":{"ready":true}}]`
-  @ScrubStats::default() body `{"distinct":0,"occurrences":0}`; the same value in ./server.rs is the
-    header `X-Diag-Redactions: distinct=0;occurrences=0` — the serde keys and the header grammar
-    share names by literal copy, not by serde
+  Corps @PackagesState : `{"items":[{"kind":"SystemInstance","namespace":"vynil-system","name":"longhorn","package":"longhorn","tag":"1.3.2","ready":false}]}` —
+    `tag` rend `null` quand le statut de l'instance ne porte aucun tag
+  Corps @PopularityContest : `{"jukeboxes":{"longhorn":{"categories":{"storage":{"longhorn":3}}}}}`
+  Corps @ChildWithState : `[{"child":{"apiVersion":"apps/v1","kind":"Deployment","name":"web","namespace":"tenant-a"},"state":{"ready":true}}]`
+  Corps de @ScrubStats::default() : `{"distinct":0,"occurrences":0}` ; la même valeur dans
+    ./server.rs devient l'en-tête `X-Diag-Redactions: distinct=0;occurrences=0` — les clés serde et la
+    grammaire de l'en-tête partagent leurs noms par copie littérale, pas par serde
