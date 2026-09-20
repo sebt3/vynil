@@ -1,212 +1,212 @@
 Spec: crdgen
 
 Purpose:
-  Be the `agent crdgen` leaf: print the complete CustomResourceDefinition set of the four Vynil
-    custom resources (@JukeBox, @TenantInstance, @ServiceInstance, @SystemInstance) to stdout as
-    one `---`-separated YAML stream, generated fully offline from the compiled type definitions
-    through @kube::CustomResourceExt::crd() — never read from a cluster — after three
-    post-derivation schema patches: mark every opaque `options` map with
-    `x-kubernetes-preserve-unknown-fields`, and normalize JukeBox's `source` @Option shape
-    (@schemars output is not usable as-is on those nodes). The /Makefile `generate-crd` target is
-    the consumer: stdout redirects into `box/vynil/crds/crd.yaml`, hand-copied to
-    `deploy/crd/crd.yaml`.
+  Être la feuille `agent crdgen` : imprimer sur stdout le jeu complet de CustomResourceDefinition
+    des quatre ressources custom Vynil (@JukeBox, @TenantInstance, @ServiceInstance, @SystemInstance)
+    sous la forme d'un unique flux YAML séparé par `---`, généré entièrement hors ligne à partir des
+    définitions de types compilées via @kube::CustomResourceExt::crd() — jamais lu depuis un cluster —
+    après trois patchs de schéma post-dérivation : marquer chaque map opaque `options` avec
+    `x-kubernetes-preserve-unknown-fields`, et normaliser la forme @Option de `source` de JukeBox (la
+    sortie de @schemars n'est pas exploitable en l'état sur ces nœuds). La cible `generate-crd` de
+    /Makefile est le consommateur : stdout est redirigé vers `box/vynil/crds/crd.yaml`, puis copié à
+    la main dans `deploy/crd/crd.yaml`.
 
 Owns:
   ./crdgen.rs
 
 References:
   /common/src/jukebox.sdd, /common/src/instanceservice.sdd, /common/src/instancetenant.sdd,
-    /common/src/instancesystem.sdd — the four CRD specs whose @crd() output is emitted here; they
-    own the serde wire names (`spec`, `source`, `options`, `status`, `packages`) this patch chain
-    reaches into, so any rename on that side silently no-ops the matching patch here.
-  /common/src/vynilpackage.sdd — owns @VynilPackage whose `options` key is the node patched under
-    `status.packages` in the JukeBox document.
-  /common/src/yamlhandler.sdd — @yaml_serialize_to_string: the serde_yaml-based rendering of each
-    document, which never emits a `---` marker (the file prints every separator itself), ends its
-    text, and maps failures to @vynil_core::Error::YamlError display text.
-  /common/src/lib.sdd — the @crate::Error vocabulary; @Error::Core is the `#[error(transparent)]`
-    @vynil_core::@Error carrier with the `#[from]` arm this `?` travels.
-  ./main.rs — sole caller: attaches @Parameters to the `crdgen` subcommand (help text `generate
-    CRDs` lives there, not here) and is the catcher turning @Err into one `tracing::@error` line
-    on stderr plus @std::process::@exit of `2` (the exit table also sits in /docs/cli.md).
+    /common/src/instancesystem.sdd — les quatre specs de CRD dont la sortie @crd() est émise ici ;
+    ce sont elles qui possèdent les noms serde du fil (`spec`, `source`, `options`, `status`,
+    `packages`) où plonge cette chaîne de patchs ; tout renommage de ce côté neutralise en silence le patch correspondant.
+  /common/src/vynilpackage.sdd — possède @VynilPackage dont la clé `options` est le nœud patché sous
+    `status.packages` du document JukeBox.
+  /common/src/yamlhandler.sdd — @yaml_serialize_to_string : le rendu basé sur serde_yaml de chaque
+    document, qui n'émet jamais de marqueur `---` (le fichier imprime lui-même chaque séparateur), termine
+    son texte, et mappe les échecs sur le texte d'affichage de @vynil_core::Error::YamlError.
+  /common/src/lib.sdd — le vocabulaire @crate::Error ; @Error::Core est le porteur
+    @vynil_core::@Error en `#[error(transparent)]` avec le bras `#[from]` sur lequel voyage ce `?`.
+  ./main.rs — unique appelant : attache @Parameters à la sous-commande `crdgen` (le texte d'aide
+    `generate CRDs` vit là, pas ici) et est le catcher qui transforme @Err en une ligne `tracing::@error`
+    sur stderr plus @std::process::@exit de `2` (la table des sorties est aussi dans /docs/cli.md).
 
 Depends on:
-  `common` (workspace crate, /agent/Cargo.toml) — @JukeBox, @TenantInstance, @ServiceInstance,
+  `common` (crate du workspace, /agent/Cargo.toml) — @JukeBox, @TenantInstance, @ServiceInstance,
     @SystemInstance, @common::yamlhandler::yaml_serialize_to_string, @common::Error.
-  @kube::CustomResourceExt — the @crd() generator the @CustomResource derives attach to each type.
-  `k8s-openapi` `0.27.1` (/Cargo.toml) — the @JSONSchemaProps fields rewritten here (`properties`
-    is @Option<@BTreeMap>, so emitted schema property keys stay sorted;
+  @kube::CustomResourceExt — le générateur @crd() auquel les derives @CustomResource accrochent chaque type.
+  `k8s-openapi` `0.27.1` (/Cargo.toml) — les champs @JSONSchemaProps réécrits ici (`properties`
+    est @Option<@BTreeMap>, si bien que les clés de propriété du schéma émis restent triées ;
     `additional_properties`, `x_kubernetes_preserve_unknown_fields`, `one_of`, `any_of`,
-    `nullable`) and @JSONSchemaPropsOrArray as matched by the items patch.
-  `schemars` `1.0` (/Cargo.toml, feature `chrono04`) — indirect: the generator whose Option-enum
-    and map shapes these patches exist to correct; the pre-patch schema shape belongs to that pin
-    and to the common types, not to this file.
-  @clap `Args` — the @Parameters derive.
+    `nullable`) et @JSONSchemaPropsOrArray tel que matché par le patch des items.
+  `schemars` `1.0` (/Cargo.toml, feature `chrono04`) — indirect : le générateur dont ces patchs
+    existent pour corriger les formes des Option-enum et des maps ; la forme du schéma pré-patch
+    appartient à ce pin et aux types de common, pas à ce fichier.
+  @clap `Args` — le derive @Parameters.
 
 Exposes:
-  @Parameters — `#[derive(@clap::Args, @std::fmt::Debug)] pub struct Parameters {}`: the empty
-    Args means `agent crdgen` carries zero flags, options or positionals; the @Debug derive only
-    feeds ./main.rs's own derives and carries no runtime meaning.
-  @run — `pub fn run(_args: &@Parameters) -> @std::result::@Result<@(), @common::Error>` — the
-    whole stdout stream, patches and `?` lanes described in Must.
-  Both are `pub` yet bin-private: ./main.rs declares `mod crdgen;` in the binary root, so nothing
-    outside the `agent` bin imports them — the observable contract is process behaviour.
+  @Parameters — `#[derive(@clap::Args, @std::fmt::Debug)] pub struct Parameters {}` : les Args vides
+    signifient que `agent crdgen` ne porte aucun flag, option ni positionnel ; le derive @Debug
+    nourrit uniquement les derives propres à ./main.rs et n'a aucune signification au runtime.
+  @run — `pub fn run(_args: &@Parameters) -> @std::result::@Result<@(), @common::Error>` —
+    l'intégralité du flux stdout, des patchs et des voies `?` décrits dans Must.
+  Les deux sont `pub` mais privés au bin : ./main.rs déclare `mod crdgen;` en racine du binaire,
+    donc rien hors du bin `agent` ne les importe — le contrat observable est le comportement du processus.
 
 Accepts:
-  @run takes `&@Parameters` and never reads it — output varies with compiled types only.
-  No runtime input at all: no stdin, no files, no env reads, no argv past the clap-parsed empty
-    struct; too many or unknown arguments die in the bin root's @clap::Parser::parse with clap's
-    own stderr text and its exit `2`, never reaching @run.
-  Preconditions trusted at compile time: the four types keep the schema key names the patches
-    target (References).
+  @run reçoit `&@Parameters` et ne le lit jamais — la sortie ne dépend que des types compilés.
+  Aucune entrée au runtime : pas de stdin, pas de fichiers, aucune lecture d'env, aucun argv au-delà
+    de la structure vide parsée par clap ; arguments surnuméraires ou inconnus meurent dans @clap::Parser::parse
+    à la racine du bin avec son texte stderr et sa sortie `2` propres à clap, sans jamais atteindre @run.
+  Préconditions jugées sûres à la compilation : les quatre types conservent les noms de clés de
+    schéma que les patchs ciblent (References).
 
 Returns:
-  `@Ok(())` — reached only after the fourth document body is printed; with that @Ok the process
-    exits `0` through ./main.rs.
-  The success stdout is the four-document stream: leading `---` line, exactly four `---` lines in
-    total, bodies carrying no separators, no trailing `---`, and one final `\n` — the last body's,
-    each body ending in exactly one newline so separator and content never share a line.
-  `@Err(@common::Error)` — see Raises; carries no value beyond the error.
+  `@Ok(())` — atteint seulement après l'impression du corps du quatrième document ; avec cet @Ok
+    le processus sort `0` via ./main.rs.
+  Le stdout de succès est le flux des quatre documents : ligne `---` en tête, exactement quatre
+    lignes `---` au total, des corps sans séparateur, pas de `---` final, et un unique `\n` final —
+    celui du dernier corps ; tout corps finit par un seul newline, jamais sur une ligne de séparateur.
+  `@Err(@common::Error)` — voir Raises ; ne porte aucune valeur au-delà de l'erreur.
 
 Raises:
-  Mints no error of its own. The only lane is `?` on the four @yaml_serialize_to_string calls: a
-    @vynil_core failure wraps through its `#[from]` arm as @Error::Core over
-    @vynil_core::Error::YamlError, and transparency renders the inner
+  Ne fabrique aucune erreur elle-même. La seule voie est le `?` sur les quatre appels
+    @yaml_serialize_to_string : une panne @vynil_core s'enveloppe via son bras `#[from]` en
+    @Error::Core sur @vynil_core::Error::YamlError, et la transparence rend le texte interne
     `YamlError: <serde_yaml text>` verbatim.
-  A failure aborts mid-stream: the failing document's `---` — and every earlier body — is already
-    printed; nothing is buffered, rewritten or rolled back.
-  The catcher is ./main.rs's `@Commands::Crdgen` arm: `CRD generation failed with:` plus that
-    Display text reaches stderr via `tracing::@error` (stderr by env_logger), then
-    @std::process::@exit of `2`.
-  Serializing these four generated documents failing has never been observed — the lane is
-    defensive against an emitter fault.
-  Panics outside the @Err lane, exit `101`, uncalled-out by ./main.rs: a closed stdout consumer
-    (e.g. piping into a reader that quits early) makes @print/@println panic `Failed printing to
-    stdout: Broken pipe` mid-stream.
+  Un échec interrompt le flux en cours : le `---` du document fautif — et chaque corps
+    antérieur — est déjà imprimé ; rien n'est tamponné, réécrit ni annulé.
+  Le catcher est le bras `@Commands::Crdgen` de ./main.rs : `CRD generation failed with:` plus ce
+    texte Display atteignent stderr via `tracing::@error` (stderr par env_logger), puis
+    @std::process::@exit de `2`.
+  Voir échouer la sérialisation de ces quatre documents générés n'a jamais été observé — la voie
+    est défensive contre une panne de l'émetteur.
+  Paniques hors de la voie @Err, sortie `101`, non capturées par ./main.rs : un consommateur
+    stdout fermé (p. ex. un pipe vers un lecteur qui quitte tôt) fait paniquer @print/@println
+    `Failed printing to stdout: Broken pipe` en plein flux.
 
 Handles:
-  An empty `versions`, a first version with `@None` @schema, @open_api_v3_schema or @properties —
-    that document's whole patch is skipped silently and the unpatched CRD is serialized anyway.
-  A patched key missing from its map (`status`, `packages`, `spec`, `source`, `options`) —
-    @entry().@and_modify touches only existing keys, inserting nothing.
-  `packages` @items in the @JSONSchemaPropsOrArray::Schemas variant (tuple-form) — the match arm
-    is an empty body, no patch.
-  Serialization failure on document k — stdout keeps the first `k` separator lines with their `k−1`
-    complete bodies, the k-th separator dangling with no body after it.
+  Un `versions` vide, une première version avec `@None` @schema, @open_api_v3_schema ou @properties —
+    tout le patch de ce document est silencieusement ignoré et le CRD non patché est sérialisé quand même.
+  Une clé patchée absente de sa map (`status`, `packages`, `spec`, `source`, `options`) —
+    @entry().@and_modify ne touche que les clés existantes, n'insère rien.
+  `packages` @items dans la variante @JSONSchemaPropsOrArray::Schemas (forme tuple) — le bras de
+    match a un corps vide, aucun patch.
+  Échec de sérialisation sur le document k — stdout garde les `k` premières lignes séparatrices avec
+    leurs `k−1` corps complets, le k-ième séparateur en suspens sans corps après lui.
 
 Must:
-  Emit exactly four CRD documents in the fixed order @JukeBox, @TenantInstance, @ServiceInstance,
-    @SystemInstance, each freshly generated by @CustomResourceExt::crd() at its print — no
-    sharing, sorting, filtering or merging between docs.
-  Frame each document as @println of `"---\n"` immediately followed by @print of
-    @yaml_serialize_to_string's body: the stream starts with a separator, carries exactly four,
-    each one opening its document, ends without a trailing separator, and key order is serde's
-    own (struct declaration order; schema `properties` iterate the @BTreeMap, so sorted) — the
-    patches use @and_modify exclusively, so they never insert a key and never move one.
-  Patch only the first version of each @crd().spec.versions (@first_mut); today all four docs are
-    single-version `v1` so nothing is missed, and any version added later would ship its schema
-    unpatched (Tasks `[?]`).
-  Treat the entire chain as conditional: with versions empty or any of @schema,
-    @open_api_v3_schema, top-level @properties absent or a patched key missing, no mutation
-    happens, the unpatched CRD is still emitted and the run still answers `@Ok(())`.
-  Apply the JukeBox `options` patch at `status` → @properties `packages` → @items — only the
-    @JSONSchemaPropsOrArray::Schema branch descends; @Schemas is a no-op — to the items-schema
-    @properties `options` node: set `x_kubernetes_preserve_unknown_fields` to @Some(`true`) and
-    `additional_properties` to @None (removing `additionalProperties` from the wire for an opaque
-    map), leaving `type: object` and the generated `nullable` untouched.
-  Apply the JukeBox `source` patch at `spec` → @properties `source`: whenever that key exists the
-    three writes are unconditional — `one_of` becomes a @clone of the first @any_of branch's
-    `one_of` (@None when `any_of` is absent or that branch holds no oneOf, clobbering any
-    pre-existing `one_of` in that case), then `any_of` to @None and `nullable` to @Some(`true`) —
-    while `properties`, `required` and `type` stay untouched; under the pinned generator no
-    `anyOf` ever reaches @run, so the visible net is the forced `nullable` (Tasks `[?]`).
-  Apply the single options patch to each of the three instance documents at `spec` → @properties
-    `options`: the same two writes as the JukeBox `options` bullet and nothing else — instances
-    get no `source`-style rewrite, and the JukeBox document gets no `spec.options` patch.
-  Write every observable success byte through @print/@println to stdout and only stdout: no
-    logging, no stderr text, no env read, no config, and no @std::process::@exit call here.
+  Émettre exactement quatre documents CRD dans l'ordre fixe @JukeBox, @TenantInstance, @ServiceInstance,
+    @SystemInstance, chacun fraîchement généré par @CustomResourceExt::crd() à son impression — aucun
+    partage, tri, filtrage ou fusion entre les documents.
+  Encadrer chaque document comme un @println de `"---\n"` immédiatement suivi du @print du corps de
+    @yaml_serialize_to_string : le flux démarre sur un séparateur, en porte exactement quatre,
+    chacun ouvrant son document, s'achève sans séparateur final, et l'ordre des clés est celui de
+    serde (ordre de déclaration des structs ; les `properties` du schéma parcourent le @BTreeMap, donc
+    triées) — les patchs n'emploient que @and_modify, ils n'insèrent donc jamais de clé et n'en déplacent jamais.
+  Ne patcher que la première version du @crd().spec.versions de chacun (@first_mut) ; aujourd'hui les
+    quatre documents sont mono-version `v1` donc rien n'est manqué, et toute version ajoutée
+    plus tard publierait son schéma non patché (Tasks `[?]`).
+  Traiter toute la chaîne comme conditionnelle : avec versions vide ou @schema,
+    @open_api_v3_schema, @properties de premier niveau absents ou une clé patchée manquante, aucune
+    mutation n'a lieu, le CRD non patché est quand même émis et le run répond toujours `@Ok(())`.
+  Appliquer le patch JukeBox `options` à `status` → @properties `packages` → @items — seule la
+    branche @JSONSchemaPropsOrArray::Schema descend ; @Schemas est un no-op — jusqu'au nœud
+    @properties `options` du schéma des items : poser `x_kubernetes_preserve_unknown_fields` à
+    @Some(`true`) et `additional_properties` à @None (retirant `additionalProperties` du fil pour
+    une map opaque), laissant `type: object` et le `nullable` généré intacts.
+  Appliquer le patch JukeBox `source` à `spec` → @properties `source` : chaque fois que cette clé
+    existe, les trois écritures sont inconditionnelles — `one_of` devient un @clone du `one_of` de la
+    première branche @any_of (@None quand `any_of` est absent ou que cette branche ne porte aucun
+    oneOf, écrasant alors tout `one_of` préexistant), puis `any_of` à @None et `nullable` à
+    @Some(`true`) — tandis que `properties`, `required` et `type` restent intacts ; sous le generator
+    épinglé, aucun `anyOf` n'atteint @run, donc le net visible est le `nullable` forcé (Tasks `[?]`).
+  Appliquer le patch unique d'options à chacun des trois documents d'instance à `spec` → @properties
+    `options` : les deux mêmes écritures que la puce JukeBox `options` et rien d'autre — les instances
+    n'ont aucune réécriture façon `source`, et le document JukeBox n'a aucun patch `spec.options`.
+  Écrire chaque octet observable de succès via @print/@println vers stdout et seulement stdout : pas de
+    logging, pas de texte stderr, pas de lecture d'env, pas de config, et aucun appel @std::process::@exit ici.
 
 Must not:
-  Depend on cluster state: nothing builds a @kube::Client even though `kube` is imported — kube
-    contributes only the derive-generated @crd(), and `agent crdgen` must answer identically with
-    no kubeconfig and no API server.
+  Dépendre de l'état d'un cluster : rien ne construit de @kube::Client bien que `kube` soit importé —
+    kube ne fournit que le @crd() généré par derive, et `agent crdgen` doit répondre identiquement
+    sans kubeconfig ni serveur d'API.
 
 Tasks:
-  [ ] Cover the file at process level: no `#[cfg(test)]` module and no integration test spawns
-      the bin, so all five Scenarios rest on reading today; a test must run `agent crdgen` and
-      assert the framing (four `---` lines, no trailing separator, single final `\n`), the four
-      `metadata.name` values in order, the four patched-node footprints, empty stderr and exit
-      `0` — plus, if the failure lane is ever made injectable, its partial-stream behaviour.
-  [ ] Regenerate the shipped manifests: `box/vynil/crds/crd.yaml` and `deploy/crd/crd.yaml` are
-      stale against the current build — a fresh `make generate-crd` differs only in schema
-      `description` docstring rendering, so regenerate through the Makefile, never edit by hand.
-  [ ] Delete the debris left in the three instance patch blocks: the commented-out
-      `//print!("{:?}", spec.additional_properties);` debug lines.
-  [?] The `source` normalization: with the pinned schemars no `anyOf` is ever produced for
-      @JukeBoxSpec::source (emitted schemas inline the variants as a plain `properties` object),
-      so the oneOf derivation always yields @None and the patch's visible effect is just forcing
-      `nullable`. Decide whether the code comment's anyOf→oneOf intent is stale and the mutation
-      shrinks to the nullable write, or the generator pin is what should change.
-  [?] Skip silently vs fail loudly: every skipped link (absent version, schema, `properties`, or
-      a renamed `options`/`source`/`packages` key on the common side) emits an unpatched CRD —
-      exactly the options-pruning and anyOf wire shapes these patches exist to prevent — with no
-      warning and a success exit. Decide whether @run must assert the patch landed and @Err.
-  [?] First-version-only patching: loop every @versions entry, or record explicitly that
-      multi-version CRDs are not supported until one is designed.
-  [?] The per-instance patch bodies are three literal copies of each other (the JukeBox one
-      differs); decide whether to factor a helper or keep the copies.
+  [ ] Couvrir le fichier au niveau processus : ni module `#[cfg(test)]` ni test d'intégration ne
+      lance le bin, si bien que les cinq Scenarios reposent tous sur la lecture aujourd'hui ; un test doit lancer
+      `agent crdgen` et vérifier le cadrage (quatre lignes `---`, pas de séparateur final, un unique `\n`
+      final), les quatre valeurs `metadata.name` dans l'ordre, les quatre empreintes de nœuds patchés, stderr
+      vide et sortie `0` — plus, si la voie d'échec devient jamais injectable, son comportement de flux partiel.
+  [ ] Régénérer les manifests livrés : `box/vynil/crds/crd.yaml` et `deploy/crd/crd.yaml` sont
+      périmés contre la build actuelle — un `make generate-crd` frais ne diffère que dans le rendu
+      des docstrings `description` du schéma, donc régénérer via le Makefile, ne jamais éditer à la main.
+  [ ] Supprimer les débris laissés dans les trois blocs de patch d'instance : les lignes de debug
+      `//print!("{:?}", spec.additional_properties);` commentées.
+  [?] La normalisation du `source` : avec le schemars épinglé, aucun `anyOf` n'est jamais produit pour
+      @JukeBoxSpec::source (les schémas émis inlinent les variantes en un simple objet `properties`),
+      donc la dérivation oneOf rend toujours @None et l'effet visible du patch se borne à forcer
+      `nullable`. Décider si l'intention anyOf→oneOf du commentaire de code est obsolète et la mutation
+      se réduit à l'écriture nullable, ou si c'est le pin du generator qui doit changer.
+  [?] Ignorer en silence vs échouer bruyamment : chaque maillon sauté (version, schéma, `properties`
+      absents, ou clé `options`/`source`/`packages` renommée côté common) émet un CRD non patché —
+      exactement l'élagage des options et les formes de fil anyOf que ces patchs existent pour prévenir — sans
+      aucun avertissement et avec une sortie de succès. Décider si @run doit affirmer que le patch est passé et @Err.
+  [?] Le patching première version seulement : boucler sur chaque entrée de @versions, ou rendre
+      explicite que les CRD multi-versions ne sont pas supportés tant que l'un n'est pas conçu.
+  [?] Les corps de patch par instance sont trois copies littérales l'une de l'autre (celle de JukeBox
+      diffère) ; décider de factoriser un helper ou de garder les copies.
 
 Done when:
-  Process-level coverage pins the stream framing, the document order and the four patch
-    footprints, every `[?]` above is decided, and `cargo test -p agent` with `cargo clippy
-    --all-targets -- -D warnings`, `cargo +nightly fmt --check` and `specdd lint` are green.
+  La couverture au niveau processus fige le cadrage du flux, l'ordre des documents et les quatre
+    empreintes de patch, chaque `[?]` ci-dessus est tranché, et `cargo test -p agent` avec `cargo clippy
+    --all-targets -- -D warnings`, `cargo +nightly fmt --check` et `specdd lint` sont verts.
 
-Scenario: crdgen prints the four-document stream
-  Given a bare `agent crdgen` run with no kubeconfig and no cluster reachable
-  When @run executes
-  Then stdout begins with a `---` line and holds exactly four, each opening a
-    @CustomResourceDefinition body whose `metadata.name` is
-    `jukeboxes.vynil.solidite.fr`, then `tenantinstances.vynil.solidite.fr`, then
-    `serviceinstances.vynil.solidite.fr`, then `systeminstances.vynil.solidite.fr`
-  And no `---` line touches the final body, the last byte is the `\n` ending that body, stderr
-    stays silent and the process exits `0`
-  No mapped test exists.
+Scenario: crdgen imprime le flux à quatre documents
+  Given une exécution nue de `agent crdgen` sans kubeconfig ni cluster joignable
+  When @run s'exécute
+  Then stdout commence par une ligne `---` et en contient exactement quatre, chacune ouvrant un
+    corps @CustomResourceDefinition dont `metadata.name` est
+    `jukeboxes.vynil.solidite.fr`, puis `tenantinstances.vynil.solidite.fr`, puis
+    `serviceinstances.vynil.solidite.fr`, puis `systeminstances.vynil.solidite.fr`
+  And aucune ligne `---` ne touche le dernier corps, l'octet final est le `\n` qui termine ce corps, stderr
+    reste silencieux et le processus sort `0`
+  Aucun test mappé n'existe.
 
-Scenario: JukeBox carries both patches
-  Given the first document of the stream
-  Then the `status` → `packages` item-schema → `options` node reads `x-kubernetes-preserve-unknown-fields:
-    true` with the `additionalProperties` key gone, beside its generated `type` and `nullable`
-  And the `spec` → `source` node carries no `anyOf` key and `nullable: true` — under today's
-    generator also no `oneOf` — keeping its variant `properties`
-  No mapped test exists.
+Scenario: JukeBox porte les deux patchs
+  Given le premier document du flux
+  Then le nœud `status` → `packages` item-schema → `options` se lit `x-kubernetes-preserve-unknown-fields:
+    true` avec la clé `additionalProperties` disparue, à côté de ses `type` et `nullable` générés
+  And le nœud `spec` → `source` ne porte aucune clé `anyOf` et porte `nullable: true` — sous le
+    generator d'aujourd'hui également aucun `oneOf` — en gardant ses `properties` de variantes
+  Aucun test mappé n'existe.
 
-Scenario: instance documents get one options patch each
-  Given any of the three instance CRDs in the stream
-  Then its `spec` → `properties` → `options` node reads
-    `x-kubernetes-preserve-unknown-fields: true` with `additionalProperties` removed
-  But no other node of that document was rewritten
-  No mapped test exists.
+Scenario: les documents d'instance reçoivent un patch d'options chacun
+  Given l'un quelconque des trois CRD d'instance dans le flux
+  Then son nœud `spec` → `properties` → `options` se lit
+    `x-kubernetes-preserve-unknown-fields: true` avec `additionalProperties` retiré
+  But aucun autre nœud de ce document n'a été réécrit
+  Aucun test mappé n'existe.
 
-Scenario: missing schema links skip patching silently
-  Given the patch chain over any document meeting an empty @versions, an @None @schema,
-    @open_api_v3_schema or @properties, or a renamed patched key (all unreachable in today's
-    generated types)
-  When @run processes that document
-  Then the CRD serializes completely unpatched, no error or warning marks the skip, and the run
-    still ends `@Ok(())`
-  No mapped test exists; see the `[?]` on the loud-failure decision.
+Scenario: des maillons de schéma manquants sautent le patching en silence
+  Given la chaîne de patchs sur un document rencontrant un @versions vide, un @None @schema,
+    @open_api_v3_schema ou @properties, ou une clé patchée renommée (tous inatteignables dans les
+    types générés aujourd'hui)
+  When @run traite ce document
+  Then le CRD est sérialisé complètement non patché, aucune erreur ni avertissement ne marque le saut, et le
+    run finit quand même `@Ok(())`
+  Aucun test mappé n'existe ; voir le `[?]` sur la décision d'échec bruyant.
 
-Scenario: serialization failure truncates the stream and exits 2
-  Given an `@Err` from @yaml_serialize_to_string while printing document two (the defensive lane,
-    never observed)
-  Then stdout holds the first separator, document one complete and the second `---` — the stream
-    simply stops there
-  And ./main.rs logs `CRD generation failed with: YamlError: <text>` on stderr and exits `2`
-  No mapped test exists.
+Scenario: une panne de sérialisation tronque le flux et sort 2
+  Given un `@Err` de @yaml_serialize_to_string pendant l'impression du document deux (la voie
+    défensive, jamais observée)
+  Then stdout tient le premier séparateur, le document un complet et le second `---` — le flux
+    s'arrête simplement là
+  And ./main.rs journalise `CRD generation failed with: YamlError: <text>` sur stderr et sort `2`
+  Aucun test mappé n'existe.
 
 Example:
-  stream skeleton: `---` line, then a body starting at literal line `apiVersion:
-    apiextensions.k8s.io/v1` / `kind: CustomResourceDefinition`, three times repeated with their
-    own separators — the four separators are the only `---` occurrences in valid output.
-  patched options node as emitted: `type: object`, `nullable: true`,
-    `x-kubernetes-preserve-unknown-fields: true` — no `additionalProperties` survived the patch.
+  squelette du flux : ligne `---`, puis un corps démarrant à la ligne littérale `apiVersion:
+    apiextensions.k8s.io/v1` / `kind: CustomResourceDefinition`, trois fois répété avec leurs propres
+    séparateurs — les quatre séparateurs sont les seules occurrences de `---` dans une sortie valide.
+  nœud options patché tel qu'émis : `type: object`, `nullable: true`,
+    `x-kubernetes-preserve-unknown-fields: true` — aucun `additionalProperties` n'a survécu au patch.
