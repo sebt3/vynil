@@ -62,8 +62,8 @@ Done when:
     copies restent verrouillées l'une sur l'autre.
 
 Scenario: la fenêtre s'ouvre et se ferme sans rien changer
-  Etant donné `FenetresMaintenanceTenant` sans aucun fichier hook maintenance_* dans les
+  Given  `FenetresMaintenanceTenant` sans aucun fichier hook maintenance_* dans les
     répertoires résolveurs
-  Quand une lane backup tenant import_run start puis stop
-  Alors les deux renvoient l'unité, les quatre hooks sont ignorés en silence, et le backup
+  When une lane backup tenant import_run start puis stop
+  Then les deux renvoient l'unité, les quatre hooks sont ignorés en silence, et le backup
     tourne contre des workloads vivants non mis à l'échelle

@@ -3,74 +3,74 @@ Spec: SystemMod
 Platform: Rust
 
 Purpose:
-  Sub-command dispatcher for `agent system …`: owns the private `install` and `delete`
-    modules, exposes one clap group and one async entry that ensures the Kubernetes
-    client is initialized before handing typed arguments to the leaf handlers.
+  Dispatcheur de sous-commandes pour `agent system …` : possède les modules privés `install`
+    et `delete`, expose un groupe clap et une entrée async qui garantit que le client
+    Kubernetes est initialisé avant de passer les arguments typés aux handlers feuilles.
 
 Owns:
   ./mod.rs
 
 Exposes:
-  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
-    ./../main.rs (the `System` dispatch arm; spec pending ./../main.sdd).
-  @Commands — clap `Subcommand`, `Debug`, with exactly two variants and their help
-    strings verbatim: @Install(install::Parameters) doc `Install an instance`,
+  @Parameters — clap `Parser`, `Debug` ; champ unique @command: @Commands. Consommé par
+    ./../main.rs (bras de dispatch `System` ; spec en attente ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, avec exactement deux variantes et leurs chaînes
+    d'aide verbatim : @Install(install::Parameters) doc `Install an instance`,
     @Delete(delete::Parameters) doc `Delete an instance`.
-  @run — async, takes `&Parameters`, returns `()`.
+  @run — async, prend `&Parameters`, renvoie `()`.
 
 Accepts:
-  A fully parsed @Commands tree; no env vars or defaults at this level — every flag
-    contract lives in ./install.sdd and ./delete.sdd.
+  Un arbre @Commands entièrement parsé ; pas de variables d'env ni de défauts à ce niveau —
+    chaque contrat de flag vit dans ./install.sdd et ./delete.sdd.
 
 Returns:
-  `()` — both outcome lanes terminate: success falls off the end, failure calls
-    @std::process::exit and never returns.
+  `()` — les deux voies d'issue se terminent : le succès retombe en fin de fonction,
+    l'échec appelle @std::process::exit et ne revient jamais.
 
 Handles:
-  Leaf @Err — log via @tracing::error! `Installing a package failed with: {e:}` then
-    @process::exit(1) for @Install; `Deleting a package failed with: {e:}` then
-    @process::exit(3) for @Delete. The `{e:}` Display-only formatting is the frozen
-    log shape (no debug `{e:?}`).
-  A panic inside a leaf — unwinds to main's tokio runtime; this level neither catches
-    nor converts.
+  @Err des feuilles — log via @tracing::error! `Installing a package failed with: {e:}` puis
+    @process::exit(1) pour @Install ; `Deleting a package failed with: {e:}` puis
+    @process::exit(3) pour @Delete. Le formatage Display seul `{e:}` est la forme de log
+    gelée (pas de debug `{e:?}`).
+  Un panic dans une feuille — se débobine jusqu'au runtime tokio de main ; ce niveau
+    n'attrape ni ne convertit rien.
 
 Must:
-  Re-export nothing: `mod delete;` and `mod install;` stay private so the only public
-    surface of this module is @Parameters/@Commands/@run.
-  Call @common::context::init_k8s() once, before the match, on every invocation — the
-    leaves assume a live client and do (per ./install.sdd, ./delete.sdd) initialize
-    nothing.
-  Dispatch by exact variant to @install::run / @delete::run passing the inner
-    @Parameters reference unchanged.
-  Map failure exit codes asymmetrically and keep them frozen: @Install error dies 1,
-    @Delete error dies 3; success never calls exit.
+  Ne rien ré-exporter : `mod delete;` et `mod install;` restent privés, donc la seule
+    surface publique de ce module est @Parameters/@Commands/@run.
+  Appeler @common::context::init_k8s() une fois, avant le match, à chaque invocation — les
+    feuilles supposent un client vivant et (selon ./install.sdd, ./delete.sdd)
+    n'initialisent rien.
+  Dispatcher par variante exacte vers @install::run / @delete::run en passant la référence
+    @Parameters interne inchangée.
+  Mapper asymétriquement les codes de sortie d'échec et les garder gelés : l'erreur @Install
+    meurt avec 1, l'erreur @Delete meurt avec 3 ; le succès n'appelle jamais exit.
 
 Depends on:
-  ./install.sdd, ./delete.sdd — the leaf contracts and their flag shapes.
-  ../common/src/context.sdd — @init_k8s semantics and double-init posture.
-  ./../main.rs — the caller (`system::run(args).await`); spec pending ./../main.sdd.
+  ./install.sdd, ./delete.sdd — les contrats des feuilles et leurs formes de flags.
+  ../common/src/context.sdd — sémantique de @init_k8s et posture de double-init.
+  ./../main.rs — l'appelant (`system::run(args).await`) ; spec en attente ./../main.sdd.
 
 Tasks:
-  [ ] Decide later whether the 1-vs-3 exit-code split between install and delete is a
-      meaningful operator contract (the kubectl-vynil plugin never reads child exit
-      codes) or drift; main's own lanes use 1/2 for other groups.
-  [ ] Decide whether @common::context::init_k8s() being invoked per-subcommand here
-      while ./../main.rs also calls @wire_core_k8s is intended layering; confirm the
-      init is idempotent for a process that reaches this @run only once today.
-  [ ] Cover the module with tests: no `#[cfg(test)]` module exists; dispatch table,
-      `init_k8s` ordering, and the two exit lanes are unverified except through leaf
-      script tests that bypass this dispatcher.
+  [ ] Décider plus tard si la scission 1-vs-3 des codes de sortie entre install et delete est
+      un contrat operator signifiant (le plugin kubectl-vynil ne lit jamais les codes de
+      sortie des enfants) ou une dérive ; les voies propres de main utilisent 1/2 pour d'autres groupes.
+  [ ] Décider si l'appel de @common::context::init_k8s() par sous-commande ici alors que
+      ./../main.rs appelle aussi @wire_core_k8s est un layering voulu ; confirmer que l'init
+      est idempotente pour un processus qui n'atteint ce @run qu'une seule fois aujourd'hui.
+  [ ] Couvrir le module par des tests : aucun module `#[cfg(test)]` n'existe ; la table de
+      dispatch, l'ordre de `init_k8s` et les deux voies de sortie ne sont pas vérifiés, sauf
+      via des tests de scripts feuilles qui contournent ce dispatcheur.
 
 Done when:
-  Dispatch, init ordering, and the exit-code lanes hold under tests.
+  Le dispatch, l'ordre de l'init et les voies de codes de sortie tiennent sous les tests.
 
 Scenario: install arm delegates after cluster init
-  Given `SystemMod` with @Commands::Install carrying valid leaf flags
-  When @run is awaited
-  Then @common::context::init_k8s runs before @install::run is entered
-  And a leaf @Ok(()) ends @run normally with no exit call
+  Given `SystemMod` avec @Commands::Install portant des flags de feuille valides
+  When @run est attendue
+  Then @common::context::init_k8s s'exécute avant l'entrée dans @install::run
+  And un @Ok(()) de feuille termine @run normalement sans appel à exit
 
 Scenario: delete failure exits 3
-  Given @Commands::Delete whose leaf returns @Err
-  When @run reaches the @unwrap_or_else arm
-  Then @tracing::error logs the frozen delete text and @process::exit(3) is reached
+  Given @Commands::Delete dont la feuille renvoie @Err
+  When @run atteint le bras @unwrap_or_else
+  Then @tracing::error consigne le texte delete gelé et @process::exit(3) est atteint

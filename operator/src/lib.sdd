@@ -1,174 +1,174 @@
 Spec: OperatorLib
 
 Purpose:
-  Anchor the `controller` library of the `operator` crate: declare the module tree the
-    reconciling controller runs on — the shared instance algorithm, the three instance kinds,
-    the JukeBox scan, @Manager, telemetry and the private @metrics module — and own the
-    crate-wide @Reconciler contract every custom resource implements plus the identity
-    surfaces @OPERATOR and @get_client_name. The crate root is the whole import surface of the
-    separate `operator` binary, which pulls it via @controller in ./main.rs; the re-exported
-    @Error, @Result, @Manager and the four CR models are what that binary and every in-crate
-    @crate path then name. Module behaviour itself belongs to each module spec, referenced
-    below.
+  Ancrer la bibliothèque `controller` du crate `operator` : déclarer l'arborescence de
+    modules sur laquelle s'exécute le controller de réconciliation — l'algorithme d'instance
+    partagé, les trois kinds d'instances, le scan JukeBox, @Manager, la telemetry et le
+    module privé @metrics — et porter le contrat @Reconciler à l'échelle du crate que chaque
+    ressource personnalisée implémente, plus les surfaces d'identité @OPERATOR et
+    @get_client_name. La racine du crate est toute la surface d'import du binaire `operator`
+    séparé, qui la tire via @controller dans ./main.rs ; @Error, @Result, @Manager et les
+    quatre modèles CR ré-exportés sont ce que ce binaire et tout chemin @crate du crate
+    nomment ensuite. Le comportement des modules appartient à chaque spec de module référencée.
 
 Owns:
   ./lib.rs
 
 References:
   ./instance_common.sdd, ./instanceservice.sdd, ./instancesystem.sdd, ./instancetenant.sdd,
-    ./jukebox.sdd, ./manager.sdd, ./main.rs — specs pending; their owners own the module and
-    binary behaviour this file only declares and re-exports.
-  ./metrics.sdd, ./telemetry.sdd — module specs; @metrics and @telemetry behaviour lives
-    there, this file only fixes their visibility.
-  /common/src/lib.sdd — source of @Error, @Result and the four re-exported CR models.
-  /common/src/context.sdd — @common::get_client_name and its executable-derived client names;
-    the divergence from this file's @get_client_name is frozen in Handles.
-  /linting.sdd — the static-analysis harness whose per-crate `cfg_attr` form these crate
-    attributes carry.
+    ./jukebox.sdd, ./manager.sdd, ./main.rs — specs en attente ; leurs propriétaires portent
+    le comportement de module et de binaire que ce fichier déclare et ré-exporte seulement.
+  ./metrics.sdd, ./telemetry.sdd — specs de module ; le comportement de @metrics et @telemetry
+    vit là, ce fichier n'en fixe que la visibilité.
+  /common/src/lib.sdd — source de @Error, @Result et des quatre modèles CR ré-exportés.
+  /common/src/context.sdd — @common::get_client_name et ses noms de client dérivés de
+    l'exécutable ; la divergence avec le @get_client_name de ce fichier est gelée dans Handles.
+  /linting.sdd — le harnais d'analyse statique dont ces attributs de crate portent
+    la forme `cfg_attr` par crate.
 
 Must:
-  Carry exactly the two crate attributes, in order:
+  Porter exactement les deux attributs de crate, dans l'ordre :
     `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]`
     `#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]`
-    Both lints are scoped to not(test), so the `cfg(test)` build runs without them.
-  Declare seven `pub mod` modules: @instance_common, @instanceservice, @instancesystem,
-    @instancetenant and @jukebox plain, @manager doc-commented
-    `/// State machinery for kube, as exposeable to actix`, @telemetry doc-commented
-    `/// Log and trace integrations`.
-  Declare @metrics as the single private module — `mod metrics;` doc-commented `/// Metrics`
-    — publishing @Metrics as its only crate-root name through @pub; every other item of
-    ./metrics.rs stays reachable only as a @crate:: path inside this package (./metrics.sdd
-    freezes the internal consumers).
-  Carry exactly eight name-only re-exports at the crate root: the grouped @pub from @common of
-    @Error, @Result and the CR models @ServiceInstance, @SystemInstance, @TenantInstance and
-    @JukeBox, plus @Manager from @manager and @Metrics from @metrics. Nothing else reaches the
-    root — in particular @common::get_client_name is not re-exported, so the root's
-    @get_client_name resolves to this crate's own fn.
-  Define @Reconciler as a `#[async_trait]` `pub trait` with exactly two async methods taking
-    `&self` and @std::sync::@Arc<@manager::@Context> and returning @Result<@Action> with
-    @Action from @kube::runtime::@controller: @Reconciler::reconcile and @Reconciler::cleanup.
-    The re-exported @Result makes @Error the fixed failure type of both methods.
-  Keep the @Reconciler implementations and dispatch where they are: all four root CR types
-    implement the trait — @JukeBox in ./jukebox.rs, @ServiceInstance in ./instanceservice.rs,
-    @SystemInstance in ./instancesystem.rs, @TenantInstance in ./instancetenant.rs — and the
-    trait methods run only from the finalizer match arms of @run_with_finalizer, bounded
-    @InstanceKind + @Reconciler, and of the jukebox finalizer wrapper (./instance_common.rs,
-    ./jukebox.rs) reached from the ./manager.rs controller wiring; @dyn dispatch of the trait
-    exists nowhere in the workspace.
-  Pin @OPERATOR as a `pub static` of type `&str` with the exact value
+    Les deux lints sont bornés à not(test), le build `cfg(test)` s'exécute donc sans eux.
+  Déclarer sept modules `pub mod` : @instance_common, @instanceservice, @instancesystem,
+    @instancetenant et @jukebox simples, @manager avec doc-commentaire
+    `/// State machinery for kube, as exposeable to actix`, @telemetry avec
+    doc-commentaire `/// Log and trace integrations`.
+  Déclarer @metrics comme le seul module privé — `mod metrics;` avec doc-commentaire
+    `/// Metrics` — publiant @Metrics comme son seul nom à la racine du crate via @pub ;
+    tout autre élément de ./metrics.rs reste atteignable seulement comme chemin @crate::
+    dans ce package (./metrics.sdd gèle les consommateurs internes).
+  Porter exactement huit ré-exportations par nom à la racine du crate : le @pub groupé
+    depuis @common de @Error, @Result et des modèles CR @ServiceInstance, @SystemInstance,
+    @TenantInstance et @JukeBox, plus @Manager depuis @manager et @Metrics depuis @metrics.
+    Rien d'autre n'atteint la racine — en particulier @common::get_client_name n'est pas
+    ré-exporté, donc le @get_client_name de la racine résout vers la fn du crate lui-même.
+  Définir @Reconciler comme un `#[async_trait]` `pub trait` avec exactement deux méthodes
+    async prenant `&self` et @std::sync::@Arc<@manager::@Context> et retournant
+    @Result<@Action> avec @Action depuis @kube::runtime::@controller : @Reconciler::reconcile
+    et @Reconciler::cleanup. Le @Result ré-exporté fixe @Error comme type d'échec des deux.
+  Garder les implémentations et le dispatch de @Reconciler où ils sont : les quatre types
+    CR de la racine implémentent le trait — @JukeBox dans ./jukebox.rs, @ServiceInstance dans
+    ./instanceservice.rs, @SystemInstance dans ./instancesystem.rs, @TenantInstance dans
+    ./instancetenant.rs — et les méthodes du trait ne s'exécutent que depuis les branches de
+    match des finalizers de @run_with_finalizer, borné @InstanceKind + @Reconciler, et du
+    wrapper finalizer jukebox (./instance_common.rs, ./jukebox.rs) atteint depuis le câblage
+    controller de ./manager.rs ; le dispatch @dyn du trait n'existe nulle part dans le workspace.
+  Épingler @OPERATOR comme un `pub static` de type `&str` avec la valeur
     `operator.vynil.solidite.fr`.
-  Define @get_client_name as a `#[must_use]` `pub` fn taking nothing and returning the literal
-    `controller.vynil.solidite.fr` on every call, reading no environment or process state; the
-    three @PatchParams::apply SSA lanes of the crate (./instance_common.rs, ./jukebox.rs)
-    import this fn through the crate root, never the executable-derived @common twin.
-  Run no code and hold no state beyond the static: no constructor, registration, global
-    initialisation or @cfg test module lives here; the tokio runtime build, rustls provider
-    install, tracing setup, @wire_core_k8s call and controller wiring all belong to @main in
-    ./main.rs, and the @Manager/@Context construction to ./manager.rs.
-  Keep the lib/bin target split: this root is lib target `controller` named in ../Cargo.toml,
-    the `operator` bin is a separate crate that pulls it wholesale with
-    `pub use controller::*` in ./main.rs, and in-crate modules reach these same names through
-    @crate paths; dropping a `pub` here removes the name from both consumers at once.
+  Définir @get_client_name comme une fn `#[must_use]` `pub` sans argument retournant le
+    littéral `controller.vynil.solidite.fr` à chaque appel, sans lire l'environnement ni l'état
+    du processus ; les trois voies SSA @PatchParams::apply du crate (./instance_common.rs,
+    ./jukebox.rs) importent cette fn via la racine du crate, jamais le jumeau @common dérivé de l'exécutable.
+  N'exécuter aucun code et ne porter aucun état au-delà du static : pas de constructeur,
+    d'enregistrement, d'initialisation globale ni de module de test @cfg ici ; runtime tokio,
+    provider rustls, tracing, appel @wire_core_k8s et câblage controller appartiennent tous à
+    @main dans ./main.rs, et la construction @Manager/@Context à ./manager.rs.
+  Garder la séparation des targets lib/bin : cette racine est la target lib `controller`
+    nommée dans ../Cargo.toml, le bin `operator` est un crate séparé qui la tire en totalité
+    avec `pub use controller::*` dans ./main.rs, et les modules du crate atteignent ces mêmes
+    noms via des chemins @crate ; retirer un `pub` ici retire le nom des deux consommateurs.
 
 Exposes:
   Modules @instance_common, @instanceservice, @instancesystem, @instancetenant, @jukebox,
-    @manager, @telemetry — `pub mod`; behaviour of each owned by the referenced spec.
-  @Reconciler — `pub` async_trait trait with @Reconciler::reconcile and
-    @Reconciler::cleanup per the Must signature.
-  @OPERATOR — `pub static` of type `&str`, value `operator.vynil.solidite.fr`.
+    @manager, @telemetry — `pub mod` ; le comportement de chacun est porté par la spec référencée.
+  @Reconciler — trait async_trait `pub` avec @Reconciler::reconcile et
+    @Reconciler::cleanup selon la signature de Must.
+  @OPERATOR — `pub static` de type `&str`, valeur `operator.vynil.solidite.fr`.
   @get_client_name — `#[must_use] pub fn @get_client_name() -> @String`.
-  Re-exports at crate root: @Error and @Result from @common; @ServiceInstance from
-    @common::instanceservice, @SystemInstance from @common::instancesystem, @TenantInstance
-    from @common::instancetenant, @JukeBox from @common::jukebox; @Manager aliasing
-    @manager::@Manager; @Metrics aliasing @crate::metrics::@Metrics — the module-private
-    type's only external name.
+  Ré-exportations à la racine du crate : @Error et @Result depuis @common ; @ServiceInstance
+    depuis @common::instanceservice, @SystemInstance depuis @common::instancesystem,
+    @TenantInstance depuis @common::instancetenant, @JukeBox depuis @common::jukebox ;
+    @Manager aliasant @manager::@Manager ; @Metrics aliasant @crate::metrics::@Metrics —
+    le seul nom externe du type privé du module.
 
 Accepts:
-  This file branches on no input — every item is a module declaration, a re-export binding,
-    the trait, the static or a nullary fn; @get_client_name has no arguments and no
-    precondition in any feature or runtime state.
+  Ce fichier ne branche sur aucune entrée — chaque élément est une déclaration de module,
+    une liaison de ré-exportation, le trait, le static ou une fn sans argument ;
+    @get_client_name n'a aucun argument et aucune précondition en tout feature ou état runtime.
 
 Returns:
-  @get_client_name returns exactly `controller.vynil.solidite.fr`, identical on every call in
-    every environment.
+  @get_client_name retourne exactement `controller.vynil.solidite.fr`, identique à chaque
+    appel dans tout environnement.
 
 Handles:
-  Two client-name lanes crossing the cluster: the crate's own @PatchParams::apply SSA field
-    manager takes this file's invariant string, while @wire_core_k8s in ./main.rs registers
-    @common::get_client_name into `vynil-core` — for the shipped `operator` binary both lanes
-    resolve to `controller.vynil.solidite.fr` (that is the common fn's mapping of executable
-    name `operator`), so the split is invisible in production; any other executable name —
-    test harness, renamed binary — makes the common lane fall back to `vynil.solidite.fr`
-    while this file keeps the `controller.` value.
-  @OPERATOR — declared with no reader: no code, test, log line or annotation in the workspace
-    names it.
+  Deux voies de nom de client traversant le cluster : le field manager SSA @PatchParams::apply
+    du crate prend la chaîne invariante de ce fichier, alors que @wire_core_k8s dans ./main.rs
+    enregistre @common::get_client_name dans `vynil-core` — pour le binaire `operator` livré,
+    les deux voies résolvent vers `controller.vynil.solidite.fr` (correspondance du nom
+    d'exécutable `operator` par la fn commune), donc la scission est invisible en production ;
+    tout autre nom d'exécutable — harnais de test, binaire renommé — fait retomber la voie
+    commune sur `vynil.solidite.fr` pendant que ce fichier garde la valeur `controller.`.
+  @OPERATOR — déclaré sans lecteur : aucun code, test, ligne de log ni annotation du
+    workspace ne le nomme.
 
 Depends on:
-  @common — path dependency `../common` in ../Cargo.toml: the @Error, @Result and four CR
-    models this root mirrors.
-  @async-trait `0.1.68` (../Cargo.toml) — the `#[async_trait]` attribute on @Reconciler.
-  @kube — @kube::runtime::controller::@Action as both methods' success value (workspace kube,
-    locked in /Cargo.lock).
-  @std::sync::@Arc — the @Context carrier in both method signatures.
-  ./manager.rs and ./metrics.rs — the two local modules whose @Manager and @Metrics names this
-    root binds.
-  ./main.rs — the `operator` bin crate; sole external consumer of this root surface via
-    `pub use controller::*`.
+  @common — dépendance de chemin `../common` dans ../Cargo.toml : les @Error, @Result et
+    quatre modèles CR que cette racine miroite.
+  @async-trait `0.1.68` (../Cargo.toml) — l'attribut `#[async_trait]` sur @Reconciler.
+  @kube — @kube::runtime::controller::@Action comme valeur de succès des deux méthodes
+    (kube du workspace, verrouillé dans /Cargo.lock).
+  @std::sync::@Arc — le porteur de @Context dans les deux signatures de méthode.
+  ./manager.rs et ./metrics.rs — les deux modules locaux dont cette racine lie les noms
+    @Manager et @Metrics.
+  ./main.rs — le crate bin `operator` ; seul consommateur externe de cette surface racine
+    via `pub use controller::*`.
 
 Tasks:
-  [ ] Cover the frozen root surface: the eight root names denote the same items as their
-      @common/@module paths, @get_client_name returns its literal regardless of environment,
-      and @OPERATOR carries its value. No mapped test exists — the ./jukebox.rs tests exercise
-      that type's @Reconciler impl, not this file.
-  [?] @OPERATOR is dead — zero use sites — and its value `operator.vynil.solidite.fr` is a
-      third spelling matching nothing in use: the actual SSA field manager is
-      @get_client_name's `controller.vynil.solidite.fr` and the CRD group is
-      `vynil.solidite.fr`. Decide later whether the static is removed or wired in.
-  [?] @get_client_name hard-codes at the crate root what @common::get_client_name derives from
-      the executable, keeping both only because the shipped binary is named `operator`; the
-      divergence and the executable-name scheme are already `[?]`-ed in
-      /common/src/context.sdd. Decide later which file owns operator write identity: the
-      crate-local copy or the shared dynamic fn.
-  [?] The parent ./operator.sdd `Structure` describes this file as "Library root re-exporting
-      the controllers and @InstanceKind", but this root re-exports neither controller funcs
-      nor @InstanceKind — both are reachable only through their `pub mod` paths. Decide later
-      whether the parent wording or a wider root surface is intended; the parent spec is not
-      edited here.
+  [ ] Couvrir la surface racine gelée : les huit noms racine désignent les mêmes éléments
+      que leurs chemins @common/@module, @get_client_name retourne son littéral quel que
+      soit l'environnement, et @OPERATOR porte sa valeur. Aucun test mappé n'existe — les
+      tests de ./jukebox.rs exercent l'impl @Reconciler de ce type, pas ce fichier.
+  [?] @OPERATOR est mort — zéro site d'usage — et sa valeur `operator.vynil.solidite.fr`
+      est une troisième orthographe sans correspondance en usage : le vrai field manager
+      SSA est `controller.vynil.solidite.fr` de @get_client_name et le groupe CRD est
+      `vynil.solidite.fr`. Décider plus tard si le static est retiré ou branché.
+  [?] @get_client_name code en dur à la racine du crate ce que @common::get_client_name
+      dérive de l'exécutable, ne gardant les deux que parce que le binaire livré s'appelle
+      `operator` ; la divergence et le schéma de nom d'exécutable sont déjà `[?]`-és dans
+      /common/src/context.sdd. Décider plus tard quel fichier porte l'identité d'écriture
+      operator : la copie locale au crate ou la fn dynamique partagée.
+  [?] Le `Structure` du parent ./operator.sdd décrit ce fichier comme "Library root
+      re-exporting the controllers and @InstanceKind", mais cette racine ne ré-exporte ni
+      les funcs de controller ni @InstanceKind — les deux ne sont atteignables que via
+      leurs chemins `pub mod`. Décider plus tard si le libellé du parent ou une surface
+      racine plus large est visé ; la spec parente n'est pas éditée ici.
 
 Done when:
-  Every Scenario above has a passing mapped test or a decided `[?]` Task, the identity
-    decision is recorded, and `cargo test -p operator` with clippy, fmt and `specdd lint` are
-    green.
+  Chaque Scenario ci-dessus a un test mappé qui passe ou une Task `[?]` décidée, la
+    décision d'identité est consignée, et `cargo test -p operator` avec clippy, fmt et
+    `specdd lint` sont verts.
 
 Scenario: Crate-root names alias their source items
-  Given an @Error, a @Result, one CR model, an @Manager and a @Metrics named through their
-    @common or module paths
-  When the same five are named at this crate root instead
-  Then they are the same items and types, not copies or wrappers, and the root exposes nothing
-    beyond the seven modules plus those eight names
-  No mapped test exists.
+  Given un @Error, un @Result, un modèle CR, un @Manager et un @Metrics nommés via leurs
+    chemins @common ou module
+  When les cinq mêmes sont nommés à la racine de ce crate à la place
+  Then ce sont les mêmes éléments et types, pas des copies ni des wrappers, et la racine
+    n'expose rien au-delà des sept modules plus ces huit noms
+  Aucun test mappé n'existe.
 
 Scenario: get_client_name is constant while the common twin follows the binary
-  Given any executable name and environment — `operator`, a cargo-test harness, a renamed
-    binary
-  When @get_client_name runs
-  Then the result is always `controller.vynil.solidite.fr`
-  But @common::get_client_name returns `vynil.solidite.fr` for every executable name other
-    than `operator` and `agent`, so outside the shipped `operator` and `agent` binaries the
-    two client names diverge
-  No mapped test exists.
+  Given n'importe quel nom d'exécutable et environnement — `operator`, un harnais de test
+    cargo-test, un binaire renommé
+  When @get_client_name s'exécute
+  Then le résultat est toujours `controller.vynil.solidite.fr`
+  But @common::get_client_name retourne `vynil.solidite.fr` pour tout nom d'exécutable
+    autre qu'`operator` et `agent`, donc hors des binaires livrés `operator` et `agent`
+    les deux noms de client divergent
+  Aucun test mappé n'existe.
 
 Scenario: Every kind runs through the Reconciler contract
-  Given the four controller wires in ./manager.rs starting from the module-level @reconcile
-    free functions
-  When a watch event reaches a kind
-  Then the module free fn hands the object to its finalizer wrapper — @run_with_finalizer for
-    the three instance kinds, @reconcile's own wrapper for JukeBox — which dispatches
-    @Reconciler::reconcile on Apply and @Reconciler::cleanup on Cleanup
-  And a future kind joins that lane only by implementing both @Reconciler and @InstanceKind
-  Partial coverage only: the ./jukebox.rs tests call @Reconciler::reconcile and
-    @Reconciler::cleanup on @JukeBox; no test maps this trait contract across kinds.
+  Given les quatre câblages controller de ./manager.rs partant des fonctions libres
+    @reconcile de niveau module
+  When un événement de watch atteint un kind
+  Then la fonction libre du module remet l'objet à son wrapper de finalizer —
+    @run_with_finalizer pour les trois kinds d'instances, le wrapper propre de @reconcile pour
+    JukeBox — qui dispatche @Reconciler::reconcile sur Apply et @Reconciler::cleanup sur Cleanup
+  And un kind futur ne rejoint cette voie qu'en implémentant @Reconciler et @InstanceKind
+  Couverture partielle seulement : les tests de ./jukebox.rs appellent @Reconciler::reconcile
+    et @Reconciler::cleanup sur @JukeBox ; aucun test ne mappe ce contrat de trait entre kinds.
 
 Example:
-  `@get_client_name()` in any process → `controller.vynil.solidite.fr`
-  `@OPERATOR` value `operator.vynil.solidite.fr` — reaches no request and no label today
+  `@get_client_name()` dans tout processus → `controller.vynil.solidite.fr`
+  Valeur `@OPERATOR` `operator.vynil.solidite.fr` — n'atteint aujourd'hui ni requête ni label

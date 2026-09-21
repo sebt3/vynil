@@ -1,29 +1,29 @@
-# Directory spec for the `operator` crate: the reconciling Kubernetes controller.
-# Submodules are specified by nearer same-basename specs.
+# Spec de répertoire pour le crate `operator` : le contrôleur Kubernetes réconciliateur.
+# Les sous-modules sont spécifiés par des specs de même nom de base, plus proches.
 
 Spec: operator
 
 Platform: Rust/Kubernetes
 
 Purpose:
-  The Vynil controller. It watches the four custom resources, caches packages from JukeBox
-  scans, selects the package for each instance, checks requirements, and renders and applies
-  the Job that runs the agent. It also serves Prometheus metrics and health over Actix on
-  port 9000.
+  Le controller Vynil. Il observe les quatre ressources personnalisées, met en cache les
+  paquets issus des scans JukeBox, sélectionne le paquet pour chaque instance, vérifie les
+  prérequis, puis rend et applique le Job qui exécute l'agent. Il sert aussi les métriques
+  Prometheus et la santé via Actix sur le port 9000.
 
 Structure:
-  ./src/main.rs: Entrypoint, Actix metrics/health server, controller wiring
-  ./src/lib.rs: Library root re-exporting the controllers and `@InstanceKind`
-  ./src/manager.rs: `@Manager` shared context and the four controllers
-  ./src/instance_common.rs: `@InstanceKind` trait and the shared `@do_reconcile`/`@do_cleanup`
-    algorithm
-  ./src/{instanceservice,instancesystem,instancetenant}.rs: Per-kind `@InstanceKind` impls
-  ./src/jukebox.rs: JukeBox scan reconciliation and package cache update
-  ./src/metrics.rs: Prometheus registries and reconciliation metrics
-  ./src/telemetry.rs: OpenTelemetry tracing, behind the `telemetry` feature
-  ./templates/: Job and scan Job Handlebars templates
-  ./parent.toml: Standalone workspace manifest for the image build (generated)
-  ./Dockerfile: Runtime image build (contract in ./Dockerfile.sdd)
+  ./src/main.rs: Point d'entrée, serveur Actix métriques/santé, câblage du controller
+  ./src/lib.rs: Racine de bibliothèque ré-exportant les controllers et `@InstanceKind`
+  ./src/manager.rs: Contexte partagé `@Manager` et les quatre controllers
+  ./src/instance_common.rs: Le trait `@InstanceKind` et l'algorithme partagé
+    `@do_reconcile`/`@do_cleanup`
+  ./src/{instanceservice,instancesystem,instancetenant}.rs: Implémentations `@InstanceKind` par type
+  ./src/jukebox.rs: Réconciliation des scans JukeBox et mise à jour du cache de paquets
+  ./src/metrics.rs: Registres Prometheus et métriques de réconciliation
+  ./src/telemetry.rs: Tracing OpenTelemetry, derrière le feature `telemetry`
+  ./templates/: Templates Handlebars du Job et du Job de scan
+  ./parent.toml: Manifeste de workspace autonome pour la build de l'image (généré)
+  ./Dockerfile: Build de l'image runtime (contrat dans ./Dockerfile.sdd)
 
 Owns:
   ./src/main.rs
@@ -41,18 +41,18 @@ Owns:
   ./templates/**
 
 Must:
-  Reconcile all three instance kinds through the single `@InstanceKind` algorithm, so new kinds
-    share install, requirement-check, and cleanup behaviour.
-  Requeue an instance every 15 minutes and honour the suspend and force-reinstall control
-    annotations.
-  Render every Job through Handlebars templates in `./templates/`.
-  Expose reconciliation duration, success/failure counters, and last-event timestamp on
-    `GET /metrics`.
+  Réconcilier les trois types d'instances à travers le seul algorithme `@InstanceKind`, afin que
+    les nouveaux types partagent l'installation, la vérification des prérequis et le nettoyage.
+  Réenfiler une instance toutes les 15 minutes et respecter les annotations de contrôle
+    suspend et force-reinstall.
+  Rendre chaque Job via les templates Handlebars de `./templates/`.
+  Exposer la durée de réconciliation, les compteurs de succès/échec et l'horodatage du
+    dernier événement sur `GET /metrics`.
 
 Must not:
-  Deploy or uninstall applications directly; the controller only creates the Job that launches
-    the agent.
-  Depend on the `agent` or `server` crates.
+  Déployer ou désinstaller des applications directement ; le controller crée seulement le Job
+    qui lance l'agent.
+  Dépendre des crates `agent` ou `server`.
 
 Depends on:
   ./common/common.sdd
@@ -61,14 +61,14 @@ Depends on:
 References:
   ./src/main.sdd, ./src/lib.sdd, ./src/manager.sdd, ./src/instance_common.sdd,
     ./src/instanceservice.sdd, ./src/instancesystem.sdd, ./src/instancetenant.sdd,
-    ./src/jukebox.sdd, ./src/metrics.sdd, ./src/telemetry.sdd — the file-level contracts;
-    this directory spec stays coarse and defers all file behavior to them.
+    ./src/jukebox.sdd, ./src/metrics.sdd, ./src/telemetry.sdd — les contrats au niveau fichier ;
+    cette spec de répertoire reste grossière et leur délègue tout le comportement des fichiers.
 
 Done when:
-  `./src/instance_common.rs` and each per-kind module have reviewed specs, and
-    `cargo test -p operator` is green.
+  `./src/instance_common.rs` et chaque module par type ont des specs revues, et
+    `cargo test -p operator` est vert.
 
 Tasks:
-  [x] #0 Spec `./src/instance_common.rs` (the shared reconcile/cleanup algorithm and annotations).
-  [x] #1 Spec `./src/jukebox.rs` and the three per-kind impl modules.
-  [x] #2 Spec `./src/manager.rs` and `./src/metrics.rs`.
+  [x] #0 Spec de `./src/instance_common.rs` (algorithme partagé de réconciliation/nettoyage et annotations).
+  [x] #1 Spec de `./src/jukebox.rs` et des trois modules d'implémentation par type.
+  [x] #2 Spec de `./src/manager.rs` et `./src/metrics.rs`.

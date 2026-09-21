@@ -1,224 +1,243 @@
-# File spec for ./validate.rhai — the module the Rust lane of
-# /agent/src/package/validate.sdd resolves through its resolver dirs and
-# evaluates as `import("validate") as validate; validate::run(args);`.
-# Script semantics only: the clap surface, `args` injection, resolver-dir
-# order and the `Rhai script error:`/exit-4 conversion are that spec's.
-# Calibrated on ./../lib/secret_dockerconfigjson.sdd and ./build.sdd.
+# File spec de ./validate.rhai — le module que la lane Rust de
+# /agent/src/package/validate.sdd résout via ses répertoires de résolution et
+# évalue comme `import("validate") as validate; validate::run(args);`.
+# Sémantique de script uniquement : la surface clap, l'injection d'`args`,
+# l'ordre des répertoires de résolution et la conversion `Rhai script
+# error:`/exit-4 appartiennent à cette spec-là.
+# Calibré sur ./../lib/secret_dockerconfigjson.sdd et ./build.sdd.
 
 Spec: PackagesValidate
 
-Platform: Rhai script (vynil-core 0.7.7 engine / locked rhai)
+Platform: script Rhai (moteur vynil-core 0.7.7 / rhai verrouillé)
 
 Purpose:
-  Own the script side of `agent package validate`: read
-  `args.source + "/package.yaml"` through @file_read/@yaml_decode, run the
-  seven-throw manifest gate sequence over the decoded map, then re-read the
-  SAME path through the strict @read_package_yaml model and run the
-  @validate_options shape gate on the loaded @VynilPackage object. Success is
-  silent — the verdict channel is throw/raise versus completion, and all
-  user-facing text and exit codes belong to the Rust lane.
-  Complete file structure: two @fn definitions (@validate, @run) and nothing
-  else — no imports, no top-level statements; importing the module evaluates
-  zero effects.
+  Posséder le côté script de `agent package validate` : lire
+  `args.source + "/package.yaml"` via @file_read/@yaml_decode, dérouler la
+  séquence de gates du manifeste à sept levées sur la carte décodée, puis
+  relire le MÊME chemin via le modèle strict @read_package_yaml et dérouler le
+  gate de forme @validate_options sur l'objet @VynilPackage chargé. Le succès
+  est silencieux — le canal de verdict est throw/levée versus achèvement, et
+  tout le texte visible par l'utilisateur comme les codes de sortie
+  appartiennent à la lane Rust.
+  Structure complète du fichier : deux définitions d'@fn (@validate, @run) et
+  rien d'autre — aucun import, aucune instruction de premier niveau ; importer
+  le module n'évalue aucun effet.
 
 Exposes:
-  @run(args) — the module entry, the only fn the Rust snippet calls; answers
-    the Rhai unit value (its last statement `valid.validate_options();` is
-    semicolon-terminated) and the snippet discards it anyway.
-  @validate(yaml) — the gate chain over the decoded manifest map, returning
-    the map (bare trailing `yaml`, possibly requirements-rewritten); @run
-    calls it as a @statement and drops that value. Internal by convention
-    only — no test or importer calls it — though any importing or shadowing
-    module can.
-  Import contract: `import("validate") as validate` over the caller's three
-    resolver dirs — a package-local `<source>/scripts/validate.rhai`
-    replaces this module and every check below wholesale.
+  @run(args) — l'entrée du module, seul fn appelé par l'extrait Rust ; rend
+    la valeur unitaire Rhai (sa dernière instruction
+    `valid.validate_options();` se termine par un point-virgule) et l'extrait
+    la jette de toute façon.
+  @validate(yaml) — la chaîne de gates sur la carte de manifeste décodée,
+    retournant la carte (`yaml` nu en fin, éventuellement réécrite aux
+    `requirements`) ; @run l'appelle en @statement et jette cette valeur.
+    Interne par convention seulement — aucun test ni importateur ne
+    l'appelle — quoique tout module l'important ou l'éclipsant le puisse.
+  Contrat d'import : `import("validate") as validate` sur les trois
+    répertoires de résolution de l'appelant — un
+    `<source>/scripts/validate.rhai` local au package remplace ce module et
+    chaque vérification ci-dessous en bloc.
 
 Accepts:
-  @args — the JSON scope map injected by /agent/src/package/validate.sdd.
-    The one key read is `source`, joined as `args.source+"/package.yaml"`
-    (the concat itself is written twice, identical each pass; a trailing
-    separator in the flag yields a doubled slash). `script_dir` is present
-    in the map and never read here. A hand-built map without `source` dies
-    in the `+` join itself — no addition operator is registered for the unit
-    a missing map key yields — before @file_read is reached.
-  @validate — one loosely typed value; nothing shape-checks it at entry, the
-    first @keys call settles whether it behaves like a map.
+  @args — la carte de scope JSON injectée par
+    /agent/src/package/validate.sdd. La seule clé lue est `source`, jointe en
+    `args.source+"/package.yaml"` (la concaténation elle-même est écrite deux
+    fois, identique à chaque passe ; un séparateur de fin dans le flag produit
+    un slash doublé). `script_dir` est présent dans la carte et jamais lu
+    ici. Une carte construite à la main sans `source` meurt dans la jointure
+    `+` elle-même — aucun opérateur d'addition n'est enregistré pour
+    l'unitaire que rend une clé de carte manquante — avant que @file_read
+    soit atteint.
+  @validate — une valeur au typage lâche ; rien ne vérifie sa forme à
+    l'entrée, le premier appel @keys tranche si elle se comporte comme une
+    carte.
 
 Returns:
-  @run — unit; completion is the only success signal, no @print or @log_*
-    call exists anywhere in this file.
-  @validate — the input map itself (Rhai maps are reference types, not
-    copies), including any `requirements` default it wrote; invisible to the
-    outcome because @run re-reads the file from disk afterwards.
+  @run — unitaire ; l'achèvement est le seul signal de succès, aucun appel
+    @print ou @log_* n'existe nulle part dans ce fichier.
+  @validate — la carte d'entrée elle-même (les cartes Rhai sont des types à
+    référence, pas des copies), y compris tout défaut `requirements` qu'elle
+    a écrit ; invisible au verdict car @run relit ensuite le fichier sur
+    disque.
 
 Raises:
-  Seven @throw statements, eleven texts, first hit wins in the fixed gate
-    order — surfaced upstream inside the `Rhai script error:` lane:
+  Sept instructions @throw, onze textes, premier atteint gagne dans l'ordre
+    de gates fixe — surfaces en amont dans la voie `Rhai script error:` :
       - `You should set your apiVersion`
       - `You should set your kind`
       - `No metadata defined in package.yaml`
       - `No metadata.name defined in package.yaml`,
         `No metadata.category defined in package.yaml`,
-        `No metadata.type defined in package.yaml` (one template
-        `No metadata.${key} defined in package.yaml` per key)
+        `No metadata.type defined in package.yaml` (un template
+        `No metadata.${key} defined in package.yaml` par clé)
       - `metadata.name should be a string`,
         `metadata.category should be a string`,
-        `metadata.type should be a string` (one template
-        `metadata.${key} should be a string` per key)
+        `metadata.type should be a string` (un template
+        `metadata.${key} should be a string` par clé)
       - `options should be a map.`
       - `requirements should be an array.`
-  Engine raises that are NOT this file's @throws, same Rust lane: @file_read
-    stdio/invalid-UTF-8 failure; @yaml_decode parse errors including the
-    multi-document package.yaml text; `@keys` function-not-found once the
-    decoded root or a present `metadata` value is not a map;
-    @read_package_yaml's serde rejections (missing required
-    `metadata.description`/`metadata.features`/`requirements`, the `type`
-    enum, requirement tags) and @validate_options' `Json decoding error: …`
-    (both frozen in /common/src/vynilpackage.sdd).
+  Levées moteur qui ne sont PAS les @throw de ce fichier, même voie Rust :
+    échec @file_read lecture stdio/UTF-8 invalide ; erreurs de parse
+    @yaml_decode y compris le texte du package.yaml multi-documents ;
+    `@keys` fonction-introuvable dès que la racine décodée ou une valeur
+    `metadata` présente n'est pas une carte ; les rejets serde de
+    @read_package_yaml (les requis `metadata.description`/
+    `metadata.features`/`requirements` manquants, l'enum `type`, les tags de
+    requirement) et le `Json decoding error: …` de @validate_options (tous
+    deux gelés dans /common/src/vynilpackage.sdd).
 
 Handles:
-  Absent `requirements` — assigns `[]` into the shared decoded map BEFORE
-    @run re-reads the file, where serde demands the key on-disk; the default
-    therefore rescues no manifest (Tasks records the dead-default finding).
-  Present-but-empty `options:` / `requirements:` lines (YAML null decodes
-    neither map nor array): the respective throw fires, so authors must
-    omit the keys entirely to mean "none".
-  Non-map root document (scalar-only YAML) or scalar/null `metadata:` —
-    engine @keys failure, not one of this file's throws.
-  Missing or unreadable manifest — @file_read raises at @run's first line,
-    so no missing-manifest throw text exists here.
+  `requirements` absent — affecte `[]` dans la carte décodée partagée AVANT
+    qu'@run ne relise le fichier, là où serde exige la clé sur disque ; le
+    défaut ne sauve donc aucun manifeste (Tasks consigne le constat du défaut
+    mort).
+  Lignes `options:` / `requirements:` présentes mais vides (le null YAML ne
+    décode ni carte ni tableau) : le throw respectif part, donc les auteurs
+    doivent omettre les clés entièrement pour signifier « aucun ».
+  Racine non-carte (YAML scalaire seul) ou `metadata:` scalaire/null —
+    échec @keys du moteur, pas un des throws de ce fichier.
+  Manifeste absent ou illisible — @file_read lève à la première ligne de
+    @run, donc aucun texte de throw manifeste-manquant n'existe ici.
 
 Must:
-  Evaluate the gates in exactly this order, short-circuiting on the first
-    failure: `apiVersion`, `kind`, `metadata`, then for each of `name`,
-    `category`, `type` in that literal list order presence-then-stringness,
-    then `options`, then `requirements`; any throw skips every later gate,
-    the strict re-read included.
-  Read the file from disk twice per @run: once as
-    `@yaml_decode(@file_read(args.source+"/package.yaml"))` for the gate
-    pass, then once through @read_package_yaml on the same path text — the
-    strict model sees the bytes on disk, never the in-memory rewritten map.
-  Express presence as `in yaml.keys()` / `in yaml.metadata.keys()` membership
-    and types against the exact @type_of answers `"string"`, `"map"`,
-    `"array"`; no @try/@catch exists in the file, so every failure
-    propagates to the Rust lane unchanged.
-  Keep the engine surface to @file_read and @yaml_decode (core registrars
-    per /common/src/rhaihandler.sdd), @read_package_yaml and
-    @validate_options (@package_rhai_register in
-    /common/src/vynilpackage.sdd), plus native rhai @type_of/@keys, `in`,
-    @throw and template strings — no k8s, http, oci, shell, no lib imports
-    and no top-level effect at import time.
+  Évaluer les gates dans cet ordre exact, en court-circuitant au premier
+    échec : `apiVersion`, `kind`, `metadata`, puis pour chacun de `name`,
+    `category`, `type` dans cet ordre littéral de liste, la présence puis le
+    type string, puis `options`, puis `requirements` ; tout throw saute
+    chaque gate suivante, y compris la relecture stricte.
+  Lire le fichier sur disque deux fois par @run : une fois comme
+    `@yaml_decode(@file_read(args.source+"/package.yaml"))` pour la passe des
+    gates, puis une fois via @read_package_yaml sur le même texte de chemin —
+    le modèle strict voit les octets sur disque, jamais la carte réécrite en
+    mémoire.
+  Exprimer la présence par les appartenances `in yaml.keys()` /
+    `in yaml.metadata.keys()` et les types contre les réponses exactes de
+    @type_of `"string"`, `"map"`, `"array"` ; aucun @try/@catch n'existe dans
+    le fichier, donc chaque échec se propage à la lane Rust inchangé.
+  Garder la surface moteur à @file_read et @yaml_decode (registrars core
+    selon /common/src/rhaihandler.sdd), @read_package_yaml et
+    @validate_options (@package_rhai_register dans
+    /common/src/vynilpackage.sdd), plus les rhai natifs @type_of/@keys, `in`,
+    @throw et les strings template — pas de k8s, http, oci, shell, aucun
+    import de lib et aucun effet de premier niveau à l'import.
 
 Must not:
-  Compare or default `apiVersion`/`kind` values — the presence checks never
-    look at what is there, and the strict lane stores both as unchecked
-    @String, so no convention string is enforced on this path.
-  Write anything: the requirements default stays in process memory, the
-    source tree is untouched — unlike the build lane's @pck::validate pair,
-    this lane never @file_writes a patched manifest back (./build.sdd
-    @improve_package is the writer).
+  Comparer ou mettre un défaut aux valeurs `apiVersion`/`kind` — les checks
+    de présence ne regardent jamais ce qui s'y trouve, et la lane stricte
+    stocke les deux en @String non vérifié, donc aucune chaîne de convention
+    n'est imposée sur ce chemin.
+  Écrire quoi que ce soit : le défaut requirements reste en mémoire
+    processus, l'arborescence source est intacte — contrairement à la paire
+    @pck::validate de la lane build, cette lane ne @file_write jamais un
+    manifeste patché en retour (./build.sdd @improve_package est le
+    scripteur).
 
 Depends on:
-  /agent/src/package/validate.sdd — sole caller: resolver dirs, `args`
-    injection, discard of the snippet result, and the error-text/exit-4
-    conversion; this file decides nothing CLI-side.
-  vynil-core `0.7.7` @file_read + @yaml_decode — text read and
-    single-document YAML parse.
-  @read_package_yaml + @validate_options (/common/src/vynilpackage.sdd) —
-    the strict re-read and the options shape gate; effectively the real
-    manifest authority, since the script gates pre-check a small subset of
-    what serde then rejects.
-  /common/src/rhaihandler.sdd — the @Script::new assembly whose registrations
-    give this file its engine names.
+  /agent/src/package/validate.sdd — seul appelant : répertoires de
+    résolution, injection d'`args`, rejet du résultat de l'extrait, et la
+    conversion texte-d'erreur/exit-4 ; ce fichier ne décide rien côté CLI.
+  vynil-core `0.7.7` @file_read + @yaml_decode — lecture texte et parse YAML
+    mono-document.
+  @read_package_yaml + @validate_options (/common/src/vynilpackage.sdd) — la
+    relecture stricte et le gate de forme des options ; de fait la véritable
+    autorité du manifeste, puisque les gates-script en pré-vérifient un petit
+    sous-ensemble de ce que serde rejette ensuite.
+  /common/src/rhaihandler.sdd — l'assemblage @Script::new dont les
+    enregistrements donnent à ce fichier ses noms de moteur.
 
 References:
-  ./../lib/package_yaml.rhai (./../lib/package_yaml.sdd) — the forked twin:
-    the build lane's @validate carries five identical throw texts but
-    @log_warns-and-defaults apiVersion/kind where this file throws, and adds
-    the `properties_improve` options rewrite absent here; cross-reference
-    only — this module imports nothing.
-  ./../lib/secret_dockerconfigjson.sdd, ./build.sdd — script-spec style
-    calibration.
+  ./../lib/package_yaml.rhai (./../lib/package_yaml.sdd) — le jumeau
+    fourchu : @validate de la lane build porte cinq textes de throw
+    identiques mais log-warn-et-default apiVersion/kind là où ce fichier
+    lève, et ajoute la réécriture d'options `properties_improve` absente ici
+    ; référence croisée seulement — ce module n'importe rien.
+  ./../lib/secret_dockerconfigjson.sdd, ./build.sdd — calibration de style
+    des specs de script.
 
 Tasks:
-  [ ] Map the Scenario belows to tests: no test imports this module —
-      @validate/@run have zero coverage (the `@update_package_yaml` tests
-      around line 2000 of ./../../tests/rhai_lib.rs exercise the lib lane,
-      not this file) and no integration test drives `agent package validate`.
-  [?] Dead default: `yaml.requirements = []` rewrites the shared in-memory
-      map that @run then ignores, while the strict @read_package_yaml re-read
-      lists `requirements` as required on-disk — a manifest lacking the key
-      dies despite the lenient default. Decide whether the serde model gains
-      a default or the script default goes (same finding reached from the
-      Rust side, recorded in /agent/src/package/validate.sdd).
-  [?] Weaker than the name promises, confirmed from this vantage: the
-      `apiVersion`/`kind` gate is presence-only (null, `42`, a map — any
-      value sails through) and the metadata gate is type-only (all three
-      keys pass as `""`), with no convention, file-presence or structure
-      rule anywhere on this path. Decide with /agent/src/package/validate.sdd
-      and /common/src/vynilpackage.sdd which lane owns content checks.
-  [?] Forked validator: a hand copy of ./../lib/package_yaml.rhai's
-      @validate that diverged (throw versus warn-and-default on
-      apiVersion/kind, no options improvement). Decide whether
-      validate/build/any future lane should share one @validate.
-  [?] Non-map inputs (scalar root, scalar `metadata:`, multi-document
-      file) surface as raw engine @keys/@yaml_decode failures rather than
-      one of this file's throw texts. Decide whether friendlier
-      diagnostics get added.
+  [ ] Mapper les Scenarios ci-dessous vers des tests : aucun test n'importe
+      ce module — @validate/@run ont une couverture nulle (les tests
+      `@update_package_yaml` vers la ligne 2000 de ./../../tests/rhai_lib.rs
+      exercent la lane lib, pas ce fichier) et aucun test d'intégration ne
+      pilote `agent package validate`.
+  [?] Défaut mort : `yaml.requirements = []` réécrit la carte en mémoire
+      partagée qu'@run ignore ensuite, tandis que la relecture
+      @read_package_yaml stricte liste `requirements` comme requis sur disque
+      — un manifeste sans la clé meurt malgré le défaut tolérant. Décider si
+      le modèle serde gagne un défaut ou si le défaut script part (même
+      constat atteint depuis le côté Rust, consigné dans
+      /agent/src/package/validate.sdd).
+  [?] Plus faible que son nom ne promet, confirmé depuis ce point de vue : le
+      gate `apiVersion`/`kind` est en présence seulement (null, `42`, une
+      carte — toute valeur passe) et le gate metadata est en type seulement
+      (les trois clés passent en `""`), sans règle de convention, de présence
+      de fichier ni de structure nulle part sur ce chemin. Décider avec
+      /agent/src/package/validate.sdd et /common/src/vynilpackage.sdd quelle
+      lane possède les checks de contenu.
+  [?] Validateur fourchu : une copie à la main du @validate de
+      ./../lib/package_yaml.rhai qui a divergé (throw versus
+      avertir-et-mettre-un-défaut sur apiVersion/kind, pas d'amélioration
+      d'options). Décider si validate/build/toute lane future doivent partager
+      un @validate unique.
+  [?] Les entrées non-cartes (racine scalaire, `metadata:` scalaire, fichier
+      multi-documents) remontent en échecs bruts @keys/@yaml_decode du moteur
+      plutôt qu'en un des textes de throw de ce fichier. Décider si des
+      diagnostics plus conviviaux sont ajoutés.
 
 Done when:
-  Every Scenario has a mapped passing test (script-level under
-    ./../../tests/ or through the Rust lane), the `[?]` decisions are
-    recorded, and `cargo test -p agent` with `specdd lint` and fmt stay
-    green.
+  Chaque Scenario a un test mappé passant (niveau script sous
+    ./../../tests/ ou via la lane Rust), les décisions `[?]` sont consignées,
+    et `cargo test -p agent` avec `specdd lint` et fmt restent verts.
 
 Scenario: first gate wins
-  Given a package.yaml fully valid except for no `apiVersion` key
-  When @run executes
-  Then `You should set your apiVersion` throws and the metadata checks,
-    @read_package_yaml and @validate_options never run
+  Given un package.yaml entièrement valide sauf l'absence de clé `apiVersion`
+  When @run s'exécute
+  Then `You should set your apiVersion` est levé et les checks metadata,
+    @read_package_yaml et @validate_options ne tournent jamais
 
 Scenario: metadata loop stops at first offender
-  Given a decoded `metadata` of `#{name: "x", type: 42}` — `category`
-    missing
-  When @validate runs
-  Then `No metadata.category defined in package.yaml` throws — `category`
-    precedes `type` in the literal key list — and nothing ever mentions
-    the 42
+  Given un `metadata` décodé `#{name: "x", type: 42}` — `category`
+    manquant
+  When @validate s'exécute
+  Then `No metadata.category defined in package.yaml` est levé — `category`
+    précède `type` dans la liste littérale de clés — et rien ne mentionne
+    jamais le 42
 
 Scenario: strings pass however empty, other types throw
-  Given metadata values `""` versus any of `12`, `true`, `()` or a map for
-    the same keys
-  Then the string set clears every gate; each non-string value throws
-    `metadata.{key} should be a string`
+  Given des valeurs de metadata `""` versus l'un de `12`, `true`, `()` ou une
+    carte pour les mêmes clés
+  Then le jeu de strings franchit chaque gate ; chaque valeur non-string
+    lève `metadata.{key} should be a string`
 
 Scenario: empty-valued options line is rejected, absence tolerated
-  Given otherwise-valid manifests with a bare `options:` line (YAML null)
-    vs. no `options` key at all
-  Then the bare line throws `options should be a map.` while the absent key
-    skips the gate entirely
+  Given des manifestes sinon valides avec une ligne `options:` nue (null
+    YAML) versus aucune clé `options` du tout
+  Then la ligne nue lève `options should be a map.` tandis que la clé
+    absente saute le gate entièrement
 
 Scenario: requirements-absent manifest passes the gate then dies at the model
-  Given a package.yaml valid everywhere yet missing the `requirements` key
-  When @run executes
-  Then @validate assigns `[]` and returns, and @read_package_yaml raises the
-    serde missing-field error — the default never reaches disk (Tasks)
+  Given un package.yaml valide partout sauf la clé `requirements` manquante
+  When @run s'exécute
+  Then @validate affecte `[]` et retourne, et @read_package_yaml lève
+    l'erreur serde de champ manquant — le défaut n'atteint jamais le disque
+    (Tasks)
 
 Scenario: non-map manifests raise raw, not diagnostic
-  Given `metadata: notamap` on an otherwise valid document
-  Then the loop's first @keys call fails as a function-not-found engine
-    error, not as any of this file's throw texts
+  Given `metadata: notamap` sur un document sinon valide
+  Then le premier appel @keys de la boucle échoue en erreur moteur
+    fonction-introuvable, pas en un des textes de throw de ce fichier
 
 Scenario: file trouble precedes every throw
-  Given `<source>/package.yaml` missing, unreadable, non-UTF-8 or a YAML
-    parse error (multi-document included)
-  Then the run dies at @file_read/@yaml_decode before any gate text can fire
+  Given `<source>/package.yaml` absent, illisible, non-UTF-8 ou une erreur de
+    parse YAML (multi-documents compris)
+  Then le run meurt à @file_read/@yaml_decode avant que tout texte de gate
+    puisse partir
 
 Example:
-  default handoff: `args` `{"source":"/src","script_dir":"./agent/scripts"}`
-    → manifest path `/src/package.yaml`, built twice by the `+` join;
-    `--source ./pkg/` yields `./pkg//package.yaml`
-  script-lane pass, strict-lane reject: `metadata` `{name: "", category: "",
-    type: ""}` clears every gate, then @read_package_yaml demands
-    `description`, `features` and a valid enum for `type`
+  passage du défaut : `args` `{"source":"/src","script_dir":"./agent/scripts"}`
+    → chemin du manifeste `/src/package.yaml`, construit deux fois par la
+    jointure `+` ; `--source ./pkg/` produit `./pkg//package.yaml`
+  passe de la lane script, rejet de la lane stricte : `metadata`
+    `{name: "", category: "", type: ""}` franchit chaque gate, puis
+    @read_package_yaml exige `description`, `features` et un enum valide
+    pour `type`

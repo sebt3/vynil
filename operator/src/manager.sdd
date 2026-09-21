@@ -1,380 +1,380 @@
 Spec: Manager
 
 Purpose:
-  Own the operator's controller runtime: build the @Manager — the @Arc-shared @Diagnostics and
-    @Metrics pair ./main.rs hands to actix — build the one shared @Context every reconcile
-    receives (rendered engine, env-baked `base_context`, JukeBox package cache), probe that all
-    four CRDs answer, and hand back the four boxed controller futures ./main.rs races. Also
-    own the JukeBox package cache itself: @JukeCacheItem, its diff/upsert rules, and the async
-    accessors the reconciles call. Futures are lazy here — nothing is polled until ./main.rs
-    selects on them — and the reconcile bodies, finalizers, scan-job rules and @Action backoffs
-    those futures run belong to the kind specs referenced below, not to this file.
+  Possède le runtime des contrôleurs de l'opérateur : construire le @Manager — la paire
+    @Diagnostics/@Metrics partagée par @Arc que ./main.rs remet à actix — construire l'unique
+    @Context partagé reçu par chaque reconcile (moteur rendu, `base_context` cuit depuis
+    l'env, cache de paquets JukeBox), sonder les quatre CRD, et rendre les quatre futures
+    boxed que ./main.rs met en concurrence ; possède aussi le cache JukeBox lui-même —
+    @JukeCacheItem, ses règles diff/upsert, et les accesseurs async des reconciles. Futures
+    paresseuses ici — rien n'est pollé tant que ./main.rs ne les selecte pas ; corps de
+    reconcile, finalizers, scan-jobs et backoffs @Action : specs kind référencés, pas ici.
 
 References:
-  ./lib.sdd — @Context defined here is the trait's ctx carrier, and this @Manager is what the
-    crate root republishes as its `pub use` name; the @get_client_name identity split crosses
-    this file only through @common::@context::@get_client_async used by the context seed
-    (see below).
-  ./metrics.sdd — @Metrics, its four prefixed registries and label rules; @Manager::metrics
-    only encodes what that spec builds.
-  ./main.sdd — sole caller of @Manager::new, @Manager::metrics and @Manager::diagnostics; the
-    @tokio::@select! race, the three route answers, exit codes and every panic that crosses
-    into exit `101` are frozen there.
+  ./lib.sdd — le @Context défini ici est le porteur ctx du trait, et ce @Manager est ce que
+    la racine de crate republie sous son nom `pub use` ; le partage d'identité
+    @get_client_name ne traverse ce fichier que via @common::@context::@get_client_async
+    utilisé par le seed du contexte (voir plus bas).
+  ./metrics.sdd — @Metrics, ses quatre registres préfixés et ses règles de labels ;
+    @Manager::metrics n'encode que ce que cette spec construit.
+  ./main.sdd — seul appelant de @Manager::new, @Manager::metrics et @Manager::diagnostics ;
+    la concurrence @tokio::@select!, les trois réponses de routes, les exit codes et chaque
+    panic traversant vers l'exit `101` sont gelés là-bas.
   ./jukebox.sdd, ./instance_common.sdd, ./instanceservice.sdd, ./instancesystem.sdd,
-    ./instancetenant.sdd — specs pending; they own the @reconcile and @error_policy functions
-    wired here, the force-scan/finalizer/job-template rules, the @last_event writers
-    (@ctx.diagnostics.write()), the cache call sites, and the `base_context` consumers.
-  /common/src/jukebox.sdd — @JukeBox, @JukeBoxSpec::pull_secret, @JukeBoxStatus::packages and
-    @JukeBox::list (per-call @get_client_async client build, cluster-scope list).
-  /common/src/context.sdd — @common::context::@get_client_async and its @panic! text
-    `cannot create the Kubernetes client: {e}` (reached via the seed, see Handles).
-  /common/src/vynilpackage.sdd — @VynilPackage, the cached payload and the @Eq definition the
-    diff runs on.
-  /common/src/handlebarshandler.sdd — @HandleBars::@new and @register_partial_dir, including
-    the core @is_dir gate that answers a missing directory with a silent @Ok no-op.
+    ./instancetenant.sdd — specs en attente ; elles possèdent les fonctions @reconcile et
+    @error_policy câblées ici, les règles force-scan/finalizer/job-template, les writers de
+    @last_event (@ctx.diagnostics.write()), les appels du cache, les consommateurs `base_context`.
+  /common/src/jukebox.sdd — @JukeBox, @JukeBoxSpec::pull_secret, @JukeBoxStatus::packages et
+    @JukeBox::@list (construction de client @get_client_async par appel, list cluster-scope).
+  /common/src/context.sdd — @common::context::@get_client_async et son texte de @panic!
+    `cannot create the Kubernetes client: {e}` (atteint via le seed, voir Handles).
+  /common/src/vynilpackage.sdd — @VynilPackage, le payload mis en cache et la définition @Eq
+    sur laquelle tourne le diff.
+  /common/src/handlebarshandler.sdd — @HandleBars::@new et @register_partial_dir, y compris
+    le gate @is_dir du core qui répond un no-op @Ok silencieux à un dossier manquant.
   /common/src/instanceservice.sdd, /common/src/instancesystem.sdd,
-    /common/src/instancetenant.sdd — the three namespaced CR models watched.
+    /common/src/instancetenant.sdd — les trois modèles de CR namespaced surveillés.
 
 Depends on:
-  @kube (locked `3.1.0`) — @Client::@try_default, @Api::@all, @ListParams, @ObjectList,
+  @kube (verrouillé `3.1.0`) — @Client::@try_default, @Api::@all, @ListParams, @ObjectList,
     @ResourceExt::@name_any, @runtime::controller::@Controller, @watcher::@Config,
-    @events::@Reporter; on that build @events::@Reporter implements @From<&str> reading the OS
-    hostname into the `instance` field.
+    @events::@Reporter ; sur ce build @events::@Reporter implémente @From<&str> qui lit
+    l'hostname de l'OS dans le champ `instance`.
   @common — @common::handlebarshandler::@HandleBars, @common::vynilpackage::@VynilPackage,
-    @common::@DEFAULT_AGENT_IMAGE and @JukeBox::@list.
+    @common::@DEFAULT_AGENT_IMAGE et @JukeBox::@list.
   @futures — @FutureExt::@boxed, @StreamExt, @future::@BoxFuture, @future::@ready.
-  @tokio::sync::@RwLock — every shared-state guard in this file (async, not std).
-  @chrono — @DateTime<@Utc>, @Utc::@now; @serde and @serde_json — @Serialize on @Diagnostics,
-    the @json! carrier of `base_context`.
-  @prometheus_client `0.24.x` text format — @encode_registry and @encode_eof inside
+  @tokio::sync::@RwLock — toutes les gardes d'état partagé de ce fichier (async, pas std).
+  @chrono — @DateTime<@Utc>, @Utc::@now ; @serde et @serde_json — @Serialize sur @Diagnostics,
+    le porteur @json! de `base_context`.
+  @prometheus_client format texte `0.24.x` — @encode_registry et @encode_eof dans
     @Manager::metrics.
-  @std::env — the six startup-variable reads pinned in Must.
+  @std::env — les six variables de démarrage épinglées dans Must.
   @std::collections::@BTreeMap, @std::sync::@Arc, @std::path::@PathBuf.
 
 Must:
-  Define @Manager as `#[derive(Clone, @Default, @Debug)] pub struct Manager` with exactly two
-    private fields: @diagnostics @Arc<@RwLock<@Diagnostics>> and @metrics @Arc<@Metrics>;
-    @Default constructs a fresh @Diagnostics and a fresh @Metrics, @Clone shares both Arcs.
-  Boot exactly once through @Manager::@new in this order: @Client::@try_default (@Err →
+  Définit @Manager comme `#[derive(Clone, @Default, @Debug)] pub struct Manager` avec exactement
+    deux champs privés : @diagnostics @Arc<@RwLock<@Diagnostics>> et @metrics @Arc<@Metrics> ;
+    @Default construit @Diagnostics et @Metrics neufs, @Clone partage les deux Arcs.
+  Démarre exactement une fois via @Manager::@new dans cet ordre : @Client::@try_default (@Err →
     @panic! `cannot create the Kubernetes client: {e}`) → @Self::@default → @build_context
-    awaited → four cluster-scope @Api::@all handles (@JukeBox, @TenantInstance,
-    @ServiceInstance, @SystemInstance) → four probes, each @list of @ListParams::@default
-    with @limit(`1`), in order JukeBox, TenantInstance, SystemInstance, ServiceInstance, each
-    @Err → @panic! `is a CRD installed? {e}` → build the four controllers → return the tuple of
-    the @Manager plus the four @BoxFuture values in the destructure order stated in Exposes.
-    @Manager::new has no @Result channel: success builds everything, failure kills the
-    process.
-  Build each future by one identical shape — @Controller::@new(@Api,
+    attendue → quatre handles @Api::@all cluster-scope (@JukeBox, @TenantInstance,
+    @ServiceInstance, @SystemInstance) → quatre sondes, chacune un @list de
+    @ListParams::@default avec @limit(`1`) dans l'ordre JukeBox, TenantInstance,
+    SystemInstance, ServiceInstance ; chaque @Err → @panic! `is a CRD installed? {e}` →
+    construit les quatre contrôleurs → retourne le tuple du @Manager et les quatre valeurs
+    @BoxFuture dans l'ordre de déstructuration dit dans Exposes. @Manager::new n'a aucun canal @Result :
+    le succès construit tout, l'échec tue le processus.
+  Construit chaque future par une forme identique — @Controller::@new(@Api,
     @Config::@default().@any_semantic()).@run(kind::@reconcile, kind::@error_policy,
-    @Arc<@Context> clone) then @filter_map keeping @Ok(@Action) only then @for_each dropping
-    that @Action then @boxed — giving @BoxFuture<'static, ()> per kind, with the pairs
-    @jukebox::@reconcile and @jukebox::@error_policy, @instancetenant::@reconcile and
-    @instancetenant::@error_policy, @instancesystem::@reconcile and
-    @instancesystem::@error_policy, @instanceservice::@reconcile and
-    @instanceservice::@error_policy. All four share the one @Arc<@Context>; the futures are
-    lazy until ./main.rs polls them.
-  Watch exactly the default @watcher::@Config plus @ListSemantic::@Any (@any_semantic), so
-    metadata-only events reach reconcile too, with no label or field selectors and no namespace
-    narrowing (the @Api::@all handles stream all four kinds cluster-wide); no selectors, drain
-    conditions or grace settings are configured here.
-  Drop the controller stream's @Err half at the @filter_map: every failed-reconcile event is
-    discarded uninspected and unlogged by this file, so failure backoff and visibility live
-    entirely in the kind modules' @error_policy and in kube-runtime's own machinery; the
-    dropped @Action never feeds back — requeue decisions were already applied internally by
-    @Controller::@run.
-  Share state through the Arcs only: @build_context stores @Clone copies of the @Manager
-    @metrics and @diagnostics Arcs into @Context, so a reconcile writing through
-    @ctx.diagnostics or @ctx.metrics mutates what this @Manager — and every actix @Data clone
-    of it — later reads.
-  Read startup configuration from exactly six environment variables, once per process, each
-    through @std::env::@var plus @unwrap_or_else — a present-but-empty value passes through as
-    `""`, a non-Unicode or absent one falls to the default:
-    `CONTROLLER_BASE_DIR`: default `./operator`; sole use is the partial-dir path
-      `{CONTROLLER_BASE_DIR}/templates` (working-directory-relative by default).
-    `VYNIL_NAMESPACE`: default `vynil-system`.
-    `AGENT_IMAGE`: default @common::@DEFAULT_AGENT_IMAGE — `docker.io/sebt3/vynil-agent:0.7.7`.
-    `AGENT_ACCOUNT`: default `vynil-agent`.
-    `AGENT_LOG_LEVEL`: default `info`.
-    `TENANT_LABEL`: default `vynil.solidite.fr/tenant`.
-    Env read order: `CONTROLLER_BASE_DIR` before the renderer, the other five during
-    @Context construction after the seed list.
-  Build @Context's `base_context` as a @json! object with exactly the keys `vynil_namespace`,
-    `agent_image`, `service_account`, `log_level` and `label_key` carrying those six reads — the
-    JSON key differs from the env name in three cases (`AGENT_ACCOUNT` → `service_account`,
-    `AGENT_LOG_LEVEL` → `log_level`, `TENANT_LABEL` → `label_key`) — and keep it immutable for
-    the process lifetime; reconciles clone it per render and add per-object keys (owned by the
-    kind specs). This key-set is this file's bake; `TENANT_LABEL` is additionally re-read
-    per call inside @common::@context::@get_labels, a separate lane this file does not control.
-  Register `register_partial_dir(@PathBuf)` failures as warn-only inside @build_context —
-    @tracing::@warn! `Registering template generated: {e}` — and boot on regardless; the core
-    @is_dir gate makes a missing `templates` directory a silent @Ok no-op, so neither the warn
-    nor a failure marks the common broken-renderer case.
-  Seed the package cache inside @build_context from @JukeBox::@list(): @Ok builds a fresh
-    @BTreeMap keyed by @name_any over the items whose @status is @Some — entries carry
-    @spec.pull_secret and @status.packages cloned — logs @tracing::@debug!
-    `Initialize packages cache` and `Initialize packages cache done`, and replaces the cache
-    even when the seed map is empty; @Err logs @tracing::@warn! `While listing jukebox:
-    {:?}` (Debug formatting of the error) and boot continues with an empty cache. JukeBoxes
-    without a status never enter the cache here.
-  Define @Context as `#[derive(Clone)] pub struct Context` with exactly six `pub` fields in
-    order: @client @kube::@Client, @diagnostics @Arc<@RwLock<@Diagnostics>>, @metrics
+    clone @Arc<@Context>) puis @filter_map ne gardant que @Ok(@Action) puis @for_each jetant cet
+    @Action puis @boxed — donnant @BoxFuture<'static, ()> par kind, avec les paires
+    @jukebox::@reconcile et @jukebox::@error_policy, @instancetenant::@reconcile et
+    @instancetenant::@error_policy, @instancesystem::@reconcile et
+    @instancesystem::@error_policy, @instanceservice::@reconcile et
+    @instanceservice::@error_policy. Les quatre partagent l'unique @Arc<@Context> ; les futures
+    sont paresseuses jusqu'au poll de ./main.rs.
+  Surveille exactement le @watcher::@Config défaut plus @ListSemantic::@Any (@any_semantic), donc
+    les événements metadata-only atteignent aussi reconcile, sans sélecteur de label ni de champ
+    ni rétrécissement de namespace (les handles @Api::@all streament les quatre kinds à l'échelle
+    cluster) ; aucun sélecteur, condition de drain ni réglage de grâce n'est configuré ici.
+  Jette la moitié @Err du stream du contrôleur au @filter_map : chaque événement de reconcile
+    en échec est jeté sans inspection ni log par ce fichier, donc le backoff et la visibilité
+    des échecs vivent entièrement dans les @error_policy des modules kind et dans la
+    machinerie de kube-runtime elle-même ; l'@Action jeté ne reboucle jamais — les décisions
+    de requeue ont déjà été appliquées en interne par @Controller::@run.
+  Partage l'état par les Arcs seulement : @build_context stocke des copies @Clone des Arcs
+    @metrics et @diagnostics du @Manager dans le @Context, donc un reconcile écrivant via
+    @ctx.diagnostics ou @ctx.metrics mute ce que ce @Manager — et tout clone actix @Data
+    de lui — lira plus tard.
+  Lit la configuration de démarrage dans exactement six variables d'environnement, une fois par
+    processus, chacune via @std::env::@var plus @unwrap_or_else — une valeur présente mais vide
+    passe telle quelle en `""`, une absence ou non-Unicode retombe au défaut :
+    `CONTROLLER_BASE_DIR` : défaut `./operator` ; seul usage, le chemin de partials
+      `{CONTROLLER_BASE_DIR}/templates` (relatif au working directory par défaut).
+    `VYNIL_NAMESPACE` : défaut `vynil-system`.
+    `AGENT_IMAGE` : défaut @common::@DEFAULT_AGENT_IMAGE — `docker.io/sebt3/vynil-agent:0.7.7`.
+    `AGENT_ACCOUNT` : défaut `vynil-agent`.
+    `AGENT_LOG_LEVEL` : défaut `info`.
+    `TENANT_LABEL` : défaut `vynil.solidite.fr/tenant`.
+    Ordre de lecture : `CONTROLLER_BASE_DIR` avant le renderer, les cinq autres pendant
+    la construction du @Context après la liste du seed.
+  Construit le `base_context` du @Context comme objet @json! avec exactement les clés `vynil_namespace`,
+    `agent_image`, `service_account`, `log_level` et `label_key` portant ces six lectures — la clé
+    JSON diffère du nom d'env dans trois cas (`AGENT_ACCOUNT` → `service_account`,
+    `AGENT_LOG_LEVEL` → `log_level`, `TENANT_LABEL` → `label_key`) — et le garde immuable pour la
+    vie du processus ; les reconciles le dupliquent par rendu et ajoutent des clés
+    par objet (possédées par les specs kind). Ce jeu de clés est la cuisson de ce fichier ; `TENANT_LABEL` est
+    aussi relu par appel dans @common::@context::@get_labels, voie séparée que ce fichier ne contrôle pas.
+  Enregistre les échecs de `register_partial_dir(@PathBuf)` en warn-only dans @build_context —
+    @tracing::@warn! `Registering template generated: {e}` — et le démarrage continue quoi qu'il en soit ;
+    le gate @is_dir du core fait d'un dossier `templates` manquant un no-op @Ok silencieux, donc
+    ni le warn ni l'échec ne marque le cas renderer cassé du common.
+  Amorce le cache de paquets dans @build_context depuis @JukeBox::@list() : @Ok construit une
+    fraîche @BTreeMap keyée par @name_any sur les items dont @status est @Some — les entrées portent
+    @spec.pull_secret et @status.packages clonés — logue @tracing::@debug!
+    `Initialize packages cache` et `Initialize packages cache done`, et remplace le cache
+    même vide quand la carte du seed est vide ; @Err logue @tracing::@warn! `While listing jukebox:
+    {:?}` (formatage Debug de l'erreur) et le démarrage continue avec un cache vide. Un
+    JukeBox sans statut n'entre jamais ici dans le cache.
+  Définit @Context comme `#[derive(Clone)] pub struct Context` avec exactement six champs `pub` dans
+    l'ordre : @client @kube::@Client, @diagnostics @Arc<@RwLock<@Diagnostics>>, @metrics
     @Arc<@Metrics>, @renderer @HandleBars<'static>, @base_context @serde_json::@Value, @packages
-    @Arc<@RwLock<@BTreeMap<@String, @JukeCacheItem>>>; the hand-written @Debug substitutes the
-    literal `kube::Client` for @client and `handlebars::HandleBars` for @renderer and
-    live-formats @diagnostics, @base_context and the whole @packages map — every cached package
-    body — while @metrics delegates to @Metrics. The shared @renderer is consumed by clone at
-    each reconcile (kind specs), never mutated in place through @Context.
-  Define @JukeCacheItem as `#[derive(Debug)] pub struct` with `pub` fields @pull_secret
-    @Option<@String> and @packages @Vec<@VynilPackage>, no other derives.
-  Gate every cache mutation on @name_any as key — kube-core `3.1.0` resolution `metadata.name`
-    → `metadata.generate_name` → `""`, so several nameless JukeBoxes share the single `""`
-    entry; @BTreeMap keeps entries name-ordered.
-  Compute staleness through @cache_entry_differs(@BTreeMap, @JukeBox) (@crate-visible): a
-    @None @status answers @false always, otherwise @is_none_or — an absent key answers @true,
-    and a present entry answers @true only when its @packages vector `!=` @status.packages or
-    its @pull_secret `!=` @spec.pull_secret; unchanged status answers @false.
-  Apply @upsert_cache_entry(&mut @BTreeMap, @JukeBox) (@crate-visible): @None @status is a
-    silent no-op that leaves any existing entry untouched — neither refresh nor removal — and
-    otherwise @insert overwrites the key with @spec.pull_secret and @status.packages cloned.
-  Expose the cache to reconciles through four @async methods on @Context, each holding the
-    tokio lock only across its own call: @Context::upsert_jukebox_cache (write lock plus
-    @upsert_cache_entry), @Context::remove_jukebox_cache(@name) (write lock @remove, the
-    returned @Option discarded, so an absent key is a silent success returning nothing),
-    @Context::cache_needs_update (read lock plus @cache_entry_differs), and
+    @Arc<@RwLock<@BTreeMap<@String, @JukeCacheItem>>> ; le @Debug à main substitue le
+    littéral `kube::Client` pour @client et `handlebars::HandleBars` pour @renderer,
+    formate en direct @diagnostics, @base_context et toute la carte @packages — chaque paquet
+    en cache — et délègue @metrics à @Metrics. Le @renderer partagé est consommé par clone à
+    chaque reconcile (specs kind), jamais muté en place via @Context.
+  Définit @JukeCacheItem comme `#[derive(Debug)] pub struct` avec les champs `pub` @pull_secret
+    @Option<@String> et @packages @Vec<@VynilPackage>, aucun autre derive.
+  Gâte toute mutation du cache sur @name_any comme clé — résolution kube-core `3.1.0`
+    `metadata.name` → `metadata.generate_name` → `""`, donc plusieurs JukeBoxes sans nom partagent
+    l'entrée unique `""` ; @BTreeMap garde les entrées ordonnées par nom.
+  Calcule la péremption via @cache_entry_differs(@BTreeMap, @JukeBox) (visible @crate) : un
+    @None @status répond toujours @false, sinon @is_none_or — une clé absente répond @true,
+    une entrée présente répond @true seulement quand son vecteur @packages `!=` @status.packages ou
+    son @pull_secret `!=` @spec.pull_secret ; un statut inchangé répond @false.
+  Applique @upsert_cache_entry(&mut @BTreeMap, @JukeBox) (visible @crate) : @None @status est un
+    no-op silencieux qui laisse l'entrée existante intacte — ni refresh ni retrait — et
+    sinon @insert écrase la clé avec @spec.pull_secret et @status.packages clonés.
+  Expose le cache aux reconciles par quatre méthodes @async sur @Context, chacune tenant le
+    verrou tokio seulement sur son appel : @Context::upsert_jukebox_cache (write lock plus
+    @upsert_cache_entry), @Context::remove_jukebox_cache(@name) (write lock @remove, l'@Option
+    retourné jeté, donc une clé absente est un succès silencieux ne retournant rien),
+    @Context::cache_needs_update (read lock plus @cache_entry_differs), et
     @Context::set_package_cache(@ObjectList<@JukeBox>).
-  Rebuild in @Context::set_package_cache from the given list only — no cluster call: fresh
-    map from the @Some-status items, a log-line `jukes` string of every item name joined by `,`
-    (@reduce, `""` for an empty list), and a package count summed with @saturating_add;
-    an empty rebuild logs @tracing::@warn! `No packages found from the jukebox list
-    ({jukes}) to update the cache` and keeps the previous cache byte-for-byte, while a
-    non-empty rebuild logs @tracing::@info! `Updating packages cache with {count} packages
-    from {len} jukebox: {jukes}`, wholesale-replaces the cache, and closes with
-    @tracing::@debug! `Updating packages cache done`. This empty-guard differs from the
-    @build_context unconditional replace, and the method has no caller in the workspace (Tasks).
-  Define @Diagnostics as `#[derive(Clone, @Debug, @Serialize)] pub struct` with `pub`
-    @last_event @DateTime<@Utc> and `#[serde(skip)]` @reporter @kube::runtime::events::@Reporter;
-    @Default stamps @last_event with @Utc::@now at construction — boot time until a reconcile
-    first overwrites it — and @reporter from the literal `vynil-controller` via the
-    kube-runtime `3.1.0` @From<&str> conversion, which writes that literal into the
-    `controller` field and fills `instance` from the OS hostname. @reporter never serializes
-    anywhere and no code reads or rewrites it after @default; this file only stores it while
-    reconciles (./jukebox.rs, ./instance_common.rs) own every @last_event write.
-  Render @Manager::metrics as `#[must_use] pub fn @metrics(&self) -> @String`: encode exactly
-    @reg_box, @reg_sys, @reg_svc, @reg_tnt in that order through @encode_registry, logging
-    @tracing::@error! `encoding prometheus registry failed: {e}` and continuing to the next
-    registry on @Err — bytes already appended by a failing registry stay in the buffer — then
-    one @encode_eof whose @Err logs `encoding prometheus EOF failed: {e}`; return the buffer
-    unconditionally, whatever failed (the `200` route decision is ./main.rs).
-  Export @Manager::diagnostics as @async @pub fn returning the @clone of the snapshot taken
-    under the read guard of @Diagnostics.
+  Reconstruit dans @Context::set_package_cache depuis la liste donnée seulement — aucun appel cluster : carte
+    fraîche des items au statut @Some, chaîne `jukes` de logs joignant chaque nom d'item par `,`
+    (@reduce, `""` pour une liste vide), et un compteur de paquets sommé par @saturating_add ;
+    une reconstruction vide logue @tracing::@warn! `No packages found from the jukebox list
+    ({jukes}) to update the cache` et garde le cache précédent octet pour octet ; une
+    reconstruction non vide logue @tracing::@info! `Updating packages cache with {count} packages
+    from {len} jukebox: {jukes}`, remplace le cache en masse, et ferme par
+    @tracing::@debug! `Updating packages cache done`. Garde-empty distinct du
+    remplacement inconditionnel de @build_context, et la méthode n'a aucun appelant du workspace (Tasks).
+  Définit @Diagnostics comme `#[derive(Clone, @Debug, @Serialize)] pub struct` avec `pub`
+    @last_event @DateTime<@Utc> et `#[serde(skip)]` @reporter @kube::runtime::events::@Reporter ;
+    @Default horodate @last_event avec @Utc::@now à la construction — le temps du
+    démarrage jusqu'à ce qu'un reconcile le recouvre — et fabrique @reporter du littéral `vynil-controller`
+    via la conversion kube-runtime `3.1.0` @From<&str>, qui écrit ce littéral dans le
+    champ `controller` et remplit `instance` de l'hostname de l'OS. @reporter ne se sérialise
+    jamais et aucun code ne le lit ni ne le réécrit après @default ; ce fichier le stocke seulement,
+    les reconciles (./jukebox.rs, ./instance_common.rs) possédant chaque écriture de @last_event.
+  Rendu @Manager::metrics comme `#[must_use] pub fn @metrics(&self) -> @String` : encode exactement
+    @reg_box, @reg_sys, @reg_svc, @reg_tnt dans cet ordre via @encode_registry, en loguant
+    @tracing::@error! `encoding prometheus registry failed: {e}` et en passant au registre
+    suivant sur @Err — les octets déjà ajoutés par un registre en échec restent dans le
+    tampon — puis un seul @encode_eof dont l'@Err logue `encoding prometheus EOF failed: {e}` ;
+    retourne le tampon inconditionnellement, quel que soit l'échec (la décision de route `200` est ./main.rs).
+  Exporte @Manager::diagnostics comme @async @pub fn retournant le @clone de l'instantané pris
+    sous la garde de lecture de @Diagnostics.
 
 Exposes:
-  @Manager — `pub` struct shared with the actix layer via ./main.rs; surface is @Manager::@new,
-    @Manager::metrics, @Manager::diagnostics and the derive trio @Clone, @Default and @Debug;
-    re-exported at the crate root by ./lib.rs.
-  @Manager::new — @async @pub fn returning (@Manager, four @BoxFuture<'static, ()>) in JukeBox,
-    Tenant, System, Service order; panics are its only failure channel.
-  @Context — `pub` struct, @Clone plus hand-written @Debug; the sole @Context type of the
-    ./lib.sdd @Reconciler contract and of all four controller wires.
+  @Manager — `pub` struct partagé avec la couche actix via ./main.rs ; surface @Manager::@new,
+    @Manager::metrics, @Manager::diagnostics et le trio de derives @Clone, @Default, @Debug ;
+    ré-exporté à la racine de crate par ./lib.rs.
+  @Manager::new — @async @pub fn retournant (@Manager, quatre @BoxFuture<'static, ()>) dans
+    l'ordre JukeBox, Tenant, System, Service ; le panic est son seul canal d'échec.
+  @Context — `pub` struct, @Clone plus @Debug à main ; seul type @Context du contrat
+    @Reconciler de ./lib.sdd et de tous les câblages des quatre contrôleurs.
   @Context::upsert_jukebox_cache, @Context::remove_jukebox_cache, @Context::cache_needs_update,
-    @Context::set_package_cache — the four `pub async` cache accessors.
-  @cache_entry_differs, @upsert_cache_entry — `pub(crate)` fn free functions; used here plus
-    ./jukebox.rs tests build their maps.
-  @Diagnostics — `pub` struct with @last_event and @reporter fields and the @Default impl.
-  @JukeCacheItem — `pub` struct, cache map value.
+    @Context::set_package_cache — les quatre accesseurs de cache `pub async`.
+  @cache_entry_differs, @upsert_cache_entry — fn libres `pub(crate)` ; utilisées ici plus
+    les tests de ./jukebox.rs construisent leurs cartes.
+  @Diagnostics — `pub` struct avec champs @last_event et @reporter et l'impl @Default.
+  @JukeCacheItem — `pub` struct, valeur de la carte du cache.
 
 Accepts:
-  The six environment variables of Must, read once at @build_context, with every oddity
-    (unset, empty, non-Unicode) taking a defined arm; nothing else is read from the process.
-  A cluster reachable for discovery: @Manager::new takes no argument and preconditions on
-    kubeconfig/in-cluster config through @Client::@try_default, and needs the four CRDs
-    installed (the `limit=1` probes), having already survived — or silently swallowed — the
-    seed list.
-  Borrowed @JukeBox references for @cache_entry_differs and @upsert_cache_entry, validated no
-    further than the @Option state of @status: @name_any on a nameless object is accepted as
-    `""`, and @spec.pull_secret is an unvalidated secret name.
-  A borrowed @ObjectList<@JukeBox> to @set_package_cache; the list is cloned, never the cluster
-    asked. @Context::remove_jukebox_cache accepts any @name text.
-  Preconditions the callers own: @Diagnostics and caches are only touched from a tokio runtime
-    (all locks are tokio @RwLock); each @BoxFuture is polled by ./main.rs only.
+  Les six variables d'environnement de Must, lues une fois à @build_context, chaque bizarrerie
+    (unset, vide, non-Unicode) prenant un bras défini ; rien d'autre n'est lu du processus.
+  Un cluster joignable pour la découverte : @Manager::new ne prend aucun argument et présuppose
+    kubeconfig/config in-cluster via @Client::@try_default, et requiert les quatre CRD
+    installées (les sondes `limit=1`), ayant déjà survécu — ou silencieusement avalé — la
+    liste du seed.
+  Des références @JukeBox empruntées pour @cache_entry_differs et @upsert_cache_entry, validées
+    pas plus loin que l'état @Option de @status : @name_any sur un objet sans nom est accepté comme
+    `""`, et @spec.pull_secret est un nom de secret non validé.
+  Un @ObjectList<@JukeBox> emprunté pour @set_package_cache ; la liste est clonée, jamais le
+    cluster interrogé. @Context::remove_jukebox_cache accepte tout texte de @name.
+  Préconditions possédées par les appelants : @Diagnostics et les caches ne sont touchés que depuis un runtime
+    tokio (tous les verrous sont des @RwLock tokio) ; chaque @BoxFuture est pollée par ./main.rs seulement.
 
 Returns:
-  @Manager::new — the @Manager plus four boxed futures, returned only after all four probes
-    answer; the @Manager clone feeds `@Data` in ./main.rs.
-  @cache_entry_differs and @Context::cache_needs_update — @bool staleness; @upsert_cache_entry,
-    @Context::upsert_jukebox_cache, @Context::remove_jukebox_cache, @Context::set_package_cache
-    and @Diagnostics construction return `()`.
-  @Manager::metrics — the concatenated OpenMetrics text in the four-registry order above,
-    possibly missing a registry or `# EOF` on encoder failure.
-  @Manager::diagnostics — a cloned @Diagnostics snapshot taken under the read guard;
-    @JukeCacheItem fields are the status payload cloned at insert time.
+  @Manager::new — le @Manager plus quatre futures boxed, retournés seulement après que les
+    quatre sondes ont répondu ; le clone du @Manager alimente `@Data` dans ./main.rs.
+  @cache_entry_differs et @Context::cache_needs_update — la @bool de péremption ;
+    @upsert_cache_entry, @Context::upsert_jukebox_cache, @Context::remove_jukebox_cache,
+    @Context::set_package_cache et la construction de @Diagnostics retournent `()`.
+  @Manager::metrics — le texte OpenMetrics concaténé dans l'ordre des quatre registres ci-dessus,
+    possiblement amputé d'un registre ou de `# EOF` sur échec d'encodeur.
+  @Manager::diagnostics — un clone d'instantané @Diagnostics pris sous la garde de lecture ;
+    les champs @JukeCacheItem sont le payload du statut cloné à l'insertion.
 
 Raises:
-  No typed errors. Nothing here returns @Result or an @Error — @Manager::new's contract is
-    future-or-process-death, and @set_package_cache and @build_context launder every fallible
-    leg into logs.
-  @panic! `cannot create the Kubernetes client: {e}` from @Manager::new's own
-    @Client::@try_default, and @panic! `is a CRD installed? {e}` from each of the four probes —
-    the four share that one text, so the failed kind is identifiable only from {e}.
-  In-transit panic: the @JukeBox::@list seed builds its own client through
-    @common::@context::@get_client_async, which @panic! with the same
-    `cannot create the Kubernetes client: {e}` text from that site for a cluster the first
-    client saw fine; an API-level list failure instead returns @Err and is warn-logged.
-  No @unwrap or @expect exists in the file; the @reduce, @unwrap_or_else and @is_none_or legs
-    are non-panicking. The panics above are the file's (and the process's) only abrupt ends
-    from here.
+  Zéro erreur typée. Rien ici ne retourne @Result ni @Error — le contrat de @Manager::new
+    est future-ou-mort-du-processus, et @set_package_cache et @build_context lessent chaque
+    jambe faillible en logs.
+  @panic! `cannot create the Kubernetes client: {e}` du propre @Client::@try_default de
+    @Manager::new, et @panic! `is a CRD installed? {e}` de chacune des quatre sondes — les
+    quatre partagent ce texte unique, donc le kind en échec ne s'identifie que par {e}.
+  Panic de transit : le seed @JukeBox::@list construit son propre client via
+    @common::@context::@get_client_async, qui @panic! du même texte
+    `cannot create the Kubernetes client: {e}` depuis ce site pour un cluster que le premier
+    client voyait bien ; un échec de list niveau API retourne @Err et est logué en warn.
+  Aucun @unwrap ni @expect n'existe dans le fichier ; les jambes @reduce, @unwrap_or_else et
+    @is_none_or ne paniquent pas. Les panics ci-dessus sont les seules fins abruptes (du
+    fichier et du processus) venues d'ici.
 
 Handles:
-  Probe order vs seed order — a missing Tenant/System/Service CRD still panics through the
-    probes even though @build_context (and its JukeBox seed) already completed; a missing
-    JukeBox CRD first yields the seed warn, then the first probe panics.
-  A box whose status vanished — @cache_needs_update answers @false and @upsert_cache_entry
-    no-ops, so the stale pre-removal entry survives in the full cache until @cleanup's removal
-    (./jukebox.rs); nothing here ever prunes by age — this cache has no TTL.
-  Nameless JukeBoxes — keyed `""`; a fresh-`generate_name`-only box caches under that text
-    until the name lands, then re-keys on the next upsert, orphaning the old key until a
-    @remove on the new name only never reclaims it.
-  Empty package cache at startup — the seed replaces unconditionally (empty means empty),
-    while @set_package_cache refuses to empty a populated cache (see Tasks `[?]` for the dead
-    lane).
-  Partial metrics bodies — a failing registry is skipped after logging, later registries still
-    encode, a failing EOF just logs; the returned string is whatever accumulated.
-  Lock contention — every accessor takes a tokio @RwLock await, no guard is held across an
-    await on other state, so a slow writer (big @insert) only delays readers.
-  @Debug of @Context on an arbitrarily large cache prints every cached package — a diagnostics
-    cost, not an error.
-  `TENANT_LABEL` double-read — the one bake here feeds templates;
-    @common::@context::@get_labels re-reads the env per call, so the two can diverge within one
-    process after a deployment edit without restart.
+  Ordre des sondes vs ordre du seed — une CRD Tenant/System/Service manquante panique quand même
+    via les sondes alors que @build_context (et son seed JukeBox) a déjà fini ; une CRD
+    JukeBox manquante donne d'abord le warn du seed, puis la première sonde panique.
+  Une box dont le statut a disparu — @cache_needs_update répond @false et @upsert_cache_entry
+    no-op, donc l'entrée périmée d'avant retrait survit dans le cache plein jusqu'au retrait de
+    @cleanup (./jukebox.rs) ; ici on ne prune jamais par âge — ce cache n'a pas de TTL.
+  JukeBoxes sans nom — keyées `""` ; une box fraîche au seul `generate_name` se met en cache sous
+    ce texte jusqu'à l'arrivée du nom, puis re-key au prochain upsert, orphelinant la vieille clé,
+    qu'un @remove sur le seul nouveau nom ne récupère jamais.
+  Cache de paquets vide au démarrage — le seed remplace inconditionnellement (vide veut dire
+    vide), tandis que @set_package_cache refuse de vider un cache peuplé (voir Tasks `[?]` pour
+    la voie morte).
+  Corps de metrics partiels — un registre en échec est sauté après log, les registres suivants
+    s'encodent quand même, un EOF en échec logue seulement ; la chaîne retournée est ce qui s'est accumulé.
+  Compétition de verrous — chaque accesseur attend un tokio @RwLock, aucune garde n'est tenue
+    par-dessus un await d'un autre état, donc un scripteur lent (gros @insert) ne fait que retarder les lecteurs.
+  Le @Debug de @Context sur un cache de taille arbitraire imprime chaque paquet en cache — un coût
+    de diagnostic, pas une erreur.
+  Double lecture de `TENANT_LABEL` — la cuisson de ce fichier nourrit les templates ;
+    @common::@context::@get_labels relit l'env par appel, donc les deux peuvent diverger dans un
+    même processus après une modif de déploiement sans redémarrage.
 
 Tasks:
-  [x] Cache pure-function coverage exists and is green: @cache_entry_differs_when_not_in_cache,
+  [x] La couverture des fonctions pures du cache existe et est verte : @cache_entry_differs_when_not_in_cache,
       @cache_entry_differs_when_packages_changed, @cache_entry_idempotent_when_status_unchanged,
       @cache_entry_differs_when_pull_secret_changed, @cache_entry_does_not_differ_when_no_status,
       @upsert_cache_entry_inserts_new, @upsert_cache_entry_updates_existing,
-      @upsert_preserves_other_jukebox_entries, @upsert_no_op_when_no_status — the whole
-      in-file `#[cfg(test)]` module, verified by `cargo test -p operator`.
-  [ ] Cover the async cache accessors: @Context::upsert_jukebox_cache,
-      @Context::remove_jukebox_cache and @Context::cache_needs_update over the locked map
-      (present, absent key, double remove) — no test builds a @Context for this today;
-      ./jukebox.rs touches them only through @reconcile.
-  [ ] Cover @set_package_cache both arms — empty list keeps the old cache and warns, populated
-      list wholesale-replaces and logs the counted info line; no test exists for the method.
-  [ ] Cover @build_context: each env default and empty-value passthrough, the `base_context`
-      key set, the seed on list @Ok/@Err, and the warn-only template-registration lane; no test
-      exists.
-  [ ] Cover @Manager::new failure lanes — client panic and each of the four probe panics — with
-      a fake/unreachable cluster; no test exists; nothing spawns the binary either.
-  [ ] Cover @Manager::metrics (order, EOF, encoder-failure continuation) and the
-      @Manager::diagnostics snapshot against a @last_event write; no test exists.
-  [?] @Context::set_package_cache is fully dead — zero call sites — while its empty-guard
-      semantics differ from the live @build_context replace. Decide later whether it is deleted
-      or wired to a live re-list lane.
-  [?] A box whose @status is cleared keeps its cached packages forever (differs @false, upsert
-      no-op): decide later whether status-removal must evict, refresh-with-empty, or add a TTL
-      sweep — this cache has none.
-  [?] A box that re-names or loses its name leaks old keys of the kinds in Handles; decide
-      whether key churn gets a reaper or `""` keys are rejected outright.
-  [?] @Diagnostics carries `#[serde(deserialize_with = "from_ts")]` although it derives no
-      @Deserialize, and @from_ts is defined nowhere in the workspace — inert today, compile
-      error the moment @Deserialize is added. Decide later: drop the attribute or define the
+      @upsert_preserves_other_jukebox_entries, @upsert_no_op_when_no_status — tout le module
+      `#[cfg(test)]` interne au fichier, vérifié par `cargo test -p operator`.
+  [ ] Couvrir les accesseurs async du cache : @Context::upsert_jukebox_cache,
+      @Context::remove_jukebox_cache et @Context::cache_needs_update sur la carte verrouillée
+      (présente, clé absente, double remove) — aucun test ne construit de @Context pour ça
+      aujourd'hui ; ./jukebox.rs y touche seulement via @reconcile.
+  [ ] Couvrir @set_package_cache sur ses deux bras — liste vide garde l'ancien cache et warn,
+      liste peuplée remplace en masse et logue la ligne info comptée ; aucun test pour la méthode.
+  [ ] Couvrir @build_context : chaque défaut d'env et le passage de la valeur vide, le jeu de clés
+      `base_context`, le seed sur @Ok/@Err de la liste, et la voie warn-only de
+      template-registration ; aucun test n'existe.
+  [ ] Couvrir les voies d'échec de @Manager::new — panic client et chacun des quatre panics de
+      sonde — avec un cluster fake/injoignable ; aucun test ; rien ne spawn le binaire non plus.
+  [ ] Couvrir @Manager::metrics (ordre, EOF, continuation sur échec d'encodeur) et le
+      snapshot de @Manager::diagnostics face à une écriture de @last_event ; aucun test n'existe.
+  [?] @Context::set_package_cache est totalement mort — zéro site d'appel — et sa garde-empty a
+      une sémantique différente du remplacement vivant de @build_context. Trancher plus tard : supprimé
+      ou câblé à une voie vivante de re-list.
+  [?] Une box dont le @status est effacé garde ses paquets en cache pour toujours (differs @false, upsert
+      no-op) : trancher plus tard si le retrait du statut doit évincer, rafraîchir-à-vide, ou ajouter
+      un balayage TTL — ce cache n'en a pas.
+  [?] Une box qui se renomme ou perd son nom fuit de vieilles clés des kinds décrits en Handles ; décider
+      si l'agitation des clés mérite un reaper ou si les clés `""` sont rejetées d'emblée.
+  [?] @Diagnostics porte `#[serde(deserialize_with = "from_ts")]` sans dériver
+      @Deserialize, et @from_ts n'est défini nulle part du workspace — inerte aujourd'hui, erreur de
+      compilation dès qu'on ajoutera @Deserialize. Trancher plus tard : retirer l'attribut ou définir le
       deserializer with @Deserialize.
-  [?] @Diagnostics.reporter is never serialized (@serde skip), never read, and its value
-      (`vynil-controller` plus hostname) differs in kind from the event @Reporter that
-      @common::context::get_reporter builds from @get_short_name and `POD_NAME`. Decide later
-      whether it is replaced by that lane or deleted.
-  [?] Template-dir failure is warn-only and a missing dir is a core silent no-op, so boot
-      succeeds with a renderer whose partials are missing and the first failure surfaces
-      mid-reconcile far from this file. Decide later whether @build_context must hard-fail on
-      an absent `{CONTROLLER_BASE_DIR}/templates`.
-  [?] The seed calls @JukeBox::@list — which builds a second @kube client through
-      @get_client_async and can panic with a duplicate-text client-build panic — while
-      @build_context already holds the process client and @JukeBox::@list_with_client exists.
-      Decide later to pass the client down or keep the separate lane.
-  [?] The controller-error drains in the @filter_map log nothing here, so a backoff storm is
-      only visible if each kind's @error_policy says so — and those four are still pending
-      specs. Decide later whether drained errors deserve a line at this layer.
-  [?] The `/// Manager that owns a Controller for JukeBox, SystemInstance, and TenantInstance`
-      doc omits @ServiceInstance although @new wires four; correct wording is a one-liner for
-      the same slice that touches the file.
-  [?] Startup-failure polarity here is @panic!-only (exit `101` per ./main.sdd) while its
-      sibling boot failure (@bind) returns a @Result; the mixed-style decision lives in
-      ./main.sdd's Tasks — resolve both lanes together there.
+  [?] @Diagnostics.reporter n'est jamais sérialisé (@serde skip), jamais lu, et sa valeur
+      (`vynil-controller` plus hostname) diffère en kind du @Reporter d'événements que
+      @common::context::get_reporter construit depuis @get_short_name et `POD_NAME`. Trancher plus
+      tard s'il est remplacé par cette voie ou supprimé.
+  [?] Le template-dir en échec est warn-only et un dossier manquant est un no-op silencieux du core, donc le
+      démarrage réussit avec un renderer dont les partials manquent et le premier échec surgit
+      mid-reconcile loin de ce fichier. Trancher plus tard si @build_context doit échouer dur sur
+      un `{CONTROLLER_BASE_DIR}/templates` absent.
+  [?] Le seed appelle @JukeBox::@list — qui construit un second @kube client via
+      @get_client_async et peut paniquer d'un panic de construction de client au texte dupliqué — tandis que
+      @build_context tient déjà le client du processus et que @JukeBox::@list_with_client existe.
+      Trancher plus tard : passer le client en aval ou garder la voie séparée.
+  [?] Les drains de controller-error dans le @filter_map ne loguent rien ici, donc une tempête de
+      backoffs ne devient visible que si l'@error_policy de chaque kind le dit — et ces quatre sont
+      encore des specs pending. Trancher plus tard si les erreurs drainées méritent une ligne à cette couche.
+  [?] La doc `/// Manager that owns a Controller for JukeBox, SystemInstance, and TenantInstance`
+      omet @ServiceInstance alors que @new en câble quatre ; la correction est une_one-liner pour la
+      même slice qui touche le fichier.
+  [?] La polarité d'échec de démarrage ici est @panic!-seule (exit `101` cf. ./main.sdd) alors que son
+      échec de démarrage frangin (@bind) retourne un @Result ; la décision de style
+      mixte vit dans les Tasks de ./main.sdd — résoudre les deux voies ensemble là-bas.
 
 Done when:
-  Every Scenario has a green mapped test or a decided `[?]` Task, the cache-lifetime and
-    dead-lane decisions are recorded, and `cargo test -p operator`, `cargo clippy --all-targets
-    -- -D warnings`, `cargo +nightly fmt --check` and `specdd lint` are green.
+  Chaque Scenario a un test mappé vert ou une Task `[?]` tranchée, les décisions de durée de vie du
+    cache et de voie morte sont consignées, et `cargo test -p operator`, `cargo clippy --all-targets
+    -- -D warnings`, `cargo +nightly fmt --check` et `specdd lint` sont verts.
 
 Scenario: An unstored JukeBox with status needs a cache entry
-  Given an empty cache and a @JukeBox named `box-a` with a status
-  When @cache_entry_differs runs
-  Then the answer is @true — absent key outranks any payload — and @upsert_cache_entry inserts
-    @status.packages under `box-a`
+  Given un cache vide et un @JukeBox nommé `box-a` avec un statut
+  When @cache_entry_differs s'exécute
+  Then la réponse est @true — la clé absente l'emporte sur tout payload — et @upsert_cache_entry
+    insère @status.packages sous `box-a`
   Maps to tests @cache_entry_differs_when_not_in_cache, @upsert_cache_entry_inserts_new
 
 Scenario: Changed packages or pull secret marks the entry stale, identical status does not
-  Given a cached `box-a` entry
-  When @cache_entry_differs sees packages differing in any element, or @spec.pull_secret
-    differing from the cached @pull_secret, or a byte-identical status
-  Then the first two answer @true and the third @false, and @upsert_cache_entry replaces the
-    entry's payload while leaving sibling `box-b` entries untouched
+  Given une entrée `box-a` en cache
+  When @cache_entry_differs voit des paquets différents sur un quelconque élément, ou @spec.pull_secret
+    différente du @pull_secret en cache, ou un statut identique octet pour octet
+  Then les deux premiers répondent @true et le troisième @false, et @upsert_cache_entry remplace le
+    payload de l'entrée en laissant intactes les entrées sœurs `box-b`
   Maps to tests @cache_entry_differs_when_packages_changed,
     @cache_entry_differs_when_pull_secret_changed, @cache_entry_idempotent_when_status_unchanged,
     @upsert_cache_entry_updates_existing, @upsert_preserves_other_jukebox_entries
 
 Scenario: A status-less JukeBox neither differs nor upserts
-  Given a @JukeBox whose @status is @None
-  When @cache_entry_differs and @upsert_cache_entry run on an empty or populated cache
-  Then both answer @false / do nothing — the cache is never seeded, refreshed or evicted from a
-    status-less box
+  Given un @JukeBox dont @status est @None
+  When @cache_entry_differs et @upsert_cache_entry s'exécutent sur un cache vide ou peuplé
+  Then les deux répondent @false / ne font rien — le cache n'est jamais amorcé, rafraîchi ni évincé
+    depuis une box sans statut
   Maps to tests @cache_entry_does_not_differ_when_no_status, @upsert_no_op_when_no_status
 
 Scenario: A missing CRD kills boot through the probes
-  Given a reachable cluster missing, say, the @TenantInstance CRD and an installed @JukeBox CRD
-  When @Manager::new runs
-  Then the seed list succeeded or warn-logged, then the second probe @panic! with
+  Given un cluster joignable où manque p. ex. la CRD @TenantInstance et la CRD @JukeBox installée
+  When @Manager::new s'exécute
+  Then le seed list a réussi ou logué warn, puis la seconde sonde @panic! avec
     `is a CRD installed? {e}`
-  And no future was returned, so ./main.rs never binds and the exit is `101`
-  No mapped test exists.
+  And aucune future n'a été retournée, ./main.rs ne bind jamais et l'exit est `101`
+  Aucun test mappé n'existe.
 
 Scenario: Environment defaults bake the base context once
-  Given none of the six variables set
-  When @build_context constructs @base_context
-  Then the keys are exactly `vynil_namespace`:`vynil-system`,
+  Given aucune des six variables posée
+  When @build_context construit @base_context
+  Then les clés sont exactement `vynil_namespace`:`vynil-system`,
     `agent_image`:`docker.io/sebt3/vynil-agent:0.7.7`, `service_account`:`vynil-agent`,
     `log_level`:`info`, `label_key`:`vynil.solidite.fr/tenant`
-  But with `VYNIL_NAMESPACE` set to the empty string the value is `""`, and later env edits
-    inside the live process change nothing here
-  No mapped test exists.
+  But avec `VYNIL_NAMESPACE` posée à la chaîne vide la valeur est `""`, et modifier l'env
+    ensuite dans le processus vivant ne change rien ici
+  Aucun test mappé n'existe.
 
 Scenario: A failed or empty seed still boots, with an empty cache
-  Given @JukeBox::@list failing, or answering with only status-less boxes
-  When @build_context finishes
-  Then boot continues — @warn `While listing jukebox: {:?}` in the first case, debug pair lines
-    in the second — and the cache ends empty regardless
-  No mapped test exists.
+  Given @JukeBox::@list en échec, ou répondant seulement des box sans statut
+  When @build_context finit
+  Then le démarrage continue — @warn `While listing jukebox: {:?}` dans le premier cas, lignes debug
+    en paire dans le second — et le cache finit vide dans les deux cas
+  Aucun test mappé n'existe.
 
 Scenario: set_package_cache refuses to empty a populated cache
-  Given a cache holding entries and an @ObjectList of status-less JukeBoxes
-  When @Context::set_package_cache runs
-  Then the previous cache survives untouched and one @warn names the box list in parentheses
-  But given a populated list, the cache is wholesale replaced after the counted @info line
-  No mapped test exists — and no call site exists either (see Tasks `[?]`).
+  Given un cache tenant des entrées et un @ObjectList de JukeBoxes sans statut
+  When @Context::set_package_cache s'exécute
+  Then le cache précédent survit intact et un @warn nomme la liste des box entre parenthèses
+  But donné une liste peuplée, le cache est remplacé en masse après la ligne @info comptée
+  Aucun test mappé n'existe — et aucun site d'appel non plus (voir Tasks `[?]`).
 
 Scenario: Metrics text survives encoder failures
-  Given a registry the text encoder rejects
-  When @Manager::metrics encodes the four registries
-  Then the failing registry is skipped with one @tracing::@error! line and the others — and the
-    EOF leg — still encode, and the partial text is returned unchanged by the caller-side route
-  No mapped test exists.
+  Given un registre que l'encodeur texte rejette
+  When @Manager::metrics encode les quatre registres
+  Then le registre en échec est sauté avec une ligne @tracing::@error! et les autres registres — et la
+    jambe EOF — s'encodent quand même, et le texte partiel est rendu tel quel par la route côté appelant
+  Aucun test mappé n'existe.
 
 Example:
-  future tuple destructure in ./main.rs: @Manager::@new().await resolves to the tuple
-    destructured there as `manager` plus the @BoxFuture bindings `controller_jbs`,
-    `controller_tnts`, `controller_stms` and `controller_svcs`
-  env map → `base_context` keys: `CONTROLLER_BASE_DIR` stays private, `VYNIL_NAMESPACE` →
+  Déstructuration du tuple de futures dans ./main.rs : @Manager::@new().await résout au tuple
+    déstructuré là-bas en `manager` plus les bindings @BoxFuture `controller_jbs`,
+    `controller_tnts`, `controller_stms` et `controller_svcs`
+  carte env → clés `base_context` : `CONTROLLER_BASE_DIR` reste privé, `VYNIL_NAMESPACE` →
     `vynil_namespace`, `AGENT_IMAGE` → `agent_image`, `AGENT_ACCOUNT` → `service_account`,
     `AGENT_LOG_LEVEL` → `log_level`, `TENANT_LABEL` → `label_key`
-  boot-time JSON on `GET /` before any reconcile: `{"last_event":"<boot instant>"}` — the only
-    serialized @Diagnostics field
+  JSON de démarrage sur `GET /` avant tout reconcile : `{"last_event":"<boot instant>"}` — le seul
+    champ sérialisé de @Diagnostics

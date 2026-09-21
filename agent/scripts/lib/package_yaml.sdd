@@ -4,210 +4,230 @@
 
 Spec: LibPackageYaml
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: Bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Give the package build and update lanes one shared gate for the author-facing
-    `package.yaml`: take a decoded manifest map, inject the missing `apiVersion`/`kind`/
-    `requirements` defaults with warnings, force the few keys no author may omit
-    (`metadata.name`/`category`/`type` strings, a map `options`, an array `requirements`),
-    and rewrite the `options` section into JSON-schema-shaped property definitions,
-    returning the patched map for the Rust-side load or the in-place manifest rewrite.
+  Donner aux lanes build et update du package un gate partagé pour le `package.yaml`
+    destiné aux auteurs : prendre la map manifest décodée, injecter avec warnings les
+    défauts `apiVersion`/`kind`/`requirements` manquants, forcer les quelques clés
+    qu'aucun auteur ne peut omettre (`metadata.name`/`category`/`type` en strings, une
+    map `options`, un array `requirements`), et réécrire la section `options` en
+    définitions de propriétés de forme JSON-schema, en retournant la map patchée pour le
+    chargement côté Rust ou la réécriture du manifest en place.
 
 Exposes:
-  @validate(yaml) — the gate, reached by importers as @pck::validate(yaml) (the
-    `import "package_yaml" as pck` convention frozen in ./../packages/build.rhai and
-    ./../packages/update.rhai). In-memory only, returns the patched map.
-  @properties_improve(values) — the options-property rewriter @validate runs on every
-    present `options`; recursion over nested `object` properties; tests in
-    ./../../tests/rhai_lib.rs also call it directly as `pkg::properties_improve`.
-  @get_json_type(val) — the `type_of`→JSON-type-name guesser used by @properties_improve's
-    default-inference legs.
+  @validate(yaml) — le gate, atteint par les importeurs sous @pck::validate(yaml) (la
+    convention `import "package_yaml" as pck` gelée dans ./../packages/build.rhai et
+    ./../packages/update.rhai). En mémoire seulement, retourne la map patchée.
+  @properties_improve(values) — la réécriture des propriétés options que @validate
+    exécute sur tout `options` présent ; récursion sur les propriétés `object` imbriquées ;
+    les tests de ./../../tests/rhai_lib.rs l'appellent aussi directement comme
+    `pkg::properties_improve`.
+  @get_json_type(val) — le devineur de nom de type JSON à partir de `type_of`, utilisé
+    par les branches d'inférence de défaut de @properties_improve.
 
 Accepts:
-  @validate — a decoded manifest map: the build lane feeds @yaml_decode's plain @rhai map,
-    the update lane feeds `yaml_decode_ordered`'s @YamlDoc (dot-accessee debate in Tasks).
-  @properties_improve — any @Dynamic; a non-map value never enters the loop and a fresh
-    empty `#{}` comes back instead (the `else {{}}` arm discards the input).
-  @get_json_type — any @Dynamic to be typed.
-  Nothing shape-checks its inputs first: every key read is preceded by `"k" in x.keys()`
-    and the lone array index `default[0]` is guarded by `default.len() > 0`, so rhai's
-    map-miss `()` and array out-of-range throws are never exercised by this file.
+  @validate — une map manifest décodée : la lane build nourrit de la @rhai map plain de
+    @yaml_decode, la lane update du @YamlDoc de `yaml_decode_ordered` (débat de l'accès
+    par point dans Tasks).
+  @properties_improve — n'importe quel @Dynamic ; une valeur non-map n'entre jamais dans
+    la boucle et c'est une `#{}` vide flambant neuve qui ressort (la branche `else {{}}`
+    rejette l'entrée).
+  @get_json_type — n'importe quel @Dynamic à typer.
+  Rien ne vérifie la forme des entrées au préalable : chaque lecture de clé est précédée
+    de `"k" in x.keys()` et le seul index de tableau `default[0]` est gardé par
+    `default.len() > 0`, si bien que les `()` de trou de map et les levées d'index de
+    tableau hors bornes de rhai ne sont jamais exercés par ce fichier.
 
 Returns:
-  @validate — the patched map: `apiVersion`/`kind` injected only when absent, `requirements`
-    injected as `[]` only when absent, `options` replaced by the @properties_improve result;
-    other keys (`images`, `resources`, …) passed through byte-for-byte. Importers rebind
-    through the return value (`yaml = pck::validate(yaml)`).
-  @properties_improve — the input map with its improvements applied.
-  @get_json_type — one of the literals `string`, `object`, `array`, `boolean`, `integer`,
+  @validate — la map patchée : `apiVersion`/`kind` injectés seulement quand absents,
+    `requirements` injecté en `[]` seulement quand absent, `options` remplacé par le
+    résultat de @properties_improve ; les autres clés (`images`, `resources`, …) passent
+    octet pour octet. Les importeurs relient à travers la valeur de retour
+    (`yaml = pck::validate(yaml)`).
+  @properties_improve — la map d'entrée avec ses améliorations appliquées.
+  @get_json_type — l'un des littéraux `string`, `object`, `array`, `boolean`, `integer`,
     `number`.
 
 Raises:
-  Script `throw`s, verbatim (`${…}` interpolates at runtime):
+  Des `throw` de script, verbatim (`${…}` interpole à l'exécution) :
     - `No metadata defined in package.yaml`
-    - `No metadata.${key} defined in package.yaml` — one text per key, only the first
-      failing key of `["name", "category", "type"]` is ever reported
+    - `No metadata.${key} defined in package.yaml` — un texte par clé, seule la première
+      clé en échec de `["name", "category", "type"]` est jamais rapportée
     - `metadata.${key} should be a string`
     - `options should be a map.`
     - `requirements should be an array.`
     - `no type and no default for property ${prop}`
     - `Invalid type "${values[prop].type}" for property ${prop}`
     - `property ${prop} is an array with no items definition and not enough values in default to guess.`
-  Engine raises, unguarded — interpreter errors, not script throws:
-    - `yaml.keys()` when @validate receives a non-map.
-    - `.keys()` on a scalar `metadata` or a non-map `options` property entry.
-    - @get_json_type's `switch` has no catch-all arm, so any @type_of outside its six
-      (`()`, `u64`, `char`, …) fails the switch itself rather than throwing a reviewed text.
+  Levées moteur, non gardées — erreurs d'interpréteur, pas des throw de script :
+    - `yaml.keys()` quand @validate reçoit un non-map.
+    - `.keys()` sur un `metadata` scalaire ou une entrée de propriété `options` non-map.
+    - le `switch` de @get_json_type n'a pas de branche rattrape-tout, donc tout @type_of
+      hors des six (`()`, `u64`, `char`, …) fait échouer le switch lui-même plutôt que de
+      lever un texte revu.
 
 Handles:
-  Missing `apiVersion` / `kind` — @log_warn `You should set your apiVersion` /
-    `You should set your kind`, then inject `vinyl.solidite.fr/v1beta1` / `Package`;
-    warn-and-continue, never a throw.
-  `options` absent — the whole gate-to-improve branch is skipped.
-  `type` invalid where a `default` exists — silently repaired from the inferred type and
-    never reported; the `Invalid type …` throw is only reachable with `type` invalid and
-    `default` absent, `no type and no default …` only with both absent.
-  `object` without `properties` — synthesised from `default`'s keys when present, else
-    kept `#{}` behind @log_warn `Properties definition left empty for property ${prop}`.
-  `array` without `items` and a non-empty `default` — `items` guessed from `default[0]`
-    only; first entry `object` seeds `items.properties` from its keys and recurses.
+  `apiVersion` / `kind` manquants — @log_warn `You should set your apiVersion` /
+    `You should set your kind`, puis injection de `vinyl.solidite.fr/v1beta1` / `Package` ;
+    avertir-et-continuer, jamais un throw.
+  `options` absent — toute la branche du gate vers improve est sautée.
+  `type` invalide là où un `default` existe — silencieusement réparé depuis le type
+    inféré et jamais rapporté ; le throw `Invalid type …` n'est atteignable qu'avec
+    `type` invalide et `default` absent, `no type and no default …` seulement avec les
+    deux absents.
+  `object` sans `properties` — synthétisé depuis les clés du `default` quand présentes,
+    sinon gardé en `#{}` derrière @log_warn `Properties definition left empty for property ${prop}`.
+  `array` sans `items` et un `default` non vide — `items` deviné depuis `default[0]`
+    seulement ; une première entrée `object` amorce `items.properties` depuis ses clés et
+    repart en récursion.
 
 Must:
-  Read exactly `apiVersion`, `kind`, `metadata` with `metadata.name`/`metadata.category`/
-    `metadata.type`, `options` and `requirements`; `description`, `features`, `images`,
-    `resources`, `recommandations`, `value_script` are never read or checked — the Rust
-    @VynilPackageSource load (./../../../common/src/vynilpackage.sdd) is the gate for those.
-  Require @type_of `string` for the three metadata keys, checked in the loop order
+  Lire exactement `apiVersion`, `kind`, `metadata` avec
+    `metadata.name`/`metadata.category`/`metadata.type`, `options` et `requirements` ;
+    `description`, `features`, `images`, `resources`, `recommandations`, `value_script` ne
+    sont jamais lus ni vérifiés — le chargement Rust @VynilPackageSource
+    (./../../../common/src/vynilpackage.sdd) est le gate pour ceux-là.
+  Exiger @type_of `string` pour les trois clés metadata, vérifiées dans l'ordre de boucle
     `name`, `category`, `type`.
-  Never validate the value of a present `apiVersion` or `kind` — defaults only; the
-    misspelled `vinyl.solidite.fr/v1beta1` ships from this file's @line-4 assignment and
-    no code path here compares it against anything.
-  Keep `valid_type` exactly `["string", "object", "array", "boolean", "integer", "number"]`
-    and the guess map exactly string→`string`, map→`object`, array→`array`, bool→`boolean`,
-    i64→`integer`, f64→`number`; all six guesses are members of `valid_type`, so an
-    inferred type can never trip the `Invalid type` throw.
-  Compute object parent defaults thus: recurse `properties` first (synthesised or
-    authored), then set the parent `default` only when it has none, gather only children
-    that carry a `default` (partial accepted), and set nothing when the computed map is
-    empty — an authored parent `default` is never overwritten.
-  Accept a present `items` on an `array` untouched — no validation, no recursion, unlike
-    the synthesised path, and only the first `default` element shapes a synthesised
-    items entry; no sibling element is sampled.
-  Stay import-clean: no `import` of any module, no top-level statements (importing the
-    module evaluates nothing), no fs/k8s/OCI/registry calls — @log_warn is the only engine
-    surface the file calls.
+  Ne jamais valider la valeur d'un `apiVersion` ou `kind` présent — que des défauts ; le
+    fautif `vinyl.solidite.fr/v1beta1` part de l'affectation @line-4 de ce fichier et
+    aucun chemin de code ici ne le compare à quoi que ce soit.
+  Garder `valid_type` exactement
+    `["string", "object", "array", "boolean", "integer", "number"]` et la carte de
+    devinette exactement string→`string`, map→`object`, array→`array`, bool→`boolean`,
+    i64→`integer`, f64→`number` ; les six devinettes sont membres de `valid_type`, donc
+    un type inféré ne peut jamais déclencher le throw `Invalid type`.
+  Calculer ainsi les défauts du parent objet : descendre `properties` par récursion
+    d'abord (synthétisé ou d'auteur), puis ne poser le `default` du parent que quand il
+    n'en a pas, ne rassembler que les enfants portant un `default` (partiel accepté), et
+    ne rien poser quand la map calculée est vide — un `default` de parent écrit par
+    l'auteur n'est jamais écrasé.
+  Accepter un `items` présent sur un `array` sans y toucher — ni validation ni
+    récursion, contrairement à la voie synthétisée — et seul le premier élément du
+    `default` façonne une entrée items synthétisée ; aucun élément voisin n'est
+    échantillonné.
+  Rester clean à l'import : aucun `import` de module, aucune instruction de premier
+    niveau (importer le module n'évalue rien), aucun appel fs/k8s/OCI/registry —
+    @log_warn est la seule surface moteur que ce fichier appelle.
 
 Depends on:
-  vynil-core 0.7.7 engine API — @log_warn from the core engine registrar, the script-side
-    helpers installed by @Script::new_core's base
-    (./../../../common/src/rhaihandler.sdd); rhai builtins (@type_of, `switch`, map/array
-    indexing, `in`) arrive with the engine and nothing else is reached.
-  ./../packages/build.rhai — imports this as `pck`, runs @validate on `yaml_decode` of the
-    source manifest before staging (./../../src/package/build.sdd lane).
-  ./../packages/update.rhai — imports this as `pck`, runs @validate on a
-    `yaml_decode_ordered` @YamlDoc on the tag-only write pass
-    (./../../src/package/update.sdd lane).
+  API du moteur vynil-core 0.7.7 — @log_warn du registrar du moteur core, les helpers
+    script installés par le socle de @Script::new_core
+    (./../../../common/src/rhaihandler.sdd) ; les builtins rhai (@type_of, `switch`,
+    indexage map/tableau, `in`) arrivent avec le moteur et rien d'autre n'est atteint.
+  ./../packages/build.rhai — importe ce module comme `pck`, exécute @validate sur le
+    `yaml_decode` du manifest source avant staging (lane ./../../src/package/build.sdd).
+  ./../packages/update.rhai — importe ce module comme `pck`, exécute @validate sur un
+    @YamlDoc de `yaml_decode_ordered` sur la passe d'écriture tag-only
+    (lane ./../../src/package/update.sdd).
 
 References:
-  ./../../src/package/update.sdd — caller-side restatement of this gate and the home of
-    the `[?]` deciding whether the misspelled default ships; ./../../src/package/build.sdd —
-    the staging lane this gate serves.
-  ./../../../common/src/vynilpackage.sdd — the Rust accept/reject surface the gate
-    partially previews; ./../../../common/src/yamlhandler.sdd — @YamlDoc's registered
-    surface behind the Tasks dot-access question.
+  ./../../src/package/update.sdd — reformulation côté appelant de ce gate et domicile du
+    `[?]` qui tranche d'expédier ou non le défaut fautif ; ./../../src/package/build.sdd —
+    la lane de staging que ce gate sert.
+  ./../../../common/src/vynilpackage.sdd — la surface Rust d'acceptation/rejet que le
+    gate préfigure partiellement ; ./../../../common/src/yamlhandler.sdd — la surface
+    enregistrée de @YamlDoc derrière la question dot-access des Tasks.
 
 Tasks:
-  [x] Cover @properties_improve's parent-default leg on the mock @Script::new_mock engine
-      in ./../../tests/rhai_lib.rs — five `package_yaml_properties_improve_*` tests map it.
-  [ ] Cover @validate: no test imports the gate at all — injections, @log_warn lines and
-      all eight throw texts are unmapped; ./../../tests/rhai_build.rs never reaches this
-      module (mock `security_filter`/push/sign only).
-  [ ] Cover the array-guess, non-map-entry and dead-switch legs: `items` guessed from
-      `default[0]` (scalar and object first entries), the guessless-array throw, and
-      @get_json_type's six mappings plus its no-arm failure on `()`/`u64` defaults.
-  [?] Dot access versus @YamlDoc: the body mutates and reads via map dotted syntax
-      (`yaml.apiVersion = …`, `values[prop].type`, even the bracketed `values[prop]`
-      indexer), but the update lane hands it a @YamlDoc with only `[]` indexers and named
-      member functions registered (@YamlDoc in ./../../../common/src/yamlhandler.sdd) —
-      whether the tag-only pass reaches @validate at all, or dies first on an
-      engine property error, must be settled by a test on a `yaml_decode_ordered` input
-      (pairs with ./../../src/package/update.sdd's chained-write `[?]`).
-  [?] `vinyl.solidite.fr/v1beta1` mixes the `vinyl` misspelling and a `v1beta1` beside the
-      CRD group `vynil.solidite.fr/v1`; shipped packages, docs and the box manifest
-      already carry it and no Rust path validates the value, so renaming is wire-facing.
-      The keep-or-fix decision lives in ./../../src/package/update.sdd — do not fork it here.
-  [?] A no-default `switch` makes an unguessable `default` (YAML null → `()`) an opaque
-      engine failure mid-validation. Decide whether @get_json_type gains a catch-all or
-      @properties_improve a scripted throw.
-  [?] Freeze-or-fix the array asymmetry: an authored `items` is waved through unchecked
-      while a synthesised one is inferred from `default[0]` only — first element shape is
-      treated as whole-array truth.
-  [ ] Carry the file's own TODOs forward or retire them: requirement list items pass with
-      any content once `requirements` is an array, and `options` auto_improvements are
-      limited to the type/default legs documented above.
+  [x] Couvrir la branche parent-default de @properties_improve sur le moteur mock
+      @Script::new_mock dans ./../../tests/rhai_lib.rs — cinq tests
+      `package_yaml_properties_improve_*` la mappent.
+  [ ] Couvrir @validate : aucun test n'importe le gate — injections, lignes @log_warn et
+      les huit textes de throw sont non mappés ; ./../../tests/rhai_build.rs n'atteint
+      jamais ce module (mock `security_filter`/push/sign uniquement).
+  [ ] Couvrir les branches devine-array, entrée non-map et switch mort : `items` deviné
+      depuis `default[0]` (premières entrées scalaire et object), le throw array sans
+      quoi deviner, et les six correspondances de @get_json_type plus son échec sans
+      branche sur les défauts `()`/`u64`.
+  [?] Accès par point versus @YamlDoc : le corps mute et lit via la syntaxe pointée de
+      map (`yaml.apiVersion = …`, `values[prop].type`, même l'indexeur crochets
+      `values[prop]`), mais la lane update lui passe un @YamlDoc avec seulement des
+      indexeurs `[]` et des fonctions membres nommées enregistrées (@YamlDoc dans
+      ./../../../common/src/yamlhandler.sdd) — savoir si la passe tag-only atteint
+      @validate, ou meurt d'abord sur une erreur de propriété moteur, doit être tranché
+      par un test sur une entrée `yaml_decode_ordered` (s'accouple au `[?]` chained-write
+      de ./../../src/package/update.sdd).
+  [?] `vinyl.solidite.fr/v1beta1` mélange la faute `vinyl` et un `v1beta1` à côté du
+      groupe de CRD `vynil.solidite.fr/v1` ; les packages expédiés, la doc et le manifest
+      de la box le portent déjà et aucun chemin Rust ne valide la valeur, donc renommer
+      touche le wire. La décision garder-ou-corriger vit dans
+      ./../../src/package/update.sdd — ne pas la fourcher ici.
+  [?] Un `switch` sans défaut rend un `default` indévinable (null YAML → `()`) une
+      défaillance moteur opaque en pleine validation. Décider si @get_json_type gagne une
+      branche rattrape-tout ou @properties_improve un throw scripté.
+  [?] Figer ou corriger l'asymétrie des arrays : un `items` écrit par l'auteur passe sans
+      vérification tandis qu'un synthétisé est inféré depuis `default[0]` seulement — la
+      forme du premier élément est traitée comme la vérité de tout l'array.
+  [ ] Emporter ou retirer les TODO du fichier lui-même : les éléments de la liste de
+      requirements passent avec n'importe quel contenu dès lors que `requirements` est un
+      array, et les auto_improvements de `options` se limitent aux branches
+      type/default documentées ci-dessus.
 
 Done when:
-  @validate and @get_json_type have mapped mock-engine tests pinning the injections and
-    the verbatim throws, the dot-access and misspelling questions are decided (the latter
-    once, under ./../../src/package/update.sdd), and the five existing
-    `package_yaml_properties_improve_*` tests plus `cargo test -p agent` stay green.
+  @validate et @get_json_type ont des tests mappés sur moteur mock épinglant les
+    injections et les throw verbatim, les questions dot-access et orthographe fautiva
+    sont tranchées (la seconde une seule fois, sous ./../../src/package/update.sdd), et
+    les cinq `package_yaml_properties_improve_*` existants plus `cargo test -p agent`
+    restent verts.
 
 Scenario: deficient header is patched with warnings
-  Given a map with `metadata` carrying `name`, `category` and `type` strings but no
-    `apiVersion`, `kind` or `requirements`
-  When @validate runs
-  Then `log_warn` fires for the two missing headers, `apiVersion` is injected as
-    `vinyl.solidite.fr/v1beta1`, `kind` as `Package`, `requirements` as `[]`
-  And the same map is returned unthrown, all other keys untouched
-  No mapped test exists.
+  Given une map dont `metadata` porte les strings `name`, `category` et `type` mais pas
+    d'`apiVersion`, `kind` ni `requirements`
+  When @validate s'exécute
+  Then `log_warn` sonne pour les deux en-têtes manquants, `apiVersion` est injecté en
+    `vinyl.solidite.fr/v1beta1`, `kind` en `Package`, `requirements` en `[]`
+  And la même map est retournée sans lever, toutes les autres clés intactes
+  Aucun test mappé n'existe.
 
 Scenario: metadata gate reports the first offender
   Given `metadata` absent → throw `No metadata defined in package.yaml`
-  Given `metadata` without `category` → throw `No metadata.category defined in package.yaml`
+  Given `metadata` sans `category` → throw `No metadata.category defined in package.yaml`
   Given `metadata.type: 3` → throw `metadata.type should be a string`
-  Given `metadata` a bare string → no scripted outcome: the `.keys()` call raises as an
-    engine error, `metadata` itself is never type-checked
-  No mapped test exists.
+  Given `metadata` un simple string → aucun résultat scripté : l'appel `.keys()` lève en
+    erreur moteur, `metadata` lui-même n'est jamais vérifié en type
+  Aucun test mappé n'existe.
 
 Scenario: options gate and improve ride back through validate
   Given `options: "x"` → throw `options should be a map.`
-  Given an options property `{type: "str", "default": "hi"}` → `type` silently becomes
-    `string`, the invalid name never reported
-  Given the same property with no `default` → throw `Invalid type "str" for property <prop>`
-  Given a property with neither `type` nor `default` → throw
-    `no type and no default for property <prop>`
-  Given `options: #{myobj: #{type: "object"}}` → `properties` synthesised as `#{}` with
+  Given une propriété options `{type: "str", "default": "hi"}` → `type` devient
+    silencieusement `string`, le nom invalide jamais rapporté
+  Given la même propriété sans `default` → throw `Invalid type "str" for property <prop>`
+  Given une propriété sans `type` ni `default` →
+    throw `no type and no default for property <prop>`
+  Given `options: #{myobj: #{type: "object"}}` → `properties` synthétisé en `#{}` avec
     `log_warn Properties definition left empty for property myobj`
-  No mapped test exists for the @validate leg.
+  Aucun test mappé n'existe pour la branche @validate.
 
 Scenario: leaf defaults compute the parent default
-  Given an `object` property whose children carry all / some / no defaults, one whose
-    parent already owns a `default`, and one nested three levels deep
-  When @properties_improve runs
-  Then the parent `default` is computed, or partial (only children with defaults appear),
-    or absent when no child has one, never overwritten, and cascades child→parent level
-    by level
-  Maps to tests @package_yaml_properties_improve_leaf_defaults_all_children_compute_parent_default,
+  Given une propriété `object` dont les enfants portent tous / certains / aucun défaut,
+    une dont le parent possède déjà un `default`, et une imbriquée trois niveaux plus bas
+  When @properties_improve s'exécute
+  Then le `default` du parent est calculé, ou partiel (seuls les enfants avec défauts
+    apparaissent), ou absent quand aucun enfant n'en a, jamais écrasé, et la cascade
+    remonte de child vers parent, niveau par niveau
+  Mappé sur les tests @package_yaml_properties_improve_leaf_defaults_all_children_compute_parent_default,
     @package_yaml_properties_improve_leaf_defaults_partial_children_compute_partial_default,
     @package_yaml_properties_improve_leaf_defaults_no_children_default_means_no_parent_default,
     @package_yaml_properties_improve_existing_parent_default_not_overwritten,
     @package_yaml_properties_improve_leaf_defaults_cascade_multiple_levels
 
 Scenario: array items guessed from the first default entry
-  Given an `array` property with no `items` and `default` `["a", "b"]`
-  When @properties_improve runs
-  Then `items.type` is `string` (from the first entry) and later entries are ignored
-  And with an object first entry, `items.properties` is seeded from that entry's keys and
-    recursively improved
-  And with `default` absent or empty (`[]`), the run throws
+  Given une propriété `array` sans `items` et un `default` `["a", "b"]`
+  When @properties_improve s'exécute
+  Then `items.type` est `string` (depuis la première entrée) et les entrées suivantes
+    sont ignorées
+  And avec une première entrée object, `items.properties` est semé depuis les clés de
+    cette entrée et amélioré récursivement
+  And avec `default` absent ou vide (`[]`), le run lève
     `property <prop> is an array with no items definition and not enough values in default to guess.`
-  No mapped test exists.
+  Aucun test mappé n'existe.
 
 Scenario: ungessable defaults kill the switch
-  Given a property `{ "default": ... }` whose value types as `()` or any @rhai type
-    outside the six arms
-  When @get_json_type runs
-  Then execution ends in the engine's no-switch-match error, not one of the module's
-    throw texts
-  No mapped test exists.
+  Given une propriété `{ "default": ... }` dont la valeur se type en `()` ou tout type
+    @rhai hors des six branches
+  When @get_json_type s'exécute
+  Then l'exécution meurt sur l'erreur moteur du switch sans branche qui matche, pas sur
+    l'un des textes de throw du module
+  Aucun test mappé n'existe.

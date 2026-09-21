@@ -3,44 +3,44 @@ Spec: VersionCmd
 Platform: Rust
 
 Purpose:
-  Back the `agent version` sub-command: a clap leaf that prints the single workspace
-    version constant and exits. Its only job is to keep the release version observable
-    from the agent binary.
+  Adosser la sous-commande `agent version` : une feuille clap qui affiche la constante
+    de version unique du workspace puis se termine. Son seul travail est de rendre la version de
+    release observable depuis le binaire de l’agent.
 
 Exposes:
-  @Parameters — clap `Args` derive, empty field list; `Debug`. Consumed by
-    ./main.sdd under the `Version` subcommand.
-  @run — takes `&Parameters` by reference, ignores it entirely, prints
-    `common::vynilpackage::VERSION` followed by a newline to stdout via `println!`,
-    returns `()` with no failure path.
+  @Parameters — dérivation clap `Args`, liste de champs vide ; `Debug`. Consommé par
+    ./main.sdd sous le sous-ordre `Version`.
+  @run — prend `&Parameters` par référence, l’ignore entièrement, affiche
+    `common::vynilpackage::VERSION` suivi d’un newline sur stdout via `println!`,
+    et retourne `()` sans aucun chemin d’échec.
 
 Accepts:
-  `&Parameters` — structurally required for dispatch symmetry with the sibling
-    sub-commands; value never read.
+  `&Parameters` — structurellement requis pour la symétrie de distribution avec les
+    sous-commandes sœurs ; la valeur n’est jamais lue.
 
 Returns:
-  `()`. No @Result, no exit call, no error channel: the command always succeeds.
+  `()`. Pas de @Result, pas d’appel à exit, pas de canal d’erreur : la commande réussit toujours.
 
 Must:
-  Print exactly the @common::vynilpackage::VERSION string frozen in
-    ../common/src/vynilpackage.sdd, nothing else, no prefix or suffix beyond the
-    newline @println! appends.
-  Take the value from the shared @common constant rather than a local `env!` crate
-    version, so agent and every other binary report one identical version string.
+  Afficher exactement la chaîne @common::vynilpackage::VERSION figée dans
+    ../common/src/vynilpackage.sdd, rien d’autre, sans préfixe ni suffixe au-delà du
+    newline ajouté par @println!.
+  Prendre la valeur depuis la constante partagée @common plutôt qu’une version de crate
+    `env!` locale, afin que l’agent et tous les autres binaires rapportent une seule et même chaîne de version.
 
 Depends on:
-  ../common/src/vynilpackage.sdd — the VERSION constant.
-  ./main.sdd — the only caller, synchronous arm of the dispatch table.
+  ../common/src/vynilpackage.sdd — la constante VERSION.
+  ./main.sdd — le seul appelant, branche synchrone de la table de distribution.
 
 Scenario: version prints the shared constant
-  Given `VersionCmd` with any empty @Parameters
-  When @run is invoked
-  Then stdout holds the @common::vynilpackage::VERSION line and nothing else
-  And the call returns without touching stdout/stderr configuration or the process exit code
+  Given `VersionCmd` avec n’importe quel @Parameters vide
+  When @run est invoqué
+  Then stdout contient la ligne @common::vynilpackage::VERSION et rien d’autre
+  And l’appel retourne sans toucher à la configuration stdout/stderr ni au code de sortie du processus
 
 Tasks:
-  [ ] Decide later whether `version` should also print per-crate versions or a git
-      commit; the sub-command flag surface is deliberately empty today.
+  [ ] Décider plus tard si `version` doit aussi afficher les versions par crate ou un
+      commit git ; la surface de flags de la sous-commande est délibérément vide aujourd’hui.
 
 Done when:
-  The command keeps printing the shared VERSION constant byte-for-byte.
+  La commande continue d’afficher la constante VERSION partagée octet pour octet.

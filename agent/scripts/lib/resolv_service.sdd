@@ -1,196 +1,216 @@
 Spec: LibResolvService
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Resolve published service records — the entries of `context.cluster.services` and
-    `context.tenant.services` that other `ServiceInstance`/`TenantInstance` CRs publish — by
-    exact service `key` or by publishing package name (exact or glob), and inline their cluster
-    payload: a resolved record whose `definition` points at a ConfigMap (a Secret via
-    @resolv_secret) comes back with that object's `data` folded into the returned map, so a
-    package script gets one plain connection+config value for cross-service wiring. The file
-    itself never computes a host/port/url: connection fields arrive already flattened by the
-    context producers it consumes.
+  Résout les enregistrements de services publiés — les entrées de `context.cluster.services` et
+    `context.tenant.services` que publient d'autres CR `ServiceInstance`/`TenantInstance` — par
+    `key` de service exact ou par nom de package publiant (exact ou glob), et y inline leur charge
+    de cluster : un enregistrement résolu dont le `definition` pointe vers un ConfigMap (un Secret
+    via @resolv_secret) revient avec le `data` de cet objet replié dans la carte retournée, de
+    sorte qu'un script de package obtient une seule valeur brute connexion+config pour le câblage
+    inter-services. Le fichier lui-même ne calcule jamais d'hôte/port/url : les champs de
+    connexion arrivent déjà aplatis par les producers de contexte qu'il consomme.
 
 Exposes:
-  All fourteen in-file `@fn` declarations are the module surface, reached as
-    `svc::name(...)` under the `import "resolv_service" as svc` convention of the only
-    in-repo importer, @/agent/tests/rhai_lib.rs; nothing runs at import time (pure declarations).
-  @resolv_cm(svc) — enrich-one: when `svc?.definition?.kind == "ConfigMap"` pull that ConfigMap
-    and merge its `data` over the record, then drop `definition`; otherwise return the record
-    untouched. Every hit of every lookup below passes through it.
-  @resolv_secret(svc) — the Secret twin: same guard/drop posture, values merged are
-    @base64_decode of each `.data` key; not called by any function in this file.
-  @get_from_key(svcs, names) — first array record whose `key` equals a wanted name.
-  @get_from_package(svcs, names) / @get_from_package(svcs, key, names) — arity overloads: first
-    record whose `"package".name` equals a wanted name, the 3-arg form conjoined with `s.key == key`.
-  @service_glob(svcs, matcher) — all records with `@glob(s["package"].name, matcher)`,
-    @resolv_cm-mapped, returned as an array.
-  @get_system(context, names) / @get_tenant(context, names) — @get_from_key over
+  Les quatorze déclarations `@fn` du fichier sont la surface du module, atteintes comme
+    `svc::name(...)` sous la convention `import "resolv_service" as svc` du seul importateur du
+    dépôt, @/agent/tests/rhai_lib.rs ; rien ne s'exécute à l'import (pures déclarations).
+  @resolv_cm(svc) — enrich-one : quand `svc?.definition?.kind == "ConfigMap"`, récupérer ce
+    ConfigMap et fusionner son `data` sur l'enregistrement, puis retirer `definition` ; sinon
+    retourner l'enregistrement intact. Chaque hit de chaque lookup ci-dessous passe par lui.
+  @resolv_secret(svc) — le jumeau Secret : même posture de garde/retrait, les valeurs fusionnées
+    sont @base64_decode de chaque clé `.data` ; appelé par aucune fonction de ce fichier.
+  @get_from_key(svcs, names) — premier enregistrement du tableau dont le `key` égale un nom cherché.
+  @get_from_package(svcs, names) / @get_from_package(svcs, key, names) — surcharges d'arité :
+    premier enregistrement dont le `"package".name` égale un nom cherché, la forme à 3 arguments
+    étant conjonctionnée avec `s.key == key`.
+  @service_glob(svcs, matcher) — tous les enregistrements avec `@glob(s["package"].name, matcher)`,
+    mappés @resolv_cm, retournés en tableau.
+  @get_system(context, names) / @get_tenant(context, names) — @get_from_key sur
     `context?.cluster?.services` / `context?.tenant?.services`.
-  @get_system_package(context, names) / (context, key, names) and @get_tenant_package(context,
-    names) / (context, key, names) — same lane split over @get_from_package, both arities.
+  @get_system_package(context, names) / (context, key, names) et @get_tenant_package(context,
+    names) / (context, key, names) — même division de voie sur @get_from_package, aux deux arités.
   @glob_system_package(context, pattern) / @glob_tenant_package(context, pattern) — @service_glob
-    over the two context lanes.
+    sur les deux voies de contexte.
 
 Accepts:
-  Records — array elements must be maps as the producers mint them (see `Depends on`): `key`
-    (String), `"package"` (map with `name`), `definition` (@Children shape: `kind`, `name`,
-    `namespace`), plus passthrough fields (`fqdn`, `port`, `instance`, `tenant`) which this file
-    reads never and forwards verbatim. Records missing `key` are simply non-matches for the key
-    lanes (missing map property answers `()`); records missing `"package"` are not tolerated by
-    the package/glob lanes (see `Raises`).
-  @svcs — the record array, or `()` (the guard), anything else is unguarded (see `Raises`).
-  @names — @String matched by full equality, or an iterable treated as a preference list: the
-    first name in @names order that matches anything wins; other types raise in the `for`.
-  @matcher — glob pattern text for the engine @glob helper (wildmatch semantics).
-  @context — the run-context map; safe-nav `?.` chains make an absent lane answer `()` instead
-    of raising, so tenant-lane functions on a service-instance context and cluster-lane
-    functions without `build_context` output both degrade to "not found".
+  Enregistrements — les éléments du tableau doivent être des cartes telles que les producers les
+    fabriquent (voir `Depends on`) : `key` (String), `"package"` (carte avec `name`), `definition`
+    (forme @Children : `kind`, `name`, `namespace`), plus les champs de passthrough (`fqdn`,
+    `port`, `instance`, `tenant`) que ce fichier ne lit jamais et transmet verbatim. Les
+    enregistrements sans `key` sont de simples non-matches pour les voies par clé (une propriété de
+    carte absente répond `()`) ; les enregistrements sans `"package"` ne sont pas tolérés par les
+    voies package/glob (voir `Raises`).
+  @svcs — le tableau d'enregistrements, ou `()` (la garde), tout le reste n'est pas gardé (voir
+    `Raises`).
+  @names — @String apparié par égalité pleine, ou un itérable traité comme liste de préférence : le
+    premier nom dans l'ordre de @names qui apparie quoi que ce soit gagne ; les autres types lèvent
+    dans le `for`.
+  @matcher — texte de motif glob pour le helper @glob du moteur (sémantique wildmatch).
+  @context — la carte de contexte d'exécution ; les chaînes safe-nav `?.` font qu'une voie absente
+    répond `()` au lieu de lever, si bien que les fonctions de voie tenant sur un contexte
+    d'instance de service et les fonctions de voie cluster sans sortie de `build_context` dégradent
+    toutes deux vers « introuvable ».
 
 Returns:
-  Lookup hits — one record map (or an array of them in @service_glob), never an aggregate of
-    multiple matches, never wrapped. Lookup misses — `()`, always: no @throw exists anywhere in
-    the file and absence never raises. Merged maps keep every original record key not overwritten
-    by the fetched `data` plus/minus what `Must` lists.
-  @resolv_cm / @resolv_secret return the (possibly enriched) record itself — including for a
-    `()` or `definition`-free input.
+  Hits de lookup — un enregistrement-carte (ou un tableau d'enregistrements dans @service_glob),
+    jamais un agrégat de plusieurs matches, jamais encapsulé. Misses de lookup — `()`, toujours :
+    aucun @throw n'existe nulle part dans le fichier et l'absence ne lève jamais. Les cartes
+    fusionnées gardent chaque clé d'enregistrement originale non écrasée par le `data` récupéré,
+    plus/moins ce que `Must` énumère.
+  @resolv_cm / @resolv_secret retournent l'enregistrement (éventuellement enrichi) lui-même —
+    y compris pour une entrée `()` ou sans `definition`.
 
 Raises:
-  No @throw and no typed error: the only uncaught interpreter errors are rhai shape failures —
-    a record whose `"package"` index answers `()` (or a non-map) followed by `.name` on it, in
-    @get_from_package (both arities; the 3-arg form only for records already matching `key`) and
-    in @service_glob (every record, it is the predicate), and @filter not existing on a
-    non-array @svcs. No `?.` guards protect these indexes; the caller sees the raw interpreter error.
-  Every @k8s_resource failure inside the two enrichers is caught and logged, never raised (@rhai_err
-    turns engine errors into string-carrying texts, so the catch's `type_of(e) == "string"`
-    branch takes them to @log_warn; other thrown values go to @log_warn(@json_encode(e))).
+  Aucun @throw ni erreur typée : les seules erreurs d'interpréteur non rattrapées sont des échecs
+    de forme rhai — un enregistrement dont l'indexation `"package"` répond `()` (ou un non-carte)
+    suivi de `.name` dessus, dans @get_from_package (aux deux arités ; la forme à 3 arguments
+    seulement pour les enregistrements déjà matching `key`) et dans @service_glob (chaque
+    enregistrement, c'est le prédicat), et @filter n'existant pas sur un @svcs non-tableau. Aucune
+    garde `?.` ne protège ces indexations ; l'appelant voit l'erreur d'interpréteur brute.
+  Chaque échec @k8s_resource dans les deux enrichers est rattrapé et loggé, jamais levé (@rhai_err
+    convertit les erreurs moteur en textes porteurs de chaîne, si bien que la branche
+    `type_of(e) == "string"` du catch les envoie vers @log_warn ; les autres valeurs levées vont
+    vers @log_warn(@json_encode(e))).
 
 Handles:
-  `svcs == ()` — the first statement of every lookup returns `()` unchanged.
-  Non-ConfigMap / `definition`-free records — returned as-is, `definition` key kept (the
-    `@remove("definition")` sits inside the kind branch).
-  ConfigMap fetch failure (kind/CRD unresolved, object absent, no `.data`, bad namespace
-    coordinate) — @log_warn, no data merged, but `definition` is still dropped, and the record
-    is returned, not replaced by `()`.
-  Secret decode failure on some mid-loop key — earlier keys stay decoded into the record
-    (partial merge), then @log_warn and the `definition` drop.
-  Array @names with no match, and any non-hit path — the trailing `()`.
+  `svcs == ()` — la première instruction de chaque lookup retourne `()` inchangé.
+  Enregistrements non-ConfigMap / sans `definition` — retournés tels quels, clé `definition`
+    conservée (le `@remove("definition")` siège dans la branche de kind).
+  Échec de récupération ConfigMap (kind/CRD non résolu, objet absent, pas de `.data`, mauvaise
+    coordonnée de namespace) — @log_warn, aucune donnée fusionnée, mais `definition` est quand même
+    retiré, et l'enregistrement est retourné, non remplacé par `()`.
+  Échec de décodage Secret sur une clé en milieu de boucle — les clés précédentes restent décodées
+    dans l'enregistrement (fusion partielle), puis @log_warn et le retrait de `definition`.
+  Tableau @names sans match, et tout chemin sans hit — le `()` final.
 
 Must:
-  Read only four record fields: `key`, `"package".name`, and `definition.kind` / `definition.name`
-    / `definition.namespace`; the enrichers touch no other cluster kind beyond the literal
-    @k8s_resource("ConfigMap", ns) / @k8s_resource("Secret", ns) `@get(name)` lookup — no
-    typed-instance getter (`get_instance` family) is imported.
-  Take the first element of the filtered array (`found[0]`, @svcs order) as the one match; array
-    @names resolve by caller-preference order, first name with any match wins.
-  Merge fetched `data` over the record with `+=` (or per-key assignment for Secrets): colliding
-    data keys overwrite record keys such as `key`/`fqdn`/`port`, and Secret values are stored
-    decoded via @base64_decode, never as base64 text.
-  Drop `definition` from enriched records on both the success and the swallowed-failure leg of
-    each kind branch, and keep it on every other record.
-  Stay mutation-free toward the caller: enrichment happens on a by-value copy (rai
-    clone-on-write parameter semantics), so the @svcs/@context maps the caller owns never gain
-    data or lose `definition`.
-  Freeze the `?.` posture: enrichers and context wrappers safe-navigate, lookup predicates do
-    not — which is exactly why `"package"`-free records raise while `key`-free ones miss.
-  Keep the 2-arg/3-arg overloads of @get_from_package, @get_system_package and @get_tenant_package
-    coexisting as distinct signatures (rhai dispatches by arity).
+  Lire seulement quatre champs d'enregistrement : `key`, `"package".name`, et `definition.kind` /
+    `definition.name` / `definition.namespace` ; les enrichers ne touchent aucun autre kind de
+    cluster au-delà de la lookup littérale @k8s_resource("ConfigMap", ns) /
+    @k8s_resource("Secret", ns) `@get(name)` — aucun getter d'instance typée (famille
+    `get_instance`) n'est importé.
+  Prendre le premier élément du tableau filtré (`found[0]`, ordre @svcs) comme seul match ; les
+    tableaux @names se résolvent par ordre de préférence de l'appelant, le premier nom avec un
+    match gagne.
+  Fusionner le `data` récupéré sur l'enregistrement avec `+=` (ou affectation par clé pour les
+    Secrets) : les clés de données en collision écrasent des clés d'enregistrement telles que
+    `key`/`fqdn`/`port`, et les valeurs Secret sont stockées décodées via @base64_decode, jamais en
+    texte base64.
+  Retirer `definition` des enregistrements enrichis sur la jambe de succès comme sur celle d'échec
+    avalé de chaque branche de kind, et le conserver sur tout autre enregistrement.
+  Rester sans mutation envers l'appelant : l'enrichissement a lieu sur une copie par valeur
+    (sémantique de paramètre clone-on-write de rai), si bien que les cartes @svcs/@context
+    possédées par l'appelant ne gagnent jamais de données ni ne perdent `definition`.
+  Geler la posture `?.` : enrichers et wrappers de contexte safe-naviguent, les prédicats de lookup
+    ne le font pas — c'est exactement pourquoi les enregistrements sans `"package"` lèvent tandis
+    que ceux sans `key` sont des misses.
+  Conserver les surcharges 2-arg/3-arg de @get_from_package, @get_system_package et
+    @get_tenant_package coexistant comme signatures distinctes (rhai dispatche par arité).
 
 Depends on:
-  vynil-core `0.7.7` engine API — @k8s_resource(kind, ns)`@get` on the `K8sGeneric` lane of
-    @k8sgeneric_rhai_register, @glob (./glob.rs-style `glob(text, pattern)` helper), @log_warn,
-    @json_encode, @base64_decode: the string-error conversion is @rhai_err / @error_chain; host
-    ownership behind the @/common/src/rhaihandler.sdd assembly.
-  Record shape producers (read context, not owned here): @/agent/scripts/lib/build_context.sdd —
-    `cluster.services` entries with `fqdn`/`port` already flattened, `"package"` and `instance`
-    attached, `definition` verbatim; `../tenant/context.rhai` — the `tenant.services` twin
-    (`tenant:`-filtered only in the cluster lane; this file applies no `tenant` filtering itself).
-  @/common/src/instanceservice.sdd + @/common/src/lib.sdd — the `ServiceInstance` CR whose
-    `status.services` (@Published with `@Children` `definition`) the producers enumerate: the
-    upstream source of every key this library matches.
-  @rhai `?.`-returns-`()` on unit/missing properties, map index miss answering `()`, map `+=`
-    merge, `@remove` on maps, and @filter/@map/@len array helpers.
+  API du moteur vynil-core `0.7.7` — @k8s_resource(kind, ns)`@get` sur la voie `K8sGeneric` de
+    @k8sgeneric_rhai_register, @glob (helper `glob(text, pattern)` à la ./glob.rs), @log_warn,
+    @json_encode, @base64_decode : la conversion d'erreur en chaîne est @rhai_err / @error_chain ;
+    ownership hôte derrière l'assembly @/common/src/rhaihandler.sdd.
+  Producers de forme d'enregistrements (contexte lu, non possédé ici) :
+    @/agent/scripts/lib/build_context.sdd — entrées `cluster.services` avec `fqdn`/`port` déjà
+    aplatis, `"package"` et `instance` attachés, `definition` verbatim ; `../tenant/context.rhai`
+    — le jumeau `tenant.services` (filtré `tenant:` uniquement dans la voie cluster ; ce fichier
+    n'applique lui-même aucun filtrage `tenant`).
+  @/common/src/instanceservice.sdd + @/common/src/lib.sdd — le CR `ServiceInstance` dont les
+    `status.services` (@Published avec `definition` `@Children`) sont énumérés par les producers : la
+    source amont de chaque clé que cette bibliothèque apparie.
+  @rhai `?.`-returns-`()` sur les unit/propriétés manquantes, le miss d'index de carte répondant
+    `()`, la fusion de carte `+=`, `@remove` sur les cartes, et les helpers de tableau
+    @filter/@map/@len.
 
 References:
-  @/agent/tests/rhai_lib.rs — sole importer to date (`make_lib_script`, resolver dir
-    `./scripts/lib`, mock engine with empty k8s mocks); five tests pin the pure-map lanes only.
-  `/docs/packages/lifecycle.md` — advertises this library to package authors as the
-    service-discovery toolkit lane.
+  @/agent/tests/rhai_lib.rs — seul importateur à date (`make_lib_script`, répertoire de resolver
+    `./scripts/lib`, moteur mock aux mocks k8s vides) ; cinq tests épinglent uniquement les voies
+    carte-pures.
+  `/docs/packages/lifecycle.md` — annonce cette bibliothèque aux auteurs de packages comme la voie
+    toolkit de découverte de services.
 
 Scenario: key hit inlines ConfigMap data
-  Given a cluster-lane record `#{key: "pg", fqdn: "pg.ns", port: 5432, definition: #{kind: "ConfigMap", name: "pg-conf", namespace: "ns"}}`
-  When @get_from_key(svcs, "pg") runs and the ConfigMap fetch answers `#{data: #{tls: "on"}}`
-  Then the return carries `key`/`fqdn`/`port` 5432 plus `tls: "on"`, and no longer contains `definition`
+  Given un enregistrement de voie cluster `#{key: "pg", fqdn: "pg.ns", port: 5432, definition: #{kind: "ConfigMap", name: "pg-conf", namespace: "ns"}}`
+  When @get_from_key(svcs, "pg") s'exécute et que la récupération ConfigMap répond `#{data: #{tls: "on"}}`
+  Then le retour porte `key`/`fqdn`/`port` 5432 plus `tls: "on"`, et ne contient plus `definition`
 
 Scenario: key miss answers unit, never an error
-  Given the same @svcs
-  When @get_from_key(svcs, "nonexistent") runs
-  Then the result is `()` with no cluster call and no throw
-  Maps to @resolv_service_get_from_key_returns_unit_when_not_found (and the hit half to
-    @resolv_service_get_from_key_finds_service — those fixtures carry no `definition`, so the
-    enricher runs as a typed no-op there)
+  Given le même @svcs
+  When @get_from_key(svcs, "nonexistent") s'exécute
+  Then le résultat est `()` sans appel cluster ni throw
+  Mappé sur @resolv_service_get_from_key_returns_unit_when_not_found (et la moitié hit sur
+    @resolv_service_get_from_key_finds_service — ces fixtures ne portent pas de `definition`, si
+    bien que l'enricher y tourne comme no-op typé)
 
 Scenario: array names keep caller order authoritative
-  Given records listed secondary-first
-  When @get_from_key(svcs, ["primary", "secondary"]) runs
-  Then the `primary` record returns, though `secondary` stands first in @svcs
-  Maps to @resolv_service_get_from_key_with_array_of_names
+  Given des enregistrements énumérés secondary-en-premier
+  When @get_from_key(svcs, ["primary", "secondary"]) s'exécute
+  Then l'enregistrement `primary` revient, bien que `secondary` trône en premier dans @svcs
+  Mappé sur @resolv_service_get_from_key_with_array_of_names
 
 Scenario: package-name lanes, exact and paired
-  Given records each carrying `"package"` `#{name: ...}`
-  When @get_from_package(svcs, "postgresql") runs, then @get_from_package(svcs, "svc1", "redis")
-  Then the first returns the `svc1` record, the second the record whose `key` and package name
-    both match, and a name no record publishes answers `()`
-  Maps to @resolv_service_get_from_package_finds_by_package_name (2-arg leg only)
+  Given des enregistrements portant chacun `"package"` `#{name: ...}`
+  When @get_from_package(svcs, "postgresql") s'exécute, puis @get_from_package(svcs, "svc1", "redis")
+  Then le premier retourne l'enregistrement `svc1`, le second l'enregistrement dont le `key` et le
+    nom de package apparient tous deux, et un nom publié par aucun enregistrement répond `()`
+  Mappé sur @resolv_service_get_from_package_finds_by_package_name (jambe 2-arg seulement)
 
 Scenario: glob lanes return every match or unit
-  Given three records, two carrying package names `postgres-*` matches
-  When @service_glob(svcs, "postgres-*") runs
-  Then an array of the two @resolv_cm-mapped records returns; a pattern matching nothing answers
-    `()` — not an empty array
-  Maps to @resolv_service_service_glob_filters_and_maps (miss leg unmapped)
+  Given trois enregistrements, deux portant des noms de package appariés par `postgres-*`
+  When @service_glob(svcs, "postgres-*") s'exécute
+  Then un tableau des deux enregistrements mappés @resolv_cm revient ; un motif n'appariant rien
+    répond `()` — pas un tableau vide
+  Mappé sur @resolv_service_service_glob_filters_and_maps (jambe miss non mappée)
 
 Scenario: ConfigMap lookup failure is swallowed but shaping continues
-  Given a `ConfigMap`-kinded record whose object no longer exists
-  When any lookup resolves it
-  Then @log_warn carries the fetch text, no data appears in the result, yet the record returns
-    minus `definition`
-  No mapped test exists; see the open task below.
+  Given un enregistrement de kind `ConfigMap` dont l'objet n'existe plus
+  When n'importe quel lookup le résout
+  Then @log_warn porte le texte de la récupération, aucune donnée n'apparaît dans le résultat, mais
+    l'enregistrement revient amputé de `definition`
+  Aucun test mappé n'existe ; voir la tâche ouverte ci-dessous.
 
 Scenario: Secret records pass through lookups, decode only via @resolv_secret
-  Given a record with `definition.kind: "Secret"`
-  When @get_from_key resolves it
-  Then it returns exactly as stored, `definition` intact — no lookup lane auto-resolves Secrets
-  But @resolv_secret(svc) on the same record returns it with each `.data` key base64-decoded and
-    `definition` removed
-  No mapped test exists for either leg.
+  Given un enregistrement avec `definition.kind: "Secret"`
+  When @get_from_key le résout
+  Then il revient exactement tel que stocké, `definition` intact — aucune voie de lookup ne résout
+    les Secrets d'office
+  But @resolv_secret(svc) sur le même enregistrement le retourne avec chaque clé `.data` décodée en
+    base64 et `definition` retiré
+  Aucun test mappé n'existe pour l'une ni l'autre jambe.
 
 Scenario: malformed records raise in the package lanes only
-  Given an @svcs array in which one record carries no `"package"` key
-  When @get_from_package or @service_glob filters it
-  Then the whole call dies on the interpreter property-access error, uncaught
-  But @get_from_key over the same array returns normally
-  No mapped test exists; see the open task below.
+  Given un tableau @svcs dans lequel un enregistrement ne porte pas de clé `"package"`
+  When @get_from_package ou @service_glob le filtre
+  Then tout l'appel meurt sur l'erreur d'accès aux propriétés de l'interpréteur, non rattrapée
+  But @get_from_key sur le même tableau répond normalement
+  Aucun test mappé n'existe ; voir la tâche ouverte ci-dessous.
 
 Tasks:
-  [ ] Cover the cluster lane with @make_lib_script_with_k8s: the ConfigMap hit, miss-swallow and
-      Secret-decode scenarios above, plus the package-lane raise and the glob miss leg — the five
-      current tests never set `definition`, so no fetch branch executes today.
-  [?] Freeze the tier: no shipped script imports this library (repo grep finds only the test
-      file); decide later whether it is the public service-discovery surface for boxes/packages
-      or a dormant toolkit, and whether @resolv_secret — called from nothing — stays exposed.
-  [?] Decide return shapes: @service_glob answers `()`-or-array while every multi-match lookup
-      silently truncates to the first match; unify to always-list or document the truncation.
-  [?] Merge precedence: fetched data keys overwrite the record's own `key`/`fqdn`/`port`; decide
-      whether connection fields must win instead.
-  [?] @resolv_secret partial merge: the loop leaves earlier decoded keys in place when a later
-      @base64_decode throws; decide whether to prevalidate or roll back.
-  [?] Findings left unfixed: the `s["package"].name` predicates carry no `?.` so one malformed
-      record aborts a whole lookup, @service_glob ends in an unreachable trailing `()` after both
-      branches already return, and `get_tenant_package(context, names)` reads `tenant.services`
-      entries that only TenantInstance contexts carry — confirm each posture or correct it.
+  [ ] Couvrir la voie cluster avec @make_lib_script_with_k8s : les scenarios ci-dessus de hit
+      ConfigMap, d'échec avalé et de décodage Secret, plus le raise de la voie package et la jambe
+      miss du glob — les cinq tests actuels ne posent jamais de `definition`, donc aucune branche
+      de récupération ne s'exécute aujourd'hui.
+  [?] Geler le tier : aucun script livré n'importe cette bibliothèque (le grep du dépôt ne trouve
+      que le fichier de test) ; décider plus tard s'il s'agit de la surface publique de découverte
+      de services pour les boxes/packages ou d'un toolkit dormant, et si @resolv_secret — appelé de
+      nulle part — reste exposé.
+  [?] Décider les formes de retour : @service_glob répond `()`-ou-tableau tandis que chaque lookup
+      multi-match se tronque silencieusement au premier match ; unifier en always-list ou documenter
+      la troncature.
+  [?] Précédence de fusion : les clés de données récupérées écrasent le `key`/`fqdn`/`port` propre
+      de l'enregistrement ; décider si les champs de connexion doivent gagner à la place.
+  [?] Fusion partielle de @resolv_secret : la boucle laisse en place les clés décodées précédentes
+      quand un @base64_decode ultérieur lève ; décider s'il faut prévalider ou faire un rollback.
+  [?] Constats laissés non corrigés : les prédicats `s["package"].name` ne portent aucun `?.` si
+      bien qu'un seul enregistrement malformé avorte un lookup entier, @service_glob se termine par
+      un `()` final inaccessible après que les deux branches ont déjà retourné, et
+      `get_tenant_package(context, names)` lit des entrées `tenant.services` que seuls les
+      contextes TenantInstance portent — confirmer chaque posture ou la corriger.
 
 Done when:
-  Every scenario above has a mapped test (mock-k8s lane included), the tier and shape decisions
-    are recorded, and `cargo test -p agent` is green.
+  Chaque scenario ci-dessus a un test mappé (voie mock-k8s incluse), les décisions de tier et de
+    forme sont consignées, et `cargo test -p agent` est vert.

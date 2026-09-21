@@ -1,506 +1,528 @@
 Spec: YamlHandler
 
 Purpose:
-  Give the crate one order-preserving YAML surface: @YamlDoc wraps @rust_yaml's
-    @IndexMap-backed @Value so scripts and re-emission keep key insertion order, converts
-    documents to and from Rhai (@value_to_dynamic, @dynamic_to_value), and registers the
-    whole script surface on an @rhai::Engine via @yaml_ordered_rhai_register; alongside,
-    re-exports @vynil_core's @serde_yaml-based @yaml_str_to_json, @yaml_serialize_to_string
-    and @yaml_all_serialize_to_string for the JSON-oriented paths, whose typing and
-    multi-document behaviour differ from @YamlDoc (see `Must`).
+  Donner au crate une surface YAML préservant l'ordre : @YamlDoc encapsule le @Value
+    à base d'@IndexMap de @rust_yaml pour que scripts et ré-émission conservent l'ordre
+    d'insertion des clés, convertit les documents vers et depuis Rhai (@value_to_dynamic,
+    @dynamic_to_value), et enregistre toute la surface script sur un @rhai::Engine via
+    @yaml_ordered_rhai_register ; à côté, ré-exporte @yaml_str_to_json,
+    @yaml_serialize_to_string et @yaml_all_serialize_to_string de @vynil_core (fondés sur
+    @serde_yaml) pour les voies orientées JSON, dont le typage et le comportement
+    multi-document diffèrent de @YamlDoc (voir `Must`).
 
 Owns:
   ./yamlhandler.rs
 
 References:
-  ./rhaihandler.rs — sole in-crate caller of @yaml_ordered_rhai_register
-    (@crate::rhaihandler::Script::new_core adds it; that module depends on this file, not
-    the reverse) and holder of @test_yaml_decode_modify_single_key_preserves_order, the
-    only currently mapped regression test for this surface.
-  ./tools.sdd, ./ttl_cache.sdd, ./instance_macros.sdd — approved calibration references.
+  ./rhaihandler.rs — seul appelant intra-crate de @yaml_ordered_rhai_register
+    (@crate::rhaihandler::Script::new_core l'ajoute ; ce module dépend de ce fichier, pas
+    l'inverse) et détenteur de @test_yaml_decode_modify_single_key_preserves_order, seul
+    test de régression actuellement mappé pour cette surface.
+  ./tools.sdd, ./ttl_cache.sdd, ./instance_macros.sdd — références de calibration approuvées.
 
 Must:
-  @YamlDoc is a pure pass-through over @rust_yaml's @Value: the observable contract of every
-    entry point below is the locked `rust-yaml` git build's behaviour, attributed to it
-    wherever the file merely forwards.
-  All loads and dumps use the private @new_yaml builder: @LoaderType::RoundTrip,
+  @YamlDoc est un strict relais sur le @Value de @rust_yaml : le contrat observable de
+    chaque point d'entrée ci-dessous est le comportement du build git `rust-yaml` verrouillé,
+    attribué à lui partout où le fichier ne fait que transmettre.
+  Tous les chargements et dumps passent par le builder privé @new_yaml : @LoaderType::RoundTrip,
     @preserve_comments `true`, @emit_anchors `false`, @indent `2`, @sequence_indent @Some(`0`),
-    remaining fields from @YamlConfig::default (@allow_duplicate_keys `false`, @width `Some(80)`,
-    default @Limits: @max_depth `1000`, 10 MiB strings, `1_000_000`-item collections), and a
-    fresh @Yaml per call so no state is shared between documents.
-  On that build @LoaderType::RoundTrip and @preserve_comments have no effect on this path:
-    @Yaml::load_str uses the safe constructor for every loader type and the emitter reads only
-    @indent, @sequence_indent and @emit_anchors, so comments and quote styles are dropped,
-    tags are rewritten, and only key order survives a decode→encode cycle.
-  Implicit scalar typing is YAML 1.1-flavoured, not 1.2-core: `true`, `False`, `yes`, `NO`,
-    `on`, `OFF` (case-insensitive) load as @Value::Bool — `y` and `n` stay strings and quoted
-    scalars bypass typing entirely; `~`, `null`, `Null`, `NULL` load as @Value::Null; only
-    plain @i64 decimal integers type — leading zeros (`0755` → `755`) and a leading `+`
-    (`+5` → `5`) are accepted, `0x1F`, `0o17`, `0b10`, `1_000` stay strings, and an
-    integer beyond the @i64 range falls through to @f64 (`99999999999999999999999` → `Float(1e23)`,
-    precision lost); floats are @str::parse::<f64> accepted, so `1.`, `.5`, `1e3`, `inf` and
-    `NaN` type as @Value::Float while the YAML forms `.inf` and `.nan` load as @String;
-    bare dates are mangled — `d: 2024-01-15` loads as `d` → `Int(2024)` plus a spurious
-    `Int(-1): Int(-15)` entry, `[2024-01-15, x]` as four entries — and `2024-01-15T10:00:00Z`
-    fails scanning outright.
-  Mapping keys take the same implicit typing: `yes: v` loads with @Value::Bool(true) as key,
-    re-encodes as `true: v`, and becomes inaccessible (see the string-key access rule
-    below); quoted keys load as @String keys but lose their quoting on re-encode. And on this
-    backend the first line of a block mapping is special: if it starts with a quoted key or a
-    numeric-typed key (`"q": v` or `80: v` as the first line), the whole document collapses
-    to the key scalar alone (`String("q")`, `Int(80)`) with every entry after it silently
-    dropped; the same keys parse correctly on any later line.
-  A @YamlDoc is exactly one YAML document: loading composes the first document only, later
-    `---` content is silently dropped even when syntactically invalid, and empty,
-    comment-only or bare `---\n` input loads as @YamlDoc(@Value::Null) which encodes `null\n`.
-  Duplicate mapping keys never fail: the last value wins at the first-occurrence position
-    (IndexMap insert), and the @allow_duplicate_keys config is never consulted.
-  The merge key `<<` on a string key is expanded during loading: the value must be a mapping
-    or a sequence of mappings, otherwise loading fails with a construction error whose text
-    ends `Merge key value must be a mapping or sequence of mappings`; merged entries land
-    only where the key is still absent and take the position of the `<<` entry; no literal
-    `<<` key can be stored — the quoted `'<<': 7` document additionally collapses to the
-    bare string `"<<"` with the value lost.
-  Aliases load to @Clone copies with no shared memory in the @Value: an aliased mapping
-    arrives as a duplicated @Value::Mapping, an unknown alias fails with an `Unknown anchor`
-    construction error, and a self-referential `&x [*x]` fails identically because a
-    collection anchor registers only after its children complete; dumping does not re-emit
-    anchors, so a decode→encode cycle expands every alias.
-  Tagged scalars are rewritten at load: `!!binary` base64-decodes — a valid-UTF-8 payload
-    becomes a plain @String (`aGVsbG8=` → `hello`), a non-UTF-8 payload becomes the marker
-    `"[binary data: N bytes]"` with `N` estimated as `clean.len() / 4 * 3`, malformed base64
-    fails with `invalid base64` — and `!!timestamp x` becomes the string `timestamp:x`;
-    encoding re-tags neither.
-  Emission layout: nested mappings step `2` columns; block-sequence dashes sit flush at the
-    parent key column (sequence indent `0`) while a mapping entry following a `- ` begins on
-    the dash line and continues `+2`; a top-level @Sequence document dumps with a leading
-    blank line (`"\n- x\n- y\n"`); empty collections dump `{}` / `[]`; @width is never
-    consumed, so no line wrapping; output always ends in exactly one `\n`; a @String is
-    double-quoted only when re-reading it would change type or break the grammar (re-typing
-    bool/null/int/float, empty `""`, whitespace edges, `\n`, `\r`, `\t`, leading indicator
-    characters, leading `- `, any `": "`, trailing `:`, ` #`) — so `"true"` and `"yes"`
-    strings keep their quotes while comments, plain styles and folding do not survive.
-  Floats print with a forced decimal point (`Float(3.0)` → `3.0`) and specials as `.inf`,
-    `-.inf`, `.nan` — forms the loader itself parses back as @String, so infinite or NaN
-    floats are not cycle-stable (see Tasks).
-  String keys only for the accessor surface: @idx_get, @idx_set, @contains_key and @keys
-    match @Value::String keys exclusively — Bool and Int keys produced by the typing above
-    (a `yes:` key, a port-key map like `80: web`) are unreadable from Rhai and invisible to
-    @keys while @len counts them and dumps still print them; @values hands them out in value
-    position.
-  @idx_get clones: a nested mapping comes back as a @YamlDoc @Dynamic copy and a sequence as
-    a fresh array, so mutating a child obtained through chaining never writes through to its
-    parent — encoding the parent after `doc["a"]["b"] = v` without re-assigning `doc["a"]`
-    keeps the old value.
-  @idx_set inserts or replaces @Value::String(key) → @dynamic_to_value(val) only on
-    mapping-rooted documents: an existing key keeps its position, a new key appends, and
-    sequence- or scalar-rooted documents are silently left unchanged.
-  @keys and @values return empty arrays for any non-mapping root — including a
-    sequence-rooted document — @contains_key answers `false` and @idx_get still indexes
-    sequences by numeric-string key; @len counts mappings and sequences and answers `0` for
-    scalars, saturating at @i64::MAX via @Result::unwrap_or when @i64::try_from fails;
-    @is_empty is exactly `@YamlDoc::len == 0`, so every scalar document is `true`.
-  @value_to_dynamic maps @Value::Null to @Dynamic::UNIT — an explicit `null` value and an
-    absent key are therefore the same `()` to a script — @Value::Mapping to
-    @Dynamic::from(@YamlDoc) for chained access, and every other variant to the same-typed
-    @rhai value recursively.
-  @dynamic_to_value tests a fixed ladder: unit → @Value::Null, @YamlDoc → its inner @Value
-    unchanged, then @bool, @i64, @f64, @rhai::ImmutableString, @String, @rhai::Array →
-    @Value::Sequence recursively, @rhai::Map → @Value::Mapping with `key.to_string()` and
-    insertion order kept, then finally a @serde_json serialize-then-deserialize round-trip
-    for anything else (numbers → @Value::Int or @Value::Float, objects → string-keyed
-    mappings; the further arm mapping a Number to @Value::String is unreachable because
-    every @serde_json::Number answers @serde_json::Number::as_f64); a Dynamic the round-trip
-    refuses converts to @Value::Null with no signal.
-  @yaml_ordered_rhai_register adds exactly two global functions and one custom type to the
-    passed engine and touches nothing else: `yaml_decode_ordered` taking `@rhai::ImmutableString`
-    → @crate::RhaiRes<@YamlDoc>, `yaml_encode_ordered` overloaded over @rhai::Dynamic and
-    @YamlDoc → @crate::RhaiRes<@rhai::ImmutableString>, and @YamlDoc via
-    @rhai::Engine::register_type_with_name under the script-visible name `"map"` with
-    @YamlDoc::idx_get / @YamlDoc::idx_set bound as indexer get/set plus member functions
-    `keys`, `values`, `len`, `is_empty`, `contains` (bound to @YamlDoc::contains_key) and
-    `to_string` whose dump failure becomes `""` through @Result::unwrap_or_default.
-  Rhai crossing flattens errors: @crate::rhai_err bakes @crate::Error::YamlError into an
-    @rhai::EvalAltResult string, so scripts see the `YamlError: <backend message>` text
-    prefix only — while the direct Rust surface (@std::str::FromStr,
-    @YamlDoc::to_yaml_string) carries the bare backend @String with no prefix and never a
+    champs restants de @YamlConfig::default (@allow_duplicate_keys `false`, @width `Some(80)`,
+    @Limits par défaut : @max_depth `1000`, chaînes de 10 MiB, collections de `1_000_000`
+    d'éléments), et un @Yaml neuf par appel pour qu'aucun état ne soit partagé entre documents.
+  Sur ce build, @LoaderType::RoundTrip et @preserve_comments n'ont aucun effet sur cette voie :
+    @Yaml::load_str utilise le constructeur sûr pour tout type de loader et l'émetteur ne lit que
+    @indent, @sequence_indent et @emit_anchors, donc commentaires et styles de quoting sautent,
+    les tags sont réécrits, et seul l'ordre des clés survit à un cycle decode→encode.
+  Le typage implicite des scalaires est de saveur YAML 1.1, pas 1.2-core : `true`, `False`, `yes`,
+    `NO`, `on`, `OFF` (insensible à la casse) se chargent en @Value::Bool — `y` et `n` restent des
+    chaînes et les scalaires quotés court-circuitent tout typage ; `~`, `null`, `Null`, `NULL` se
+    chargent en @Value::Null ; seuls les entiers décimaux @i64 plain se typent — zéros de tête
+    (`0755` → `755`) et `+` de tête (`+5` → `5`) acceptés, `0x1F`, `0o17`, `0b10`, `1_000` restent
+    des chaînes, et un entier hors plage @i64 retombe sur @f64 (`99999999999999999999999` →
+    `Float(1e23)`, précision perdue) ; les flottants sont acceptés par @str::parse::<f64>, donc
+    `1.`, `.5`, `1e3`, `inf` et `NaN` se typent en @Value::Float tandis que les formes YAML `.inf`
+    et `.nan` se chargent en @String ; les dates nues sont massacrées — `d: 2024-01-15` se charge
+    en `d` → `Int(2024)` plus une entrée parasite `Int(-1): Int(-15)`, `[2024-01-15, x]` en quatre
+    entrées — et `2024-01-15T10:00:00Z` échoue purement au scan.
+  Les clés de mapping subissent le même typage implicite : `yes: v` se charge avec
+    @Value::Bool(true) en clé, se ré-encode en `true: v`, et devient inaccessible (voir la règle
+    d'accès par clé string plus bas) ; les clés quotées se chargent en clés @String mais perdent
+    leur quoting au ré-encodage. Et sur ce backend la première ligne d'un block mapping est
+    spéciale : si elle démarre par une clé quotée ou une clé à typage numérique (`"q": v` ou
+    `80: v` en première ligne), tout le document s'effondre en le seul scalaire clé
+    (`String("q")`, `Int(80)`) avec toute entrée suivante silencieusement perdue ; les mêmes clés
+    se parsent correctement sur n'importe quelle ligne ultérieure.
+  Un @YamlDoc est exactement un document YAML : le chargement ne compose que le premier document,
+    le contenu `---` ultérieur est silencieusement ignoré même s'il est syntaxiquement invalide,
+    et une entrée vide, comment-only ou un `---\n` nu se charge en @YamlDoc(@Value::Null) qui
+    encode `null\n`.
+  Les clés de mapping dupliquées n'échouent jamais : la dernière valeur gagne à la position de
+    première occurrence (insertion IndexMap), et la config @allow_duplicate_keys n'est jamais
+    consultée.
+  La merge key `<<` sur une clé string est expandue au chargement : la valeur doit être un mapping
+    ou une séquence de mappings, sinon le chargement échoue d'une erreur de construction dont le
+    texte finit par `Merge key value must be a mapping or sequence of mappings` ; les entrées
+    mergées n'atterrissent que là où la clé est encore absente et prennent la position de l'entrée
+    `<<` ; aucune clé `<<` littérale ne peut être stockée — le document quoté `'<<': 7` s'effondre
+    de plus en la simple chaîne `"<<"` avec la valeur perdue.
+  Les aliases se chargent en copies @Clone sans mémoire partagée dans le @Value : un mapping.aliasé
+    arrive en @Value::Mapping dupliqué, une alias inconnue échoue d'une erreur de construction
+    `Unknown anchor`, et un `&x [*x]` autoréférentiel échoue identiquement car une ancre de
+    collection ne s'enregistre qu'après complétion de ses enfants ; le dump ne réémet pas les
+    ancres, donc un cycle decode→encode expande chaque alias.
+  Les scalaires.taggués sont réécrits au chargement : `!!binary` décode en base64 — une payload
+    UTF-8 valide devient une @String plain (`aGVsbG8=` → `hello`), une payload non-UTF-8 devient le
+    marqueur `"[binary data: N bytes]"` avec `N` estimé comme `clean.len() / 4 * 3`, une base64
+    malformée échoue avec `invalid base64` — et `!!timestamp x` devient la chaîne `timestamp:x` ;
+    l'encodage ne re-tague rien.
+  Mise en page d'émission : les mappings imbriqués avancent de `2` colonnes ; les tirets de
+    block-sequence restent au ras de la colonne de la clé parente (sequence indent `0`) tandis
+    qu'une entrée de mapping suivant un `- ` démarre sur la ligne du tiret et continue à `+2` ;
+    un document @Sequence de top-level se dumper avec une ligne blanche de tête (`"\n- x\n- y\n"`) ;
+    les collections vides se dumper en `{}` / `[]` ; @width n'est jamais consommé, donc pas de
+    repli de ligne ; la sortie finit toujours par exactement un `\n` ; une @String n'est
+    double-quotée que si sa relecture changerait le type ou casserait la grammaire (re-typage
+    bool/null/int/float, `""` vide, blancs en bord, `\n`, `\r`, `\t`, caractères indicateurs de
+    tête, `- ` de tête, tout `": "`, `:` de fin, ` #`) — donc les chaînes `"true"` et `"yes"`
+    gardent leurs quotes tandis que commentaires, styles plain et folding ne survivent pas.
+  Les flottants s'impriment avec point décimal forcé (`Float(3.0)` → `3.0`) et les spéciaux en
+    `.inf`, `-.inf`, `.nan` — formes que le loader relit lui-même en @String, donc les flottants
+    infinis ou NaN ne sont pas cycle-stables (voir Tasks).
+  Clés string uniquement pour la surface d'accession : @idx_get, @idx_set, @contains_key et @keys
+    ne matchent que les clés @Value::String — les clés Bool et Int produites par le typage
+    ci-dessus (une clé `yes:`, une map de ports type `80: web`) sont illisibles depuis Rhai et
+    invisibles à @keys tandis que @len les compte et que les dumps les impriment encore ; @values
+    les rend en position valeur.
+  @idx_get clone : un mapping imbriqué revient en copie @Dynamic de @YamlDoc et une séquence en
+    tableau neuf, donc muter un enfant obtenu par chaînage n'écrit jamais à travers son parent —
+    encoder le parent après `doc["a"]["b"] = v` sans ré-assigner `doc["a"]` conserve l'ancienne
+    valeur.
+  @idx_set insère ou remplace @Value::String(key) → @dynamic_to_value(val) uniquement sur les
+    documents à racine mapping : une clé existante garde sa position, une clé neuve s'ajoute en
+    queue, et les documents à racine séquence ou scalaire sont silencieusement laissés intacts.
+  @keys et @values retournent des tableaux vides pour toute racine non-mapping — document à
+    racine séquence compris — @contains_key répond `false` et @idx_get indexe quand même les
+    séquences par clé string numérique ; @len compte mappings et séquences et répond `0` pour
+    les scalaires, saturation à @i64::MAX via @Result::unwrap_or quand @i64::try_from échoue ;
+    @is_empty est exactement `@YamlDoc::len == 0`, donc tout document scalaire est `true`.
+  @value_to_dynamic mappe @Value::Null sur @Dynamic::UNIT — une valeur `null` explicite et une clé
+    absente sont donc le même `()` pour un script — @Value::Mapping sur @Dynamic::from(@YamlDoc)
+    pour l'accès chaîné, et toute autre variante vers la valeur @rhai de même type récursivement.
+  @dynamic_to_value teste une échelle fixe : unit → @Value::Null, @YamlDoc → son @Value interne
+    inchangé, puis @bool, @i64, @f64, @rhai::ImmutableString, @String, @rhai::Array →
+    @Value::Sequence récursivement, @rhai::Map → @Value::Mapping avec `key.to_string()` et ordre
+    d'insertion conservé, puis enfin un aller-retour de sérialisation-puis-désérialisation
+    @serde_json pour tout le reste (nombres → @Value::Int ou @Value::Float, objets → mappings à
+    clés string ; le bras plus lointain mappant un Number sur @Value::String est inatteignable car
+    tout @serde_json::Number répond @serde_json::Number::as_f64) ; un Dynamic que l'aller-retour
+    refuse devient @Value::Null sans signal.
+  @yaml_ordered_rhai_register ajoute exactement deux fonctions globales et un type custom à
+    l'engine passé et ne touche à rien d'autre : `yaml_decode_ordered` prenant
+    `@rhai::ImmutableString` → @crate::RhaiRes<@YamlDoc>, `yaml_encode_ordered` surchargée sur
+    @rhai::Dynamic et @YamlDoc → @crate::RhaiRes<@rhai::ImmutableString>, et @YamlDoc via
+    @rhai::Engine::register_type_with_name sous le nom visible en script `"map"` avec
+    @YamlDoc::idx_get / @YamlDoc::idx_set liés en get/set d'indexeur plus les fonctions membres
+    `keys`, `values`, `len`, `is_empty`, `contains` (liée à @YamlDoc::contains_key) et
+    `to_string` dont l'échec de dump devient `""` via @Result::unwrap_or_default.
+  La traversée Rhai aplatit les erreurs : @crate::rhai_err cuit @crate::Error::YamlError en chaîne
+    @rhai::EvalAltResult, donc les scripts ne voient que le préfixe de texte
+    `YamlError: <backend message>` — tandis que la surface Rust directe (@std::str::FromStr,
+    @YamlDoc::to_yaml_string) porte le @String brut du backend sans préfixe et jamais de
     @crate::Error.
-  The re-exports keep @serde_yaml behaviour, which differs from @YamlDoc: `yes` stays a JSON
-    string, `2024-01-15` survives as a string, empty input loads @Ok as @Value::Null,
-    duplicate keys collapse last-wins silently, and more than one document fails with the
-    message `deserializing from YAML containing more than one document is not supported`;
-    @yaml_serialize_to_string omits any `---` document marker; @yaml_all_serialize_to_string
-    concatenates `"---\n"` plus one @serde_yaml rendering per item.
+  Les ré-exports conservent le comportement @serde_yaml, qui diffère de @YamlDoc : `yes` reste une
+    chaîne JSON, `2024-01-15` survit en chaîne, une entrée vide se charge @Ok en @Value::Null,
+    les clés dupliquées s'effondrent last-wins en silence, et plus d'un document échoue avec le
+    message `deserializing from YAML containing more than one document is not supported` ;
+    @yaml_serialize_to_string omet tout marqueur de document `---` ; @yaml_all_serialize_to_string
+    concatène `"---\n"` plus un rendu @serde_yaml par élément.
 
 Depends on:
-  `rust-yaml` `0.0.5` — git branch `main` at rev `ea95bf4` locked in `/Cargo.lock`, from the
-    workspace git dependency via `rust-yaml.workspace = true` in `/common/Cargo.toml`;
-    @rust_yaml::Value, @rust_yaml::Yaml, @rust_yaml::YamlConfig, @rust_yaml::LoaderType and
-    @rust_yaml::yaml::IndentConfig — the load/emit behaviour described above is this build's.
-  `vynil-core` `0.7.7` from crates.io (`/common/Cargo.toml`) — @vynil_core::yaml hosts the
-    three re-exported functions; its `yaml.rs` drives @serde_yaml `0.9.34+deprecated`
-    (unsafe-libyaml backend, `/Cargo.lock`) and maps failures into @vynil_core::Error::YamlError
-    carrying the @serde_yaml display text.
-  @rhai `1.25.1` (workspace requests `1.20.0`, features `sync`, `serde`, `internals` in
+  `rust-yaml` `0.0.5` — branche git `main` au rev `ea95bf4` verrouillé dans `/Cargo.lock`,
+    issue de la dépendance git du workspace via `rust-yaml.workspace = true` dans
+    `/common/Cargo.toml` ; @rust_yaml::Value, @rust_yaml::Yaml, @rust_yaml::YamlConfig,
+    @rust_yaml::LoaderType et @rust_yaml::yaml::IndentConfig — le comportement load/emit
+    décrit au-dessus est celui de ce build.
+  `vynil-core` `0.7.7` depuis crates.io (`/common/Cargo.toml`) — @vynil_core::yaml héberge les
+    trois fonctions ré-exportées ; son `yaml.rs` pilote @serde_yaml `0.9.34+deprecated`
+    (backend unsafe-libyaml, `/Cargo.lock`) et mappe les échecs en @vynil_core::Error::YamlError
+    portant le texte display de @serde_yaml.
+  @rhai `1.25.1` (le workspace demande `1.20.0`, features `sync`, `serde`, `internals` dans
     `/common/Cargo.toml`) — @rhai::Dynamic, @rhai::ImmutableString, @rhai::Array, @rhai::Map,
     @rhai::Engine, @rhai::EvalAltResult, @Dynamic::UNIT.
-  @serde_json `1.0.150` — @serde_json::to_string / @serde_json::from_str round-trip inside
-    @dynamic_to_value, plus @serde_json::Value as the re-exported target type; the workspace
-    feature tree unifies `preserve_order` onto it via `handlebars` `6.4.2`, so JSON objects
-    keep document order in this build.
-  @indexmap `2` (`/common/Cargo.toml`) — @IndexMap used in the @rhai::Map conversion arm;
-    @rust_yaml already stores mappings as @IndexMap.
-  @crate::Error::YamlError, @crate::RhaiRes and @crate::rhai_err in ./lib.rs — the script
-    error funnel; @crate::Error::Core (transparent, `#[from] @vynil_core::Error`) is how the
-    re-export errors continue into consuming @crate::Result callers.
+  @serde_json `1.0.150` — aller-retour @serde_json::to_string / @serde_json::from_str dans
+    @dynamic_to_value, plus @serde_json::Value comme type cible ré-exporté ; l'arbre de features
+    du workspace unifie `preserve_order` dessus via `handlebars` `6.4.2`, donc les objets JSON
+    gardent l'ordre du document dans ce build.
+  @indexmap `2` (`/common/Cargo.toml`) — @IndexMap utilisé dans le bras de conversion @rhai::Map ;
+    @rust_yaml stocke déjà les mappings en @IndexMap.
+  @crate::Error::YamlError, @crate::RhaiRes et @crate::rhai_err dans ./lib.rs — l'entonnoir
+    d'erreurs script ; @crate::Error::Core (transparent, `#[from] @vynil_core::Error`) est la voie
+    par laquelle les erreurs des ré-exports se poursuivent chez les appelants @crate::Result
+    consommateurs.
 
 Exposes:
-  @yaml_str_to_json — @pub use re-export of @vynil_core::yaml::yaml_str_to_json:
+  @yaml_str_to_json — ré-export @pub use de @vynil_core::yaml::yaml_str_to_json :
     `pub fn yaml_str_to_json(s: &str) -> @std::result::Result<@serde_json::Value, @vynil_core::Error>`
-    — single-document YAML to JSON; behaviour in the re-export `Must` entry.
-  @yaml_serialize_to_string — @pub use re-export of @vynil_core::yaml::yaml_serialize_to_string:
+    — YAML mono-document vers JSON ; comportement dans l'entrée `Must` des ré-exports.
+  @yaml_serialize_to_string — ré-export @pub use de @vynil_core::yaml::yaml_serialize_to_string :
     `pub fn yaml_serialize_to_string<T: @serde::Serialize>(val: &T) -> @std::result::Result<@String, @vynil_core::Error>` —
-    @serde_yaml rendering of any serializable value.
-  @yaml_all_serialize_to_string — @pub use re-export of @vynil_core::yaml::yaml_all_serialize_to_string:
+    rendu @serde_yaml de toute valeur sérialisable.
+  @yaml_all_serialize_to_string — ré-export @pub use de @vynil_core::yaml::yaml_all_serialize_to_string :
     `pub fn yaml_all_serialize_to_string<T: @serde::Serialize>(vals: &[T]) -> @std::result::Result<@String, @vynil_core::Error>` —
-    `---\n`-framed multi-document stream; not readable back through @yaml_str_to_json.
-  @YamlDoc — `#[derive(@std::fmt::Debug, @Clone)] pub struct YamlDoc(pub @rust_yaml::Value)`;
-    the tuple field `.0` is public, so Rust callers can bypass every accessor below.
-  <YamlDoc as @std::str::FromStr>::from_str — `fn from_str(s: &str) -> @std::result::Result<@YamlDoc, @String>`;
-    loads the first document with the @new_yaml config.
-  @YamlDoc::to_yaml_string — `pub fn to_yaml_string(&self) -> @std::result::Result<@String, @String>`;
-    dumps with the same config.
-  @YamlDoc::idx_get — `pub fn idx_get(&mut self, key: @rhai::ImmutableString) -> @rhai::Dynamic`;
-    Rust-visible backing of the registered indexer and of chained nested access.
-  @YamlDoc::idx_set — `pub fn idx_set(&mut self, key: @rhai::ImmutableString, val: @rhai::Dynamic)`;
-    backing of the registered setter.
-  @YamlDoc::keys — `pub fn keys(&mut self) -> @rhai::Array` of @rhai::ImmutableString values.
+    flux multi-document encadré de `---\n` ; non relisible via @yaml_str_to_json.
+  @YamlDoc — `#[derive(@std::fmt::Debug, @Clone)] pub struct YamlDoc(pub @rust_yaml::Value)` ;
+    le champ de tuple `.0` est public, donc les appelants Rust peuvent court-circuiter tout
+    accessoir ci-dessous.
+  <YamlDoc as @std::str::FromStr>::from_str — `fn from_str(s: &str) -> @std::result::Result<@YamlDoc, @String>` ;
+    charge le premier document avec la config @new_yaml.
+  @YamlDoc::to_yaml_string — `pub fn to_yaml_string(&self) -> @std::result::Result<@String, @String>` ;
+    dumper avec la même config.
+  @YamlDoc::idx_get — `pub fn idx_get(&mut self, key: @rhai::ImmutableString) -> @rhai::Dynamic` ;
+    support visible côté Rust de l'indexeur enregistré et de l'accès imbriqué chaîné.
+  @YamlDoc::idx_set — `pub fn idx_set(&mut self, key: @rhai::ImmutableString, val: @rhai::Dynamic)` ;
+    support du setter enregistré.
+  @YamlDoc::keys — `pub fn keys(&mut self) -> @rhai::Array` de valeurs @rhai::ImmutableString.
   @YamlDoc::values — `pub fn values(&mut self) -> @rhai::Array`.
   @YamlDoc::contains_key — `#[must_use] pub fn contains_key(&self, key: @rhai::ImmutableString) -> @bool`.
   @YamlDoc::len — `#[must_use] pub fn len(&self) -> @i64`.
   @YamlDoc::is_empty — `#[must_use] pub fn is_empty(&self) -> @bool`.
-  @value_to_dynamic — `pub fn value_to_dynamic(v: @rust_yaml::Value) -> @rhai::Dynamic`;
-    @pub so other modules convert @rust_yaml::Value directly.
-  @dynamic_to_value — `pub fn dynamic_to_value(d: @rhai::Dynamic) -> @rust_yaml::Value`;
-    @pub inverse with the JSON fallback.
-  @yaml_ordered_rhai_register — `pub fn yaml_ordered_rhai_register(engine: &mut @rhai::Engine)`;
-    installs exactly the script surface itemised in its `Must` entry; the file's only
-    registration entry point.
+  @value_to_dynamic — `pub fn value_to_dynamic(v: @rust_yaml::Value) -> @rhai::Dynamic` ;
+    @pub pour que d'autres modules convertissent un @rust_yaml::Value directement.
+  @dynamic_to_value — `pub fn dynamic_to_value(d: @rhai::Dynamic) -> @rust_yaml::Value` ;
+    @pub inverse avec le repli JSON.
+  @yaml_ordered_rhai_register — `pub fn yaml_ordered_rhai_register(engine: &mut @rhai::Engine)` ;
+    installe exactement la surface script détaillée dans son entrée `Must` ; seul point d'entrée
+    d'enregistrement du fichier.
 
 Accepts:
-  Loading (@std::str::FromStr and script `yaml_decode_ordered`) accepts any `&str` within the
-    default backend @Limits: `""`, comment-only, `"---\n"`, multi-document and malformed text
-    all reach the backend, and only text in front of the first document boundary can make
-    the load fail.
-  Encoding (@YamlDoc::to_yaml_string and script `yaml_encode_ordered`) accepts any @YamlDoc,
-    including the @Value::Null doc and sequence- or scalar-rooted docs.
-  @idx_get / @idx_set accept any key text; on a sequence-rooted doc @idx_get interprets the
-    key as a @usize index string; @idx_set accepts any @rhai::Dynamic — every Dynamic type
-    is accepted, unmappable types are null-converted, and on non-mapping documents the
-    whole call is dropped.
-  @keys / @values / @contains_key / @len / @is_empty accept documents in whatever shape
-    loading produced — they degrade to empty/zero/`false` rather than reject.
-  @dynamic_to_value accepts any @rhai::Dynamic including embedded custom types;
-    @value_to_dynamic accepts any @rust_yaml::Value.
-  @yaml_ordered_rhai_register accepts any mutable @rhai::Engine and adds only its own names
-    to it (idempotent in effect only in the sense that it registers the same names again —
-    it does not detect prior registrations).
+  Le chargement (@std::str::FromStr et le script `yaml_decode_ordered`) accepte tout `&str` dans
+    les @Limits par défaut du backend : `""`, comment-only, `"---\n"`, multi-document et texte
+    malformé atteignent tous le backend, et seul le texte devant la première frontière de document
+    peut faire échouer le chargement.
+  L'encodage (@YamlDoc::to_yaml_string et le script `yaml_encode_ordered`) accepte tout @YamlDoc,
+    y compris le doc @Value::Null et les docs à racine séquence ou scalaire.
+  @idx_get / @idx_set acceptent tout texte de clé ; sur un doc à racine séquence, @idx_get
+    interprète la clé comme une chaîne d'index @usize ; @idx_set accepte tout @rhai::Dynamic —
+    tout type Dynamic est accepté, les types non-mappables sont convertis en null, et sur un
+    document non-mapping l'appel entier est jeté.
+  @keys / @values / @contains_key / @len / @is_empty acceptent les documents quelle que soit la
+    forme produite par le chargement — ils se dégradent en vide/zéro/`false` plutôt que de rejeter.
+  @dynamic_to_value accepte tout @rhai::Dynamic, types custom embarqués compris ;
+    @value_to_dynamic accepte tout @rust_yaml::Value.
+  @yaml_ordered_rhai_register accepte tout @rhai::Engine mutable et n'y ajoute que ses propres
+    noms (idempotent en effet seulement au sens où il enregistre à nouveau les mêmes noms —
+    il ne détecte pas les enregistrements antérieurs).
 
 Returns:
-  @std::str::FromStr returns `Ok(@YamlDoc)` holding the first document on success —
-    document-less text yielding @Value::Null — with mappings in source key order.
-  Encoding returns the document as one YAML stream ending in exactly one `\n`, top-level
-    sequences with the documented leading blank line, comments already stripped.
-  @idx_get returns @rhai::Dynamic::UNIT for absent string keys, out-of-range or
-    sequence indices that are not @usize text, and every scalar root, else the cloned converted
-    value; @idx_set, @keys / @values and the re-exports return as itemised in `Exposes`.
-  @contains_key returns `false` for absent keys and for every non-mapping root, including a
-    sequence whose item equals that key; @len reports the saturated count; @is_empty the @YamlDoc::len
-    comparison.
-  @yaml_str_to_json returns the single-document JSON @serde_json::Value,
-    @yaml_serialize_to_string the marker-less rendering, @yaml_all_serialize_to_string the
-    `---\n`-framed concatenation; an empty slice returns `Ok("")`.
-  Script-side calls return @crate::RhaiRes payloads: @YamlDoc, @rhai::ImmutableString YAML
-    text, arrays of @rhai values, @i64, @bool, and `to_string` @String.
+  @std::str::FromStr retourne `Ok(@YamlDoc)` portant le premier document en cas de succès —
+    un texte sans document produisant @Value::Null — avec les mappings dans l'ordre des clés
+    source.
+  L'encodage retourne le document en un seul flux YAML finissant par exactement un `\n`, les
+    séquences de top-level avec la ligne blanche de tête documentée, commentaires déjà retirés.
+  @idx_get retourne @rhai::Dynamic::UNIT pour les clés string absentes, hors plage ou les index
+    de séquence qui ne sont pas du texte @usize, et pour toute racine scalaire, sinon la valeur
+    convertie clonée ; @idx_set, @keys / @values et les ré-exports retournent comme détaillé
+    dans `Exposes`.
+  @contains_key retourne `false` pour les clés absentes et pour toute racine non-mapping,
+    séquence dont un item égale cette clé comprise ; @len rapporte le compte saturé ; @is_empty
+    la comparaison @YamlDoc::len.
+  @yaml_str_to_json retourne le @serde_json::Value JSON mono-document, @yaml_serialize_to_string
+    le rendu sans marqueur, @yaml_all_serialize_to_string la concaténation encadrée de `---\n` ;
+    une tranche vide retourne `Ok("")`.
+  Les appels côté script retournent des payloads @crate::RhaiRes : @YamlDoc, du texte YAML
+    @rhai::ImmutableString, des tableaux de valeurs @rhai, @i64, @bool, et le @String de
+    `to_string`.
 
 Raises:
-  @std::str::FromStr raises `Err(@String)` carrying the backend display — scanner failures
-    carry a position (`Error at line 1, column 4: ...`), plus an `Unknown anchor`
-    construction failure, the merge-key shape message and `invalid base64`; only the first
-    document's content is ever scanned, so trailing documents cannot cause an @Err.
-  @YamlDoc::to_yaml_string keeps an `Err(@String)` arm that no reachable failure exercises:
-    the emitter covers every @rust_yaml::Value variant and writes into memory (see Tasks).
-  `yaml_decode_ordered` / `yaml_encode_ordered` raise through @rhai::EvalAltResult with the
-    @crate::Error::YamlError display, i.e. `YamlError: ` prefixed text; errors never surface
-    as a matchable @crate::Error to scripts.
-  The registered script `to_string` raises nothing — its dumped-error path returns `""`.
+  @std::str::FromStr lève `Err(@String)` portant le display du backend — les échecs de scanner
+    portent une position (`Error at line 1, column 4: ...`), plus un échec de construction
+    `Unknown anchor`, le message de forme de merge key et `invalid base64` ; seul le contenu du
+    premier document est scanné, donc les documents suivants ne peuvent causer d'@Err.
+  @YamlDoc::to_yaml_string conserve un bras `Err(@String)` qu'aucun échec atteignable n'exerce :
+    l'émetteur couvre toute variante de @rust_yaml::Value et écrit en mémoire (voir Tasks).
+  `yaml_decode_ordered` / `yaml_encode_ordered` lèvent via @rhai::EvalAltResult avec le display
+    de @crate::Error::YamlError, c.-à-d. un texte préfixé `YamlError: ` ; les erreurs ne remontent
+    jamais aux scripts comme un @crate::Error appairable.
+  Le `to_string` script enregistré ne lève rien — sa voie d'erreur de dump retourne `""`.
   @idx_get, @idx_set, @keys, @values, @contains_key, @YamlDoc::len, @is_empty, @value_to_dynamic
-    and @dynamic_to_value never raise or panic on any input; every miss, wrong root or
-    unmappable value degrades silently to UNIT, empty, `false`, `0`, or @Value::Null.
-  @yaml_str_to_json carries @vynil_core::Error::YamlError display text (`YamlError: ...`),
-    most visibly the multi-document rejection; @yaml_serialize_to_string and
-    @yaml_all_serialize_to_string carry the same variant on @serde_yaml failures; Rust
-    callers of the re-exports receive them as @vynil_core::Error, continuing into
-    @crate::Result callers wrapped as @crate::Error::Core.
+    et @dynamic_to_value ne lèvent ni ne paniquent sur aucune entrée ; tout raté, mauvaise racine
+    ou valeur non-mappable se dégrade en silence en UNIT, vide, `false`, `0`, ou @Value::Null.
+  @yaml_str_to_json porte le texte display de @vynil_core::Error::YamlError (`YamlError: ...`),
+    plus visiblement le rejet multi-document ; @yaml_serialize_to_string et
+    @yaml_all_serialize_to_string portent la même variante sur un échec @serde_yaml ; les
+    appelants Rust des ré-exports les reçoivent en @vynil_core::Error, se poursuivant chez les
+    appelants @crate::Result empaquetés en @crate::Error::Core.
 
 Handles:
-  Absent string key, Bool/Int keys, non-string roots for @idx_get — @rhai::Dynamic::UNIT
-    instead of an error.
-  Sequence-rooted @idx_get by `"0"`-style index — valid @usize picks the item, anything else
-    is UNIT.
-  Sequence- and scalar-rooted documents in mapping-only methods — the empty/`false`/`0`
-    defaults, silent @idx_set drop, and the special dumps (leading blank line; `null\n`).
-  Duplicate keys — last value wins at first position, silently.
-  `<<` merge key — load-time expansion with explicit-wins and merge-position inserts; bad
-    shapes fail the load.
-  Unknown anchor and self-referential alias — load-time Err; shared-value aliases —
-    load-time clone, dump-time expansion.
-  `!!binary` (valid and non-UTF-8 payloads) and `!!timestamp` — rewritten to strings at
-    load; the data behind them is reported, not preserved.
-  Empty, comment-only and `---`-only documents — @Value::Null.
-  Multi-document input — first document only.
-  `null` value and absent key — both @Dynamic::UNIT.
-  Dynamic outside the conversion ladder — JSON round-trip, and @Value::Null when that too
-    fails.
-  Collection sizes @i64::try_from cannot represent — @YamlDoc::len answers @i64::MAX.
+  Clé string absente, clés Bool/Int, racines non-string pour @idx_get — @rhai::Dynamic::UNIT
+    au lieu d'une erreur.
+  @idx_get sur racine séquence par index façon `"0"` — un @usize valide sélectionne l'item,
+    tout le reste est UNIT.
+  Documents à racine séquence ou scalaire dans les méthodes mapping-only — les défauts
+    vide/`false`/`0`, le rejet silencieux de @idx_set, et les dumps spéciaux (ligne blanche de
+    tête ; `null\n`).
+  Clés dupliquées — la dernière valeur gagne en première position, en silence.
+  merge key `<<` — expansion au chargement avec explicit-wins et insertions à la position de
+    merge ; les mauvaises formes font échouer le chargement.
+  Ancre inconnue et alias autoréférentiel — Err au chargement ; aliases à valeur partagée —
+    clone au chargement, expansion au dump.
+  `!!binary` (payloads valides et non-UTF-8) et `!!timestamp` — réécrits en chaînes au chargement ;
+    la donnée derrière est rapportée, pas préservée.
+  Documents vides, comment-only et `---` seuls — @Value::Null.
+  Entrée multi-document — premier document uniquement.
+  valeur `null` et clé absente — toutes deux @Dynamic::UNIT.
+  Dynamic hors de l'échelle de conversion — aller-retour JSON, et @Value::Null quand celui-ci
+    échoue aussi.
+  Tailles de collection que @i64::try_from ne peut représenter — @YamlDoc::len répond @i64::MAX.
 
 Tasks:
-  [ ] Cover @YamlDoc scalar typing: `yes`/`NO`/`on`/`True` → `true`, `y` string, quoted
-      `"true"` and `"yes"` surviving re-encode quoted, `~`/`NULL` → null.
-  [ ] Cover mapping-key typing: `yes: v` → Bool key invisible to @keys / @idx_get /
-      @contains_key, counted by @len, re-encoded `true: v`; `80: web` likewise unreadable as
+  [ ] Couvrir le typage scalaire de @YamlDoc : `yes`/`NO`/`on`/`True` → `true`, `y` en chaîne,
+      `"true"` et `"yes"` quotés survivant ré-encodés avec quotes, `~`/`NULL` → null.
+  [ ] Couvrir le typage des clés de mapping : `yes: v` → clé Bool invisible à @keys / @idx_get /
+      @contains_key, comptée par @len, ré-encodée `true: v` ; `80: web` tout aussi illisible via
       `doc["80"]`.
-  [ ] Cover document edges: `""`, `"# c\n"`, `"---\n"` → @Value::Null encoding `null\n`;
-      `z: 1\n---\n<broken>` returning only the first document and re-encoding without `---`;
-      comments between entries absent from output.
-  [ ] Cover @keys / @values / @contains_key / @len / @is_empty on sequence- and
-      scalar-rooted documents, and @idx_set silently dropping writes to them.
-  [ ] Cover @idx_get clone semantics: mutating a nested child without re-assignment not
-      surviving re-encode, and the `let child = doc[...]` + `doc[...] = child` dance working.
-  [ ] Cover duplicates (`a: 1\na: 2` → one pair), `<<` expansion (mapping form, sequence
-      form, explicit-wins, position at the `<<` entry), and both failure shapes.
-  [ ] Cover anchors: unknown-alias Err, `&x [*x]` Err, alias expansion in encoded output.
-  [ ] Cover the numeric edges: `0755` → `755`, `0x1F` / `1_000` strings,
-      `99999999999999999999999` loading as @Value::Float and encoding the full f64 decimal
-      `99999999999999991611392.0`, `1.5` / `3.0` round-trips, and Float specials encoding
-      `.inf` / `.nan` while loading them back as strings.
-  [ ] Cover tagged scalars: `!!binary aGVsbG8=` → plain `hello` in output, `!!binary //7/` →
-      `"[binary data: 3 bytes]"` output quoted, malformed base64 failing the load,
-      `!!timestamp` → `timestamp:`-prefixed string.
-  [ ] Cover quoted/first-line keys: a quoted key mid-document loads as string and re-prints
-      unquoted; `"q": v...` or `80: v...` as the first line load as the bare key scalar with
-      the entries dropped; `y: n` stays strings.
-  [ ] Cover @dynamic_to_value: @rhai::Map → key-ordered @Value::Mapping, unit → null,
-      embedded @serde_json-serializable Dynamic → mapped, non-serializable → silent null,
-      nested @YamlDoc unwrap; cover `yaml_encode_ordered` on both overloads (plain Dynamic
-      scalar/map/array and @YamlDoc).
-  [ ] Cover @yaml_ordered_rhai_register as a unit: script round-trip of decode → mutate →
-      encode, script `len` / `contains` / `keys`, error text prefix `YamlError: ` on bad
-      input, `to_string` on a good doc matching @YamlDoc::to_yaml_string; keep the existing
-      @test_yaml_decode_modify_single_key_preserves_order passing (today it lives in
-      ./rhaihandler.rs).
-  [ ] Contrast the re-exports against @YamlDoc in tests: `yes` string in
-      @yaml_str_to_json output vs bool through @YamlDoc; date string preserved vs mangled;
-      multi-document rejected vs truncated; empty input `Ok(null)` vs @YamlDoc null;
-      @yaml_serialize_to_string marker-less; @yaml_all_serialize_to_string `---\n` framing.
-  [?] @LoaderType::RoundTrip with @preserve_comments `true` reads as "comments and styles
-      round-trip", but this backend path ignores both — comments die, quoting is re-derived.
-      Decide whether @YamlDoc should move to the genuinely comment-aware @Yaml API or the
-      misleading flags get dropped.
-  [?] The two backends in one file disagree on everything a script can observe (`yes` bool
-      vs string, dates mangled vs intact, multi-doc dropped vs rejected, anchors
-      load-resolved vs JSON-shaped). Documents routed through different helpers change
-      meaning. Decide later which typing is the durable contract, or split
-      the surfaces by consumer.
-  [?] YAML 1.1-style booleans: unquoted `yes` / `on` load as `true` and a `yes:` key
-      re-emits as `true:` under this backend, while the @serde_yaml exports (1.2-core
-      schema) keep them strings — two answers for manifests moving between the surfaces.
-      Confirm the 1.1 typing is intended for k8s-bound documents.
-  [?] Leading-zero integers silently change value and wire: the backend accepts `0755` as the
-      decimal `755`, so an octal-mode-looking option becomes a different number on the
-      re-emitted YAML and `needs_quoting` never re-quotes it. Decide whether decimal-only
-      typing is acceptable or leading-zero text must stay a string.
-  [?] Bare ISO dates are corrupted by the backend scanner (`2024-01-15` → `Int(2024)` plus a
-      spurious `Int(-1): Int(-15)` entry or split sequence items; `T` forms fail scanning).
-      Decide whether to patch/pin `rust-yaml` upstream before manifests with dates flow
-      through @YamlDoc, or route date-carrying documents to @yaml_str_to_json.
-  [?] Multi-document input is silently truncated to the first document (even when the later
-      documents were invalid text). Decide later whether `yaml_decode_ordered` must reject
-      streams or gain a multi-doc API.
-  [?] Integers beyond @i64 become @f64 with silent precision loss through loading and
-      encoding. Decide whether big integers should stay strings or widen.
-  [?] Infinite/NaN floats encode as `.inf` / `-.inf` / `.nan` which the loader returns as
-      plain strings, breaking the second cycle of a decode/encode pipeline. Decide whether
-      float specials must be cycle-stable.
-  [?] Duplicate keys are accepted with last-value-wins and the `allow_duplicate_keys` knob
-      is not wired into the composer at all. Decide later whether strict rejection is needed.
-  [?] Mappings with non-string keys are half-present: dumps carry them, @YamlDoc accessors
-      cannot reach them, @values lists their values unlabelled. Decide whether to reject,
-      stringify, or widen the accessors.
-  [?] Chained indexed writes cannot propagate (nested reads clone); scripts must re-assign.
-      Decide later whether @YamlDoc needs a nested setter or a documented write protocol.
-  [?] An explicit `null` value and an absent key are the same `()` to scripts. Decide later
-      whether presence detection is required.
-  [?] Script-side `to_string` swallows dump failures to `""` while `yaml_encode_ordered`
-      raises — one error channel silenced; and @YamlDoc::to_yaml_string keeps an unreachable
-      Err arm (its own doc-comment claims `the file cannot be read` although it reads no
-      file). Decide whether the fallible signature stays, and fix or drop the comment.
-  [?] @dynamic_to_value turns un-JSON-able Dynamics into @Value::Null with no signal — data
-      dropped with the assignment still "succeeding". Decide later whether that must be an
-      error or a preserved marker.
-  [?] `!!binary` cannot traverse the surface: UTF-8 payloads silently decode, non-UTF-8
-      payloads collapse to an approximate-count marker string, and re-encoding emits the
-      marker or plain string. Decide whether binary documents need a distinct lossless
-      channel, and whether the placeholder shape is acceptable.
-  [?] The backend merge-key handling is lossy and non-spec: an explicit `<<` mapping key can
-      never be stored and the quoted `'<<': 7` document disappears into the bare string
-      `"<<"` (one face of the first-line key bug below). Decide whether merge-key support is
-      corrected upstream or removed.
-  [?] First-line key collapse: a block mapping whose first line starts with a quoted or a
-      numeric-typed key (`"q": v` / `80: v` as line 1) loads as just the key scalar and
-      silently discards the rest — documents starting with port-keyed or quoted-first blocks
-      lose data on decode, and only mid-document occurrences parse. Same upstream queue as
-      the date scanner.
-  [?] @YamlDoc registers under the script type name `"map"`, the same name @rhai::Map
-      already reports, and member functions like `len` and `to_string` also answer on a
-      native map, so scripts cannot tell the two backends apart without trying an index.
-      Decide later whether the registration renames to e.g. `YamlDoc` or `yaml_map`.
-  [?] The @serde_json fallback in @dynamic_to_value carries a dead arm: the match arm
-      mapping a large @serde_json number to @Value::String is unreachable because every
-      @serde_json::Number answers @serde_json::Number::as_f64. Decide whether to delete or
-      keep as a guard.
-  [?] Root sequences dump with a leading blank line, so script `to_string` and
-      `yaml_encode_ordered` output differs byte-wise from @yaml_serialize_to_string for the
-      same content. Confirm wire shape matters (diffs, hashes) before pinning it, then
-      decide whether to fix upstream.
-  [?] @value_to_dynamic and @dynamic_to_value are @pub while the @rust_yaml::Value /
-      @rhai::Dynamic types they trade are backend-typed; widening the module boundary
-      couples consumers to `rust-yaml` types directly. Confirm the exports are intended API
-      (the re-exports already are; the accessors are used via registration only).
+  [ ] Couvrir les edges de document : `""`, `"# c\n"`, `"---\n"` → @Value::Null encodant `null\n` ;
+      `z: 1\n---\n<broken>` ne retournant que le premier document et se ré-encodant sans `---` ;
+      commentaires intercalés absents de la sortie.
+  [ ] Couvrir @keys / @values / @contains_key / @len / @is_empty sur des documents à racine
+      séquence ou scalaire, et @idx_set ignorant silencieusement leurs écritures.
+  [ ] Couvrir la sémantique de clone de @idx_get : muter un enfant imbriqué sans ré-assignation
+      ne survivant pas au ré-encodage, et la danse `let child = doc[...]` + `doc[...] = child`
+      fonctionnant.
+  [ ] Couvrir les doublons (`a: 1\na: 2` → une seule paire), l'expansion `<<` (forme mapping,
+      forme séquence, explicit-wins, position à l'entrée `<<`), et les deux formes d'échec.
+  [ ] Couvrir les ancres : Err d'alias inconnue, Err de `&x [*x]`, expansion des alias dans la
+      sortie encodée.
+  [ ] Couvrir les edges numériques : `0755` → `755`, `0x1F` / `1_000` en chaînes,
+      `99999999999999999999999` se chargeant en @Value::Float et encodant la décimale f64 complète
+      `99999999999999991611392.0`, les aller-retours `1.5` / `3.0`, et les Float spéciaux encodant
+      `.inf` / `.nan` tandis qu'ils se relisent en chaînes.
+  [ ] Couvrir les scalaires taggués : `!!binary aGVsbG8=` → `hello` plain en sortie,
+      `!!binary //7/` → `"[binary data: 3 bytes]"` en sortie quotée, base64 malformée faisant
+      échouer le chargement, `!!timestamp` → chaîne préfixée `timestamp:`.
+  [ ] Couvrir clés quotées/première ligne : une clé quotée en milieu de document se charge en
+      chaîne et se ré-imprime sans quotes ; `"q": v...` ou `80: v...` en première ligne se
+      chargent en simple scalaire clé avec les entrées perdues ; `y: n` reste des chaînes.
+  [ ] Couvrir @dynamic_to_value : @rhai::Map → @Value::Mapping en ordre de clés, unit → null,
+      Dynamic @serde_json-sérialisable embarqué → mappé, non-sérialisable → null silencieux,
+      @YamlDoc imbriqué déballé ; couvrir `yaml_encode_ordered` sur les deux surcharges (Dynamic
+      scalar/map/array plain et @YamlDoc).
+  [ ] Couvrir @yaml_ordered_rhai_register en unité : aller-retour script decode → mutate →
+      encode, `len` / `contains` / `keys` en script, préfixe de texte d'erreur `YamlError: ` sur
+      entrée invalide, `to_string` sur un bon doc égalant @YamlDoc::to_yaml_string ; garder
+      @test_yaml_decode_modify_single_key_preserves_order existant passant (il vit aujourd'hui
+      dans ./rhaihandler.rs).
+  [ ] Contraster les ré-exports face à @YamlDoc dans les tests : `yes` chaîne dans la sortie
+      @yaml_str_to_json vs bool via @YamlDoc ; chaîne de date préservée vs massacrée ;
+      multi-document rejeté vs tronqué ; entrée vide `Ok(null)` vs null de @YamlDoc ;
+      @yaml_serialize_to_string sans marqueur ; encadrement `---\n` de
+      @yaml_all_serialize_to_string.
+  [?] @LoaderType::RoundTrip avec @preserve_comments `true` se lit comme « commentaires et styles
+        font l'aller-retour », mais cette voie de backend ignore les deux — les commentaires
+        meurent, le quoting est ré-dérivé. Décider si @YamlDoc doit passer à l'API @Yaml réellement
+        comment-aware ou si les flags trompeurs sont retirés.
+  [?] Les deux backends d'un même fichier divergent sur tout ce qu'un script peut observer (`yes`
+        bool vs chaîne, dates massacrées vs intactes, multi-doc jeté vs rejeté, ancres résolues au
+        load vs en forme JSON). Des documents routés par différentes helpers changent de sens.
+        Décider plus tard quel typage est le contrat durable, ou scinder les surfaces par
+        consommateur.
+  [?] Booléens style YAML 1.1 : `yes` / `on` non quotés se chargent en `true` et une clé `yes:`
+        se ré-émet en `true:` sous ce backend, tandis que les exports @serde_yaml (schéma 1.2-core)
+        les gardent en chaînes — deux réponses pour des manifests circulant entre les surfaces.
+        Confirmer que le typage 1.1 est voulu pour des documents destinés à k8s.
+  [?] Les entiers à zéros de tête changent silencieusement valeur et câble : le backend accepte
+        `0755` comme le décimal `755`, donc une option d'allure mode octal devient un nombre
+        différent dans le YAML ré-émis et `needs_quoting` ne la re-quote jamais. Décider si un
+        typage décimal-only est acceptable ou si le texte à zéro de tête doit rester une chaîne.
+  [?] Les dates ISO nues sont corrompues par le scanner du backend (`2024-01-15` → `Int(2024)`
+        plus une entrée parasite `Int(-1): Int(-15)` ou des items de séquence scindés ; les formes
+        `T` échouent au scan). Décider s'il faut patcher/épingler `rust-yaml` en amont avant que
+        des manifests avec dates traversent @YamlDoc, ou router les documents porteurs de dates
+        vers @yaml_str_to_json.
+  [?] L'entrée multi-document est silencieusement tronquée au premier document (même quand les
+        documents suivants étaient du texte invalide). Décider plus tard si `yaml_decode_ordered`
+        doit rejeter les flux ou gagner une API multi-doc.
+  [?] Les entiers au-delà de @i64 deviennent @f64 avec perte de précision silencieuse au travers
+        du chargement et de l'encodage. Décider si les grands entiers doivent rester des chaînes
+        ou s'élargir.
+  [?] Les flottants infinis/NaN s'encodent en `.inf` / `-.inf` / `.nan` que le loader rend en
+        chaînes plain, cassant le second cycle d'un pipeline decode/encode. Décider si les spéciaux
+        de float doivent être cycle-stables.
+  [?] Les clés dupliquées sont acceptées avec last-value-wins et le bouton `allow_duplicate_keys`
+        n'est pas câblé du tout dans le composer. Décider plus tard si un rejet strict est
+        nécessaire.
+  [?] Les mappings à clés non-string sont à moitié présents : les dumps les portent, les
+        accessoirs de @YamlDoc ne les atteignent pas, @values énumère leurs valeurs sans étiquette.
+        Décider s'il faut rejeter, stringifier ou élargir les accessoirs.
+  [?] Les écritures indexées chaînées ne peuvent pas se propager (les lectures imbriquées clonent) ;
+        les scripts doivent ré-assigner. Décider plus tard si @YamlDoc a besoin d'un setter imbriqué
+        ou d'un protocole d'écriture documenté.
+  [?] Une valeur `null` explicite et une clé absente sont le même `()` pour les scripts. Décider
+        plus tard si la détection de présence est requise.
+  [?] Le `to_string` côté script avale les échecs de dump en `""` tandis que `yaml_encode_ordered`
+        lève — un canal d'erreur silencié ; et @YamlDoc::to_yaml_string conserve un bras Err
+        inatteignable (son propre doc-comment revendique `the file cannot be read` alors qu'il ne
+        lit aucun fichier). Décider si la signature faillible reste, et corriger ou retirer le
+        commentaire.
+  [?] @dynamic_to_value transforme les Dynamics non-JSON-ables en @Value::Null sans signal —
+        donnée perdue avec l'assignation qui « réussit » quand même. Décider plus tard si cela doit
+        être une erreur ou un marqueur préservé.
+  [?] `!!binary` ne peut pas traverser la surface : les payloads UTF-8 se décodent en silence, les
+        payloads non-UTF-8 s'effondrent en une chaîne-marqueur à compte approximatif, et le
+        ré-encodage émet le marqueur ou la chaîne plain. Décider si les documents binaires ont
+        besoin d'un canal distinct sans perte, et si la forme du placeholder est acceptable.
+  [?] La gestion backend de la merge key est perdue et hors-spec : une clé `<<` de mapping
+        explicite ne peut jamais être stockée et le document quoté `'<<': 7` disparaît en la simple
+        chaîne `"<<"` (une face du bug de clé de première ligne plus bas). Décider si le support des
+        merge keys est corrigé en amont ou retiré.
+  [?] Effondrement de clé de première ligne : un block mapping dont la première ligne démarre par
+        une clé quotée ou à typage numérique (`"q": v` / `80: v` en ligne 1) se charge en le seul
+        scalaire clé et jette silencieusement le reste — les documents commençant par des blocs à
+        clé de port ou quote-d'abord perdent des données au décodage, et seules les occurrences en
+        milieu de document se parsent. Même file amont que le scanner de dates.
+  [?] @YamlDoc s'enregistre sous le nom de type script `"map"`, le même nom que @rhai::Map
+        rapporte déjà, et des fonctions membres comme `len` et `to_string` répondent aussi sur une
+        map native, donc les scripts ne peuvent distinguer les deux backends sans essayer un index.
+        Décider plus tard si l'enregistrement se renomme en p. ex. `YamlDoc` ou `yaml_map`.
+  [?] Le repli @serde_json de @dynamic_to_value porte un bras mort : le bras de match mappant un
+        grand nombre @serde_json sur @Value::String est inatteignable car tout @serde_json::Number
+        répond @serde_json::Number::as_f64. Décider s'il faut le supprimer ou le garder comme garde.
+  [?] Les séquences de racine se dumper avec une ligne blanche de tête, donc la sortie `to_string`
+        et `yaml_encode_ordered` du script diffère octet pour octet de @yaml_serialize_to_string
+        pour le même contenu. Confirmer que la forme sur le câble compte (diffs, hashes) avant de
+        l'épingler, puis décider s'il faut corriger en amont.
+  [?] @value_to_dynamic et @dynamic_to_value sont @pub alors que les types @rust_yaml::Value /
+        @rhai::Dynamic qu'ils échangent sont typés backend ; élargir la frontière du module couple
+        les consommateurs directement aux types de `rust-yaml`. Confirmer que les exports sont une
+        API voulue (les ré-exports le sont déjà ; les accessoirs ne s'utilisent que via
+        l'enregistrement).
 
 Done when:
-  Every Scenario above has a passing in-file test on this file (the @YamlDoc coverage lives
-    here even while a related test sits in ./rhaihandler.rs), and `cargo test -p common`
-    with `cargo clippy --all-targets -- -D warnings` are green.
+  Chaque Scenario ci-dessus a un test passant dans ce fichier (la couverture @YamlDoc vit ici
+    même quand un test lié siège dans ./rhaihandler.rs), et `cargo test -p common` avec
+    `cargo clippy --all-targets -- -D warnings` sont verts.
 
 Example:
-  wire for `z: first\na: second\nm: third\n` after decode → set `a` → encode: exact line
-    order kept, `a:` second with the new value
-  wire after decode+encode of `# note\nstart: yes\nlist:\n- b\n- a\n`:
-    `start: true\nlist:\n- b\n- a\n` — comment gone, 1.1 bool normalized, dashes flush at
-    `list`, order kept
-  wire after decode+encode of `base: &b\n  k: v\nuse: *b\n`:
-    `base:\n  k: v\nuse:\n  k: v\n` — alias expanded, no `&b`/`*b` on output
-  numeric wire probes: `0755` → `755`, `d: 2024-01-15\nx: 1` → `d: 2024\n-1: -15\nx: 1`,
+  câble pour `z: first\na: second\nm: third\n` après decode → set `a` → encode : ordre de
+    lignes exact conservé, `a:` en deuxième avec la nouvelle valeur
+  câble après decode+encode de `# note\nstart: yes\nlist:\n- b\n- a\n` :
+    `start: true\nlist:\n- b\n- a\n` — commentaire parti, bool 1.1 normalisé, tirets au ras de
+    `list`, ordre conservé
+  câble après decode+encode de `base: &b\n  k: v\nuse: *b\n` :
+    `base:\n  k: v\nuse:\n  k: v\n` — alias expandu, pas de `&b`/`*b` en sortie
+  sondes numériques du câble : `0755` → `755`, `d: 2024-01-15\nx: 1` → `d: 2024\n-1: -15\nx: 1`,
     `d: 99999999999999999999999` → `d: 99999999999999991611392.0`
-  empty documents encode to `null\n`; root sequence `- x\n- y\n` encodes to
+  les documents vides s'encodent en `null\n` ; la séquence racine `- x\n- y\n` s'encode en
     `"\n- x\n- y\n"`
-  script error text for bad input is `YamlError: Error at line <l>, column <c>: <backend message>`
+  le texte d'erreur script sur entrée invalide est `YamlError: Error at line <l>, column <c>: <backend message>`
 
 Scenario: Script round-trip preserves key order
-  Given the YAML text `z: first\na: second\nm: third\n`
-  When a script (or Rust code via @std::str::FromStr and @YamlDoc::to_yaml_string) decodes
-    it, sets `doc["a"] = "MODIFIED"`, and encodes the document
-  Then the encoded lines keep the order `z`, `a`, `m` with the `a` line carrying `MODIFIED`
-  And no line is re-sorted, re-flowed or re-indented beyond the emission layout above
-  Maps to test @test_yaml_decode_modify_single_key_preserves_order
-  The mapped test is the only one covering this file today and it sits in ./rhaihandler.rs.
+  Given le texte YAML `z: first\na: second\nm: third\n`
+  When un script (ou du code Rust via @std::str::FromStr et @YamlDoc::to_yaml_string) le décode,
+    pose `doc["a"] = "MODIFIED"`, et encode le document
+  Then les lignes encodées gardent l'ordre `z`, `a`, `m` avec la ligne `a` portant `MODIFIED`
+  And aucune ligne n'est retriée, refusionnée ou ré-indentée au-delà de la mise en page
+    d'émission ci-dessus
+  Correspond au test @test_yaml_decode_modify_single_key_preserves_order
+  Le test mappé est le seul à couvrir ce fichier aujourd'hui et il siège dans ./rhaihandler.rs.
 
 Scenario: Nested mutation needs re-assignment
-  Given `a:\n  b: 1\n` decoded into a @YamlDoc on a registered engine
-  When a script runs `doc["a"]["b"] = 2` and encodes without re-assigning `doc["a"]`
-  Then the encoded document still holds `b: 1` because @idx_get handed back a copy
-  But encoding after `let x = doc["a"]`, `x["b"] = 2`, `doc["a"] = x` holds `b: 2`
-  No mapped test exists.
+  Given `a:\n  b: 1\n` décodé dans un @YamlDoc sur un engine enregistré
+  When un script exécute `doc["a"]["b"] = 2` et encode sans ré-assigner `doc["a"]`
+  Then le document encodé porte encore `b: 1` car @idx_get avait rendu une copie
+  But l'encodage après `let x = doc["a"]`, `x["b"] = 2`, `doc["a"] = x` porte `b: 2`
+  Aucun test mappé n'existe.
 
 Scenario: Absent key and null value are both ()
-  Given `a: null\n` decoded through `yaml_decode_ordered`
-  Then `doc["a"]` and `doc["missing"]` are each the @rhai unit `()`
-  And @YamlDoc::keys still reports `a` as present and @YamlDoc::contains_key answers `true`
-  No mapped test exists.
+  Given `a: null\n` décodé via `yaml_decode_ordered`
+  Then `doc["a"]` et `doc["missing"]` sont chacun l'unité @rhai `()`
+  And @YamlDoc::keys rapporte encore `a` comme présent et @YamlDoc::contains_key répond `true`
+  Aucun test mappé n'existe.
 
 Scenario: Implicit typing normalizes the wire
   Given `start: yes\nstop: no\nflag: True\nword: "true"\nport: 80\n`
-  When it is decoded and re-encoded
-  Then `start` and `flag` print `true`, `stop` prints `false`, `word` re-prints quoted
-    `"true"`, and `port` prints `80`
-  And `y` and `n` are not boolean forms — a `y: n` text keeps both key and value strings
-  No mapped test exists.
+  When il est décodé puis ré-encodé
+  Then `start` et `flag` s'impriment `true`, `stop` s'imprime `false`, `word` se ré-imprime
+    quoté `"true"`, et `port` s'imprime `80`
+  And `y` et `n` ne sont pas des formes booléennes — un texte `y: n` garde clé et valeur en
+    chaînes
+  Aucun test mappé n'existe.
 
 Scenario: Bare ISO date is corrupted
   Given `d: 2024-01-15\nx: 1\n`
-  When a @YamlDoc load runs
-  Then the document holds `d` → `Int(2024)` and the spurious entry `Int(-1)` → `Int(-15)`
-    next to `x`
-  But @yaml_str_to_json on the same text keeps `2024-01-15` unharmed as a string
-  No mapped test exists; see the open decision task.
+  When un chargement @YamlDoc s'exécute
+  Then le document porte `d` → `Int(2024)` et l'entrée parasite `Int(-1)` → `Int(-15)` à côté
+    de `x`
+  But @yaml_str_to_json sur le même texte conserve `2024-01-15` intact en chaîne
+  Aucun test mappé n'existe ; voir la tâche de décision ouverte.
 
 Scenario: First document wins silently
-  Given the text `z: 1\n---\nb:\n  x: 2`
-  When @YamlDoc decodes and re-encodes
-  Then only `z: 1` survives and the output has no `---` line
-  But the same text through @yaml_str_to_json fails outright with the
-    more-than-one-document message
-  No mapped test exists.
+  Given le texte `z: 1\n---\nb:\n  x: 2`
+  When @YamlDoc décode et ré-encode
+  Then seul `z: 1` survit et la sortie n'a pas de ligne `---`
+  But le même texte via @yaml_str_to_json échoue purement avec le message
+    more-than-one-document
+  Aucun test mappé n'existe.
 
 Scenario: Empty and comment-only documents encode as null
-  Given input `""`, `"# only a comment\n"`, or `"---\n"`
-  When @YamlDoc decodes and encodes it
-  Then the document is @Value::Null and the output is exactly `null\n`
-  No mapped test exists.
+  Given les entrées `""`, `"# only a comment\n"`, ou `"---\n"`
+  When @YamlDoc les décode et encode
+  Then le document est @Value::Null et la sortie est exactement `null\n`
+  Aucun test mappé n'existe.
 
 Scenario: Comments drop despite the RoundTrip config
   Given `start: yes\n# mid comment\nlist:\n- b\n- a\n`
-  When it is decoded and encoded through @new_yaml's config
-  Then the output is `start: true\nlist:\n- b\n- a\n` — comment dropped, bool normalized,
-    dashes flush under `list`, key order kept
-  No mapped test exists.
+  When il est décodé et encodé via la config de @new_yaml
+  Then la sortie est `start: true\nlist:\n- b\n- a\n` — commentaire retiré, bool normalisé,
+    tirets au ras sous `list`, ordre des clés conservé
+  Aucun test mappé n'existe.
 
 Scenario: Duplicates, merge keys and anchor failures
-  Given `"a: 1\na: 2\n"` decodes to exactly one pair `a: 2`
-  And `"base: &b\n  k: v\nuse:\n  k2: w\n  <<: *b\n"` decodes `use` as `k2` then `k`
-  But `"use:\n  <<: 5"` fails with `Merge key value must be a mapping or sequence of mappings`
-  And `"a: &x [*x]"` fails with `Unknown anchor 'x'`
-  No mapped test exists.
+  Given `"a: 1\na: 2\n"` se décode en exactement une paire `a: 2`
+  And `"base: &b\n  k: v\nuse:\n  k2: w\n  <<: *b\n"` décode `use` comme `k2` puis `k`
+  But `"use:\n  <<: 5"` échoue avec `Merge key value must be a mapping or sequence of mappings`
+  And `"a: &x [*x]"` échoue avec `Unknown anchor 'x'`
+  Aucun test mappé n'existe.
 
 Scenario: Non-string keys are unreachable but printed
-  Given the document `yes: v\n80: web\nreg: ok\nplain: p\n`
-  When a script inspects the decoded document
-  Then @keys lists only `reg` and `plain`, `doc["yes"]` and `doc["80"]` yield `()`,
-    `len` is `4`, and re-encoding prints `true: v`, `80: web`, `reg: ok`, `plain: p`
-  But the same pairs written as the first line (`80: web\nyes: v`) collapse the load to the
-    bare key value
-  No mapped test exists.
+  Given le document `yes: v\n80: web\nreg: ok\nplain: p\n`
+  When un script inspecte le document décodé
+  Then @keys n'énumère que `reg` et `plain`, `doc["yes"]` et `doc["80"]` rendent `()`,
+    `len` vaut `4`, et le ré-encodage imprime `true: v`, `80: web`, `reg: ok`, `plain: p`
+  But les mêmes paires écrites en première ligne (`80: web\nyes: v`) effondrent le chargement
+    en la seule valeur de clé
+  Aucun test mappé n'existe.
 
 Scenario: Numeric and float edges
   Given `i: 1e3\nz: 99999999999999999999999\nf: 3.0\ninf1: .inf\ninf2: inf\n`
-  When decoded, re-encoded, then decoded once more from that output
-  Then `i` prints `1000.0`, `f` prints `3.0`, `inf1` loads as the string `.inf` and prints
-    back `.inf`, and `inf2` loads as @Value::Float, prints `.inf`, then loads back as the
-    string `.inf`
-  And `z` loads as @Value::Float and re-encodes to `99999999999999991611392.0` — the f64
-    expanded decimal, exposing the lost digits
-  No mapped test exists.
+  When décodé, ré-encodé, puis décodé une seconde fois depuis cette sortie
+  Then `i` s'imprime `1000.0`, `f` s'imprime `3.0`, `inf1` se charge en chaîne `.inf` et se
+    ré-imprime `.inf`, et `inf2` se charge en @Value::Float, s'imprime `.inf`, puis se recharge
+    en chaîne `.inf`
+  And `z` se charge en @Value::Float et se ré-encode en `99999999999999991611392.0` — la
+    décimale f64 expandue, exposant les chiffres perdus
+  Aucun test mappé n'existe.
 
 Scenario: Binary and timestamp tags are rewritten, not carried
   Given `"blob: !!binary aGVsbG8=\nraw: !!binary //7/\nts: !!timestamp 2024-01-15\n"`
-  When decoding runs on the locked backend
-  Then `blob` holds the string `hello`, `raw` the string `[binary data: 3 bytes]` which the
-    emitter then prints double-quoted, and `ts` demonstrates the `timestamp:` prefix plus
-    the separate date-mangling corruption
-  No mapped test exists.
+  When le décodage s'exécute sur le backend verrouillé
+  Then `blob` porte la chaîne `hello`, `raw` la chaîne `[binary data: 3 bytes]` que l'émetteur
+    imprime ensuite double-quotée, et `ts` démontre le préfixe `timestamp:` plus la corruption
+    separate de massacre de date
+  Aucun test mappé n'existe.
 
 Scenario: Sequence and scalar roots degrade accessors
-  Given a decoded root sequence document `- x\n- y\n`
-  Then @keys and @values answer empty, @contains_key answers `false`, @len answers `2`,
-    @is_empty `false`, and `idx_set` of any key leaves the text byte-identical
-  But a root-scalar document answers @len `0` and @is_empty `true`
-  No mapped test exists.
+  Given un document séquence racine décodé `- x\n- y\n`
+  Then @keys et @values répondent vides, @contains_key répond `false`, @len répond `2`,
+    @is_empty `false`, et `idx_set` de n'importe quelle clé laisse le texte identique octet
+    pour octet
+  But un document scalaire racine répond @len `0` et @is_empty `true`
+  Aucun test mappé n'existe.
 
 Scenario: Dynamic fallbacks at the Rhai boundary
-  Given a script-side @rhai::Map with keys inserted in an arbitrary order
-  When it is encoded via the @YamlDoc-registered engine's `yaml_encode_ordered`
-  Then the YAML follows the map's insertion order with string keys
-  But a @Dynamic the @serde_json fallback refuses (or whose JSON cannot be read back)
-    converts to @Value::Null silently, printing as `null`
-  No mapped test exists.
+  Given un @rhai::Map côté script avec des clés insérées dans un ordre arbitraire
+  When il est encodé via `yaml_encode_ordered` de l'engine enregistré de @YamlDoc
+  Then le YAML suit l'ordre d'insertion de la map avec des clés string
+  But un @Dynamic que le repli @serde_json refuse (ou dont le JSON ne peut être relu)
+    se convertit en @Value::Null silencieusement, s'imprimant `null`
+  Aucun test mappé n'existe.

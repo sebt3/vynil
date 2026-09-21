@@ -1,150 +1,151 @@
 Spec: LibScanHarbor
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  List every image repository of a Harbor project as `registry/name` image strings for the
-    box-scan lane, authenticating either with an on-cluster dockerconfigjson pull secret or
-    with Harbor's anonymous registry token.
+  Lister tous les dépôts d'images d'un projet Harbor sous forme de chaînes d'image
+    `registry/name` pour la lane box-scan, en s'authentifiant soit avec un secret de pull
+    dockerconfigjson on-cluster, soit avec le token de registre anonyme de Harbor.
 
 Exposes:
-  @list_repository(spec, namespace) — the module's sole @fn; reached by importers as
-    `harbor::list_repository(...)` (the `import "scan_harbor" as harbor` convention; sole
-    importer ./../boxes/scan.rhai, harbor-source lane only). Returns an @Array of strings.
+  @list_repository(spec, namespace) — le seul @fn du module ; atteint par les importeurs via
+    `harbor::list_repository(...)` (la convention `import "scan_harbor" as harbor` ; seul
+    importeur ./../boxes/scan.rhai, lane harbor-source uniquement). Retourne un @Array de chaînes.
 
 Accepts:
-  @spec — a @JukeBoxSpec-shaped @rhai::Dynamic (real `box.spec` through @JukeBox::get_spec, or
-    a raw mock fixture map). Indexes `source.harbor.registry` and `source.harbor.project` (the
-    @JukeBoxDef::Harbor variant of ./../../../common/src/jukebox.sdd) and reads the optional
-    `pull_secret` key (@JukeBoxSpec::pull_secret, dockerconfigjson secret name).
-  @namespace — @String namespace owning the pull Secret (the scan lane passes
-    `args.namespace`); unused when the anonymous branch runs.
-  A bare-host `registry` index — the scheme is hardcoded and the client base URL is built
-    `https://${registry}`.
+  @spec — un @rhai::Dynamic en forme de @JukeBoxSpec (vrai `box.spec` via @JukeBox::get_spec, ou
+    une carte de fixture mock brute). Indexe `source.harbor.registry` et `source.harbor.project` (la
+    variante @JukeBoxDef::Harbor de ./../../../common/src/jukebox.sdd) et lit la clé optionnelle
+    `pull_secret` (@JukeBoxSpec::pull_secret, nom de secret dockerconfigjson).
+  @namespace — le namespace @String propriétaire du Secret de pull (la lane de scan passe
+    `args.namespace`) ; inutilisé quand la branche anonyme s'exécute.
+  Un index `registry` en hôte nu — le schéma est codé en dur et l'URL de base du client est
+    construite `https://${registry}`.
 
 Returns:
-  An @Array of `${registry}/${p.name}` strings, one per repository row across all pages:
-    page 1 mapped first, each later page extended in with @Array.append — order is Harbor's
-    `sort=name` page order, no dedup, no filter. The string is the "image string" convention
-    the importer re-splits on its first `/`.
-
+  Un @Array de chaînes `${registry}/${p.name}`, une par ligne de dépôt sur toutes les pages :
+    la page 1 est mappée en premier, chaque page suivante est étendue via @Array.append — l'ordre
+    est l'ordre de pages `sort=name` de Harbor, sans déduplication, sans filtre. La chaîne est la
+    convention « image string » que l'importeur re-découpe sur son premier `/`.
 Raises:
-  @throw `Cannot get anonymous authentication from harbor` — static text, HTTP code not
-    interpolated — when the token exchange answers any `code` other than `200`.
-  @throw `Unable to list from ${registry}/${project}` when the initial list page or any
-    later page answers any `code` other than `200` — the loop and the initial request throw
-    the identical interpolated text; neither the page number nor the code appears in it.
-  Engine errors, uncaught — the file mints no guard of its own so each reaches the caller:
-    @secret::get_auth_from raising per ./secret_dockerconfigjson.sdd; @parse_int over a
-    non-integer `x-total-count` text; the missing-header case where @headers_get returns `()`
-    and @parse_int has no @() candidate; a token answer without `token` making
-    @add_header_bearer receive `()`; a non-JSON list body arriving as `#{}` where `.map`
-    fails; a row without `name`.
+  @throw `Cannot get anonymous authentication from harbor` — texte statique, code HTTP non
+    interpolé — quand l'échange de token répond n'importe quel `code` autre que `200`.
+  @throw `Unable to list from ${registry}/${project}` quand la page de liste initiale ou n'importe
+    quelle page ultérieure répond n'importe quel `code` autre que `200` — la boucle et la requête
+    initiale lèvent le texte interpolé identique ; ni le numéro de page ni le code n'y figurent.
+  Erreurs du moteur, non attrapées — le fichier ne forge aucun garde-fou à lui, chacune atteint
+    l'appelant : @secret::get_auth_from qui lève selon ./secret_dockerconfigjson.sdd ; @parse_int sur
+    un texte `x-total-count` non entier ; le cas d'en-tête manquant où @headers_get renvoie `()`
+    et @parse_int n'a pas de candidat @() ; une réponse de token sans `token` faisant recevoir `()`
+    à @add_header_bearer ; un corps de liste non-JSON arrivant comme `#{}` où `.map` échoue ; une
+    ligne sans `name`.
 
 Handles:
-  No `pull_secret` key, or the key present as the empty string — the anonymous token branch.
-  A single-page project (`x-total-count` up to `10`) or an empty project (`0`) — the loop
-    runs no iteration and only the page-1 answer is mapped.
+  Pas de clé `pull_secret`, ou la clé présente comme chaîne vide — la branche du token anonyme.
+  Un projet mono-page (`x-total-count` jusqu'à `10`) ou un projet vide (`0`) — la boucle
+    n'exécute aucune itération et seule la réponse de la page 1 est mappée.
 
 Must:
-  Build exactly one @new_http_client(`https://${registry}`) reused for the token and all list
-    requests; every path given to @get is relative (base-join owned by the core client).
-  Authenticate through exactly one exclusive branch keyed on
-    `"pull_secret" in spec.keys() && spec.pull_secret!=""`: the secret branch calls
-    @secret::get_auth_from(spec.pull_secret, @namespace, @registry) — the exact credential
-    triple frozen by ./secret_dockerconfigjson.sdd — and applies @add_header_basic(auth.user,
-    auth.pass); the else branch issues the anonymous GET
-    `service/token?service=harbor-registry&scope=repository:${project}/*:pull` before any
-    header is set on the client, then @add_header_bearer(auth.json.token). The secret branch
-    never calls the token endpoint; the bearer is never set on failure.
-  Fetch page one with GET `api/v2.0/projects/${project}/repositories?page_size=10&sort=name`
-    — no `page` param, Harbor serves page one — and page `i` with GET
-    `api/v2.0/projects/${project}/repositories?page=${i}&page_size=10&sort=name`, param order
-    verbatim.
-  Compute the page budget as `max_size = @parse_int(@headers_get(initial.headers, "x-total-count"))`
-    then `max_pages = @to_int(@ceiling(max_size / 10.0)) + 1` — INT over the float literal
-    divides to FLOAT, @ceiling is the FLOAT whole-up, @to_int truncates the whole-valued
-    FLOAT back to INT — and loop `for i in 2..max_pages` with its endpoint exclusive: fetched
-    pages are exactly `2` through `ceil(max_size / 10)`, the true last page, so page 1 is
-    never re-fetched and no page beyond the last is requested. The `10.0` divisor and the
-    `page_size=10` query param are one constant and must move together (drift silently skips
-    or refetches pages).
+  Construire exactement un @new_http_client(`https://${registry}`) réutilisé pour le token et toutes
+    les requêtes de liste ; chaque chemin passé à @get est relatif (jointure de base portée par le
+    client core).
+  S'authentifier via exactement une branche exclusive indexée sur
+    `"pull_secret" in spec.keys() && spec.pull_secret!=""` : la branche secret appelle
+    @secret::get_auth_from(spec.pull_secret, @namespace, @registry) — le triple de credentials
+    gelé par ./secret_dockerconfigjson.sdd — et applique @add_header_basic(auth.user,
+    auth.pass) ; la branche else émet le GET anonyme
+    `service/token?service=harbor-registry&scope=repository:${project}/*:pull` avant tout
+    en-tête posé sur le client, puis @add_header_bearer(auth.json.token). La branche secret
+    n'appelle jamais l'endpoint de token ; le bearer n'est jamais posé en cas d'échec.
+  Récupérer la page une via GET `api/v2.0/projects/${project}/repositories?page_size=10&sort=name`
+    — sans param `page`, Harbor sert la page une — et la page `i` via GET
+    `api/v2.0/projects/${project}/repositories?page=${i}&page_size=10&sort=name`, ordre des
+    params verbatim.
+  Calculer le budget de pages comme `max_size = @parse_int(@headers_get(initial.headers, "x-total-count"))`
+    puis `max_pages = @to_int(@ceiling(max_size / 10.0)) + 1` — INT sur le littéral float divise en
+    FLOAT, @ceiling est l'arrondi FLOAT vers le haut entier, @to_int tronque le FLOAT à valeur
+    entière retour en INT — et boucler `for i in 2..max_pages` avec sa borne exclusive : les pages
+    récupérées sont exactement de `2` à `ceil(max_size / 10)`, la vraie dernière page, donc la page 1
+    n'est jamais re-récupérée et aucune page au-delà de la dernière n'est demandée. Le diviseur
+    `10.0` et le param de requête `page_size=10` sont une seule constante et doivent bouger
+    ensemble (une dérive saute ou re-récupère des pages en silence).
 
 Depends on:
-  ./secret_dockerconfigjson.sdd — imported at line 1 as `secret`; @secret::get_auth_from is
-    the whole secret branch and its raise propagates untouched.
-  vynil-core 0.7.7 engine API — @new_http_client, @add_header_basic, @add_header_bearer,
-    @get (the client's `#{code, headers, body, json}` result, `code` an INT) and the free
-    @headers_get (case-insensitive, `()` when absent), real @http_rhai_register on scan
-    engines and the mock twin on mock engines, both wired per
+  ./secret_dockerconfigjson.sdd — importé ligne 1 comme `secret` ; @secret::get_auth_from est
+    toute la branche secret et sa levée se propage telle quelle.
+  API du moteur vynil-core 0.7.7 — @new_http_client, @add_header_basic, @add_header_bearer,
+    @get (le résultat `#{code, headers, body, json}` du client, `code` un INT) et le free
+    @headers_get (insensible à la casse, `()` quand absent), le vrai @http_rhai_register sur les
+    moteurs de scan et son jumeau mock sur les moteurs mock, tous deux câblés selon
     ./../../../common/src/rhaihandler.sdd.
-  The locked rhai default math package behind @vynil_core::engine::Script::new_bare —
-    @parse_int, @ceiling, @to_int — plus range `for`.
+  Le package math rhai par défaut verrouillé derrière @vynil_core::engine::Script::new_bare —
+    @parse_int, @ceiling, @to_int — plus le `for` sur plage.
 
 References:
-  ./../boxes/scan.rhai — sole importer; its harbor `spec.source` key routes here, and this
-    return shape feeds its first-`/` registry/repository split and @new_registry tag scan.
-  ./../../../common/src/jukebox.sdd — the spec shape (`harbor` `{registry, project}`,
-    `pull_secret` serialization).
-  ./../../src/boxes/scan.sdd — the Rust lane that runs the importer script.
-  ./../../tests/rhai_scan_gitlab.rs — nearest harness a harbor-lane test would mirror
-    (wiremock + real http + mock k8s).
+  ./../boxes/scan.rhai — seul importeur ; sa clé `spec.source` harbor route ici, et cette forme de
+    retour alimente son découpage registry/repository sur le premier `/` et le scan de tags
+    @new_registry.
+  ./../../../common/src/jukebox.sdd — la forme du spec (`harbor` `{registry, project}`,
+    sérialisation `pull_secret`).
+  ./../../src/boxes/scan.sdd — la lane Rust qui exécute le script importeur.
+  ./../../tests/rhai_scan_gitlab.rs — le harnais le plus proche qu'un test de lane harbor imiterait
+    (wiremock + vrai http + mock k8s).
 
 Scenario: pull_secret branch authenticates basic and skips the token endpoint
-  Given a spec with `pull_secret` `harbor-pull`, `source.harbor` `{registry: harbor.example, project: apps}`
-    and a Secret resolving to `{user, pass}` for `harbor.example`
-  When @list_repository("...", "vynil-system") runs
-  Then @secret::get_auth_from receives the secret name, the namespace and the bare host, the
-    client carries @add_header_basic(auth.user, auth.pass), the token endpoint is never
-    called, and the answer lists every row as `harbor.example/<name>`
-  No mapped test exists.
+  Given un spec avec `pull_secret` `harbor-pull`, `source.harbor` `{registry: harbor.example, project: apps}`
+    et un Secret résolvant à `{user, pass}` pour `harbor.example`
+  When @list_repository("...", "vynil-system") s'exécute
+  Then @secret::get_auth_from reçoit le nom du secret, le namespace et l'hôte nu, le
+    client porte @add_header_basic(auth.user, auth.pass), l'endpoint de token n'est jamais
+    appelé, et la réponse liste chaque ligne sous `harbor.example/<name>`
+  Aucun test mappé n'existe.
 
 Scenario: anonymous branch exchanges a project-wide pull token
-  Given a spec with no `pull_secret` key
-  When @list_repository runs
-  Then GET `service/token?service=harbor-registry&scope=repository:apps/*:pull` is issued
-    before any auth header, and `json.token` becomes @add_header_bearer
-  But any `code` other than `200` throws the static `Cannot get anonymous authentication from harbor`
-  No mapped test exists.
+  Given un spec sans clé `pull_secret`
+  When @list_repository s'exécute
+  Then le GET `service/token?service=harbor-registry&scope=repository:apps/*:pull` est émis
+    avant tout en-tête d'auth, et `json.token` devient @add_header_bearer
+  But n'importe quel `code` autre que `200` lève le texte statique `Cannot get anonymous authentication from harbor`
+  Aucun test mappé n'existe.
 
 Scenario: fifteen rows paginate to exactly one follow-up page
-  Given `x-total-count` `15` and pages of 10 and 5 rows
-  Then `max_pages` is `to_int(ceiling(15 / 10.0)) + 1` = `3` and `2..3` fetches page 2 only —
-    15 mapped strings, no page-3 request, page 1 not re-fetched
-  But with `x-total-count` `0` the loop range is empty and the answer is `[]`
-  No mapped test exists.
+  Given `x-total-count` `15` et des pages de 10 et 5 lignes
+  Then `max_pages` vaut `to_int(ceiling(15 / 10.0)) + 1` = `3` et `2..3` récupère la page 2
+    seulement — 15 chaînes mappées, aucune requête de page 3, page 1 non re-récupérée
+  But avec `x-total-count` `0` la plage de boucle est vide et la réponse est `[]`
+  Aucun test mappé n'existe.
 
 Scenario: missing x-total-count kills the scan on parse
-  Given a `200` initial page whose headers carry no `x-total-count`
-  Then @headers_get answers `()` and @parse_int has no `()` candidate — an engine error
-    surfaces to the caller with no throw text of its own
-  No mapped test exists.
+  Given une page initiale `200` dont les en-têtes ne portent pas `x-total-count`
+  Then @headers_get répond `()` et @parse_int n'a pas de candidat `()` — une erreur du moteur
+    remonte à l'appelant sans texte de throw qui lui soit propre
+  Aucun test mappé n'existe.
 
 Scenario: any failing list page shares one message
-  Given the initial list request or a loop page answering `404`
-  Then @throw `Unable to list from harbor.example/apps` — the identical text whichever page
-    failed, no code and no page number in it
-  No mapped test exists.
+  Given la requête de liste initiale ou une page de boucle répondant `404`
+  Then @throw `Unable to list from harbor.example/apps` — le texte identique quelle que soit la
+    page en échec, sans code ni numéro de page dedans
+  Aucun test mappé n'existe.
 
 Tasks:
-  [ ] Add harbor-lane wiremock tests mirroring ./../../tests/rhai_scan_gitlab.rs (basic
-      branch, anonymous branch plus token non-200, the 15-row and 20-row page edges, missing
-      `x-total-count`, list 404). No file under ./../../tests/ references this module today;
-      ./../../tests/rhai_scan.rs covers the filter/security lanes and ./../../tests/rhai_scan_http.rs
-      the http/s3 lanes only.
-  [?] The `pull_secret` null trap: @JukeBoxSpec::pull_secret is an @Option with no
-      `skip_serializing_if`, so @JukeBox::get_spec always emits the key for real JukeBoxes —
-      as `()` in rhai — and `()!=""` is true, sending a real pull-secret-less box down the
-      @secret::get_auth_from branch to die on the `()` secret name; the anonymous branch is
-      then only reachable from raw-fixture specs without the key. The importer's own
-      `use_auth` guard additionally tests `!= ()`. Decide whether this guard aligns (or the
-      Option serialization skips none).
-  [?] Failure texts are thinner than the ./scan_gitlab.rhai sibling's (no HTTP code, no page
-      number, and the initial-page and page-i failures are indistinguishable), so a
-      multi-page incident lands in the box condition message undiagnosable. Decide later
-      whether to enrich them.
+  [ ] Ajouter des tests wiremock de lane harbor miroirs de ./../../tests/rhai_scan_gitlab.rs (branche
+      basic, branche anonyme plus token non-200, les bords de pagination 15 et 20 lignes,
+      `x-total-count` manquant, liste 404). Aucun fichier sous ./../../tests/ ne référence ce module
+      aujourd'hui ; ./../../tests/rhai_scan.rs couvre les lanes filter/security et ./../../tests/rhai_scan_http.rs
+      uniquement les lanes http/s3.
+  [?] Le piège du null `pull_secret` : @JukeBoxSpec::pull_secret est un @Option sans
+      `skip_serializing_if`, donc @JukeBox::get_spec émet toujours la clé pour les vrais JukeBoxes —
+      comme `()` en rhai — et `()!=""` est vrai, envoyant un vrai box sans pull-secret dans la branche
+      @secret::get_auth_from pour mourir sur le nom de secret `()` ; la branche anonyme n'est alors
+      atteignable que depuis des specs raw-fixture sans la clé. Le garde `use_auth` de l'importeur
+      teste en plus `!= ()`. Décider si ce garde s'aligne (ou si la sérialisation de l'Option
+      ne saute rien).
+  [?] Les textes d'échec sont plus pauvres que ceux du jumeau ./scan_gitlab.rhai (pas de code HTTP,
+      pas de numéro de page, et les échecs page-initiale et page-i sont indiscernables), si bien
+      qu'un incident multi-pages atterrit dans le message de condition du box indiagnostiquable.
+      Décider plus tard s'il faut les enrichir.
 
 Done when:
-  The harbor-lane Scenarios above carry mapped wiremock tests, the `pull_secret` null guard
-    decision is recorded, and the `${registry}/${name}` contract still matches what
-    ./../boxes/scan.rhai splits.
+  Les Scenarios de lane harbor ci-dessus portent des tests wiremock mappés, la décision du garde
+    null `pull_secret` est consignée, et le contrat `${registry}/${name}` correspond toujours à ce
+    que ./../boxes/scan.rhai découpe.

@@ -1,330 +1,330 @@
-# File spec for ./vyniltest.rs — the `Test` document schema plus the single-Test
-# assert-evaluation engine. Loading, merged templating, mock injection, install execution,
-# timing and the Err posture live in ./handler.rs (./handler.sdd pending): referenced
-# here as collaborator truth, never restated.
+# Spec de fichier pour ./vyniltest.rs — le schéma du document `Test` et le moteur
+# d'évaluation des asserts d'un Test unique. Le chargement, le templating fusionné,
+# l'injection des mocks, l'exécution de l'install, le timing et la posture Err vivent
+# dans ./handler.rs (./handler.sdd pending) : référencé ici comme vérité
+# collaborateur, jamais réénoncé.
 
 Spec: VynilTest
 
 Platform: Rust
 
 Purpose:
-  Hold the serde shape of the `Test` document — @VynilTest, @VynilTestMeta,
-    @VynilTestInstance, @VynilTestSetRef, deserialized by ./handler.rs — and provide the
-    complete assert engine @VynilTest::run_asserts: selector matching, JSON-subset value
-    comparison, the six matcher verdicts in a value-bearing and a bare lane, and every
-    verbatim pass/fail message string, over a borrowed snapshot of mock-created
-    @Dynamic objects. Also exposes @appslug, the `instance.appslug` slug builder used by
-    the handler's templating context. Total by design: a failing assert is a
-    @VynilAssertResult row, never an error and never a panic; this file performs no I/O,
-    no Handlebars, no Rhai, no cluster access and no clock reads.
+  Conserver la forme serde du document `Test` — @VynilTest, @VynilTestMeta, @VynilTestInstance,
+    @VynilTestSetRef, désérialisés par ./handler.rs — et fournir le moteur d'asserts complet
+    @VynilTest::run_asserts : correspondance de sélecteur, comparaison de valeurs par
+    sous-ensemble JSON, les six verdicts de matcher en voie chargée et en voie nue, et chaque
+    chaîne de message succès/échec verbatim, sur l'instantané emprunté des objets @Dynamic
+    créés par les mocks. Expose aussi @appslug, le constructeur du slug `instance.appslug`
+    du contexte de templating du handler. Total par conception : un assert en échec est une
+    ligne @VynilAssertResult, jamais une erreur ni un panic ; ce fichier ne fait ni I/O, ni
+    Handlebars, ni Rhai, ni accès au cluster, et ne lit pas l'horloge.
 
 Owns:
   ./vyniltest.rs
 
 References:
-  ./vyniltestset.sdd — the shared assert vocabulary this engine consumes (@VynilAssert,
-    @VynilAssertMatch, @VynilAssertSelector, @VynilAssertResult, @VynilTestSetMocks); its
-    wire shapes are not restated here.
-  ./handler.rs — consumer, sole caller (./handler.sdd pending): loads `Test` documents via
-    @serde_json::from_value after the scanner's apiVersion/kind gate (duplicate-name
-    abort), pre-templates every selector/value/mock and merges @testSets before any
-    evaluation happens here, and runs the whole suite flow around @run_asserts:
-    @./handler.rs @TestHandler::get_templated_test builds the Handlebars context with
-    @appslug as `instance.appslug`, resolves per-reference variables in precedence
-    reference-override first, then testSet @default, then JSON null, and adds undeclared
-    reference-only names (@build_var_context — the variable precedence the `Test`
-    schema merely carries, resolved entirely outside this file); @Script::new_mock injects
-    the kubernetes/http mocks; the install lane is one Rhai @eval (context then install);
-    there is no wait/settle posture anywhere — asserts evaluate once over the
-    created-objects snapshot.
-  ./handler.rs — truth on the two postures the `Test` types feed: Err-vs-failed-assert is
-    decided in @TestHandler::run_test, which folds any @common::Error into one synthetic
-    `execution` failed @VynilAssertResult row and times each test with
-    @std::time::Instant around @run_test_inner, so @run_asserts itself has no error lane
-    and no duration; and the validate_refs referenced by ./../package/test.sdd is
-    @TestHandler::validate_refs in ./handler.rs — it reads @VynilTestSetRef.testSet
-    declared here, and is never called from ./../package/test.rs (open there as its own
-    task).
-  ./../package/test.sdd — CLI driver; its run/summary/@Error::TestFailure lane sits two
-    calls above @run_asserts.
-  ./result.sdd — consumer of the produced rows: they are appended by ./handler.rs and
-    rendered there into text/json/JUnit; the shape here is their only production site
-    besides the synthetic rows in ./handler.rs.
-  ./mod.rs — module re-export of @VynilTest alone; @appslug, @VynilTestMeta,
-    @VynilTestInstance and @VynilTestSetRef reach other ./handler.rs code through the
-    `vyniltest::` path (crate surface `client::testing::vyniltest::*` via
-    /agent/src/lib.rs `pub mod testing`).
-  /common/src/rhaihandler.sdd — @Dynamic, the object representation selected, labeled,
-    serialized and compared here; the selection snapshot itself is produced upstream by
-    the mock k8s layer of `vynil-core` (objects land in the shared created vec only
-    through mock apply calls, which merge the matching mock input — a bare `mocks` entry
-    never reaches @run_asserts unless a script re-applies it).
+  ./vyniltestset.sdd — le vocabulaire d'assert partagé consommé par ce moteur (@VynilAssert,
+    @VynilAssertMatch, @VynilAssertSelector, @VynilAssertResult, @VynilTestSetMocks) ; ses
+    formes wire ne sont pas réécrites ici.
+  ./handler.rs — consumeur, unique appelant (./handler.sdd pending) : charge les documents
+    `Test` via @serde_json::from_value après la porte apiVersion/kind du scanner (abort sur
+    nom dupliqué), pré-template chaque sélecteur/valeur/mock et fusionne @testSets avant
+    toute évaluation ici, et pilote tout le flux de suite autour de @run_asserts :
+    @TestHandler::get_templated_test construit le contexte Handlebars avec @appslug comme
+    `instance.appslug`, résout les variables par référence — override de référence d'abord,
+    puis @default du testSet, puis null JSON — et ajoute les noms-only-référence non déclarés
+    (@build_var_context — la précédence de variables que le schéma `Test` ne fait que porter,
+    résolue entièrement hors de ce fichier) ; @Script::new_mock injecte les mocks
+    kubernetes/http ; la voie install est un seul @eval Rhai (contexte puis install) ; aucune
+    posture wait/settle nulle part — les asserts s'évaluent une fois sur l'instantané des
+    objets créés.
+  ./handler.rs — vérité sur les deux postures nourries par les types `Test` :
+    Err-contre-assert-échoué se tranche dans @TestHandler::run_test, qui plie toute
+    @common::Error en une ligne factice @VynilAssertResult échouée `execution` et chronomètre
+    chaque test via @std::time::Instant autour de @run_test_inner, si bien que @run_asserts
+    n'a ni voie d'erreur ni durée ; et le validate_refs référencé par ./../package/test.sdd
+    est @TestHandler::validate_refs dans ./handler.rs — il lit @VynilTestSetRef.testSet
+    déclaré ici et n'est jamais appelé depuis ./../package/test.rs (ouvert là-bas comme tâche
+    propre).
+  ./../package/test.sdd — le driver CLI ; sa voie run/summary/@Error::TestFailure siège deux
+    appels au-dessus de @run_asserts.
+  ./result.sdd — consumeur des lignes produites : appendues par ./handler.rs et rendues là
+    en texte/json/JUnit ; la forme d'ici est leur seul site de production hormis les lignes
+    factices de ./handler.rs.
+  ./mod.rs — réexport de module de @VynilTest seul ; @appslug, @VynilTestMeta,
+    @VynilTestInstance et @VynilTestSetRef atteignent ./handler.rs via le chemin
+    `vyniltest::` (surface `client::testing::vyniltest::*` via /agent/src/lib.rs
+    `pub mod testing`).
+  /common/src/rhaihandler.sdd — @Dynamic, la représentation d'objet sélectionnée, labellisée,
+    sérialisée et comparée ici ; l'instantané de sélection est produit en amont par la couche
+    k8s mock de `vynil-core` (les objets n'entrent dans le vec partagé created que par des
+    appels mock apply, qui fusionnent l'entrée mock correspondante — une entrée `mocks` nue
+    n'atteint jamais @run_asserts sauf si un script la ré-applique).
 
 Depends on:
-  ./vyniltestset.rs types — the five imported items; matcher wire forms (`all`, `any`,
-    `none`, `exact: N`, `at_least: N`, `at_most: N`, N @u64) are frozen there.
-  `serde`/`serde_json` — the derives, and the @serde_json::Value round-trip every value
-    comparison rides.
-
+  Types ./vyniltestset.rs — les cinq items importés ; les formes wire des matchers (`all`,
+    `any`, `none`, `exact: N`, `at_least: N`, `at_most: N`, N @u64) y sont gelées.
+  `serde`/`serde_json` — les derives, et le round-trip @serde_json::Value sur lequel repose
+    toute comparaison de valeurs.
 Exposes:
-  @appslug — `#[must_use] pub fn(@pkg: &@str, @inst: &@str) -> @String`: when @pkg equals
-    @inst returns @inst untouched (no length clamp); otherwise `{inst}-{pkg}` truncated to
-    the first `28` Unicode scalar chars (@chars().take, not bytes, no word-boundary care);
-    no lowercasing, no charset sanitization. ./handler.rs injects the result as
-    `instance.appslug` in the templating context.
-  @VynilTest — `#[allow(non_snake_case)]` root with @Deserialize/@Serialize/@Clone/@Debug:
+  @appslug — #[must_use] `pub fn(@pkg: &@str, @inst: &@str) -> @String` : quand @pkg égale
+    @inst, rend @inst sans toucher (aucun clamp de longueur) ; sinon `{inst}-{pkg}` tronqué
+    aux `28` premiers scalaires Unicode (@chars().take, non les octets, sans soin des mots) ;
+    aucune minuscule, aucun assainissement de charset. ./handler.rs injecte le résultat comme
+    `instance.appslug` dans le contexte de templating.
+  @VynilTest — racine #[allow(non_snake_case)] portant @Deserialize/@Serialize/@Clone/@Debug :
     @apiVersion (@String), @kind (@String), @metadata (@VynilTestMeta), @instance
-    (@VynilTestInstance, not @Option), @testSets (@Option<Vec<@VynilTestSetRef>>), @mocks
-    (@Option<@VynilTestSetMocks> — the shared envelope owned by ./vyniltestset.sdd),
+    (@VynilTestInstance, non @Option), @testSets (@Option<Vec<@VynilTestSetRef>>), @mocks
+    (@Option<@VynilTestSetMocks> — l'enveloppe partagée possédée par ./vyniltestset.sdd),
     @asserts (@Option<Vec<@VynilAssert>>).
   @VynilTestMeta — @name (@String), @description (@Option<@String>).
-  @VynilTestInstance — @name (@String), @namespace (@String, both required), @options
+  @VynilTestInstance — @name (@String), @namespace (@String, tous deux requis), @options
     (@Option<@BTreeMap<@String, @serde_json::Value>>).
-  @VynilTestSetRef — `#[allow(non_snake_case)]` @testSet (@String), @variables
-    (@Option<@BTreeMap<@String, @serde_json::Value>> — name → raw value, typed unlike the
-    TestSet variable declarations).
-  @VynilTest::run_asserts — `#[must_use]` engine entry: `(&self, generated: &[Dynamic]) -> Vec<VynilAssertResult>`;
-    the whole observable engine behaviour below.
-  Internal helpers are private but their effects are user-visible in @message strings and
-    are therefore fully specified here: @json_subset_match, @json_subset_diff,
-    @object_label, @matches_selector, @no_match_hint, @detail_lines, @value_verdict,
-    @count_verdict.
+  @VynilTestSetRef — #[allow(non_snake_case)] @testSet (@String), @variables
+    (@Option<@BTreeMap<@String, @serde_json::Value>> — nom → valeur brute, typée contrairement
+    aux déclarations de variables du TestSet).
+  @VynilTest::run_asserts — entrée du moteur, `#[must_use]`
+    `(&self, generated: &[Dynamic]) -> Vec<VynilAssertResult>` ; tout le comportement observable du moteur ci-dessous.
+  Les helpers internes sont privés mais leurs effets sont visibles de l'utilisateur dans les
+    chaînes @message et sont donc entièrement spécifiés ici : @json_subset_match,
+    @json_subset_diff, @object_label, @matches_selector, @no_match_hint, @detail_lines,
+    @value_verdict, @count_verdict.
 
 Accepts:
-  A `Test` document mapping produced by the ./handler.rs scanner (gate
-    `vinyl.solidite.fr/v1beta1`, kind `Test`, duplicate-name abort — none re-validated
-    here). Required wire keys: `apiVersion`, `kind`, `metadata` with `name`, and
-    `instance` with both `name` and `namespace`; optional: `description`, `testSets`,
-    `mocks`, `asserts`, `instance.options`. No container rename and no
-    `deny_unknown_fields`, so keys are exactly the field spellings (camelCase
-    `apiVersion`/`testSets` survive via `#[allow(non_snake_case)]`) and unknown keys are
-    dropped; no `#[serde(default)]` — optionality is @Option-only, absent and `null`
-    alike. @apiVersion/@kind carry no constraint: the templated clone from
-    ./handler.rs keeps whatever strings arrived, and @run_asserts reads neither.
-  @run_asserts accepts any borrowed @Dynamic slice: the object pool handed over by
-    ./handler.rs after the install script ran (created/merged snapshot, see References);
-    elements that are not rhai maps are invisible to selection and to hints alike.
+  Un mapping de document `Test` produit par le scanner de ./handler.rs (porte
+    `vinyl.solidite.fr/v1beta1`, kind `Test`, abort sur nom dupliqué — rien n'est revalidé
+    ici). Clés wire obligatoires : `apiVersion`, `kind`, `metadata` avec `name`, et
+    `instance` avec `name` et `namespace` tous deux requis ; optionnelles : `description`,
+    `testSets`, `mocks`, `asserts`, `instance.options`. Pas de rename de conteneur ni de
+    `deny_unknown_fields`, donc les clés sont exactement l'orthographe des champs (le
+    camelCase `apiVersion`/`testSets` survit via `#[allow(non_snake_case)]`) et les clés
+    inconnues sont droppées ; pas de `#[serde(default)]` — l'optionnalité est @Option-only,
+    absent et `null` confondus. @apiVersion/@kind ne portent aucune contrainte : le clone
+    templatisé de ./handler.rs garde exactement les chaînes arrivées.
+  @run_asserts accepte toute tranche @Dynamic empruntée : le pool d'objets remis par
+    ./handler.rs après l'exécution du script install (instantané créés/fusionnés, voir
+    References) ; les éléments qui ne sont pas des maps rhai sont invisibles à la sélection comme aux hints.
 
 Returns:
-  @run_asserts: one @VynilAssertResult per assert, in assert order, always the same
-    length as @self.asserts (@Option::None and `Some(vec![])` both yield an empty vec —
-    the caller re-collapses empty to @None anyway); @name/@description are cloned from the
-    assert, @passed/@message from the verdict lane chosen below.
-  @appslug: the slug string per the two branches above.
+  @run_asserts — une @VynilAssertResult par assert, dans l'ordre des asserts, toujours de
+    même longueur que @self.asserts (@Option::None et `Some(vec![])` rendent un vec vide —
+    le repli du vide en @None est de toute façon côté appelant) ; @name/@description clonés
+    de l'assert, @passed/@message de la voie de verdict choisie ci-dessous.
+  @appslug : la chaîne de slug selon les deux branches ci-dessus.
 
 Raises:
-  Nothing — no @Result anywhere in this file. Every fallible read is guarded:
-    @Dynamic::as_map_ref via @let-else, enum-string reads via @and_then/@unwrap_or_default,
-    counts via @usize::try_from(...).unwrap_or(@usize::MAX) (lossy only on 32-bit
-    targets: oversized counts saturate, making `exact`/`at_least` unsatisfiable and
-    `at_most` always-true), and all indexings in @run_asserts/@detail_lines use @Vec::get +
-    @Option::map_or_else. There is no bare @unwrap()/@expect() and therefore no panic
-    site; the only data loss is the silent JSON round-trip collapse noted in Handles.
+  Rien — aucun @Result nulle part dans ce fichier. Chaque lecture faillible est gardée :
+    @Dynamic::as_map_ref via @let-else, lectures enum-string via @and_then/@unwrap_or_default,
+    comptages via @usize::try_from(...).unwrap_or(@usize::MAX) (perte seulement sur cible
+    32 bits : les comptages géants saturent, rendant `exact`/`at_least` insatisfaisables et
+    `at_most` toujours vrai), et tout indexage de @run_asserts/@detail_lines passe par
+    @Vec::get + @Option::map_or_else. Aucun @unwrap()/@expect() nu, donc aucun site de panic ;
+    seule perte, l'effondrement du round-trip JSON.
 
 Handles:
-  Zero-selection fast path — when a selector matches nothing and the matcher is not
-    `none`/`at_most(_)` (any `N`), the row is produced without touching @value:
-    @passed false, @message set to @no_match_hint over the full pool —
-    `no objects matched selector`, or the longer
-    `no objects matched selector (did you mean: {labels})` — `{labels}` the
-    comma-joined labels — for every pool object whose
-    `kind` or `metadata.name` equals a selector
-    field case-insensitively while the exact comparison rejected them (@eq_ignore_ascii_case
-    on those two fields only — `namespace` never seeds a hint; either single field is
-    enough, so a same-named `Service` is suggested for a missing `StatefulSet`/web);
-    `none` and `at_most(_)` fall through and pass vacuously at count `0`.
-  JSON round-trip collapse — @run_asserts serializes each selected @Dynamic to a string
-    and reparses; any per-object failure (@serde_json::to_string -> `""` ->
-    @serde_json::from_str fail) silently degrades that one object to a JSON `null` for
-    value comparison (labels still read the live @Dynamic), and a comparison against
-    null is just a normal diff against `null`, never an abort.
+  Fast path de zéro sélection — quand un sélecteur ne correspond à rien et que le matcher
+    n'est ni `none` ni `at_most(_)` (tout `N`), la ligne est produite sans toucher @value :
+    @passed false, @message posé sur @no_match_hint sur le pool complet —
+    `no objects matched selector`, ou la forme longue
+    `no objects matched selector (did you mean: {labels})` — `{labels}` les labels joints
+    par virgules — pour tout objet du pool dont le `kind` ou le `metadata.name` égale un
+    champ du sélecteur sans casse alors que la comparaison exacte les a rejetés
+    (@eq_ignore_ascii_case sur ces deux champs seulement — `namespace` ne graine jamais un
+    hint ; l'un des deux suffit, d'où un `Service` homonyme suggéré pour un
+    `StatefulSet`/web manquant) ; `none` et `at_most(_)` tombent à travers et passent
+    vacuement au comptage `0`.
+  Effondrement du round-trip JSON — @run_asserts sérialise chaque @Dynamic sélectionné en
+    chaîne et le reparse ; tout échec par objet (@serde_json::to_string -> `""` -> échec
+    @serde_json::from_str) dégrade silencieusement cet objet en `null` JSON pour la
+    comparaison de valeurs (les labels lisent toujours le @Dynamic vivant), et comparer à
+    null n'est qu'un diff normal contre `null`, jamais un abort.
 
 Must:
-  # ── Engine flow, fixed order, per assert, asserts kept in document order ──
-  Select: @selected = elements of @generated where @matches_selector is true, input order
-    preserved; @total = @selected.len().
-  If @total == `0` and the matcher is neither @VynilAssertMatch::@None nor
-    @VynilAssertMatch::@AtMost(_), emit the fail/hint row (Handles) and skip value work
-    even when @value is present — a zero hit never shows expected-vs-actual diffs.
-  Otherwise branch on @value: @None → @count_verdict(matcher, total); @Some → map each
-    selected object through the JSON round-trip, partition index ranges
-    `(0..total)` on @json_subset_match(value, json) (matched / non-matched index
-    vectors, both order-preserving), then @value_verdict(matcher, matching, total) with
-    two lazily-evaluated detail closures: non-matched indices with JSON diffs, matched
-    indices with `(matched)` labels.
-  Copy @name/@description verbatim into the row; never reorder, merge, drop or re-title
-    results relative to the assert list.
-  # ── @matches_selector: exact, case-sensitive, field-by-field ──
-  A non-map object matches every selector. If @kind is @Some, the object's top-level
-    `kind` must deserialize as a string exactly equal to it (missing or non-string kind
-    fails a kind selector); the comparison is case-sensitive — only the hint scan
-    lowercases.
-  With @name and @namespace both @None the object matches right after the kind check —
-    an `object without any metadata field` passes a kind-only selector.
-  Otherwise `metadata` must exist and be a map. @Some(name)/@Some(namespace) each demand
-    an exactly equal string at @metadata.name/@metadata.namespace: absent or non-string
-    metadata fields match nothing, and an explicit empty-string selector is a literal
-    ask for an empty value, NOT a wildcard — only a @None (omitted or `null` key) selects
-    all.
-  # ── @json_subset_match: expected ⊆ actual ──
-  Object ⊆ object when every expected key exists in actual and recurses; arrays match
-    when every expected element has at least one actual element matching it — unordered
-    and by existence, so duplicates and extra actual members are ignored; every other
-    pairing is plain @serde_json::Value equality, hence scalar compare is
-    type-strict (`1` does not equal `1.0`, `true` not `1`), null and missing-key are
-    distinct, and `k: null` in expected requires an actual `k: null`.
-  # ── value lane @value_verdict: `matching` of `total`, messages verbatim ──
-  `all`: pass iff `matching == total` → `{matching}/{total} match`; fail →
-    `{matching}/{total} match, expected all` + non-matched diff detail.
-  `any`: pass iff `matching > 0` → `{matching}/{total} match`; fail →
-    `0/{total} match, expected at least one` + non-matched diff detail.
-  `exact N`: pass iff `matching == N` AND ALSO `total == N` (a bigger selection failing
-    nothing extra still fails) → `{matching}/{total} match`; fail →
-    `{matching}/{total} match, expected exactly {N}` + non-matched diff detail; a
-    32-bit-saturated N (`usize::MAX`) can never pass.
-  `at_least N`: pass iff `matching >= N` → `{matching}/{total} match`; fail →
-    `{matching}/{total} match, expected at least {N}` + non-matched diff detail.
-  `at_most N`: pass iff `matching <= N` → `{matching}/{total} match`; fail →
-    `{matching}/{total} match, expected at most {N}` + matched `(matched)` detail — the
-    fail detail lists the offending MATCHES, unlike all/any/exact/at_least which list
-    the misses.
-  `none`: pass iff `matching == 0` → `0/{total} match as expected`; fail →
-    `{matching}/{total} match, expected none` + matched `(matched)` detail.
-  # ── count lane @count_verdict: bare matcher on total; never appends detail ──
-  Bare `all` runs the same arm as bare `any`: pass iff `total > 0` → `{total} match`,
-    fail only at `0` → `0 match, expected at least one`.
-  `exact N`: pass iff `total == N` → `{total} match`; fail →
+  # ── Flux moteur, ordre fixe, par assert, asserts gardés en ordre documentaire ──
+  Sélectionner : @selected = éléments de @generated où @matches_selector est vrai, ordre
+    d'entrée préservé ; @total = @selected.len().
+  Si @total == `0` et que le matcher n'est ni @VynilAssertMatch::@None ni
+    @VynilAssertMatch::@AtMost(_), émettre la ligne échec/hint (Handles) et sauter le
+    travail sur value même quand @value est présent — un zéro hit ne montre jamais de diffs.
+  Sinon brancher sur @value : @None → @count_verdict(matcher, total) ; @Some → mapper chaque
+    objet sélectionné par le round-trip JSON, partitionner les plages d'indices `(0..total)`
+    sur @json_subset_match(value, json) (vecteurs d'indices correspondants / non
+    correspondants, les deux préservant l'ordre), puis @value_verdict(matcher, matching,
+    total) avec deux closures de détail évaluées paresseusement : indices non correspondants
+    avec diffs JSON, indices correspondants avec labels `(matched)`.
+  Copier @name/@description verbatim dans la ligne ; jamais réordonner, fusionner, dropper ni
+    re-titrer les résultats par rapport à la liste d'asserts.
+  # ── @matches_selector : exact, sensible à la casse, champ par champ ──
+  Un objet non-map correspond à chaque sélecteur. Si @kind est @Some, le `kind` de top-level
+    de l'objet doit se désérialiser en chaîne exactement égale (un kind absent ou non-string
+    fait échouer un sélecteur de kind) ; la comparaison est sensible à la casse — seule la
+    scannede hints minuscule.
+  Avec @name et @namespace tous deux @None, l'objet correspond juste après le check kind —
+    un `objet sans aucun champ metadata` passe un sélecteur kind-seul.
+  Sinon `metadata` doit exister et être une map. @Some(name)/@Some(namespace) exigent chacun
+    une chaîne exactement égale sur @metadata.name/@metadata.namespace : un champ metadata
+    absent ou non-string ne correspond à rien, et un sélecteur chaîne vide explicite est une
+    demande littérale de valeur vide, PAS un wildcard — seul un @None (clé omise ou `null`)
+    sélectionne tout.
+  # ── @json_subset_match : attendu ⊆ réel ──
+  Objet ⊆ objet quand chaque clé attendue existe dans le réel et recurse ; les tableaux
+    correspondent quand chaque élément attendu a au moins un élément réel qui lui
+    correspond — non ordonné et par existence, donc doublons et membres réels surnuméraires
+    sont ignorés ; tout autre appariement est une égalité @serde_json::Value plate, d'où une
+    comparaison scalaire à typage strict (`1` ne vaut pas `1.0`, `true` pas `1`), null et
+    clé-absente distincts, et `k: null` attendu exige un `k: null` réel.
+  # ── voie valeur @value_verdict : `matching` sur `total`, messages verbatim ──
+  `all` : passe ssi `matching == total` → `{matching}/{total} match` ; échec →
+    `{matching}/{total} match, expected all` + détail des diffs non correspondants.
+  `any` : passe ssi `matching > 0` → `{matching}/{total} match` ; échec →
+    `0/{total} match, expected at least one` + détail des diffs non correspondants.
+  `exact N` : passe ssi `matching == N` ET AUSSI `total == N` (une sélection plus grande
+    sans échec de plus échoue quand même) → `{matching}/{total} match` ; échec →
+    `{matching}/{total} match, expected exactly {N}` + détail des diffs non correspondants ;
+    un N saturé 32 bits (`usize::MAX`) ne peut jamais passer.
+  `at_least N` : passe ssi `matching >= N` → `{matching}/{total} match` ; échec →
+    `{matching}/{total} match, expected at least {N}` + détail des diffs non correspondants.
+  `at_most N` : passe ssi `matching <= N` → `{matching}/{total} match` ; échec →
+    `{matching}/{total} match, expected at most {N}` + détail `(matched)` — le détail
+    d'échec liste les MATCHES fautifs, contrairement à all/any/exact/at_least qui
+    listent les ratés.
+  `none` : passe ssi `matching == 0` → `0/{total} match as expected` ; échec →
+    `{matching}/{total} match, expected none` + détail `(matched)` des correspondants.
+  # ── voie comptage @count_verdict : matcher nu sur total ; n'ajoute jamais de détail ──
+  `all` nu court la même branche que `any` nu : passe ssi `total > 0` → `{total} match`,
+    échoue seulement à `0` → `0 match, expected at least one`.
+  `exact N` : passe ssi `total == N` → `{total} match` ; échec →
     `{total} match, expected exactly {N}`.
-  `at_least N`: pass iff `total >= N` → `{total} match`; fail →
+  `at_least N` : passe ssi `total >= N` → `{total} match` ; échec →
     `{total} match, expected at least {N}`.
-  `at_most N`: pass iff `total <= N` → `{total} match`; fail →
-    `{total} match, expected at most {N}` (true also at `total == 0`).
-  `none`: pass iff total `0` → `0 match as expected`; fail → `{total} match, expected none`.
-  # ── detail rendering (the only multi-line message sources) ──
-  @object_label: rhai map's `kind` and @metadata.name/@namespace with missing/non-string
-    parts defaulting to empty → `{kind}/{name}` when the namespace reads empty else
-    `{kind}/{ns}/{name}`; a non-map object labels `<unknown>`.
-  @detail_lines: empty index list → @String::new, so a fail phrase can stand alone; else
-    the message grows a leading newline (`\n`) and one two-space-indented line per index:
-    `  {label}` bare when the diff pass finds nothing (defensive — a listed non-match
-    normally yields ≥ 1 diff), `  {label} (matched)` in the label pass, `  {label}: ` +
-    comma-joined diffs in the diff pass.
-  @json_subset_diff walks expected only: dot-path from the root object at `.key` (`.a.b`
-    nested), array misses as `{path}[{i}]: no match found for {expected-element}` with `i`
-    counting EXPECTED positions (root array prints `[0]`, under a key `.a[0]`), a present
-    key printing recursively, a missing key as `{path}: expected {v}, got <missing>`, and
-    any leaf mismatch or scalar/type divergence as
-    `{path}: expected {expected}, got {actual}` — a root-level scalar value has an empty
-    path, so its line starts with `: `.
-    Actual-only keys are never reported.
-  Keep @appslug exact-branch: the `pkg == inst` shortcut bypasses the 28-char budget;
-    truncation applies only to the `{inst}-{pkg}` composite, counted in chars so one
-    multi-byte scalar costs one slot.
+  `at_most N` : passe ssi `total <= N` → `{total} match` ; échec →
+    `{total} match, expected at most {N}` (vrai aussi à `total == 0`).
+  `none` : passe ssi total `0` → `0 match as expected` ; échec → `{total} match, expected none`.
+  # ── rendu des détails (seules sources de message multiligne) ──
+  @object_label — le `kind` de la map rhai et @metadata.name/@namespace, les parties
+    absentes/non-string tombant à vide → `{kind}/{name}` si le namespace se lit vide, sinon
+    `{kind}/{ns}/{name}` ; un objet non-map se labellise `<unknown>`.
+  @detail_lines — liste d'indices vide → @String::new, donc une phrase d'échec peut tenir
+    seule ; sinon le message gagne un newline initial (`\n`) et une ligne par index indentée
+    de deux espaces : `  {label}` nu quand la passe diff ne trouve rien (défensif — un
+    non-match listé donne normalement ≥ 1 diff), `  {label} (matched)` en passe label,
+    `  {label}: ` + diffs joints par virgules en passe diff.
+  @json_subset_diff ne marche que l'attendu : chemin pointé depuis la racine objet en `.key`
+    (`.a.b` imbriqué), ratés de tableau en `{path}[{i}]: no match found for {expected-element}`
+    avec `i` comptant les positions ATTENDUES (tableau racine affiche `[0]`, sous une clé
+    `.a[0]`), une clé présente s'imprime récursivement, une clé absente en
+    `{path}: expected {v}, got <missing>`, et tout désaccord de feuille ou divergence
+    scalaire/type en `{path}: expected {expected}, got {actual}` — une valeur scalaire de
+    racine a un chemin vide, donc sa ligne commence par `: `. Les clés purement réelles ne
+    sont jamais rapportées.
+  Garder la branche exacte de @appslug : le raccourci `pkg == inst` contourne le budget de
+    28 caractères ; la troncature ne s'applique qu'au composite `{inst}-{pkg}`, comptée en
+    caractères si bien qu'un scalaire multi-octets ne coûte qu'une place.
 
 Must not:
-  Return an error, panic, or mutate @self — abort posture, @Err-to-`execution`-row
-    folding and @Duration timing belong to @TestHandler::run_test (./handler.rs), and a
-    failed assert must stay a data row.
-  Render Handlebars or run Rhai: selectors, values and messages the asserts carry arrive
-    already templated from ./handler.rs; the only interpolation here is the engine's own
-    Rust format strings above.
-  Resolve @testSets, @variables or precedence of any kind — @VynilTestSetRef is opaque
-    cargo merged upstream (@build_var_context per References); likewise no
-    reference-existence check (@TestHandler::validate_refs stays in ./handler.rs,
-    uncalled).
-  Re-run, retry or wait: one pass over the snapshot handed by the caller, no settle loop.
+  Retourner une erreur, paniquer ou muter @self — posture d'abort, pliage de @Err en ligne
+    `execution` et timing @Duration appartiennent à @TestHandler::run_test (./handler.rs),
+    et un assert échoué doit rester une ligne de données.
+  Rendre du Handlebars ou courir du Rhai : sélecteurs, valeurs et messages portés par les
+    asserts arrivent déjà templatisés de ./handler.rs ; seule interpolation ici, les chaînes
+    de format Rust du moteur ci-dessus.
+  Résoudre @testSets, @variables ou toute précédence — @VynilTestSetRef est un chargement
+    opaque fusionné en amont (@build_var_context voir References) ; pareillement aucun check
+    d'existence de référence (@TestHandler::validate_refs reste dans ./handler.rs,
+    non appelé).
+  Relancer, réessayer ou attendre : une passe sur l'instantané remis par l'appelant, aucune boucle de settle.
 
 Tasks:
-  [ ] Map the scenarios below to same-named tests — this file has no #[cfg(test)] module
-      and nothing in-tree calls @run_asserts: selector-kind-only-no-metadata,
+  [ ] Cartographier les scénarios ci-dessous en tests homonymes — ce fichier n'a aucun module
+      #[cfg(test)] et rien dans l'arbre n'appelle @run_asserts : selector-kind-only-no-metadata,
       selector-empty-string-literal, zero-hit-hint-did-you-mean,
       zero-hit-none-and-at-most-vacuous-pass, count-lane-bare-matchers-including-all-eq-any,
       subset-match-arrays-unordered-and-strict-numbers,
       exact-value-lane-requires-total-eq-n, fail-detail-shapes-diffs-vs-matched-labels,
       serialization-collapse-to-null, appslug-equals-bare-vs-28-char-composite.
-  [?] Bare `all` (no value) is an alias of `any` — existence, not universality — and its
-      fail line even says `expected at least one`. Decide whether that is the intended
-      reading or `all` should be invalid without a value.
-  [?] Value-lane `exact N` additionally requires `total == N`, so 2-of-3 objects matching
-      fails although 2 matched; count-lane `exact` checks only `total`. Decide whether the
-      value-lane second condition is intended or matching == N suffices.
-  [?] @appslug: unexplained 28-char budget and the `pkg == inst` branch skips it, so a
-      long package-equal name escapes truncation. Decide the real budget (DNS label?) and
-      whether the shortcut must clamp too.
-  [ ] Findings to review, left untouched by this documentary pass: the zero-hit hint
-      hides every expected-vs-actual diff behind `no objects matched selector` even for
-      value-bearing asserts; the hint scans only kind/name case-insensitively, never
-      namespace; and a broken object collapses silently to `null` instead of surfacing
-      the serialization failure. Decide whether to keep or revisit each.
+  [?] `all` nu (sans value) est un alias de `any` — existence, pas universalité — et sa ligne
+      d'échec dit même `expected at least one`. Décider si c'est la lecture voulue ou si
+      `all` devrait être invalide sans value.
+  [?] `exact N` de voie valeur exige aussi `total == N`, donc 2 objets sur 3 correspondants
+      échoue bien que 2 aient matché ; `exact` de voie comptage ne vérifie que `total`.
+      Décider si la seconde condition de voie valeur est voulue ou si matching == N suffit.
+  [?] @appslug : budget de 28 caractères inexpliqué et la branche `pkg == inst` le saute, si
+      bien qu'un long nom package-égal échappe à la troncature. Décider le vrai budget (label
+      DNS ?) et si le raccourci doit clamp lui aussi.
+  [ ] Constats à rejouer, laissés intacts par cette passe documentaire : le hint de zero-hit
+      masque tout diff attendu-vs-réel derrière `no objects matched selector` même pour les
+      asserts à value ; le hint ne scanne que kind/name sans casse, jamais namespace ; et un
+      objet cassé s'effondre silencieusement en `null` au lieu de remonter l'échec de
+      sérialisation. Décider de garder ou revoir chacun.
 
 Done when:
-  Each scenario has a passing same-named test, the `[?]` records above are answered, and
-    `cargo test -p agent`, clippy, `cargo +nightly fmt --check` and `specdd lint` are green.
+  Chaque scénario a un test homonyme qui passe, les enregistrements `[?]` ci-dessus sont
+    tranchés, et `cargo test -p agent`, clippy, `cargo +nightly fmt --check` et `specdd lint` sont verts.
 
 Scenario: no asserts evaluates to nothing
-  Given @VynilTest with @asserts @Option::None or `Some` of an empty vec
-  When @run_asserts over any pool
-  Then the result vec is empty in both cases
+  Given un @VynilTest dont @asserts est @Option::None ou un `Some` de vec vide
+  When @run_asserts sur n'importe quel pool
+  Then le vec résultat est vide dans les deux cas
 
 Scenario: kind-only selector and the metadata short-circuit
-  Given pool object `Deployment` (a map) with NO metadata field at all
-  When selector is kind-only (`kind: Deployment`, name/namespace absent)
-  Then the object is selected — the check returns before touching metadata
-  But Given selector kind `deployment` lowercase
-  Then it selects nothing (matching is case-sensitive; only hints lowercase)
+  Given un objet de pool `Deployment` (une map) sans AUCUN champ metadata
+  When le sélecteur est kind-seul (`kind: Deployment`, name/namespace absents)
+  Then l'objet est sélectionné — le check revient avant de toucher metadata
+  But Given un sélecteur kind `deployment` en minuscules
+  Then il ne sélectionne rien (la correspondance est sensible à la casse ; seuls les hints minusculent)
 
 Scenario: empty-string selectors are literals not wildcards
-  Given selector `name: ""` against an object with metadata.name `web` or with no name key
-  Then neither matches — an empty value is demanded exactly; wildcard needs the key absent
+  Given un sélecteur `name: ""` contre un objet dont metadata.name vaut `web` ou sans clé name
+  Then aucun ne correspond — une valeur vide est exigée exactement ; le wildcard veut la clé absente
 
 Scenario: zero-hit hint keeps the value to itself
-  Given assert `matcher: exact: 2`, `value: {spec: {replicas: 3}}`, selector kind `StatefulSet` name `web`,
-    pool holding only `Service/prod/web`
-  Then @passed false and message `no objects matched selector (did you mean: Service/prod/web)`
-    — name-only case-insensitive hit suggests it; the `{spec}` expectation is never diffed;
-    pool order survives into the hint list
+  Given un assert `matcher: exact: 2`, `value: {spec: {replicas: 3}}`, sélecteur kind `StatefulSet` name `web`,
+    un pool ne tenant que `Service/prod/web`
+  Then @passed false et message `no objects matched selector (did you mean: Service/prod/web)`
+    — un hit case-insensitive sur name seul le suggère ; l'attente `{spec}` n'est jamais
+    diffée ; l'ordre du pool survit dans la liste de hints
 
 Scenario: zero-hit vacuous pass for none and at_most
-  Given selector matching nothing, `matcher: none`
-  When @run_asserts runs
-  Then @passed true with value `None` → message `0 match as expected`,
-    and value Some → `0/0 match as expected`
-  And Given `at_most: 0` at zero hits → passed (`0 match` / `0/0 match`), while `all`,
-    `any`, `at_least`, `exact` take the hint fail path instead
+  Given un sélecteur ne correspondant à rien, `matcher: none`
+  When @run_asserts tourne
+  Then @passed true avec value `None` → message `0 match as expected`,
+    et value Some → `0/0 match as expected`
+  And Given `at_most: 0` à zéro hit → passe (`0 match` / `0/0 match`), alors que `all`,
+    `any`, `at_least`, `exact` prennent la voie d'échec avec hint
 
 Scenario: value-lane subset comparison is structural
-  Given two selected objects, expected `{metadata: {labels: {app: a}}}`
-  When actual objects carry extra keys and one array in actual contains the expected
-    element among others
-  Then `all` passes with `2/2 match` — extra actual members are free; expected `1` against
-    actual `1.0` fails (strict scalar); unordered array membership passes by existence.
+  Given deux objets sélectionnés, attendu `{metadata: {labels: {app: a}}}`
+  When les objets réels portent des clés de plus et qu'un tableau réel contient l'élément
+    attendu parmi d'autres
+  Then `all` passe avec `2/2 match` — les membres réels surnuméraires sont gratuits ; attendu
+    `1` contre réel `1.0` échoue (scalaire strict) ; l'appartenance de tableau passe par existence.
 
 Scenario: exact needs the whole selection to be the payload
-  Given three selected objects of which two satisfy @value, `matcher: exact: 2`
-  Then @passed false, message starts `2/3 match, expected exactly 2` then a newline and
-    the one non-matched object's diff lines `  {label}: {path}: expected {v}, got {v2}`
+  Given trois objets sélectionnés dont deux satisfont @value, `matcher: exact: 2`
+  Then @passed false, le message commence par `2/3 match, expected exactly 2` puis un newline et
+    les lignes de diff du seul objet non correspondant `  {label}: {path}: expected {v}, got {v2}`
 
 Scenario: at_most and none report the offenders, not the misses
-  Given two of three selected matching @value with `matcher: at_most: 1` (or `none`)
-  Then message ends `... expected at most 1` / `... expected none` followed by the two
-    matched objects as `  {label} (matched)` lines, while the value-lane all/any/exact/
-    at_least failure detail instead lists non-matched objects with their JSON diffs
+  Given deux des trois objets sélectionnés correspondant à @value avec `matcher: at_most: 1` (ou `none`)
+  Then le message finit par `... expected at most 1` / `... expected none` suivi des deux
+    objets correspondants en lignes `  {label} (matched)`, tandis que le détail d'échec de
+    all/any/exact/at_least en voie valeur liste les non correspondants avec leurs diffs JSON
 
 Scenario: count-lane bare matchers
-  Given selector selecting three objects, asserts with no `value` key
-  Then `all`, `any`, `at_least: 2`, `at_most: 3` pass printing `3 match`;
-    `exact: 2` fails `3 match, expected exactly 2`; `none` fails `3 match, expected none`
-  And at zero selected `all`/`any` fail `0 match, expected at least one` (the hint fast
-    path exempts only `none`/`at_most`, so a bare `all` still gets the hint message, not
-    this fail phrase)
+  Given un sélecteur sélectionnant trois objets, des asserts sans clé `value`
+  Then `all`, `any`, `at_least: 2`, `at_most: 3` passent en affichant `3 match` ;
+    `exact: 2` échoue `3 match, expected exactly 2` ; `none` échoue `3 match, expected none`
+  And à zéro sélectionné `all`/`any` échouent `0 match, expected at least one` (le fast path
+    de hint n'exempte que `none`/`at_most`, donc un `all` nu reçoit encore le message de
+    hint, pas cette phrase d'échec)
 
 Scenario: appslug branches
-  Given @appslug with @pkg and @inst both the same long instance name (over 28 chars)
-  Then the name returns whole — the `pkg == inst` shortcut ignores the 28 budget
-  Given @inst `someinstance` and @pkg `longpackageoverthelimit`
-  Then the composite `{inst}-{pkg}` comes back cut to exactly 28 Unicode scalars
+  Given @appslug avec @pkg et @inst égaux au même long nom d'instance (plus de 28 caractères)
+  Then le nom revient entier — le raccourci `pkg == inst` ignore le budget de 28
+  Given @inst `someinstance` et @pkg `longpackageoverthelimit`
+  Then le composite `{inst}-{pkg}` revient coupé à exactement 28 scalaires Unicode
 
 Example:
-  full at_least fail message: `1/3 match, expected at least 2` + newline +
+  Message d'échec at_least complet : `1/3 match, expected at least 2` + newline +
     `  Deployment/prod/api: .spec.replicas: expected 3, got 1, .spec.template: expected {...}, got <missing>` +
     newline + `  ConfigMap/api-cfg: [0]: no match found for {...}`

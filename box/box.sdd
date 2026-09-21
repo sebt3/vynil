@@ -1,23 +1,23 @@
-# Directory spec for the `box` tree — in-repo Vynil package sources built into OCI images.
+# Spec de répertoire de l'arborescence `box` — sources paquets Vynil du dépôt, bâties en images OCI.
 
 Spec: box
 
 Purpose:
-  Hold the Vynil package source trees maintained with the code: the shipped `vynil` system
-  package that installs the controller stack into a cluster, and a minimal `test` package used
-  as a build/round-trip fixture.
+  Contient les arborescences sources paquets Vynil maintenues avec le code : le paquet
+  système `vynil` livré, installe la pile contrôleur dans un cluster, et un paquet `test`
+  minimal, fixture de build/aller-retour.
 
 Structure:
-  ./vynil/: The shipped `vynil` system package (specified by ./vynil/vynil.sdd)
-  ./test/: Minimal example package exercising build/update/lint round-trips
+  ./vynil/: Le paquet système `vynil` livré (via ./vynil/vynil.sdd)
+  ./test/: Exemple paquet minimal exerçant allers-retours build/update/lint
 
 Owns:
   ./test/**
 
 Must:
-  Keep each package source buildable by the agent with `agent package build` from the repository
-    root.
+  Garder chaque source de paquet constructible par l'agent avec `agent package build` depuis
+    la racine du dépôt.
 
 Must not:
-  Contain runnable cluster state; a box is package source, and deployment manifests belong to
-    /deploy.
+  Contenir état cluster exécutable ; box est source de paquet, manifestes de
+    déploiement relèvent de /deploy.

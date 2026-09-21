@@ -1,276 +1,276 @@
 Spec: ServiceDeleteCmd
 
 Purpose:
-  Back the `agent service delete` sub-command: resolve one @ServiceInstance by namespace
-    and name, publish it as the process-wide owner context and as the Rhai variable
-    `instance`, inject the parsed CLI flags as the Rhai variable `args`, then hand the
-    whole delete work to the Rhai modules `context` and `delete`. This file runs no
-    delete stage itself: no directory or resource teardown, no `status` write, no CR
-    removal — it only prepares the engine and hands off. Near-twin of the
-    `agent system delete` lane (./../system/delete.sdd), diff-verified to differ only at
-    the kind segment (`{script_dir}/service` over `{script_dir}/system`, @set_service
-    over @set_system, @ServiceInstance over @SystemInstance) and the two extra
-    `-t`/`--template-dir` and `--agent-image` flags; the snippet, the remaining three
-    search directories and the step order are identical.
+  Porte la sous-commande `agent service delete` : résout le seul @ServiceInstance par namespace
+    et nom, le publie comme contexte propriétaire du processus et comme variable Rhai
+    `instance`, injecte les flags CLI parsés comme variable Rhai `args`, puis
+    remet toute l'œuvre de suppression aux modules Rhai `context` et `delete`.
+    Ce fichier n'exécute lui-même aucune étape de suppression : pas de teardown de
+    répertoire ou de ressource, pas d'écriture de `status`, pas de suppression de CR —
+    il ne prépare que le moteur et remet. Presque jumeau de la lane `agent system delete`
+    (./../system/delete.sdd), vérifié par diff comme ne différant que par le segment
+    de kind (`{script_dir}/service` au lieu de `{script_dir}/system`, @set_service au lieu de
+    @set_system, @ServiceInstance au lieu de @SystemInstance) et les deux flags
+    supplémentaires `-t`/`--template-dir` et `--agent-image` ; le snippet, les trois autres
+    répertoires de recherche et l'ordre des étapes sont identiques.
 
 References:
-  ./../system/delete.sdd — the diff-verified near-twin; the cross-kind template-flag
-    question is open there as a task and mirrored here.
-  ./install.sdd — the sibling install lane, whose shape this file copies minus
-    `--tag`: nine fields instead of ten, and the snippet imports `delete` where
-    install imports `install`.
-  ./mod.sdd — the frozen Delete dispatch arm bounding this lane's failures:
-    `Deleting a package failed with: {e:}` then @process::exit(3).
+  ./../system/delete.sdd — le quasi-jumeau vérifié par diff ; la question
+    inter-kind du flag template y reste ouverte en tâche et est miroitée ici.
+  ./install.sdd — la lane install sœur, dont ce fichier copie la forme sauf
+    `--tag` : neuf champs au lieu de dix, et le snippet importe `delete` là où
+    install importe `install`.
+  ./mod.sdd — le bras de dispatch Delete gelé qui borne les échecs de cette
+    lane : `Deleting a package failed with: {e:}` puis @process::exit(3).
 
 Must:
-  Execute these steps in this order, with nothing between them: build the interpreter,
-    fetch the CR, publish context, inject `instance`, serialize and inject `args`,
-    evaluate the snippet, return @Ok.
-  Build the interpreter with @Script::new on exactly four resolver directories in this
-    order: `{package_dir}/scripts`, `{config_dir}` (the directory itself),
-    `{script_dir}/service`, `{script_dir}/lib` — plain string interpolation of
-    @std::path::Display, so a path argument ending in `/` doubles the separator;
-    earlier entries win an `import`.
-  @Script::new brings the full registration set — including @service_rhai_register, so
-    the scripts hold `get_service_instance`, `list_services_names` and the whole
-    @ServiceInstance bridge — plus http, s3, the other two instance kinds, the jukebox
-    and the k8s registrars, the same set the install lane gets.
-  Fetch the CR with @ServiceInstance::get taking clones of @Parameters.namespace and
-    @Parameters.instance — one namespaced named-object read in the given namespace,
-    never a list, watch, patch or delete; an absent instance is an @Err, not a
-    bootstrap path.
-  Publish the fetched CR twice from the fetched value and one clone: @set_service
-    stores the clone as the process owner context, and @rhai::Scope::set_value on
-    @Script::ctx moves the original into the script variable named `instance`.
-  Serialize @Parameters with @serde_json::to_value and inject it through
-    @Script::set_dynamic as the script variable named `args`; the JSON object carries
-    the declared snake_case keys `namespace`, `instance`, `vynil_namespace`,
-    `package_dir`, `script_dir`, `template_dir`, `agent_image`, `config_dir`,
-    `controller_values` — nine keys, no `tag` — `controller_values` as a JSON string
-    (its default renders `"{}"`, still a string, not an object), `agent_image` as a
-    string and the @PathBufs as path text.
-  Evaluate the fixed four-statement snippet, nothing configurable in it:
-    `import("context") as ctx;` then `let context = ctx::run(instance, args);` then
-    `import("delete") as delete;` then `delete::run(instance, context);` — the
-    `context` script runs first, its returned value becoming the `delete::run` second
-    argument; `delete` runs second and last; the final statement ends with `;` so the
-    resulting @rhai::Dynamic::UNIT is discarded by `let _ =` while a failed evaluation
-    still propagates through `?`.
-  Import lazily per statement as @rhai does: the `delete` module is only resolved when
-    its `import` statement executes, so a missing `delete` module fails the eval only
-    after `ctx::run` side effects have already run.
-  Perform no cluster mutation of its own: every teardown and `status` write happens
-    inside the Rhai modules through the registered @ServiceInstance bridge; this file
-    only reads the CR.
-  Emit no log and no stdout/stderr.
+  Exécuter ces étapes dans cet ordre, sans rien entre elles : construire l'interpréteur,
+    récupérer le CR, publier le contexte, injecter `instance`, sérialiser et injecter
+    `args`, évaluer le snippet, retourner @Ok.
+  Construire l'interpréteur avec @Script::new sur exactement quatre répertoires de
+    résolution dans cet ordre : `{package_dir}/scripts`, `{config_dir}` (le répertoire
+    lui-même), `{script_dir}/service`, `{script_dir}/lib` — simple interpolation de
+    chaînes de @std::path::Display, d'où un argument de chemin finissant par `/` qui
+    double le séparateur ; le premier chemin gagne un `import`.
+  @Script::new amène le jeu d'enregistrement complet — y compris @service_rhai_register, donc
+    les scripts tiennent `get_service_instance`, `list_services_names` et tout le
+    pont @ServiceInstance — plus http, s3, les deux autres kinds d'instance, le jukebox et les
+    registrars k8s, le même jeu que récupère la lane install.
+  Récupérer le CR avec @ServiceInstance::get prenant les clones de @Parameters.namespace et
+    @Parameters.instance — une seule lecture d'objet nommé avec namespace dans le namespace
+    donné, jamais un list, watch, patch ou delete ; une instance absente est
+    un @Err, pas un chemin de bootstrap.
+  Publier deux fois le CR récupéré depuis la valeur récupérée et un clone : @set_service
+    stocke le clone comme contexte propriétaire du processus, et @rhai::Scope::set_value sur
+    @Script::ctx déplace l'original dans la variable de script nommée `instance`.
+  Sérialiser @Parameters avec @serde_json::to_value et l'injecter via @Script::set_dynamic
+    comme variable de script nommée `args` ; l'objet JSON porte les clés snake_case
+    déclarées `namespace`, `instance`, `vynil_namespace`, `package_dir`, `script_dir`,
+    `template_dir`, `agent_image`, `config_dir`, `controller_values` — neuf clés sans
+    `tag` — `controller_values` comme chaîne JSON (son défaut rend `"{}"`, encore une
+    chaîne et non un objet), `agent_image` comme chaîne et les @PathBufs comme texte de
+    chemin.
+  Évaluer le snippet fixe à quatre instructions, rien de configurable dedans :
+    `import("context") as ctx;` puis `let context = ctx::run(instance, args);`
+    puis `import("delete") as delete;` puis `delete::run(instance, context);`
+    — le script `context` s'exécute d'abord et sa valeur de retour devient le second
+    argument de `delete::run` ; `delete` s'exécute en second et en dernier ;
+    l'instruction finale finit par `;` si bien que le
+    @rhai::Dynamic::UNIT rendu est jeté par `let _ =` mais une évaluation échouée
+    se propage quand même à travers `?`.
+  Importer paresseusement par instruction comme @rhai le fait : le module `delete`
+    n'est résolu que quand son instruction `import` s'exécute, donc un module
+    `delete` manquant ne fait échouer l'éval qu'après que les effets de bord de
+    `ctx::run` ont déjà couru.
+  N'effectuer aucune mutation du cluster de son propre chef : chaque teardown et chaque
+    écriture de `status` se produit dans les modules Rhai via le pont @ServiceInstance
+    enregistré ; ce fichier ne lit que le CR.
+  N'émettre aucun log ni stdout/stderr.
 
 Must not:
-  Treat an absent or already-deleted @ServiceInstance as success: the `NotFound` from
-    @ServiceInstance::get must propagate as a failure into the exit(3) lane — the fetch
-    precedes any handoff, so absence tolerance cannot be assumed.
-  Close out the delete in Rust: remove the @ServiceInstance CR, add a finalizer, write
-    a `status`, or delete anything under @Parameters.package_dir from this lane — even
-    after the snippet succeeded; teardown and file removal belong to the scripts and
-    the controller, not to this handoff file.
-  Read `template_dir` or `agent_image` to steer this lane: those service-only flags
-    reach the scripts only through `args`, and consuming them here would move
-    script-side work into the handoff.
-  Interpret `controller_values` or gate on its contents.
+  Ne pas tenir un @ServiceInstance absent ou déjà supprimé pour un succès : le
+    `NotFound` de @ServiceInstance::get doit se propager en échec dans la lane exit(3) —
+    la récupération précède toute remise, la tolérance à l'absence ne peut être supposée.
+  Ne pas clore la suppression côté Rust : retirer le CR @ServiceInstance, ajouter un
+    finalizer, écrire un `status`, ou supprimer quoi que ce soit sous @Parameters.package_dir
+    depuis cette lane — même après que le snippet a réussi ; le teardown et la suppression de
+    fichiers appartiennent aux scripts et au contrôleur, pas à ce fichier de handoff.
+  Ne pas lire `template_dir` ni `agent_image` pour piloter cette lane : ces flags
+    propres au service et au tenant n'atteignent les scripts que via `args`, et les
+    consommer ici déplacerait du travail côté script dans le handoff.
+  Ne pas interpréter `controller_values` ni se reposer sur son contenu.
 
 Depends on:
-  /common/src/rhaihandler.sdd — @Script::new resolver semantics and registration set,
-    @Script::eval error lane, @Script::set_dynamic, @Script::ctx.
-  /common/src/instanceservice.sdd — @ServiceInstance and the @ServiceInstance::get
-    lookup this file awaits (attached by @impl_instance_common! per
-    /common/src/instance_macros.sdd), and the registered bridges the scripts use for
-    teardown writes.
-  /common/src/context.sdd — @set_service store semantics and runtime preconditions.
-  /common/src/lib.sdd — @common::Error variants, @common::Result and the
-    @common::DEFAULT_AGENT_IMAGE default of `agent_image`.
-  @clap @Args, @serde, @serde_json — flag parsing (flags, envs, defaults below) and
-    the derives behind the `args` JSON.
-  /agent/scripts/service/context.rhai and /agent/scripts/service/delete.rhai — runtime
-    handoff targets the snippet imports under the default `--script-dir`; owned instead
-    by /agent/agent.sdd and unspecified here. The guarded stage dispatch (`delete_pre`,
-    the `is_dir` and `tofu` re-checks over the `{package_dir}` stage directories) lives
-    inside that `delete` module; this Rust file never names those stage modules.
-  ./mod.rs — the only caller: @context::init_k8s call, then this arm's
-    `unwrap_or_else` error lane (tracing text and @process::exit(3), frozen by
-    ./mod.sdd).
+  /common/src/rhaihandler.sdd — la sémantique de résolution de @Script::new et son jeu
+    d'enregistrement, la lane d'erreur @Script::eval, @Script::set_dynamic, @Script::ctx.
+  /common/src/instanceservice.sdd — @ServiceInstance et la
+    lookup @ServiceInstance::get que ce fichier attend (attachée par
+    @impl_instance_common! selon /common/src/instance_macros.sdd), et les ponts enregistrés
+    que les scripts utilisent pour les écritures de teardown.
+  /common/src/context.sdd — la sémantique de stockage de @set_service et les prérequis runtime.
+  /common/src/lib.sdd — les variantes de @common::Error, @common::Result et le
+    défaut @common::DEFAULT_AGENT_IMAGE d'`agent_image`.
+  @clap @Args, @serde, @serde_json — le parsing des flags (flags, envs,
+    défauts ci-dessous) et les derives derrière le JSON `args`.
+  /agent/scripts/service/context.rhai and /agent/scripts/service/delete.rhai — cibles du
+    handoff runtime que le snippet importe sous le `--script-dir` par défaut ; propriété
+    de /agent/agent.sdd et non spécifiées ici. La dispatch d'étapes est protégée
+    (`delete_pre`, les re-checks `is_dir` et `tofu` sur les répertoires d'étapes
+    de `{package_dir}`) vit dans ce module `delete` ; ce fichier Rust ne nomme jamais ces modules d'étapes.
+  ./mod.rs — le seul appelant : l'appel @context::init_k8s, puis la
+    lane d'erreur `unwrap_or_else` de ce bras (texte tracing et @process::exit(3),
+    gelé par ./mod.sdd).
 
 Exposes:
-  @Parameters — clap @Args struct, also deriving @Debug, @Serialize and @Deserialize;
-    mounted by @service::Commands::Delete in ./mod.rs; all nine fields private to this
-    module, reached only by the derive code and by this file.
-  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()>; the sole
-    caller is @service::run (delete dispatch arm).
+  @Parameters — struct clap @Args, dérivant aussi @Debug, @Serialize et @Deserialize ;
+    montée par @service::Commands::Delete dans ./mod.rs ; les neuf champs privés de ce
+    module, atteints seulement par le code des derives et par ce fichier.
+  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()> ; le
+    seul appelant est @service::run (bras de dispatch delete).
 
 Accepts:
   @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, value name
-    `NAMESPACE`, @String, required (no `default_value`); the doc comment calls it the
-    instance namespace to delete.
+    `NAMESPACE`, @String, requis (pas de `default_value`) ; le doc comment appelle cela le
+    namespace de l'instance à supprimer.
   @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, value name `INSTANCE`,
-    @String, required; names the CR to fetch and is never validated here.
-  @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env `VYNIL_NAMESPACE`,
-    value name `VYNIL_NAMESPACE`, @String, required; never read in this file beyond
-    serialization into `args`.
+    @String, requis ; nomme le CR à récupérer et n'est jamais validé ici.
+  @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env `VYNIL_NAMESPACE`, value
+    name `VYNIL_NAMESPACE`, @String, requis ; jamais lu dans ce fichier au-delà de sa
+    sérialisation dans `args`.
   @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, value name
-    `PACKAGE_DIRECTORY`, @std::path::PathBuf, clap default `/tmp/package`.
+    `PACKAGE_DIRECTORY`, @std::path::PathBuf, défaut clap `/tmp/package`.
   @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, value name
-    `SCRIPT_DIRECTORY`, @std::path::PathBuf, clap default `./agent/scripts`.
+    `SCRIPT_DIRECTORY`, @std::path::PathBuf, défaut clap `./agent/scripts`.
   @Parameters.template_dir — `-t` / `--template-dir`, env `TEMPLATE_DIRECTORY`, value
-    name `TEMPLATE_DIRECTORY`, @std::path::PathBuf, clap default `./agent/templates`; a
-    service- and tenant-only flag absent from the system twin, read by nothing in this
-    Rust lane.
-  @Parameters.agent_image — long-only `--agent-image`, env `AGENT_IMAGE`, value name
-    `AGENT_IMAGE`, @String, clap default @common::DEFAULT_AGENT_IMAGE, i.e.
-    `docker.io/sebt3/vynil-agent:0.7.7`; the other service-only flag of the twin.
+    name `TEMPLATE_DIRECTORY`, @std::path::PathBuf, défaut clap
+    `./agent/templates` ; flag propre au service et au tenant, absent du jumeau system,
+    lu par rien dans cette lane Rust.
+  @Parameters.agent_image — `--agent-image` long-only, env `AGENT_IMAGE`, value name
+    `AGENT_IMAGE`, @String, défaut clap @common::DEFAULT_AGENT_IMAGE, soit
+    `docker.io/sebt3/vynil-agent:0.7.7` ; l'autre flag service-only du jumeau.
   @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, value name
-    `CONFIG_DIR`, @std::path::PathBuf, clap default `.`.
-  @Parameters.controller_values — long-only `--controller-values`, env
-    `CONTROLLER_VALUES`, value name `CONTROLLER_VALUES`, @String, clap default the
-    two-character string `{}`.
-  Shape delta vs ./install.sdd: no `tag` / `TAG` flag at all — nine fields, not ten;
-    otherwise the flag, env and default spellings are install's verbatim.
-  Implicit runtime precondition: a live tokio multi-thread runtime (from @main's
-    @tokio::main), because @context::set_service crosses state with
-    @tokio::task::block_in_place; @context::init_k8s already ran in @service::run
-    before this file is entered and is inert either way.
+    `CONFIG_DIR`, @std::path::PathBuf, défaut clap `.`.
+  @Parameters.controller_values — `--controller-values` long-only, env
+    `CONTROLLER_VALUES`, value name `CONTROLLER_VALUES`, @String, défaut clap la
+    chaîne de deux caractères `{}`.
+  Delta de forme vs ./install.sdd : aucun flag `tag` / `TAG` — neuf champs, pas
+    dix ; sinon les orthographes de flags, envs et défauts sont le verbatim d'install.
+  Précondition runtime implicite : un runtime tokio multithread vivant (du
+    @tokio::main de @main), car @context::set_service traverse de l'état avec
+    @tokio::task::block_in_place ; @context::init_k8s a déjà couru dans @service::run
+    avant l'entrée dans ce fichier, et il est inerte de toute façon.
 
 Returns:
-  @Ok(@()) once the fixed eval snippet completes without a Rhai error — the @Dynamic
-    value the snippet returns is discarded, never inspected.
+  @Ok(@()) quand le snippet d'éval fixe complète sans erreur Rhai — la valeur
+    @Dynamic que le snippet retourne est jetée, jamais inspectée.
 
 Raises:
-  @common::Error::KubeError from @ServiceInstance::get when the API server rejects the
-    lookup — including `NotFound` for an already-gone instance (the whole @kube::Error
-    is mapped, Display `K8s error: ...`, never defaulted); the first fallible step,
-    nothing published to context or scripts when it fails.
-  @common::Error::SerializationError from the explicit @map_err when
-    @serde_json::to_value(@Parameters) fails on the derives.
-  @common::Error::Core (wrapping @vynil_core::Error::RhaiError, Display
-    `Rhai script error: <rhai text>`) from the `?` on @Script::eval — a parse error in
-    the fixed snippet, a failed `context` or `delete` import, or any parse error /
-    thrown error inside those modules and whatever they import_run.
-  The context-owned @panic! `cannot create the Kubernetes client: {e}` surfaces through
-    @ServiceInstance::get via @get_client_async when no kubeconfig or in-cluster
-    configuration resolves.
+  @common::Error::KubeError de @ServiceInstance::get quand l'API server rejette la lookup —
+    y compris `NotFound` pour une instance déjà partie (tout le @kube::Error est mappé,
+    Display `K8s error: ...`, jamais par défaut) ; premier pas faillible, rien publié au contexte
+    ni aux scripts en cas d'échec.
+  @common::Error::SerializationError depuis l'explicite @map_err quand
+    @serde_json::to_value(@Parameters) échoue sur les derives.
+  @common::Error::Core (enveloppant @vynil_core::Error::RhaiError,
+    Display `Rhai script error: <rhai text>`) depuis le `?` sur @Script::eval — une erreur de
+    parsing dans le snippet fixe, un import `context` ou `delete` échoué, ou toute erreur de
+    parsing / levée dans ces modules et tout ce qu'ils import_run.
+  Le @panic! possédé par le contexte `cannot create the Kubernetes client: {e}` remonte via
+    @ServiceInstance::get par @get_client_async quand ni kubeconfig ni configuration in-cluster ne se résout.
   Panics from @context::set_service on a current-thread runtime or no runtime at all
     (contract in /common/src/context.sdd), not catchable by the parent `?` lane.
 
 Handles:
-  @Err lane owned by the caller — @service::run logs `Deleting a package failed with:`
-    followed by the error Display through @tracing::error and calls @process::exit(3);
-    code `3` is this arm's delete-specific exit, shared with the system twin, distinct
-    from install's `1`. This file logs nothing and never exits, so a failed delete
-    leaves no status marker written by this lane.
-  Failed lookup or failed eval after @set_service already ran — the process context
-    keeps the @VynilContext::ServiceInstance variant for the remaining process lifetime
-    (which ends in the exit(3)).
-  Already-gone instance — no absence-tolerance branch: the hard @KubeError above is
-    the whole behaviour; no script ever runs to do an idempotent no-op delete.
-  Half-deleted instance — no branch on `status`, finalizers or the contents of
-    @Parameters.package_dir here: a rerun refetches the CR and replays both modules;
-    stage skipping (the `is_dir` and `tofu` guards) is `delete.rhai`'s script-side
-    contract.
-  Absent resolver directories — the four search paths are never existence-checked at
-    construction; the failure only lands later as the @common::Error::Core import error
-    if no search dir holds `context.rhai` / `delete.rhai`.
-  Flags with no local reader (`vynil_namespace`, `template_dir`, `agent_image`,
-    `controller_values`) — their only observable use is the `args` JSON the scripts
-    consume; the `context` module picks up `template_dir` and `agent_image` from there.
+  La lane @Err tenue par l'appelant — @service::run log
+    `Deleting a package failed with:` suivi du Display de l'erreur via @tracing::error et
+    appelle @process::exit(3) ; le code `3` est la sortie propre au delete de ce bras, partagée
+    avec le jumeau system, distincte du `1` d'install. Ce fichier ne logge rien et ne sort
+    jamais, donc une suppression échouée ne laisse aucun marqueur de status écrit par cette lane.
+  Lookup échoué ou eval échouée après qu'@set_service a déjà couru — le
+    contexte du processus garde la variante @VynilContext::ServiceInstance pour la durée de
+    vie restante du processus (qui finit dans l'exit(3)).
+  Instance déjà partie — aucune branche de tolérance à l'absence : le @KubeError dur
+    ci-dessus est tout le comportement ; aucun script ne court jamais pour un delete no-op idempotent.
+  Instance à moitié supprimée — aucune branche sur `status`, les finalizers ou le contenu
+    de @Parameters.package_dir ici : une re-run re-récupère le CR et rejoue les deux
+    modules ; le saut d'étapes (les gardes `is_dir` et `tofu`) est le
+    contrat script-side de `delete.rhai`.
+  Répertoires de résolution absents — les quatre chemins de recherche ne sont jamais vérifiés
+    en existence à la construction ; l'échec ne tombe que plus tard comme erreur d'import
+    @common::Error::Core si aucun répertoire de recherche ne tient `context.rhai` / `delete.rhai`.
+  Flags sans lecteur local (`vynil_namespace`, `template_dir`, `agent_image`,
+    `controller_values`) — leur seul usage observable est le JSON `args` que les scripts
+    consomment ; le module `context` y récupère `template_dir` et `agent_image`.
 
 Tasks:
-  [ ] Cover all six Scenarios with tests; no test invokes this @run —
-      /agent/tests/rhai_lifecycle.rs exercises the service `context`/`delete` Rhai
-      modules on a mock engine, bypassing this Rust lane.
-  [?] Twin flag drift: this lane and /agent/src/tenant/delete.rs carry
-      `-t`/`--template-dir` and `--agent-image` like their install twins, while
-      /agent/src/system/delete.rs is exactly the seven-flag system shape minus
-      `--tag`; apart from the kind segment the three copies are diff-verified
-      identical. Cross-ref the open tasks in /agent/src/system/delete.sdd and
-      ./install.sdd: decide whether the template flags belong to one shared shape or
-      the system kind genuinely needs neither.
-  [?] Delete of an already-gone instance is a hard failure: @ServiceInstance::get runs
-      first, so a retried delete Job whose CR was removed meanwhile (controller
-      cleanup, or an earlier partial run) exits 3 instead of converging silently.
-      Same open point as /agent/src/system/delete.sdd: confirm the controller never
-      re-dispatches this Job after the CR is gone, or decide whether `NotFound` on the
-      delete lane becomes a silent @Ok.
-  [?] `vynil_namespace`, `template_dir`, `agent_image` and `controller_values` are
-      typed, required in `vynil_namespace`'s case, yet this lane never reads them —
-      their contract lives only in the script-side `args` JSON. Same open point as
-      ./install.sdd: confirm the requiredness belongs to the Rhai contract or relax
-      the flags.
-  [?] `controller_values` reaches scripts as a JSON string even when it holds `{}`,
-      so every consumer must decode it. Decide whether this file should pre-parse it
-      into an object (mirrors ./install.sdd and the system twin).
-  [?] The eval @Dynamic is discarded (`let _ =`): confirm no `delete::run` return
-      value may ever gate success, closing a delete Job that half-failed.
-  [?] @Deserialize on @Parameters has no deserialization site in the workspace (the
-      Rust lane only serializes it toward scripts). Decide whether the derive stays.
+  [ ] Couvrir les six Scenarios par des tests ; aucun test n'invoque ce @run —
+      /agent/tests/rhai_lifecycle.rs exerce les modules Rhai `context`/`delete` du
+      service sur un moteur mock, en contournant cette lane Rust.
+  [?] Dérive de flags des jumeaux : cette lane et /agent/src/tenant/delete.rs portent
+      `-t`/`--template-dir` et `--agent-image` comme leurs jumeaux install, tandis que
+      /agent/src/system/delete.rs est exactement la forme system à sept flags moins
+      `--tag` ; à part le segment de kind, les trois copies sont vérifiées identiques
+      par diff. Croiser les tâches ouvertes de /agent/src/system/delete.sdd et
+      ./install.sdd : décider si les flags template appartiennent à une forme partagée ou
+      si le kind system n'a sincèrement besoin d'aucun.
+  [?] Supprimer une instance déjà partie est un échec dur : @ServiceInstance::get court
+      d'abord, donc un Job delete relancé dont le CR a été retiré entre-temps (cleanup
+      du contrôleur, ou run partiel antérieur) sort 3 au lieu de converger en silence.
+      Même point ouvert que /agent/src/system/delete.sdd : confirmer que le contrôleur
+      ne re-dispatche jamais ce Job après la disparition du CR, ou décider si `NotFound`
+      sur la lane delete devient un @Ok silencieux.
+  [?] `vynil_namespace`, `template_dir`, `agent_image` et `controller_values` sont
+      typés, requis dans le cas de `vynil_namespace`, mais cette lane ne les lit jamais —
+      leur contrat ne vit que dans le JSON `args` côté scripts. Même point ouvert que
+      ./install.sdd : confirmer que le caractère requis appartient au contrat Rhai ou relaxer
+      les flags.
+  [?] `controller_values` atteint les scripts comme chaîne JSON même quand il tient
+      `{}`, donc tout consommateur doit le décoder. Décider si ce fichier devrait le
+      pré-parser en objet (miroite ./install.sdd et le jumeau system).
+  [?] Le @Dynamic de l'eval est jeté (`let _ =`) : confirmer qu'aucune valeur de
+      retour de `delete::run` ne peut jamais fonder le succès, fermant un Job delete à moitié échoué.
+  [?] @Deserialize sur @Parameters n'a aucun site de désérialisation dans le workspace (la
+      lane Rust ne le sérialise que vers les scripts). Décider si le derive reste.
 
 Done when:
-  The six Scenarios hold under tests pinning resolver-path order, the nine-key `args`
-    JSON with no `tag` and `template_dir`/`agent_image` present at their defaults and
-    `controller_values` as a string, and the error-to-exit(3) lane including the
-    already-gone-CR hard failure.
+  Les six Scenarios tiennent sous des tests épinglant l'ordre des chemins de résolution, le
+    JSON `args` à neuf clés sans `tag` et `template_dir`/`agent_image` présents à
+    leurs défauts et `controller_values` comme chaîne, et la lane error-to-exit(3) y
+    compris l'échec dur du CR déjà parti.
 
 Scenario: full run hands off in order
-  Given all required flags supplied (by flag or env), an existing namespaced
-    @ServiceInstance named by @Parameters.instance, and `context.rhai` plus
-    `delete.rhai` resolvable under `{script_dir}/service`
-  When @run is awaited
-  Then @Script::new received the four search dirs `[package]/scripts`, `[config]`,
-    `[script]/service`, `[script]/lib` in that order
-  And before the eval, the process owner context is the service variant (via
-    @set_service) and `instance` and `args` are bound, `args` carrying the nine
-    snake_case keys with `controller_values` as a JSON string
-  Then the `context` module's `run` executes before the `delete` module's `run`,
-    receiving (`instance`, `args`), and the resulting `context` value is what
-    `delete::run` receives
-  And @run returns @Ok(()) whatever the discarded @Dynamic was, having performed no
-    cluster write and no file deletion of its own
+  Given tous les flags requis fournis (par flag ou env), un @ServiceInstance namespaced
+    existant nommé par @Parameters.instance, et `context.rhai` plus
+    `delete.rhai` résolvables sous `{script_dir}/service`
+  When @run est attendu
+  Then @Script::new a reçu les quatre répertoires de recherche `[package]/scripts`, `[config]`,
+    `[script]/service`, `[script]/lib` dans cet ordre
+  And avant l'eval, le contexte propriétaire du processus est la variante service
+    (via @set_service) et `instance` et `args` sont liés, `args` portant les neuf
+    clés snake_case avec `controller_values` comme chaîne JSON
+  Then le `run` du module `context` s'exécute avant le `run` du module `delete`, recevant
+    (`instance`, `args`), et la valeur `context` qui en résulte est ce que `delete::run` reçoit
+  And @run retourne @Ok(()) quel que soit le @Dynamic jeté, sans avoir effectué
+    d'écriture de cluster ni de suppression de fichier de son propre chef
 
 Scenario: service-only flags reach scripts at their defaults
-  Given a command line that sets the required flags but omits `-t`/`--template-dir` and
+  Given une ligne de commande qui pose les flags requis mais omet `-t`/`--template-dir` et
     `--agent-image`
-  When @run serializes @Parameters into `args`
-  Then the object holds exactly the nine keys `namespace`, `instance`,
+  When @run sérialise @Parameters dans `args`
+  Then l'objet tient exactement les neuf clés `namespace`, `instance`,
     `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`, `agent_image`,
-    `config_dir`, `controller_values` — no `tag` key
-  And `template_dir` is `./agent/templates`, `agent_image` is
-    `docker.io/sebt3/vynil-agent:0.7.7` and `controller_values` is the JSON string `"{}"`
+    `config_dir`, `controller_values` — aucune clé `tag`
+  And `template_dir` vaut `./agent/templates`, `agent_image` vaut
+    `docker.io/sebt3/vynil-agent:0.7.7` et `controller_values` est la chaîne JSON `"{}"`
 
 Scenario: absent or already-gone CR fails before any handoff
-  Given no @ServiceInstance exists at that namespace/name — never created, or removed
-    by an earlier delete run or by the controller
-  When @run is awaited
-  Then the @ServiceInstance::get `?` returns @Err(@common::Error::KubeError)
-  And @set_service never ran (context stays @VynilContext::None), `instance`/`args`
-    were never injected and neither module ran
-  And @service::run logs `Deleting a package failed with: K8s error: ...` at
-    @tracing::error level and exits the process 3
+  Given aucun @ServiceInstance n'existe à ce namespace/nom — jamais créé, ou retiré
+    par un run delete antérieur ou par le contrôleur
+  When @run est attendu
+  Then le `?` de @ServiceInstance::get retourne @Err(@common::Error::KubeError)
+  And @set_service n'a jamais couru (contexte reste @VynilContext::None), `instance`/`args`
+    n'ont jamais été injectés et aucun module n'a couru
+  And @service::run logge `Deleting a package failed with: K8s error: ...` au
+    niveau @tracing::error et sort le processus 3
 
 Scenario: missing required flag never reaches Rust logic
-  Given `--instance` omitted and `INSTANCE` unset in the environment — same lane for
-    `--namespace` / `NAMESPACE` and `--vynil-namespace` / `VYNIL_NAMESPACE`
-  When the binary parses @Parameters
-  Then clap exits with its usage error before @run starts — no interpreter, no cluster
-    read, and the exit-3 delete lane is never entered
+  Given `--instance` omis et `INSTANCE` non posé dans l'environnement — même lane pour
+    `--namespace` / `NAMESPACE` et `--vynil-namespace` / `VYNIL_NAMESPACE`
+  When le binaire parse @Parameters
+  Then clap sort avec son erreur d'usage avant qu'@run démarre — pas d'interpréteur, pas de
+    lecture de cluster, et la lane delete exit-3 n'est jamais entrée
 
 Scenario: delete module missing after context already ran
-  Given a valid @ServiceInstance, `context.rhai` resolvable in a search dir, and no
-    `delete.rhai` resolvable in any of the four resolver directories
-  When @run evaluates the snippet
-  Then `ctx::run` and its side effects execute first, then @Script::eval returns
-    @Err(@common::Error::Core Display-prefixed `Rhai script error:`)
-  And the process context still holds the service variant when the exit(3) lane fires
+  Given un @ServiceInstance valide, `context.rhai` résolvable dans un répertoire de
+    recherche, et aucun `delete.rhai` résolvable dans l'un des quatre répertoires de résolution
+  When @run évalue le snippet
+  Then `ctx::run` et ses effets de bord s'exécutent d'abord, puis @Script::eval retourne
+    @Err(@common::Error::Core Display-préfixé `Rhai script error:`)
+  And le contexte du processus tient encore la variante service quand la lane exit(3) se déclenche
 
 Scenario: rerun over a half-deleted instance
-  Given a @ServiceInstance whose `{package_dir}` stage content was already torn down by
-    a previous delete run
-  When @run is invoked again with the same flags
-  Then the CR is refetched and both modules replay from the top — this file skips
-    nothing based on `status` or on the stage directories, whose re-check is
-    `delete.rhai`'s script-side contract
+  Given un @ServiceInstance dont le contenu d'étapes `{package_dir}` a déjà été
+    démoli par un run delete précédent
+  When @run est relancé avec les mêmes flags
+  Then le CR est re-récupéré et les deux modules rejoués depuis le début — ce fichier ne saute rien
+    selon `status` ni selon les répertoires d'étapes, dont le re-check est le contrat script-side de `delete.rhai`

@@ -1,76 +1,76 @@
 Spec: ServerLib
 
 Purpose:
-  Anchor the `server` crate: declare the module tree forming the diagnostic API library and
-  own the crate-root re-export surface @Config, @DiagError and @AppState. The file carries no
-  behaviour of its own — every item resolves through the modules it names, each specified by
-  its own spec below. The lib-vs-bin boundary is the point of the split: the `server` package
-  builds this lib plus a thin binary whose @main in ./main.rs owns all process startup, while
-  the lib is the compile target carrying the API modules and their `cfg(test)` unit tests that
-  `cargo test -p server` runs.
+  Ancrer le crate `server` : déclarer l'arborescence de modules formant la bibliothèque
+  de l'API de diagnostic et posséder la surface de ré-export racine @Config, @DiagError et
+  @AppState. Le fichier ne porte aucun comportement propre — chaque élément se résout via les
+  modules qu'il nomme, chacun spécifié par sa propre spec ci-dessous. La frontière lib-vs-bin
+  est le point du découpage : le package `server` construit cette lib plus un binaire fin dont
+  @main dans ./main.rs possède tout le démarrage du processus, tandis que la lib est la cible
+  portant les modules de l'API et leurs tests unitaires `cfg(test)` que `cargo test -p server` exécute.
 
 Owns:
   ./lib.rs
 
 References:
   ./anonymize.sdd, ./auth.sdd, ./authz.sdd, ./config.sdd, ./discovery.sdd, ./dto.sdd,
-    ./error.sdd, ./server.sdd, ./state.sdd — one per module declared by this file; each owns
-    its module's behaviour.
+    ./error.sdd, ./server.sdd, ./state.sdd — un par module déclaré par ce fichier ; chacun
+    possède le comportement de son module.
   ./collect/children.sdd, ./collect/clusterinfo.sdd, ./collect/logs.sdd,
     ./collect/packages.sdd, ./collect/popularity_contest.sdd, ./collect/state.sdd,
-    ./collect/vynilconfig.sdd — one per submodule @collect aggregates in ./collect/mod.rs.
-  /linting.sdd — the static-analysis harness whose per-crate `cfg_attr` form these crate
-    attributes carry.
-  ./main.rs — the binary root and the crate's only consumer; thin process bootstrap, not API.
+    ./collect/vynilconfig.sdd — un par sous-module que @collect agrège dans ./collect/mod.rs.
+  /linting.sdd — l'harnais d'analyse statique dont ces attributs de crate portent la forme
+    `cfg_attr` par crate.
+  ./main.rs — la racine du binaire et le seul consommateur du crate ; amorçage minimal du processus, pas de l'API.
 
 Must:
-  Carry exactly the two crate attributes, in order:
+  Porter exactement les deux attributs de crate, dans l'ordre :
     `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]`
     `#![cfg_attr(not(test), warn(clippy::arithmetic_side_effects, clippy::indexing_slicing))]`
-    Both lints are scoped to not(test), so the `cfg(test)` build runs without them.
-  Declare @anonymize, @auth, @authz, @collect, @config, @discovery, @dto, @error, @server
-    and @state as `pub mod` — all ten API modules are public; there is no private module.
-  Carry exactly three name-only `pub use` re-exports at the crate root: @Config from
-    @server::config, @DiagError from @server::error, @AppState from @server::state.
-  Define nothing of its own — no @fn, type, constant or macro — so the crate-root surface is
-    exactly the ten modules plus those three names, and any wider root surface would break the
-    parent rule that the public surface moves only with this spec.
-  Run no code: no @main, no side effects. Startup belongs to @main in ./main.rs — logging
-    init, the rustls `ring` provider install, clap parsing of @Config, @AppState construction,
-    the @run_server call and the process exit codes are all owned there; this file only has to
-    keep @main's chosen import line `use server::{@config::Config, @server::run_server,
-    @state::AppState}` resolving.
-  Keep both package targets lint-gated: these attributes gate the lib target while ./main.rs
-    carries the same pair for the bin target; dropping either leaves that target ungated.
-  Serve no consumer beyond the package binary: nothing else in the workspace imports
-    `server` and the package is unpublished (`publish = false` in ./Cargo.toml), so this root
-    plus @main is the whole cross-target contract of the lib today.
+    Les deux lints sont limitées à not(test), donc le build `cfg(test)` tourne sans elles.
+  Déclarer @anonymize, @auth, @authz, @collect, @config, @discovery, @dto, @error, @server
+    et @state en `pub mod` — les dix modules de l'API sont publics ; aucun module privé.
+  Porter exactement trois ré-exports `pub use` de noms seuls à la racine du crate : @Config
+    depuis @server::config, @DiagError depuis @server::error, @AppState depuis @server::state.
+  Ne rien définir de propre — ni @fn, type, constante ou macro — de sorte que la surface
+    racine du crate est exactement les dix modules plus ces trois noms, et toute surface racine
+    plus large romprait la règle parente que la surface publique ne bouge qu'avec cette spec.
+  N'exécuter aucun code : pas de @main, pas d'effets de bord. Le démarrage appartient à @main
+    dans ./main.rs — init des logs, installation du provider `ring` de rustls, parsing clap de
+    @Config, construction de @AppState, l'appel @run_server et les codes de sortie du processus
+    sont tous possédés là ; ce fichier doit seulement garder résolvable la ligne d'import de @main
+    `use server::{@config::Config, @server::run_server, @state::AppState}`.
+  Garder les deux cibles du package sous garde lint : ces attributs gardent la cible lib tandis
+    que ./main.rs porte la même paire pour la cible bin ; en omettre un laisse cette cible sans garde.
+  Ne servir aucun consommateur au-delà du binaire du package : rien d'autre dans le workspace
+    n'importe `server` et le package n'est pas publié (`publish = false` dans ./Cargo.toml), donc
+    cette racine plus @main est tout le contrat inter-cibles de la lib aujourd'hui.
 
 Exposes:
   Modules @anonymize, @auth, @authz, @collect, @config, @discovery, @dto, @error, @server,
-    @state — `pub mod`; behaviour of each owned by the referenced spec.
-  Re-exports at crate root: @Config aliasing @server::config::Config, @DiagError aliasing
-    @server::error::DiagError, @AppState aliasing @server::state::AppState.
+    @state — `pub mod` ; le comportement de chacun est possédé par la spec référencée.
+  Ré-exports à la racine du crate : @Config alias de @server::config::Config, @DiagError
+    alias de @server::error::DiagError, @AppState alias de @server::state::AppState.
 
 Accepts:
-  This file branches on no input — every item is a module declaration or a re-export binding.
+  Ce fichier ne branche sur aucune entrée — chaque élément est une déclaration de module ou une liaison de ré-export.
 
 Tasks:
-  [ ] Cover the frozen root surface: the three crate-root names denote the same items as
-      their module paths and the @main import of @config::Config, @server::run_server and
-      @state::AppState resolves. No mapped test exists.
-  [?] No consumer actually uses the root re-exports: @main.rs reaches @Config and @AppState
-      through their module paths, not the root names, and in-crate code uses
-      @crate::error::DiagError. Decide later whether the re-exports stay as durable API or the
-      root surface shrinks to the module paths.
+  [ ] Couvrir la surface racine gelée : les trois noms de la racine du crate désignent les mêmes
+      éléments que leurs chemins de module et l'import de @main sur @config::Config,
+      @server::run_server et @state::AppState se résout. Aucun test cartographié n'existe.
+  [?] Aucun consommateur n'utilise vraiment les ré-exports racine : @main.rs atteint @Config et
+      @AppState via leurs chemins de module, pas les noms racine, et le code intra-crate
+      utilise @crate::error::DiagError. Décider plus tard si les ré-exports restent une API durable
+      ou si la surface racine se réduit aux chemins de module.
 
 Done when:
-  Every Scenario above has a passing mapped test in `server` and `cargo test -p server` with
-    clippy and fmt are green.
+  Chaque Scenario ci-dessus a un test cartographié passant dans `server` et `cargo test -p server`
+    avec clippy et fmt sont au vert.
 
 Scenario: Crate-root re-exports alias the module items
-  Given an @AppState, a @Config and a @DiagError named through their module paths
-  When the same three are named at the crate root instead
-  Then those are the same items and types, not copies or wrappers, and no other name is
-    reachable at the `server` root beyond the ten modules
-  No mapped test exists.
+  Given un @AppState, un @Config et un @DiagError nommés via leurs chemins de module
+  When les trois mêmes sont nommés à la racine du crate à la place
+  Then ce sont les mêmes éléments et types, pas des copies ni des wrappers, et aucun autre nom
+    n'est atteignable à la racine de `server` au-delà des dix modules
+  Aucun test cartographié n'existe.

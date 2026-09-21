@@ -1,32 +1,32 @@
-# File spec for the agent runtime image.
+# Spec fichier de l'image runtime de l'agent.
 
 Spec: agent Dockerfile
 
 Platform: Docker
 
 Purpose:
-  Build the multi-arch `vynil-agent` image: the agent binary plus the external command-line
-  tools and packaged scripts that a dispatched Job needs at runtime, running as an unprivileged
-  user.
+  Construire l'image multi-arch `vynil-agent` : le binaire de l'agent ainsi que les outils en
+  ligne de commande externes et les scripts embarqués dont un Job dispatché a besoin au runtime,
+  exécuté en tant qu'utilisateur non privilégié.
 
 Owns:
   ./Dockerfile
 
 Must:
-  Compile the `agent` binary against `./parent.toml` with a dependency-cache pre-build before the
-    real sources are copied.
-  Install, at pinned verified versions, `kubectl`, `helm`, `opentofu` (as `terraform`),
-    `mongodump`/`mongorestore`, `restic`, `cosign`, and the database and archive client
-    toolchain.
-  Pre-seed the OpenTofu providers from `./providers.tf` into the runtime cache.
-  Copy `./scripts` and `./templates` into `/usr/lib/vynil` and export `SCRIPT_DIRECTORY`,
-    `TEMPLATE_DIRECTORY`, `PACKAGE_DIRECTORY`, `CONFIG_DIR`, and `XDG_CACHE_HOME`.
-  Drop privileges to `nobody` and run `/work` as the working directory.
-  Honor the `RUST_VERSION` and `DEBIAN_VERSION` build args.
+  Compiler le binaire `agent` contre `./parent.toml` avec une pré-compilation du cache de
+    dépendances avant la copie des sources réelles.
+  Installer, à des versions vérifiées épinglées, `kubectl`, `helm`, `opentofu` (sous `terraform`),
+    `mongodump`/`mongorestore`, `restic`, `cosign`, et la chaîne d'outils clients de bases de
+    données et d'archives.
+  Pré-alimenter les providers OpenTofu depuis `./providers.tf` dans le cache du runtime.
+  Copier `./scripts` et `./templates` dans `/usr/lib/vynil` et exporter `SCRIPT_DIRECTORY`,
+    `TEMPLATE_DIRECTORY`, `PACKAGE_DIRECTORY`, `CONFIG_DIR`, et `XDG_CACHE_HOME`.
+  Abandonner les privilèges au profit de `nobody` et lancer `/work` comme répertoire de travail.
+  Respecter les args de build `RUST_VERSION` et `DEBIAN_VERSION`.
 
 Must not:
-  Run the agent as root, or world-writable the key directory `/var/lib/vynil/keys`.
-  Fetch kubectl, helm, tofu, mongodb-tools, or cosign without a checksum or version pin.
+  Exécuter l'agent en root, ou donner des droits d'écriture à tous sur le répertoire de clés `/var/lib/vynil/keys`.
+  Récupérer kubectl, helm, tofu, mongodb-tools, ou cosign sans checksum ni épingle de version.
 
 Depends on:
   ./parent.toml
@@ -36,5 +36,5 @@ References:
   ./agent.sdd
 
 Done when:
-  The image builds under `docker/buildx` for `linux/amd64` and `linux/arm64` and the `agent`
-    entrypoint reports its version.
+  L'image se construit sous `docker/buildx` pour `linux/amd64` et `linux/arm64` et le point
+    d'entrée `agent` rapporte sa version.

@@ -1,26 +1,26 @@
-# Directory spec for the `kubectl-vynil` crate: the kubectl plugin CLI. Its sources are
-# specified once they are drafted.
+# Spec dossier du crate `kubectl-vynil` : la CLI du plugin kubectl. Ses sources sont
+# spécifiées une fois rédigées.
 
 Spec: kubectl-vynil
 
 Platform: Rust/Kubernetes
 
 Purpose:
-  Client-side `kubectl` plugin (`kubectl vynil …`). It drives the operator from the user's
-  kubeconfig context: trigger scans and upgrades, pull diagnostics, and tail logs. It also
-  hosts shell completion for the plugin.
+  Plugin `kubectl` côté client (`kubectl vynil …`). Il pilote l'opérateur depuis le contexte
+  kubeconfig de l'utilisateur : déclencher scans et montées de version, tirer les diagnostics et
+  suivre les logs. Il héberge aussi le completion shell du plugin.
 
 Structure:
-  ./src/main.rs: Entrypoint and `__complete`/completion dispatch
-  ./src/lib.rs: Library root
-  ./src/cli.rs: clap command tree and resource-kind constants
-  ./src/actions.rs: Instance and JukeBox operations against the cluster
-  ./src/bundle.rs: Diagnostic bundle pull and archive
-  ./src/completion.rs: Dynamic `__complete` protocol handler
-  ./src/items.rs: Resource listing and rendering
-  ./src/transport.rs: HTTP transport to the diagnostic server
-  ./kubectl_complete-vynil: Cobra-protocol shim invoked by kubectl
-  ./completions/: Sourced completion scripts per shell
+  ./src/main.rs: Point d'entrée et dispatch `__complete`/completion
+  ./src/lib.rs: Racine de la librairie
+  ./src/cli.rs: Arbre de commandes clap et constantes de kinds de ressources
+  ./src/actions.rs: Opérations Instance et JukeBox contre le cluster
+  ./src/bundle.rs: Tirage et archivage des bundles de diagnostic
+  ./src/completion.rs: Gestionnaire dynamique du protocole `__complete`
+  ./src/items.rs: Listing et rendu des ressources
+  ./src/transport.rs: Transport HTTP vers le serveur de diagnostic
+  ./kubectl_complete-vynil: Shim de protocole Cobra invoqué par kubectl
+  ./completions/: Scripts de completion sourcés par shell
 
 Owns:
   ./src/main.rs
@@ -36,32 +36,32 @@ Owns:
   ./completions/**
 
 Must:
-  Speak the Cobra `__complete` protocol so `kubectl vynil <TAB>` completes dynamically.
-  Build statically-friendly with pure rustls so the released binary needs no libssl at runtime.
-  Cross-compile for the release targets declared by the CI release job in
+  Parler le protocole Cobra `__complete` pour que `kubectl vynil <TAB>` complète dynamiquement.
+  Se compiler de façon favorable au statique avec rustls pur pour que le binaire publié n'exige aucune libssl au runtime.
+  Croiser la compilation pour les cibles de release déclarées par le job de release de la CI dans
     `/.github/workflows/workflows.sdd`.
 
 Must not:
-  Reconcile or mutate package lifecycle beyond triggering an action the operator owns.
-  Depend on `agent`, `operator`, or `server`.
+  Réconcilier ou muter le cycle de vie des paquets au-delà du déclenchement d'une action possédée par l'opérateur.
+  Dépendre de `agent`, `operator`, ou `server`.
 
 Depends on:
   `kube`, `k8s-openapi`, `reqwest`, `clap`, `anyhow`
 
 References:
   ./src/main.sdd, ./src/cli.sdd, ./src/actions.sdd, ./src/bundle.sdd, ./src/completion.sdd,
-    ./src/items.sdd, ./src/transport.sdd, ./kubectl_complete-vynil.sdd — the file-level
-    contracts; this directory spec stays coarse and defers all file behavior to them.
-    `./src/lib.rs` is a lint-attribute and `pub mod` shim: no crate attributes beyond the
-    shared `/linting.sdd` harness pair and no behavior, so it carries no file spec per
+    ./src/items.sdd, ./src/transport.sdd, ./kubectl_complete-vynil.sdd — les contrats au
+    niveau fichier ; ce spec dossier reste grossier et leur délègue tout le comportement
+    des fichiers. `./src/lib.rs` est un shim d'attributs lint et de `pub mod` : pas d'attribut
+    de crate au-delà de la paire de harnais partagée `/linting.sdd` et pas de comportement, il ne porte donc pas de spec fichier selon
     `.specdd/bootstrap.project.md`.
 
 Done when:
-  The actions, bundle, and completion modules have reviewed specs and `cargo test -p kubectl-vynil`
-    is green.
+  Les modules actions, bundle et completion ont des specs revus et `cargo test -p kubectl-vynil`
+    est vert.
 
 Tasks:
-  [x] #0 Spec ./src/actions.rs, ./src/bundle.rs, and ./src/transport.rs.
-  [x] #1 Spec ./src/completion.rs and the shim.
-  [ ] #2 Spec the emitted loaders ./completions/bash.sh and ./completions/zsh.sh (only
-      reachable through ./src/completion.rs include_str! emission decided there).
+  [x] #0 Spécifier ./src/actions.rs, ./src/bundle.rs, et ./src/transport.rs.
+  [x] #1 Spécifier ./src/completion.rs et le shim.
+  [ ] #2 Spécifier les loaders émis ./completions/bash.sh et ./completions/zsh.sh (uniquement
+      atteignables via l'émission include_str! de ./src/completion.rs décidée là-bas).

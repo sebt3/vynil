@@ -1,30 +1,30 @@
-# Directory spec for the `server` crate: the diagnostic API. Submodules are specified by
-# nearer same-basename specs.
+# Spec de répertoire pour le crate `server` : l'API de diagnostic. Les sous-modules sont
+# spécifiés par des specs de même nom de base, plus proches.
 
 Spec: server
 
 Platform: Rust/Kubernetes
 
 Purpose:
-  The diagnostic HTTP API (`vynil-server`). It exposes cluster package/instance state to
-  `kubectl-vynil` and dashboards: authentication, authorization, discovery, log and event
-  collection, and DTO serialization, with tenant-scoped access and payload anonymization.
+  L'API HTTP de diagnostic (`vynil-server`). Elle expose l'état des paquets/instances du
+  cluster à `kubectl-vynil` et aux dashboards : authentification, autorisation, découverte,
+  collecte des logs/événements, sérialisation des DTO, accès périmétré au tenant, anonymisation des payloads.
 
 Structure:
-  ./src/main.rs: Entrypoint, rustls provider pin, server bootstrap
-  ./src/lib.rs: Library root declaring the API modules
-  ./src/server.rs: Axum router and endpoint wiring
-  ./src/auth.rs: Request authentication
-  ./src/authz.rs: Tenant-scoped authorization
-  ./src/discovery.rs: Package and instance discovery
-  ./src/collect/: Log and event collection
-  ./src/dto.rs: Response DTOs
-  ./src/error.rs: API `@Error` mapping
-  ./src/anonymize.rs: Tenant payload anonymization
-  ./src/config.rs: Server configuration
-  ./src/state.rs: Shared `@AppState`
-  ./parent.toml: Standalone workspace manifest for the image build (generated)
-  ./Dockerfile: Runtime image build (contract in ./Dockerfile.sdd)
+  ./src/main.rs: Point d'entrée, épinglage du provider rustls, amorçage du serveur
+  ./src/lib.rs: Racine de bibliothèque déclarant les modules de l'API
+  ./src/server.rs: Routeur Axum et câblage des endpoints
+  ./src/auth.rs: Authentification des requêtes
+  ./src/authz.rs: Autorisation périmétrée au tenant
+  ./src/discovery.rs: Découverte des paquets et instances
+  ./src/collect/: Collecte des logs et événements
+  ./src/dto.rs: DTO de réponse
+  ./src/error.rs: Mapping `@Error` de l'API
+  ./src/anonymize.rs: Anonymisation des payloads du tenant
+  ./src/config.rs: Configuration du serveur
+  ./src/state.rs: `@AppState` partagée
+  ./parent.toml: Manifeste de workspace autonome pour la build de l'image (généré)
+  ./Dockerfile: Build de l'image runtime (contrat dans ./Dockerfile.sdd)
 
 Owns:
   ./src/main.rs
@@ -42,24 +42,24 @@ Owns:
   ./parent.toml
 
 Must:
-  Authorize every read against the requesting tenant scope before returning cluster data.
-  Anonymize secrets in returned payloads.
-  Pin the rustls crypto provider to `ring` before the Kubernetes client is built.
+  Autoriser chaque lecture selon le périmètre du tenant demandeur avant tout renvoi de données du cluster.
+  Anonymiser les secrets dans les payloads renvoyés.
+  Épingler le provider crypto rustls sur `ring` avant la construction du client Kubernetes.
 
 Must not:
-  Enforce package lifecycle rules; reconciliation belongs to the `operator` crate.
-  Depend on the `agent` or `operator` crates.
+  Appliquer les règles de cycle de vie des paquets ; la réconciliation relève du crate `operator`.
+  Dépendre des crates `agent` ou `operator`.
 
 Depends on:
   ./common/common.sdd
   `axum`, `kube`, `k8s-openapi`
 
 Done when:
-  Each API module has a reviewed spec and `cargo test -p server` is green.
+  Chaque module de l'API a une spec revue et `cargo test -p server` est vert.
 
 Tasks:
-  [x] #0 Spec `./src/authz.rs` and `./src/collect/`.
-  [x] #1 Spec `./src/discovery.rs`, `./src/anonymize.rs`, and `./src/dto.rs`.
+  [x] #0 Spec de `./src/authz.rs` et `./src/collect/`.
+  [x] #1 Spec de `./src/discovery.rs`, `./src/anonymize.rs` et `./src/dto.rs`.
 
 References:
   ./src/main.sdd, ./src/lib.sdd, ./src/server.sdd, ./src/auth.sdd, ./src/authz.sdd,
@@ -67,6 +67,6 @@ References:
     ./src/config.sdd, ./src/state.sdd, ./src/collect/children.sdd,
     ./src/collect/clusterinfo.sdd, ./src/collect/logs.sdd, ./src/collect/packages.sdd,
     ./src/collect/popularity_contest.sdd, ./src/collect/state.sdd,
-    ./src/collect/vynilconfig.sdd — the file-level contracts; this directory spec stays
-    coarse and defers all file behavior to them. `./src/collect/mod.rs` is a re-export
-    shim with no behavior and carries no file spec per `.specdd/bootstrap.project.md`.
+    ./src/collect/vynilconfig.sdd — les contrats au niveau fichier ; cette spec de répertoire
+    reste grossière et leur délègue tout le comportement des fichiers. `./src/collect/mod.rs`
+    est un shim de ré-export sans comportement, sans spec fichier selon `.specdd/bootstrap.project.md`.

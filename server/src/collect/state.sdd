@@ -1,222 +1,222 @@
 Spec: state
 
 Purpose:
-  Own the diagnostic API's `state` item: one instance CRD's full stored object — `metadata`,
-    `spec` and a sanitized `status` — rendered as one YAML dump for the `state` endpoint: read
-    the requested @TenantInstance, @ServiceInstance or @SystemInstance by kind, blank its
-    `tfstate` and `rhaistate` status blobs out of the fetched copy before anything serializes
-    them, re-encode the typed object as JSON then YAML, mask the text through @scrub_yaml, and
-    hand back the masked text plus its @ScrubStats tally. The dump is the stored-CRD view, not
-    Terraform state: the item is named `state` while `tfstate`/`rhaistate` are exactly what this
-    file removes; child-object manifests belong to ./children.rs.
+  Possède l'élément `state` de l'API de diagnostic : l'objet stocké complet d'un CRD d'instance —
+    `metadata`, `spec` et un `status` assaini — rendu comme un dump YAML unique pour la route
+    `state` : lit l'@TenantInstance, @ServiceInstance ou @SystemInstance voulu selon le kind, vide
+    les blobs de status `tfstate` et `rhaistate` de la copie récupérée avant toute sérialisation,
+    réencode l'objet typé en JSON puis YAML, masque le texte via @scrub_yaml, et renvoie le texte
+    masqué avec son décompte @ScrubStats. Le dump est la vue du CRD stocké, non l'état Terraform :
+    l'élément se nomme `state` alors que `tfstate`/`rhaistate` sont exactement ce que ce fichier
+    retire ; les manifestes des objets enfants appartiennent à ./children.rs.
 
 Owns:
   ./state.rs
 
 References:
-  ../dto.sdd — @ScrubStats is the returned tally; its `X-Diag-Redactions` rendering lives in
-    ../server.rs.
-  ../error.sdd — the exit lane: only @DiagError::UnknownKind, @DiagError::KubeError,
-    @DiagError::SerializationError and @DiagError::YamlError ever leave this file; ids and
-    statuses are owned there.
-  ../anonymize.sdd — the @scrub_yaml contract: value/regex masking of the text, per-call Secret
-    listing over both namespaces, infallibility and counter semantics.
-  ../state.sdd — the client arriving as the argument is the @AppState.client handle cloned by
-    ../server.rs; the server identity whose RBAC decides the `get` belongs there.
-  .../server.rs — sole consumer: pre-validates kind/names, authenticates and authorizes the
-    `"state"` item, then renders this dump as the HTTP body.
+  ../dto.sdd — @ScrubStats est le décompte renvoyé ; son rendu via
+    `X-Diag-Redactions` vit dans ../server.rs.
+  ../error.sdd — la voie de sortie : seuls @DiagError::UnknownKind, @DiagError::KubeError,
+    @DiagError::SerializationError et @DiagError::YamlError quittent jamais ce fichier ; les ids
+    et statuts y sont possédés.
+  ../anonymize.sdd — le contrat de @scrub_yaml : masquage du texte par valeur/regex, listing des
+    Secrets à chaque appel sur les deux namespaces, infaillibilité et sémantique des compteurs.
+  ../state.sdd — le client arrivé comme argument est la poignée @AppState.client clonée par
+    ../server.rs ; l'identité serveur dont le RBAC tranche le `get` appartient là-bas.
+  .../server.rs — seul consommateur : pré-valide kind/noms, authentifie et autorise
+    l'élément `"state"`, puis rend ce dump comme corps HTTP.
   /common/src/instancetenant.sdd, /common/src/instanceservice.sdd,
-    /common/src/instancesystem.sdd — the CRD models read and dumped here; their status types are
-    what carries the stripped `tfstate`/`rhaistate` fields.
+    /common/src/instancesystem.sdd — les modèles de CRD lus et dumptés ici ; leurs types de
+    status sont ce qui porte les champs `tfstate`/`rhaistate` expulsés.
 
 Must:
-  Kind dispatch is exact and case-sensitive on the three lowercase plurals `tenantinstances`,
-    `serviceinstances`, `systeminstances`; every other @kind string yields
-    @DiagError::UnknownKind before this file issues any cluster read.
-  Exactly one point read per call: one @Api::namespaced(@client.clone(), `namespace`) plus
-    @Api::get of `name` — no `list`, no `watch`, no @ListParams, no selector anywhere in this
-    file (the Secret lists happen inside @scrub_yaml, owned by ../anonymize.rs).
-  Sanitizing is fixed and in-memory: after the @Ok read and before any serialization, when the
-    fetched object carries a `status`, its @status.tfstate and @status.rhaistate become @None —
-    all three CRD status types declare both fields; when `status` is @None nothing is mutated;
-    no other field is touched, whichever kind was read.
-  The dump is the typed serde view with zero rename, filter or reconstruction by this file:
-    @serde_json::to_value of the sanitized object, then @serde_yaml::to_string of that tree. Per
-    the hand-written @Serialize that @kube-derive `3.1.0` generates, `apiVersion`, `kind`,
-    `metadata` and `spec` keys are always emitted in that order and `status` only when @Some;
-    because the common status structs declare no @skip_serializing_if, the stripped
-    `tfstate`/`rhaistate` keys survive the dump as `null` — the redaction is announced, not
-    hidden. Deeper key sets, casing and @metadata rendering belong to the three /common specs.
-  Order is frozen: typed read → status strip → @serde_json::to_value → @serde_yaml::to_string →
-    @scrub_yaml. Masking therefore consumes the emitted YAML text, never typed fields; the
-    instance `namespace` is the first Secret-collection namespace, `vynil_namespace` the second;
-    the returned @ScrubStats is that single infallible @scrub_yaml result passed through
-    un-aggregated (contrast the saturating per-child fold of ./children.rs).
-  Stripped payloads never reach the client or the counters: being removed before serialization,
-    tfstate/rhaistate content never enters the JSON tree, the YAML text, the scrubbing pass or
-    the redaction counts — a secret stored only there contributes nothing to the text or to
-    @ScrubStats.
-  Every failure leg aborts the call: there is no degraded-success lane (a child read failure
-    degrades in ./children.rs; an instance read failure never does); and the file keeps no
-    cache, TTL, informer or global state — every call re-reads.
+  Le dispatch du kind est exact et sensible à la casse sur les trois pluriels minuscules
+    `tenantinstances`, `serviceinstances`, `systeminstances` ; tout autre @kind renvoie
+    @DiagError::UnknownKind avant que ce fichier n'émette la moindre lecture du cluster.
+  Une seule lecture ponctuelle par appel : un @Api::namespaced(@client.clone(), `namespace`) et
+    un @Api::get de `name` — pas de `list`, de `watch`, de @ListParams ni sélecteur où que ce
+    soit dans ce fichier (les listes de Secrets ont lieu dans @scrub_yaml, dans ../anonymize.rs).
+  L'assainissement est fixe et en mémoire : après la lecture @Ok et avant toute sérialisation,
+    quand l'objet récupéré porte un `status`, ses @status.tfstate et @status.rhaistate passent à
+    @None — les trois types de status des CRD déclarent tous deux champs ; quand `status` est
+    @None rien n'est modifié ; aucun autre champ n'est touché, quel que soit le kind lu.
+  Le dump est la vue serde typée, sans renommage, filtre ni reconstruction par ce fichier :
+    @serde_json::to_value de l'objet assaini, puis @serde_yaml::to_string de cet arbre. Selon le
+    @Serialize à la main que @kube-derive `3.1.0` génère, les clés `apiVersion`, `kind`,
+    `metadata` et `spec` sont toujours émises dans cet ordre et `status` seulement si @Some ;
+    comme les structs de status communes ne déclarent pas de @skip_serializing_if, les clés
+    `tfstate`/`rhaistate` expurgées survivent au dump comme `null` — l'occultation est annoncée,
+    pas dissimulée. Clés profondes, casse et rendu @metadata relèvent des specs /common.
+  L'ordre est figé : lecture typée → expurgation du status → @serde_json::to_value →
+    @serde_yaml::to_string → @scrub_yaml. Le masquage consomme donc le texte YAML émis, jamais
+    les champs typés ; le `namespace` de l'instance est le premier namespace de collecte des
+    Secrets, `vynil_namespace` le second ; les @ScrubStats renvoyés sont l'unique résultat
+    infaillible de @scrub_yaml passé tel quel (vs le fold saturant par enfant de ./children.rs).
+  Les payloads expurgés ne parviennent ni au client ni aux compteurs : retirés avant la
+    sérialisation, le contenu de tfstate/rhaistate n'entre jamais dans l'arbre JSON, le texte
+    YAML, la passe de masquage ni les compteurs d'occultations — un secret stocké uniquement là
+    ne contribue ni au texte ni aux @ScrubStats.
+  Toute branche d'échec interrompt l'appel : il n'y a pas de voie de succès dégradé (un échec
+    de lecture d'un enfant se dégrade dans ./children.rs ; un échec de lecture d'instance ne le
+    fait jamais ; le fichier ne conserve ni cache, TTL, informer ni état global — chaque appel relit).
 
 Must not:
-  Write back to the cluster — no patch and no `status`-subresource merge of the kind the
-    /common @impl_instance_common! setters perform: stripping `tfstate`/`rhaistate` is a local
-    mutation of the fetched copy only, and the stored CRD keeps both payloads untouched by any
-    read of this endpoint.
+  Réécrire dans le cluster — aucun patch ni merge du sous-ensemble `status` du genre que les
+    setters /common @impl_instance_common! effectuent : expurger `tfstate`/`rhaistate` n'est
+    qu'une mutation locale de la copie récupérée, et le CRD stocké conserve les deux payloads
+    intacts quelle que soit la lecture de cet endpoint.
 
 Depends on:
-  @kube `3.1.0` (versions locked in /Cargo.lock) — @kube::Client, @kube::@api::@Api; only the
-    @namespaced constructor, @get and the cheap @Client @Clone per Api build are used.
-  @common — @TenantInstance, @ServiceInstance, @SystemInstance from
+  @kube `3.1.0` (versions verrouillées dans /Cargo.lock) — @kube::Client, @kube::@api::@Api ;
+    seuls le constructeur @namespaced, @get et le @Clone de @Client par Api build sont utilisés.
+  @common — @TenantInstance, @ServiceInstance, @SystemInstance depuis
     /common/src/instancetenant.rs, /common/src/instanceservice.rs,
-    /common/src/instancesystem.rs; read-only consumers here.
-  @crate::anonymize::scrub_yaml in ../anonymize.rs — the mask-and-tally step over the rendered
-    YAML.
-  @crate::dto::@ScrubStats in ../dto.rs — the returned tally type.
-  @crate::error::@DiagError in ../error.rs — the exit lane; the three payload variants enter via
-    explicit @map_err calls.
-  @serde_json::to_value and @serde_yaml::to_string (locked in /Cargo.lock) — the two-hop
-    JSON-then-YAML rendering of the dump.
+    /common/src/instancesystem.rs ; consommateurs en lecture seule ici.
+  @crate::anonymize::scrub_yaml dans ../anonymize.rs — l'étape de masquage et de comptage sur
+    le YAML rendu.
+  @crate::dto::@ScrubStats dans ../dto.rs — le type de décompte renvoyé.
+  @crate::error::@DiagError dans ../error.rs — la voie de sortie ; les trois variantes à
+    payload entrent par des appels @map_err explicites.
+  @serde_json::to_value et @serde_yaml::to_string (verrouillés dans /Cargo.lock) — le rendu en
+    deux sauts JSON-puis-YAML du dump.
 
 Exposes:
-  Full public surface — `pub mod state;` in ./mod.rs under `pub mod collect;` in ../lib.rs — is
-    the single function; the file declares no types or constants:
+  La surface publique complète — `pub mod state;` dans ./mod.rs sous `pub mod collect;` dans
+    ../lib.rs — est la fonction unique ; le fichier ne déclare ni types ni constantes :
   @get_instance_state — `pub async fn @get_instance_state(client: &@kube::Client, kind: &@str,
     namespace: &@str, name: &@str, vynil_namespace: &@str) -> @Result<(@std::string::@String,
-    @ScrubStats), @DiagError>`; its only consumer is ../server.rs, whose `"state"` arm serves
-    the text through @yaml_response (`200`, `application/yaml`) and the tally through
+    @ScrubStats), @DiagError>` ; son unique consommateur est ../server.rs, dont la branche
+    `"state"` sert le texte via @yaml_response (`200`, `application/yaml`) et le décompte via
     @add_scrub_header (`X-Diag-Redactions`).
-  Everything else is private: @get_tenant_instance, @get_service_instance and
-    @get_system_instance (`async fn` each, `(&@kube::Client, &@str, &@str) -> @Result<@TenantInstance
-    / @ServiceInstance / @SystemInstance, @DiagError>`), same-shape copies differing only in the
-    CRD fetched and stripped; their names coincide with the three script-visible Rhai functions
-    registered in /common (e.g. `get_tenant_instance` of /common/src/instancetenant.sdd) while
-    being module-private and unrelated.
+  Tout le reste est privé : @get_tenant_instance, @get_service_instance et
+    @get_system_instance (`async fn` chacun, `(&@kube::Client, &@str, &@str) -> @Result<@TenantInstance
+    / @ServiceInstance / @SystemInstance, @DiagError>`), copies de même forme ne différant que par
+    le CRD récupéré et expurgé ; leurs noms coïncident avec les trois fonctions Rhai visibles des
+    scripts enregistrées dans /common (p. ex. `get_tenant_instance` de
+    /common/src/instancetenant.sdd) tout en étant privées au module et sans lien.
 
 Accepts:
-  A live borrowed @kube::Client and four free-form @str borrows, validated nothing here: `kind`
-    is re-gated raw against the three plurals (../server.rs checks @VALID_KINDS and DNS forms,
-    authenticates and authorizes before calling, but this function independently refuses foreign
-    kinds and enforces nothing else); `namespace` serves double duty as the read namespace and
-    the first Secret-collection namespace; `name` goes verbatim to @Api::get; `vynil_namespace`
-    reaches only @scrub_yaml.
-  No precondition on the stored object's shape: it must merely decode into the kind's model — a
-    stored CRD that fails that decode surfaces as a @kube::Error through the read leg.
+  Un @kube::Client emprunté vivant et quatre emprunts @str en format libre, rien n'est validé
+    ici : `kind` est re-gaté brut contre les trois pluriels (../server.rs vérifie @VALID_KINDS
+    et les formes DNS, authentifie et autorise avant l'appel, mais cette fonction refuse
+    indépendamment les kinds étrangers et n'applique rien d'autre) ; `namespace` a un double
+    rôle : namespace de lecture et premier namespace de collecte des Secrets ; `name` part tel
+    quel vers @Api::get ; `vynil_namespace` ne rejoint que @scrub_yaml.
+  Aucun prérequis sur la forme de l'objet stocké : il doit juste se décoder dans le modèle du
+    kind — un CRD stocké dont le décodage échoue remonte en @kube::Error via la branche de lecture.
 
 Returns:
-  @Ok of `(masked YAML text, @ScrubStats)`. The text is @serde_yaml's rendering of the sanitized
-    typed view: `apiVersion: vynil.solidite.fr/v1`, the CRD's `kind`, the full `metadata` the
-    API server returned (server-populated `managedFields` and timestamps included — noise is not
-    filtered, only values are masked), `spec` verbatim including user-authored `options` and
-    `initFrom`, and when present the `status` with every field intact except `tfstate: null` and
-    `rhaistate: null`; an absent `status` contributes no `status` key at all. @Ok never carries
-    stripped payload content.
-  The tally counts @scrub_yaml pass-1 secret replacements over that rendered text only — pattern
-    redactions are invisible to the counters per ./anonymize.sdd.
+  @Ok de `(masked YAML text, @ScrubStats)`. Le texte est le rendu de @serde_yaml de la vue typée
+    assainie : `apiVersion: vynil.solidite.fr/v1`, le `kind` du CRD, le `metadata` complet
+    renvoyé par le serveur d'API (`managedFields` et horodatages peuplés par le serveur inclus —
+    le bruit n'est pas filtré, seules les valeurs sont masquées), `spec` tel quel, avec les
+    `options` et `initFrom` rédigés par l'utilisateur, et quand il est présent le `status` avec
+    chaque champ intact sauf `tfstate: null` et `rhaistate: null` ; un `status` absent n'émet
+    aucune clé `status`. @Ok ne porte jamais le contenu des payloads expurgés.
+  Le décompte compte les remplacements de secrets de la passe 1 de @scrub_yaml sur ce seul texte
+    rendu — les occultations par motif sont invisibles aux compteurs, cf. ./anonymize.sdd.
 
 Raises:
-  @DiagError::UnknownKind — any `kind` outside the three plurals, raised pre-call with zero
-    cluster reads issued.
-  @DiagError::KubeError — every @kube::Error from the single instance @get, mapped explicitly by
-    @map_err(@DiagError::KubeError): a Kubernetes-side `404` when ../server.rs' existence
-    pre-check races a deletion, an RBAC `403`, a model-decode failure — all land in the `500`
-    lane; @DiagError::InstanceNotFound is never raised from this file.
-  @DiagError::SerializationError — @serde_json::to_value failure, mapped explicitly by
+  @DiagError::UnknownKind — tout `kind` hors des trois pluriels, levé avant l'appel sans la
+    moindre lecture de cluster émise.
+  @DiagError::KubeError — tout @kube::Error issu du seul @get d'instance, mappé explicitement par
+    @map_err(@DiagError::KubeError) : un `404` côté Kubernetes quand le pré-contrôle d'existence
+    de ../server.rs entre en course avec une suppression, un `403` RBAC, un échec de décodage du
+    modèle — tout tombe dans la voie `500` ; @DiagError::InstanceNotFound n'est jamais levé ici.
+  @DiagError::SerializationError — échec de @serde_json::to_value, mappé explicitement par
     @map_err.
-  @DiagError::YamlError — @serde_yaml::to_string failure, mapped explicitly by @map_err; see
-    Tasks for its reachability.
-  @scrub_yaml adds no error leg — it is infallible per ./anonymize.sdd; its only failure mode is
-    silent under-masking.
+  @DiagError::YamlError — échec de @serde_yaml::to_string, mappé explicitement par @map_err ;
+    voir Tasks pour son atteignabilité.
+  @scrub_yaml n'ajoute aucune branche d'erreur — il est infaillible selon ./anonymize.sdd ; son
+    seul mode d'échec est le sous-masquage silencieux.
 
 Handles:
-  Absent `status` — the `if let` @Some strip guard keeps the fetched object untouched and the
-    dump loses the whole `status` key; already-@None `tfstate`/`rhaistate` make stripping an
-    idempotent no-op while the null keys still render (stripped and never-set stay
-    wire-indistinguishable, see Tasks).
-  Under-masking inherited from @scrub_yaml — a failed Secret list leaves secret values verbatim
-    without failing, and masking stays value/shape-driven only: arbitrary `spec.options` or
-    condition `message` content passes through unless it equals a collected Secret value or one
-    of the three regex shapes.
-  A tenant namespace equal to `vynil_namespace` — one Secret sweep, delegated to
-    ../anonymize.rs' equal-namespace rule.
+  `status` absent — la garde d'expurgation `if let` @Some laisse l'objet récupéré intact et le
+    dump perd la clé `status` tout entière ; des `tfstate`/`rhaistate` déjà @None font de
+    l'expurgation un no-op idempotent tandis que les clés null s'affichent quand même
+    (expurgées et jamais posées restent indiscernables sur le fil, voir Tasks).
+  Sous-masquage hérité de @scrub_yaml — une liste de Secrets échouée laisse les valeurs des
+    secrets en clair sans faire échouer, et le masquage reste dicté par la valeur et la forme
+    seulement : un contenu arbitraire de `spec.options` ou des `message` de conditions passe à
+    moins d'égaler une valeur de Secret collectée ou l'une des trois formes regex.
+  Un namespace tenant égal à `vynil_namespace` — une seule collecte de Secrets, déléguée à la
+    règle de namespace égal de ../anonymize.rs.
 
 Tasks:
-  [ ] No `#[cfg(test)]` module exists in this file and the server crate has no integration tests
-      or dev-dependencies today; cover all Scenarios below from these blocks under the project
-      TTD rule once a cluster double exists (same constraint recorded in ./children.sdd and
-      ./anonymize.sdd).
-  [?] @get_instance_state's rustdoc puts the `# Errors` block before its one-line summary, so
-      the summary renders inside the errors section — reorder during doc review; its wording
-      also claims serialization failures propagate, which Tasks below question.
-  [?] The `as per brief §7.4` comments (all three helpers) cite the retired `docs/conception/`
-      brief — declared no-authority by `.specdd/bootstrap.project.md` — leaving the strip rule
-      with no owning artifact. Decide whether this spec (or /server/server.sdd) becomes that
-      authority and drop the stale citation.
-  [?] Stripping survives the dump as `tfstate: null` / `rhaistate: null` keys: clients cannot
-      distinguish "redacted for you" from "never stored", and the null keys themselves are
-      constant noise. Decide later whether the keys are dropped (skip on the common status
-      structs), replaced by a placeholder marker, or kept as-is.
-  [?] The three helpers are same-shape copies differing only by CRD type and mirror the
-      `get_*_children` trio of ./children.rs; decide later whether one generic helper replaces
-      all six.
-  [?] The @DiagError::SerializationError and @DiagError::YamlError legs are mapped per the doc
-      comment yet likely unreachable — serializing an API-decoded typed tree always succeeds, and
-      a @serde_json::@Value (string keys, finite numbers) always renders as YAML; the doc comment
-      meanwhile claims "serialization of the collected resources" as a live failure. Decide
-      whether they propagate (here) or degrade like ./children.rs' @unwrap_or_default lane — and
-      reconcile the two crates' stances.
-  [?] Secret values whose text gets escaped in serialization (`"`, `\` or newline content emitted
-      in a quoted scalar style) may have no literal occurrence in the rendered YAML and so can
-      survive @scrub_yaml here — the escape blindness ./anonymize.sdd records for @scrub_json
-      applies to this serialized-YAML lane too, contrary to that spec's claim that those secrets
-      "still mask in the YAML lane" (that claim holds for raw log text, not for a
-      @serde_yaml::to_string product). Decide, together with ./anonymize.sdd, whether the claim,
-      the rule set or both get corrected.
+  [ ] Aucun module `#[cfg(test)]` n'existe dans ce fichier et le crate server n'a ni tests
+      d'intégration ni dev-dependencies aujourd'hui ; couvrir tous les Scenarios ci-dessous
+      depuis ces blocs selon la règle TTD du projet dès qu'un double de cluster existe (même
+      contrainte consignée dans ./children.sdd et ./anonymize.sdd).
+  [?] Le rustdoc de @get_instance_state place le bloc `# Errors` avant son résumé d'une ligne :
+      le résumé s'affiche donc dans la section des erreurs — réordonner en relecture ; son
+      libellé prétend aussi que les échecs de sérialisation se propagent, ce que Tasks conteste.
+  [?] Les commentaires `as per brief §7.4` (les trois helpers) citent le brief retiré de
+      `docs/conception/` — déclaré sans autorité par `.specdd/bootstrap.project.md` — laissant
+      la règle d'expurgation sans artefact propriétaire. Décider si cette spec (ou
+      /server/server.sdd) devient cette autorité et abandonner la citation obsolète.
+  [?] L'expurgation survit au dump comme clés `tfstate: null` / `rhaistate: null` : les clients
+      ne peuvent distinguer « occulté pour vous » de « jamais stocké », et les clés null sont
+      elles-mêmes un bruit constant. Décider plus tard si les clés sont supprimées (skip sur
+      les structs de status communes), remplacées par un marqueur placeholder, ou gardées.
+  [?] Les trois helpers sont des copies de même forme différant seulement par le type de CRD et
+      reflètent le trio `get_*_children` de ./children.rs ; décider plus tard si un helper
+      générique les remplace tous les six.
+  [?] Les branches @DiagError::SerializationError et @DiagError::YamlError sont mappées selon le
+      commentaire doc mais probablement inatteignables — sérialiser un arbre typé décodé de
+      l'API réussit toujours, et un @serde_json::@Value (clés string, nombres finis) se rend
+      toujours en YAML ; le commentaire doc avance en parallèle « serialization of the
+      collected resources » comme échec réel. Décider s'ils se propagent (ici) ou se dégradent
+      comme la voie @unwrap_or_default de ./children.rs — et réconcilier les deux crates.
+  [?] Les valeurs de secret dont le texte est échappé à la sérialisation (contenu `"`, `\` ou
+      newline émis dans un style de scalaire quoté) peuvent n'avoir aucune occurrence littérale
+      dans le YAML rendu et peuvent donc survivre à @scrub_yaml ici — l'aveuglement aux
+      échappements que ./anonymize.sdd consigne pour @scrub_json vaut aussi pour cette voie
+      YAML sérialisé, contrairement à cette spec qui affirme que ces secrets « still mask in
+      the YAML lane » (vrai pour le texte de log brut, faux pour un produit de
+      @serde_yaml::to_string). Décider avec ./anonymize.sdd quoi corriger.
 
 Done when:
-  Every Scenario below maps to a green test in `server`, the `[?]` decisions above are recorded,
-    and `cargo test -p server` with `cargo clippy --all-targets -- -D warnings` and
-    `cargo +nightly fmt --check` stays green.
+  Chaque Scenario ci-dessous correspond à un test vert dans `server`, les décisions `[?]`
+    ci-dessus sont consignées, et `cargo test -p server` avec
+    `cargo clippy --all-targets -- -D warnings` et `cargo +nightly fmt --check` reste vert.
 
 Scenario: The dump is the sanitized CRD view
-  Given a @TenantInstance in `tenant-a` whose status holds @Some `tfstate` and @Some `rhaistate`
-    and whose `spec.options` carries a collected Secret value
-  When @get_instance_state runs with kind `tenantinstances`
-  Then exactly one namespaced @Api::get of the instance is issued, and the text carries
-    `apiVersion` `vynil.solidite.fr/v1`, `kind` `TenantInstance`, full `metadata` and `spec`,
-    while `tfstate` and `rhaistate` render `null` with none of their content anywhere
-  And the `options` Secret occurrence becomes `<anonymized>` with @ScrubStats counting that
-    pass-1 replacement on the rendered YAML only
-  No mapped test exists.
+  Given un @TenantInstance dans `tenant-a` dont le status porte @Some `tfstate` et @Some
+    `rhaistate` et dont `spec.options` porte une valeur de Secret collectée
+  When @get_instance_state tourne avec le kind `tenantinstances`
+  Then un unique @Api::get namespaced de l'instance est émis et le texte porte `apiVersion`
+    `vynil.solidite.fr/v1`, `kind` `TenantInstance`, `metadata` et `spec` complets, tandis que
+    `tfstate` et `rhaistate` s'affichent `null`, leur contenu n'apparaissant nulle part
+  And l'occurrence de Secret dans `options` devient `<anonymized>` et @ScrubStats compte ce
+    remplacement de passe 1 sur le seul YAML rendu
+  Aucun test mappé n'existe.
 
 Scenario: Kind gate refuses pre-call
-  Given kind `TenantInstances` with a capital T, or `pods`, or `""`
-  When @get_instance_state is awaited
-  Then @DiagError::UnknownKind is returned and no cluster request is issued at all
-  No mapped test exists.
+  Given le kind `TenantInstances` avec un T majuscule, ou `pods`, ou `""`
+  When @get_instance_state est awaité
+  Then @DiagError::UnknownKind est renvoyé et aucune requête de cluster n'est émise du tout
+  Aucun test mappé n'existe.
 
 Scenario: Deletion race fails as KubeError, never as InstanceNotFound
-  Given the instance deleted between ../server.rs' existence pre-check and this file's @get
-  When the single read fails with a Kubernetes `404`
-  Then the call @Errs @DiagError::KubeError — the `500` lane — because this file distinguishes
-    no kube error kind
-  No mapped test exists.
+  Given l'instance supprimée entre le pré-contrôle d'existence ../server.rs et le @get de ce fichier
+  When la lecture unique échoue avec un `404` Kubernetes
+  Then l'appel @Errs @DiagError::KubeError — la voie `500` — car ce fichier ne distingue
+    aucun genre d'erreur kube
+  Aucun test mappé n'existe.
 
 Scenario: Absent status dumps without the status key
-  Given a freshly created @SystemInstance whose `status` is @None
-  When @get_instance_state runs with kind `systeminstances`
-  Then no strip mutation runs, the YAML carries no `status` key at all, and @scrub_yaml still
-    masks and counts whatever the remaining text holds
-  No mapped test exists.
+  Given un @SystemInstance fraîchement créé dont `status` est @None
+  When @get_instance_state tourne avec le kind `systeminstances`
+  Then aucune mutation d'expurgation ne s'exécute, le YAML ne porte aucune clé `status`, et
+    @scrub_yaml masque et compte quand même ce que le texte restant contient
+  Aucun test mappé n'existe.
 
 Example:
-  Sanitized @TenantInstance dump, skeleton (secrets masked, content elided):
+  Dump @TenantInstance assaini, squelette (secrets masqués, contenu élidé) :
     `apiVersion: vynil.solidite.fr/v1` / `kind: TenantInstance` / `metadata: {name: …, namespace:
     tenant-a, managedFields: […], …}` / `spec: {jukebox: …, category: …, package: …, initFrom:
     null, options: {restic_password: <anonymized>}}` / `status: {conditions: […], tag: …, digest:
     …, tfstate: null, rhaistate: null, befores: […], …}`
-  The ../server.rs answer for it: `200`, `Content-Type: application/yaml`, and
-    `X-Diag-Redactions: distinct=1;occurrences=1` for exactly the one masked `options` occurrence
-    above — tfstate-stored duplicates of that secret value counted nothing.
+  La réponse ../server.rs pour cela : `200`, `Content-Type: application/yaml`, et
+    `X-Diag-Redactions: distinct=1;occurrences=1` pour exactement la seule occurrence `options`
+    masquée ci-dessus — les doublons stockés dans tfstate de cette valeur n'ont rien compté.

@@ -3,72 +3,72 @@ Spec: PackageMod
 Platform: Rust
 
 Purpose:
-  Sub-command dispatcher for `agent package …`: the developer/CI-side package toolkit —
-    build, lint, update, test, validate, unpack — behind one clap group, dispatched
-    synchronously with no cluster dependency at this level.
+  Dispatcheur de sous-commandes pour `agent package …` : la boîte à outils de package côté
+    développeur/CI — build, lint, update, test, validate, unpack — derrière un seul groupe
+    clap, dispatchée de façon synchrone sans dépendance au cluster à ce niveau.
 
 Owns:
   ./mod.rs
 
 Exposes:
-  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
-    ./../main.rs (`Package` dispatch arm; spec pending ./../main.sdd).
-  @Commands — clap `Subcommand`, `Debug`, six variants with `///` doc help verbatim:
+  @Parameters — clap `Parser`, `Debug` ; champ unique @command: @Commands. Consommé par
+    ./../main.rs (bras de dispatch `Package` ; spec en attente ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, six variantes avec l'aide doc `///` verbatim :
     @Build(build::Parameters) doc `Pack a directory into a package`,
     @Lint(lint::Parameters) doc `Lint a package`,
     @Update(update::Parameters) doc `Update a package`,
     @Test(test::Parameters) doc `Test a package`,
     @Validate(validate::Parameters) doc `Validate a package`,
-    @Unpack(unpack::Parameters) doc `Unpack a directory into a package` — that last
-    help text reads "directory into a package" while the lane unpacks an image into a
-    directory (see ./unpack.sdd); the inverted wording is frozen.
-  @run — sync fn, takes `&Parameters`, returns `()`.
+    @Unpack(unpack::Parameters) doc `Unpack a directory into a package` — cette dernière
+    aide lit "directory into a package" alors que la voie déplaque une image vers un
+    répertoire (voir ./unpack.sdd) ; la formulation inversée est gelée.
+  @run — fonction sync, prend `&Parameters`, renvoie `()`.
 
 Accepts:
-  A parsed @Commands tree; flag contracts live in each leaf spec.
+  Un arbre @Commands parsé ; les contrats de flags vivent dans chaque spec de feuille.
 
 Returns:
-  `()` — success falls off the end; every @Err lane ends in @std::process::exit.
+  `()` — le succès retombe en fin de fonction ; chaque voie @Err se termine par @std::process::exit.
 
 Handles:
-  Leaf @Err per arm, Display-only @tracing::error! then frozen exit code:
+  @Err des feuilles par bras, @tracing::error! Display seul puis code de sortie gelé :
     Build `Packing directory failed with: {e:}` → 1;
     Lint `Linting the package failed with: {e:}` → 1;
     Update `Updating the package failed with: {e:}` → 2;
     Test `Testing the package failed with: {e:}` → 3;
     Unpack `Unpacking OCI image to directory failed with: {e:}` → 4;
     Validate `The package failed to validate: {e:}` → 4.
-  Panics — unwound to main's runtime; nothing caught here.
+  Panics — débobinés vers le runtime de main ; rien n'est attrapé ici.
 
 Must:
-  Keep all six leaf mods private.
-  Run synchronously with NO @common::context::init_k8s() call at dispatch level —
-    leaves that touch OCI or a cluster (./unpack.sdd, ./test.sdd) manage their own
-    needs per their specs.
-  Keep the exit ladder frozen including the Unpack/Validate collision at 4 and the
-    Build/Lint collision at 1.
+  Garder les six modules feuilles privés.
+  S'exécuter de façon synchrone SANS appel @common::context::init_k8s() au niveau dispatch —
+    les feuilles qui touchent OCI ou un cluster (./unpack.sdd, ./test.sdd) gèrent leurs
+    propres besoins selon leurs specs.
+  Garder le barème de sortie gelé, y compris la collision Unpack/Validate à 4 et la
+    collision Build/Lint à 1.
 
 Depends on:
   ./build.sdd, ./lint.sdd, ./update.sdd, ./test.sdd, ./validate.sdd, ./unpack.sdd —
-    leaf contracts.
-  ./../main.rs — caller (`package::run(args)`, no await); spec pending ./../main.sdd.
+    contrats des feuilles.
+  ./../main.rs — appelant (`package::run(args)`, sans await) ; spec en attente ./../main.sdd.
 
 Tasks:
-  [ ] Decide later whether the 4-collision (Unpack vs Validate) and 1-collision
-      (Build vs Lint) need distinct codes for CI consumers, and fix the Unpack help
-      text inversion (frozen until reviewed).
-  [ ] Cover the dispatcher with tests; no `#[cfg(test)]` module exists here.
+  [ ] Décider plus tard si la collision de 4 (Unpack vs Validate) et la collision de 1
+      (Build vs Lint) exigent des codes distincts pour les consommateurs CI, et corriger
+      l'inversion du texte d'aide de Unpack (gelée jusqu'à revue).
+  [ ] Couvrir le dispatcheur par des tests ; aucun module `#[cfg(test)]` n'existe ici.
 
 Done when:
-  Dispatch table, sync posture, and the exit ladder hold under tests.
+  La table de dispatch, la posture sync et le barème de sortie tiennent sous les tests.
 
 Scenario: lint failure exits 1 sharing the code with build
-  Given `PackageMod` @Commands::Lint whose leaf returns @Err (any lint finding —
-    see ./lint.sdd's Ok/Err discipline)
-  When @run reaches the lint arm
-  Then the frozen lint log line prints and @process::exit(1) is reached
+  Given `PackageMod` @Commands::Lint dont la feuille renvoie @Err (tout constat lint —
+    voir la discipline Ok/Err de ./lint.sdd)
+  When @run atteint le bras lint
+  Then la ligne de log lint gelée s'affiche et @process::exit(1) est atteint
 
 Scenario: validate failure exits 4 like unpack
-  Given @Commands::Validate whose leaf returns @Err (./validate.sdd)
-  When @run reaches the validate arm
-  Then exit 4 follows the frozen validate log line
+  Given @Commands::Validate dont la feuille renvoie @Err (./validate.sdd)
+  When @run atteint le bras validate
+  Then exit 4 suit la ligne de log validate gelée

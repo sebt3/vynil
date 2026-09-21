@@ -1,40 +1,40 @@
-# Directory spec for Continuous Integration. One same-basename file spec per workflow file
-# may be added if a pipeline grows substantial behaviour; the jobs stay described here.
+# Spécification de répertoire pour l'intégration continue. Une spec de fichier de même basename par
+# fichier de workflow peut s'ajouter si un pipeline prend un comportement substantiel ; les jobs restent décrits ici.
 
 Spec: workflows
 
 Platform: GitHub Actions
 
 Purpose:
-  Continuous integration for the workspace: it gates every change on tests, formatting, lint,
-  and coverage, and publishes container images, the kubectl plugin release, and the docs parity
-  check on the right triggers.
+  L'intégration continue du workspace : elle gate chaque changement sur les tests, le formatage, le
+  lint et la couverture, et publie les images conteneur, la release du plugin kubectl, et le contrôle
+  de parité des docs sur les bons triggers.
 
 Structure:
-  ./test.yml: Gate job set — test, fmt, clippy, coverage
-  ./agent.yml: Build and publish the agent image on tag
-  ./operator.yml: Build and publish the operator image on tag
-  ./server.yml: Build and publish the server image on tag
-  ./cli.yml: Build and release the kubectl-vynil plugin on tag
-  ./docker-agent-test.yml: Build-only smoke of the agent and operator Dockerfiles
-  ./docs.yml: English/French documentation parity check
-  ../scripts/check-docs-parity.sh: EN/FR parity checker invoked by docs.yml
+  ./test.yml: Ensemble de jobs de gate — test, fmt, clippy, coverage
+  ./agent.yml: Construit et publie l'image de l'agent sur tag
+  ./operator.yml: Construit et publie l'image de l'opérateur sur tag
+  ./server.yml: Construit et publie l'image du server sur tag
+  ./cli.yml: Construit et publie la release du plugin kubectl-vynil sur tag
+  ./docker-agent-test.yml: Test fumée limité au build des Dockerfiles de l'agent et de l'opérateur
+  ./docs.yml: Contrôle de parité de la documentation anglais/français
+  ../scripts/check-docs-parity.sh: Vérificateur de parité EN/FR appelé par docs.yml
 
 Owns:
   ./*.yml
   ../scripts/check-docs-parity.sh
 
 Must:
-  Run `cargo test`, `cargo fmt --check` on nightly, `cargo clippy -- -D warnings`, and a
-    `cargo tarpaulin` coverage gate on every push to `main` and every pull request.
-  Publish images to both Docker Hub and `ghcr.io` for `linux/amd64` and `linux/arm64` on tag push.
-  Build the plugin for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and
-    `x86_64-pc-windows-msvc`, scoping cargo to `kubectl-vynil/Cargo.toml`.
-  Build each image from its own crate Dockerfile under `/`.
+  Lancer `cargo test`, `cargo fmt --check` sur nightly, `cargo clippy -- -D warnings`, et une
+    gate de couverture `cargo tarpaulin` sur chaque push vers `main` et chaque pull request.
+  Publier les images à la fois sur Docker Hub et `ghcr.io` pour `linux/amd64` et `linux/arm64` au push de tag.
+  Construire le plugin pour `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, et
+    `x86_64-pc-windows-msvc`, en limitant cargo à `kubectl-vynil/Cargo.toml`.
+  Construire chaque image depuis le Dockerfile de sa propre crate sous `/`.
 
 Must not:
-  Gate a change that only touches documentation on the Rust build jobs.
-  Publish a mutable tag other than `latest` and the `github.ref_name` tag.
+  Soumettre un changement ne touchant que la documentation aux jobs de build Rust.
+  Publier un tag mutable autre que `latest` et le tag `github.ref_name`.
 
 Depends on:
   /agent/Dockerfile.sdd
@@ -42,6 +42,6 @@ Depends on:
   /server/Dockerfile.sdd
 
 Tasks:
-  [ ] #0 Get `cargo clippy -- -D warnings` green under the strict harness so the Clippy job can
-    stop failing.
-  [ ] #1 Keep the pinned Rust toolchain aligned with each Dockerfile `RUST_VERSION`.
+  [ ] #0 Passer `cargo clippy -- -D warnings` au vert sous le harness strict pour que le job Clippy
+    cesse d'échouer.
+  [ ] #1 Garder la toolchain Rust épinglée alignée sur le `RUST_VERSION` de chaque Dockerfile.

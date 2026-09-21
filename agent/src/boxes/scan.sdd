@@ -1,278 +1,278 @@
-# File spec for ./scan.rs — the cluster lane of `agent box scan`. Deltas versus the offline
-# twin ./file_scan.sdd are frozen from this side only; deep package/status/script semantics
-# live in the referenced common specs and are not restated.
+# Spec fichier de ./scan.rs — la voie cluster de `agent box scan`. Les deltas versus le twin
+# hors-ligne ./file_scan.sdd sont gelés depuis ce côté uniquement ; la sémantique profonde
+# package/statut/script vit dans les specs communes référencées, non redite ici.
 
 Spec: Scan
 
 Purpose:
-  Provide the cluster JukeBox scan lane of `agent box`: fetch the named @JukeBox in the
-    cluster, mount it as the process reconcile context and the script global `box`, bind an
-    `args` map, resolve the source's Opaque credential secret (HTTP `bearer`/`basic` or S3
-    key pair) from `--vynil-namespace` into script globals, and run the shipped
-    `boxes/scan.rhai` that performs the actual registry/cache inventory and owns every
-    @JukeBox status write and event on this lane.
+  Fournit la voie cluster JukeBox de scan d'`agent box`: récupérer le @JukeBox nommé dans le
+    cluster, le monter comme contexte reconcile du processus et global script `box`, lier une
+    map `args`, résoudre le secret de credentials Opaque de la source (HTTP `bearer`/`basic`
+    ou paire de clés S3) depuis `--vynil-namespace` vers les globals script, et lancer le
+    `boxes/scan.rhai` livré qui effectue le réel inventaire registre/cache et porte chaque
+    écriture de statut @JukeBox et chaque event sur cette voie.
 
 References:
-  ./mod.rs — the `boxes` dispatcher (spec pending): declares the private @scan module, calls
-    @common::context::init_k8s (documented no-op) before dispatch, awaits @scan::run and owns
-    the whole exit lane.
-  /common/src/jukebox.sdd — @JukeBox contract: cluster-scope @JukeBox::get lookup,
-    @JukeBoxStatus and @ApplicationCondition shapes and messages, the status mutators and
-    events; this lane reads the CR and hands it to the script without touching status.
-  /common/src/context.sdd — @set_box installs @VynilContext::JukeBox, @get_client_async
-    supplies each fresh @kube::Client and carries the per-call build and panic posture.
-  /common/src/rhaihandler.sdd — @Script::new live-cluster assembly, the Deref'd @ctx and the
-    unconverted core @set_dynamic, the converted @Script::run_file error texts.
-  ./file_scan.sdd — the offline twin spec, used only to freeze this lane's deltas.
-  /agent/scripts/boxes/scan.rhai — the script this run executes; its key probes explain the
-    frozen globals/`args` shape; its semantics are owned there (./agent.sdd Tasks #2).
-  /common/src/vynilpackage.sdd — @VynilPackage wire shape moved through the CR by the script;
-    this file parses nothing beyond flag serde.
-  /common/src/tools.sdd — approved calibration reference.
+  ./mod.rs — le dispatcher `boxes` (spec en attente) : déclare le module privé @scan, appelle
+    @common::context::init_k8s (no-op documenté) avant le dispatch, attend @scan::run et
+    possède toute la voie de sortie.
+  /common/src/jukebox.sdd — contrat @JukeBox : recherche @JukeBox::get scope cluster, formes
+    et messages de @JukeBoxStatus et @ApplicationCondition, les mutators de statut et events ;
+    cette voie lit le CR et le remet au script sans toucher le statut.
+  /common/src/context.sdd — @set_box installe @VynilContext::JukeBox, @get_client_async
+    fournit chaque @kube::Client neuf et porte la posture de build et de panic par appel.
+  /common/src/rhaihandler.sdd — assemblage live-cluster de @Script::new, le @ctx Deref'd et le
+    @set_dynamic core non converti, les textes d'erreur convertis de @Script::run_file.
+  ./file_scan.sdd — la spec du twin hors-ligne, utilisée pour geler seuls les deltas de cette voie.
+  /agent/scripts/boxes/scan.rhai — le script que cette exécution lance ; ses sondes de clés
+    explicitent la forme gelée des globals/`args` ; sa sémantique y est possédée (./agent.sdd Tasks #2).
+  /common/src/vynilpackage.sdd — forme wire de @VynilPackage déplacée dans le CR par le script ;
+    ce fichier ne parse rien au-delà du serde des flags.
+  /common/src/tools.sdd — référence de calibration approuvée.
 
 Must:
-  The execution order is frozen: engine built first (@Script::new with resolver dirs only and
-    no IO), CR fetched second, then context and script globals installed, then at most one
-    source secret resolved, then the script run — so an unreachable cluster, an absent
-    @JukeBox or a failing secret read aborts before the script ever starts.
-  The @JukeBox read is name-only and cluster-scoped — @JukeBox::get on the cloned `jukebox`
-    flag through @kube::api::Api::all (the CRD carries no namespace,
-    /common/src/jukebox.sdd): no flag scopes it, and `--vynil-namespace` never participates
-    in the CR lookup. A 404 NOT-found arrives as @Error::KubeError carrying kube's ApiError
-    text with zero special handling — no retry, no requeue, no fallback, no status — and
-    exits 1 through ./mod.rs.
-  `--vynil-namespace` steers exactly two things: the @resolve_http_secret /
-    @resolve_s3_secret fetches (via @kube::api::Api::namespaced, with the secret name read
-    from the CR's own `source.http.secret` / `source.s3.secret` spec field — never from a
-    flag), and, as the frozen `args.namespace` key, the script-side cluster reads
-    (harbor/gitlab listing, the `secret_dockerconfigjson` pull-secret read).
-    @JukeBoxSpec::pull_secret is never resolved by this file.
-  The engine has exactly two resolver dirs, `<script_dir>/boxes` then `<script_dir>/lib`
-    (joined by @Display, lossy), in that order, and carries the full live-cluster surface of
-    @Script::new; the dirs are consulted only for `import` statements inside the script — the
-    entry file is run by direct path, never through the resolver.
-  Script globals are live before the run: `box` is the @JukeBox clone pushed through the
-    Deref'd @rhai::Scope::set_value (Rhai type `JukeBox` with the
-    /common/src/jukebox.sdd getters and status mutators), and `args` is pushed through the
-    unconverted core @set_dynamic (a @serde_json string round-trip with two @unwrap legs)
-    from @serde_json::to_value over @Parameters. The struct holds only @String, @PathBuf and
-    @Option fields, so the @Serialize leg cannot fail on this lane and both @unwrap panic
-    paths are unreachable.
-  The `args` shape is frozen by the struct itself to exactly the keys `jukebox`, `namespace`,
-    `script_dir` (lossy path text via @serde_json's @PathBuf serialization) and `filter`, all
-    four always present — an unset `filter` ships as present-null (no skip attribute), which
-    scan.rhai reads as `()`. There is no `file_scan` marker and no `cache_dir` key: those are
-    twin-only (delta frozen from this side).
-  The two secret legs are let-chains onto the fetched CR, firing only when `spec.source` is
-    exactly @JukeBoxDef::Http or @JukeBoxDef::S3 and its `secret` field is @Some. Sources
-    `list`, `harbor`, `gitlab` and `script`, and any variant with `secret: @None`, perform
-    zero Rust fetches and bind no credentials — the git/OCI/list inventory of those variants
-    is entirely script-side and invisible to this file.
-  @resolve_http_secret posture is frozen: with `data` defaulting to an empty map when absent,
-    a present `token` key wins — auth type `bearer` with the token as credential — even when
-    the other keys also exist, and a non-UTF-8 `token` aborts the whole run via
-    @Error::UTF8; without a `token` key the Basic fallback is unconditional — missing or
-    non-UTF-8 `username`/`password` decode leniently to empty strings and the credential
-    joins them as `{user}:{pass}`, so a key-less secret yields the literal pair `basic` +
-    `":"`, never an error. The pair is bound as scope globals
+  L'ordre d'exécution est gelé : moteur construit d'abord (@Script::new avec seuls les resolver
+    dirs et aucun IO), CR récupéré ensuite, puis contexte et globals script installés, puis au
+    plus un secret de source résolu, puis le script lancé — ainsi un cluster injoignable, un
+    @JukeBox absent ou une lecture de secret en échec avortent avant même le démarrage du
+    script. La lecture @JukeBox est nom-seul et scope cluster — @JukeBox::get sur le flag
+    `jukebox` cloné via @kube::api::Api::all (le CRD ne porte pas de namespace,
+    /common/src/jukebox.sdd) : aucun flag ne le scope, et `--vynil-namespace` ne participe
+    jamais dans la recherche du CR. Un 404 NOT-found arrive en @Error::KubeError portant le texte
+    ApiError de kube sans aucun traitement spécial — ni retry, ni requeue, ni fallback, ni
+    statut — et sort en 1 via ./mod.rs.
+  `--vynil-namespace` pilote exactement deux choses : les fetches @resolve_http_secret /
+    @resolve_s3_secret (via @kube::api::Api::namespaced, le nom du secret lu depuis le champ
+    spec `source.http.secret` / `source.s3.secret` du CR lui-même — jamais depuis un flag),
+    et, en tant que clé gelée `args.namespace`, les lectures cluster côté script (listing
+    harbor/gitlab, la lecture du pull-secret `secret_dockerconfigjson`).
+    @JukeBoxSpec::pull_secret n'est jamais résolu par ce fichier.
+  Le moteur a exactement deux resolver dirs, `<script_dir>/boxes` puis `<script_dir>/lib`
+    (joints par @Display, lossy), dans cet ordre, et porte la surface live-cluster complète de
+    @Script::new ; les dirs ne sont consultés que pour les `import` du script — le fichier
+    d'entrée est lancé par chemin direct, jamais via le resolver.
+  Les globals script sont actifs avant le run : `box` est le clone @JukeBox poussé via le
+    @rhai::Scope::set_value Deref'd (type Rhai `JukeBox` avec les getters et mutators de statut
+    de /common/src/jukebox.sdd), et `args` est poussé via le @set_dynamic core non converti
+    (un aller-retour @serde_json de chaîne avec deux branches @unwrap) à partir de
+    @serde_json::to_value sur @Parameters. La structure ne porte que des champs @String,
+    @PathBuf et @Option, donc la branche @Serialize ne peut échouer sur cette voie et les deux
+    chemins de panic @unwrap sont inatteignables.
+  La forme d'`args` est gelée par la structure elle-même aux seules clés `jukebox`, `namespace`,
+    `script_dir` (texte de chemin lossy via la sérialisation @serde_json de @PathBuf) et
+    `filter`, les quatre toujours présentes — un `filter` absent part comme
+    présent-null (pas d'attribut skip), que scan.rhai lit comme `()`. Il n'y a ni marqueur
+    `file_scan` ni clé
+    `cache_dir` : propres au twin (delta gelé depuis ce côté).
+  Les deux branches des secrets sont des let-chains sur le CR récupéré, ne se déclenchant que
+    quand `spec.source` est exactement @JukeBoxDef::Http ou @JukeBoxDef::S3 et son champ
+    `secret` @Some. Les sources `list`, `harbor`, `gitlab` et `script`, et toute variante avec
+    `secret: @None`, n'effectuent zéro fetch Rust et ne lient aucun credential — l'inventaire
+    git/OCI/list de ces variantes est entièrement côté script et invisible à ce fichier.
+  La posture de @resolve_http_secret est gelée : avec `data` par défaut une map vide quand
+    absent, une clé `token` présente gagne — type d'auth `bearer` avec le token comme
+    credential — même quand les autres clés existent aussi, et un `token` non-UTF-8 avorte
+    tout le run via @Error::UTF8 ; sans clé `token` le fallback Basic est inconditionnel —
+    `username`/`password` absents ou non-UTF-8 se décodent leniemment en chaînes vides et le
+    credential les joint en `{user}:{pass}`, donc un secret sans clés donne la paire littérale
+    `basic` + `":"`, jamais une erreur. La paire est liée comme globals de scope
     `http_auth_type`/`http_credential`.
-  @resolve_s3_secret decodes `access_key_id` and `secret_access_key` through the same
-    lenient from-UTF8-failure-to-empty-string leg and binds `s3_access_key`/`s3_secret_key`;
-    it has no auth-type concept and a key-less secret yields the pair of empty strings. The
-    four credential globals exist only inside their respective leg; each leg builds its own
-    fresh client through @common::context::get_client_async at call time.
-  The run target is the literal `<script_dir>/boxes/scan.rhai` @PathBuf; because the path is
-    formatted from a valid UTF-8 @String, the non-UTF-8 path panic inside core run_file is
-    unreachable here, while a non-UTF-8 @script_dir degrades through lossy @Display into the
-    `Missing script` error text. The script's last value is discarded (`let _ =`); only the
-    @Err leg propagates.
-  Status posture: this Rust lane writes no @JukeBoxStatus — no @ApplicationCondition is
-    constructed, no `set_status_*` mutator and no event call is reachable from @run on the
-    @Ok or @Err path. Every `Updated`/`Ready` condition, package list and Scan event exists
-    only because scan.rhai called the @jukebox_rhai_register mutators first, so a Rust-lane
-    failure exit at ./mod.rs is the one failure mode that leaves `status.conditions` exactly
-    as the previous scan left them.
-  This file performs no filesystem write and carries no @tracing call: on this lane every
-    artifact lands in the CR through the API server (script-side), the only failure
-    visibility is the dispatcher's single @tracing::error text owned by ./mod.rs, and there
-    is no cache directory equivalent to the twin's.
-  Async structure is a plain awaited @run — no spawn, no join, no select, and no retry or
-    timeout at any layer: every cluster call (CR get, one secret get, the script's own IO) is
-    attempted exactly once; the tokio runtime precondition arrives through @set_box's
-    @block_in_place plus @block_on bridge (/common/src/context.sdd panic texts).
-
+  @resolve_s3_secret décode `access_key_id` et `secret_access_key` via la même branche leniente
+    d'échec de-UTF8-en-chaîne-vide et lie `s3_access_key`/`s3_secret_key` ; il n'a pas de
+    notion de type d'auth et un secret sans clés donne la paire de chaînes vides. Les quatre
+    globals de credential n'existent qu'à l'intérieur de leur branche respective ; chaque
+    branche construit son propre client neuf via @common::context::get_client_async à l'appel.
+  La cible du run est le @PathBuf littéral `<script_dir>/boxes/scan.rhai` ; comme le chemin
+    est formaté depuis un @String UTF-8 valide, le panic de chemin non-UTF-8 dans le run_file
+    core est inatteignable ici, tandis qu'un @script_dir non-UTF-8 se dégrade via le @Display
+    lossy dans le texte d'erreur `Missing script`. La dernière valeur du script est jetée
+    (`let _ =`) ; seule la branche @Err se propage.
+  Posture de statut : cette voie Rust n'écrit aucun @JukeBoxStatus — aucun @ApplicationCondition
+    n'est construit, aucun mutator `set_status_*` ni appel d'event n'est atteignable depuis
+    @run sur la branche @Ok ou @Err. Chaque condition `Updated`/`Ready`, chaque liste de
+    packages et event Scan n'existe que parce que scan.rhai a appelé les mutators
+    @jukebox_rhai_register d'abord, si bien qu'une sortie d'échec de la voie Rust sur ./mod.rs
+    laisse `status.conditions` exactement telles que le scan précédent les a laissées.
+  Ce fichier n'effectue aucune écriture filesystem et ne porte aucun appel @tracing : sur cette
+    voie chaque artefact atterrit dans le CR via l'API server (côté script), la seule
+    visibilité d'échec est le texte unique @tracing::error du dispatcher possédé par ./mod.rs,
+    et il n'y a pas de répertoire de cache équivalent à celui du twin.
+  La structure async est un @run simplement attendu — pas de spawn, pas de join, pas de
+    select, et ni retry ni timeout à aucune couche : chaque appel cluster (get du CR, un get
+    de secret, l'IO propre du script) est tenté exactement une fois ; la précondition de runtime
+    tokio arrive par le pont @block_in_place plus @block_on de @set_box (/common/src/context.sdd).
 Depends on:
-  @common::jukebox::{@JukeBox, @JukeBoxDef} (/common/src/jukebox.sdd) — the CR type, the
-    name-only @JukeBox::get fetch and the @JukeBoxDef::{@Http, @S3} destructuring.
-  @common::context::{@set_box, @get_client_async} (/common/src/context.sdd) — process context
-    install and per-call cluster clients.
-  @common::rhaihandler::Script (/common/src/rhaihandler.sdd) — @Script::new, the Deref'd @ctx
-    and @set_dynamic, the converted @Script::run_file channel.
-  @common::{@Error, @Result} (/common/src/lib.rs) — @Error::KubeError, @Error::UTF8 and
-    @Error::SerializationError are produced here; @Error::Core arrives from @Script::run_file.
-  @k8s_openapi::api::core::v1::Secret and @kube::api::Api — the namespaced secret reads.
-  @clap::Args — the flag model of @Parameters; @serde, @serde_json and
-    @std::path::PathBuf — flag types and the `args` serialization lane.
-  /agent/scripts/boxes/scan.rhai — external runtime payload, not compiled in; its head
-    imports require the `scan_harbor`, `scan_gitlab` and `secret_dockerconfigjson` module
-    files under the resolver dirs whichever source variant runs.
-  ./mod.rs — caller and exit-lane owner (spec pending), which invokes
-    @common::context::init_k8s before dispatch.
+  @common::jukebox::{@JukeBox, @JukeBoxDef} (/common/src/jukebox.sdd) — le type CR, le fetch
+    nom-seul @JukeBox::get et le destructuring @JukeBoxDef::{@Http, @S3}.
+  @common::context::{@set_box, @get_client_async} (/common/src/context.sdd) — installation du
+    contexte processus et clients cluster par appel.
+  @common::rhaihandler::Script (/common/src/rhaihandler.sdd) — @Script::new, le @ctx Deref'd
+    et @set_dynamic, le canal converti @Script::run_file.
+  @common::{@Error, @Result} (/common/src/lib.rs) — @Error::KubeError, @Error::UTF8 et
+    @Error::SerializationError sont produits ici ; @Error::Core arrive de @Script::run_file.
+  @k8s_openapi::api::core::v1::Secret et @kube::api::Api — les lectures de secret namespaced.
+  @clap::Args — le modèle de flags de @Parameters ; @serde, @serde_json et
+    @std::path::PathBuf — types des flags et la voie de sérialisation d'`args`.
+  /agent/scripts/boxes/scan.rhai — charge runtime externe, non compilée dedans ; ses imports
+    de tête requièrent les fichiers de module `scan_harbor`, `scan_gitlab` et
+    `secret_dockerconfigjson` sous les resolver dirs, quelle que soit la variante source.
+  ./mod.rs — appelant et propriétaire de la voie de sortie (spec en attente), qui invoque
+    @common::context::init_k8s avant le dispatch.
 
 Exposes:
-  @Parameters — @clap::Args + @Debug + @Serialize + @Deserialize struct, pub only to the
-    @boxes module (the @scan module itself is private to ./mod.rs), flagging exactly:
-    `-j`/`--jukebox` → @String `jukebox`, env `JUKEBOX`, required, no default;
-    `-v`/`--vynil-namespace` → @String `namespace`, env `VYNIL_NAMESPACE`, required, no
-    default; `-s`/`--script-dir` → @PathBuf `script_dir`, env `SCRIPT_DIRECTORY`, default
-    `./agent/scripts`; `-f`/`--filter` → @Option<@String> `filter`, env `SCAN_PACKAGE`,
-    @None when unset. All four flags carry short, long, env and `value_name` overrides —
-    unlike the twin's two bare no-env required flags. The @Serialize and @Deserialize
-    derives are used here (they feed `args`), unlike the sibling where they are dead.
-  @scan::run — @pub @async fn taking a borrowed @Parameters and returning
-    @common::Result<()>; the only success output is @Ok(()); the private helpers
-    @resolve_http_secret and @resolve_s3_secret are file-internal (in-file tests reach them).
+  @Parameters — struct @clap::Args + @Debug + @Serialize + @Deserialize, pub seulement au
+    module @boxes (le module @scan lui-même est privé à ./mod.rs), flaguant exactement :
+    `-j`/`--jukebox` → @String `jukebox`, env `JUKEBOX`, requis, sans défaut ;
+    `-v`/`--vynil-namespace` → @String `namespace`, env `VYNIL_NAMESPACE`, requis, sans
+    défaut ; `-s`/`--script-dir` → @PathBuf `script_dir`, env `SCRIPT_DIRECTORY`, défaut
+    `./agent/scripts` ; `-f`/`--filter` → @Option<@String> `filter`, env `SCAN_PACKAGE`,
+    @None quand absent. Les quatre flags portent des overrides short, long, env et
+    `value_name` — contrairement aux deux flags requis nus sans env du twin. Les derives
+    @Serialize et @Deserialize sont utilisés ici (ils alimentent `args`), contrairement au sibling où ils sont morts.
+  @scan::run — @pub @async fn prenant un @Parameters emprunté et retournant
+    @common::Result<()> ; la seule sortie de succès est @Ok(()) ; les helpers privés
+    @resolve_http_secret et @resolve_s3_secret sont internes au fichier (les tests in-file y accèdent).
 
 Accepts:
-  A @Parameters reference by whatever route clap produced it (flags, env, default); a
-    reachable API server holding a cluster-scoped @JukeBox of that exact name; when
-    `spec.source` names an http/s3 secret, a `--vynil-namespace` namespace that exists and
-    holds an Opaque @Secret of that name; a @script_dir whose `boxes/` + `lib/` hold
-    `scan.rhai` and the imported modules. Nothing is validated beyond serde/clap typing —
-    wrong names surface as API reads, not checks.
-  `filter` verbatim as `<category>` or `<category>/<package_name>` (doc-comment wording);
-    this file never splits it — the split belongs to the script and to
+  Une référence @Parameters par n'importe quelle route dont clap l'a produite (flags, env,
+    défaut) ; un API server joignable tenant un @JukeBox scope cluster de ce nom exact ; quand
+    `spec.source` nomme un secret http/s3, un namespace `--vynil-namespace` qui existe et
+    tient un @Secret Opaque de ce nom ; un @script_dir dont les `boxes/` + `lib/` tiennent
+    `scan.rhai` et les modules importés. Rien n'est validé au-delà du typage serde/clap —
+    un mauvais nom remonte en lecture API, pas en vérification.
+  `filter` verbatim comme `<category>` ou `<category>/<package_name>` (formulation du
+    doc-comment) ; ce fichier ne le splitte jamais — le split appartient au script et à
     @JukeBox::set_status_packages_merge (/common/src/jukebox.sdd).
 
 Returns:
-  @Ok(()) only when scan.rhai completes without rethrowing — independent of how many packages
-    the scan found or which status the script wrote; a script-side failure that recorded
-    `Updated`/`False` and rethrew arrives here as @Err, so @Ok(()) means both legs of the
-    script's own try/catch ended clean.
+  @Ok(()) seulement quand scan.rhai se termine sans rethrow — indépendant du nombre de
+    packages trouvés par le scan ou du statut écrit par le script ; un échec côté script qui
+    a enregistré `Updated`/`False` et rethrowé arrive ici en @Err, donc @Ok(()) signifie que
+    les deux branches du try/catch propre au script se sont terminées propres.
 
 Raises:
-  @Error::KubeError (display `K8s error: {0}`, kube text verbatim including the 404
-    ApiError) from @JukeBox::get and from the secret `api.get` inside either resolver — an
-    absent namespace or secret name is a KubeError, not an empty read. No status is written
-    before this @Err.
-  @Error::UTF8 (display `UTF8 error {0}`) only for a non-UTF-8 `token` value of an HTTP
-    secret; the Basic and S3 decodes swallow the same failure to `""`. No status before @Err.
-  @Error::SerializationError (display `SerializationError: {0}`) mapped from
-    @serde_json::to_value over @Parameters — unreachable in practice, see Must.
-  @Error::Core (transparent) from @Script::run_file: the display starts `Missing script `
-    for an absent entry file, and carries `Rhai script error:` for any parse or run failure —
-    the rethrow leg of scan.rhai's catch is the single error that reaches this @Err already
-    preceded by a script-written failed status (the write is script-side, never Rust-side).
-  Panics, no typed channel: @common::context::get_client_async's
-    `cannot create the Kubernetes client: {e}` — first reachable inside @JukeBox::get, before
-    @set_box or any leg would run; @set_box itself panics outside any tokio runtime or in a
-    current-thread runtime context (/common/src/context.sdd).
+  @Error::KubeError (display `K8s error: {0}`, texte kube verbatim incluant l'ApiError 404)
+    depuis @JukeBox::get et depuis le `api.get` du secret dans n'importe quel resolver — un
+    namespace ou un nom de secret absent est un KubeError, pas une lecture vide. Aucun statut
+    n'est écrit avant ce @Err.
+  @Error::UTF8 (display `UTF8 error {0}`) seulement pour une valeur `token` non-UTF-8 d'un secret
+    HTTP ; les décodages Basic et S3 avalent la même panne en `""`. Pas de statut avant @Err.
+  @Error::SerializationError (display `SerializationError: {0}`) mappé depuis
+    @serde_json::to_value sur @Parameters — en pratique inatteignable, voir Must.
+  @Error::Core (transparent) depuis @Script::run_file : le display démarre par `Missing script `
+    pour un fichier d'entrée absent, et porte `Rhai script error:` pour tout échec de parse ou
+    de run — la branche rethrow du catch de scan.rhai est la seule erreur qui atteint ce @Err, déjà
+    précédée d'un statut d'échec écrit par le script (écriture côté script, jamais côté Rust).
+  Panics, pas de canal typé : @common::context::get_client_async avec
+    `cannot create the Kubernetes client: {e}` — premier atteignable dans @JukeBox::get, avant
+    @set_box ou toute branche ; @set_box lui-même panique hors tout runtime tokio ou dans un
+    contexte runtime current-thread (/common/src/context.sdd).
 
 Handles:
-  Source variant with `secret: @None` or list/harbor/gitlab/script — no fetch, no credential
-    globals, the script falls back to its own probes and to the in-script pull-secret read
-    through `args.namespace`.
-  Secret carrying both `token` and `username`+`password` — `token` presence wins (bearer),
-    the Basic keys are simply never read.
-  Secret with empty or absent `data` — HTTP yields `basic` + `":"`, S3 yields two empty
-    strings; the run always continues past such a secret.
-  Unset `--filter` / unset `SCAN_PACKAGE` — `args.filter` present as null, never absent.
-  Env-fed required flags — `JUKEBOX` and `VYNIL_NAMESPACE` satisfy `-j`/`-v` without CLI
-    values (the Job route); `SCRIPT_DIRECTORY` steers both resolver dirs and the entry path
-    jointly since all three paths derive from one @script_dir value.
-  Any @Err — the caller's lane: @boxes::run logs `Scanning JukeBox failed with: {e:}` via
-    @tracing and calls @std::process::exit(1); @Ok(()) returns and the process exits 0; this
-    file never exits nor logs itself.
+  Variante source avec `secret: @None` ou list/harbor/gitlab/script — aucun fetch, aucun global
+    de credential, le script retombe sur ses propres sondes et sur la lecture in-script du
+    pull-secret via `args.namespace`.
+  Un secret portant à la fois `token` et `username`+`password` — la présence de `token`
+    gagne (bearer), les clés Basic ne sont tout simplement jamais lues.
+  Secret avec `data` vide ou absent — HTTP donne `basic` + `":"`, S3 donne deux chaînes
+    vides ; le run continue toujours au-delà d'un tel secret.
+  `--filter` absent / `SCAN_PACKAGE` absent — `args.filter` est présent comme null, jamais absent.
+  Flags requis nourris par l'env — `JUKEBOX` et `VYNIL_NAMESPACE` satisfont `-j`/`-v` sans
+    valeurs CLI (la voie Job) ; `SCRIPT_DIRECTORY` pilote conjointement les deux resolver dirs
+    et le chemin d'entrée puisque les trois chemins dérivent d'une seule valeur @script_dir.
+  Tout @Err — la voie de l'appelant : @boxes::run loggue `Scanning JukeBox failed with: {e:}`
+    via @tracing et appelle @std::process::exit(1) ; @Ok(()) revient et le processus sort en
+    0 ; ce fichier ne sort jamais et ne loggue jamais lui-même.
 
 Tasks:
-  [ ] Cover @run end-to-end legs with a kube fixture: NOT-found CR posture, no-secret source
-      legs, credential-globals presence per variant and the four-key `args` shape — no test
-      touches @run today.
-  [ ] Cover the unmapped resolver legs: `token` present alongside `username`+`password`
-      (bearer wins), a key-less HTTP secret yielding `("basic", ":")`, and a non-UTF-8
-      `token` answering @Error::UTF8 (needs raw mock bodies).
-  [ ] Cover a secret 404 → @Error::KubeError from either resolver with no @JukeBox patch
-      attempted afterwards.
-  [ ] Cover `Missing script` for @run with an empty @script_dir (today only the twin lane in
-      ./file_scan.sdd pins that text).
-  [?] The credentials are bound as Rhai scope globals `http_auth_type`/`http_credential`/
-      `s3_access_key`/`s3_secret_key`, but the shipped scan.rhai probes them inside `args`
-      (`"http_auth_type" in args.keys()`) — keys @Parameters never serializes — so fetched
-      HTTP/S3 credentials currently reach neither `http_get_yaml` nor `s3_get_yaml` on this
-      lane and authenticated cache sources scan unauthenticated. Decide whether the script
-      reads the bare globals or @run merges them into `args`.
-  [?] @resolve_http_secret is strict on `token` (a bad byte aborts the whole scan) and
-      lenient on `username`/`password` and the S3 keys (bad bytes become silently empty
-      creds); the empty-secret `":"` credential is sent rather than omitting auth. Decide
-      one posture.
-  [?] This lane writes no failure status at all, so a missing @JukeBox or secret surfaces
-      only as a Job exit-1 log while the CR keeps a stale `Ready`/`True`; the script lane
-      does record `Updated`/`False`. Confirm Rust-side silence is intended.
-  [?] `--vynil-namespace` is required even for sources that fetch no secret (its only other
-      use is the script reading `args.namespace`); decide whether it becomes optional with a
-      sensible default.
-  [?] The texts `K8s error {0}`, `UTF8 error {0}` and `SerializationError: {0}` reached from
-      this lane carry no stable unique error identifier per
-      /.specdd/bootstrap.project.md; decide whether lane-tagged wrapping is added.
+  [ ] Couvrir les branches de @run bout-en-bout avec un fixture kube : posture de CR NOT-found,
+      branches de source sans secret, présence des globals de credential par variante et la
+      forme d'`args` à quatre clés — aucun test ne touche @run aujourd'hui.
+  [ ] Couvrir les branches de resolver non mappées : `token` présent aux côtés de
+      `username`+`password` (bearer gagne), un secret HTTP sans clés donnant `("basic", ":")`,
+      et un `token` non-UTF-8 répondant @Error::UTF8 (exige des corps mock bruts).
+  [ ] Couvrir un secret 404 → @Error::KubeError depuis n'importe quel resolver sans
+      patch @JukeBox tenté ensuite.
+  [ ] Couvrir `Missing script` pour @run avec un @script_dir vide (aujourd'hui seule la voie
+      twin dans ./file_scan.sdd épingle ce texte).
+  [?] Les credentials sont liés comme globals de scope Rhai `http_auth_type`/`http_credential`/
+      `s3_access_key`/`s3_secret_key`, mais le scan.rhai livré les sonde dans `args`
+      (`"http_auth_type" in args.keys()`) — clés que @Parameters ne sérialise jamais — donc les
+      credentials HTTP/S3 récupérés n'atteignent ni `http_get_yaml` ni `s3_get_yaml` sur cette
+      voie et les sources de cache authentifiées scandent sans authentification. Décider si le
+      script lit les globals nus ou si @run les fusionne dans `args`.
+  [?] @resolve_http_secret est strict sur `token` (un octet invalide avorte tout le scan) et
+      lenient sur `username`/`password` et les clés S3 (octets invalides deviennent des creds
+      vides en silence) ; le credential `":"` du secret vide est envoyé plutôt que d'omettre
+      l'auth. Trancher une posture.
+  [?] Cette voie n'écrit aucun statut d'échec, donc un @JukeBox ou secret manquant ne remonte
+      qu'en log de sortie-1 de Job tandis que le CR garde un `Ready`/`True` périmé ; la voie
+      script enregistre bien `Updated`/`False`. Confirmer que le silence côté Rust est voulu.
+  [?] `--vynil-namespace` est requis même pour les sources qui ne récupèrent aucun secret (son
+      seul autre usage est la lecture script de `args.namespace`) ; décider s'il devient
+      optionnel avec un défaut sensé.
+  [?] Les textes `K8s error {0}`, `UTF8 error {0}` et `SerializationError: {0}` atteints depuis
+      cette voie n'ont pas d'identifiant d'erreur unique stable par
+      /.specdd/bootstrap.project.md ; décider si un wrapping tagué voie est ajouté.
 
 Done when:
-  Every Scenario has a mapped passing test or a recorded Task exemption, the coverage Tasks
-    are green, and `cargo test -p agent` with `cargo clippy --all-targets -- -D warnings`
-    stay green.
+  Chaque Scenario a un test passant mappé ou une exemption de Task enregistrée, les Tasks de
+    couverture sont vertes, et `cargo test -p agent` avec `cargo clippy --all-targets -- -D
+    warnings` restent verts.
 
 Scenario: Token presence wins the HTTP auth type
-  Given a mock API server returning an Opaque Secret whose only `data` key is `token`
-  When @resolve_http_secret is awaited against it
-  Then the pair is `("bearer", my-bearer-token)` with the token text verbatim
+  Étant donné un mock API server retournant un Secret Opaque dont la seule clé `data` est `token`
+  When 
+  Then 
   Maps to test @test_resolve_http_secret_bearer
-  The both-keys-set precedence leg is code-visible but has no mapped test.
+  La branche de précédence des deux clés posées est visible dans le code mais sans test mappé.
 
 Scenario: Basic fallback joins verbatim and degrades silently
-  Given a Secret with `username` `user` and `password` `pass`, or one with neither key
-  When @resolve_http_secret is awaited
-  Then the pair is `("basic", user:pass)`, and a key-less secret yields `("basic", ":")`
+  Étant donné un Secret avec `username` `user` et `password` `pass`, ou un sans aucune de ces clés
+  When 
+  Then 
   Maps to test @test_resolve_http_secret_basic
-  No mapped test for the key-less `":"` leg.
+  Pas de test mappé pour la branche `":"` sans clé.
 
 Scenario: S3 keys map through, absent keys yield empty strings
-  Given a Secret with `access_key_id`/`secret_access_key`, then one with an empty `data` map
-  When @resolve_s3_secret is awaited
-  Then the pair is the two decoded texts, or `("", "")` for the empty secret
+  Étant donné un Secret avec `access_key_id`/`secret_access_key`, puis un avec une `data` vide
+  When 
+  Then 
   Maps to tests @test_resolve_s3_secret_with_keys, @test_resolve_s3_secret_missing_keys
 
 Scenario: The namespace flag never scopes the CR read
-  Given a @JukeBox named `public` and `-v vny` on the command line
-  When @run executes
-  Then the CR is fetched cluster-scoped by @JukeBox::get and `vny` appears only in
-    `args.namespace` and in any secret fetch
-  No mapped test exists.
+  Étant donné un @JukeBox nommé `public` et `-v vny` sur la ligne de commande
+  When 
+  Then 
+    `args.namespace` et dans tout fetch de secret
+  Aucun test mappé n'existe.
 
 Scenario: Missing JukeBox aborts before secret or script
-  Given @JukeBox::get answering 404 for the flag value
-  When the dispatcher awaits @run
-  Then @Err @Error::KubeError surfaces with no Secret request, no script start and no status
-    write; the dispatcher logs `Scanning JukeBox failed with: {e:}` and exits 1, and the CR's
-    stored conditions stay exactly as a previous scan left them
-  No mapped test exists.
+  Étant donné @JukeBox::get répondant 404 pour la valeur du flag
+  When 
+  Then 
+    écriture de statut ; le dispatcher loggue `Scanning JukeBox failed with: {e:}` et sort en 1,
+    et les conditions stockées du CR restent exactement telles qu'un scan précédent les a laissées
+  Aucun test mappé n'existe.
 
 Scenario: List-style sources skip the whole Rust secret lane
-  Given a @JukeBoxDef::Harbor source with `pull_secret` set
-  When @run executes
-  Then the file issues no secret read and binds no credential global; the pull secret is
-    resolved in-script via `args.namespace` and the `secret_dockerconfigjson` module
-  No mapped test exists.
+  Étant donné une source @JukeBoxDef::Harbor avec `pull_secret` posé
+  When 
+  Then 
+    pull secret est résolu in-script via `args.namespace` et le module `secret_dockerconfigjson`
+  Aucun test mappé n'existe.
 
 Scenario: Script-recorded failure is the only status-first exit
-  Given scan.rhai throwing from inside its catch after calling `set_status_failed`
-  When @run completes
-  Then `status.conditions` carry the script-written failure first and the same run returns
-    @Err @Error::Core displaying `Rhai script error:`, with the dispatcher exiting 1
-  No mapped test exists; the mutator message shape belongs to /common/src/jukebox.sdd.
+  Étant donné scan.rhai lançant depuis l'intérieur de son catch après avoir appelé `set_status_failed`
+  When 
+  Then 
+    @Err @Error::Core affichant `Rhai script error:`, avec le dispatcher sortant en 1
+  Aucun test mappé n'existe ; la forme des messages du mutator appartient à /common/src/jukebox.sdd.
 
 Scenario: Args map shape is frozen for the script
-  Given any successful stub-script run with `-f` unset
-  When the script reads `args`
-  Then exactly the keys `jukebox`, `namespace`, `script_dir` and `filter` exist,
-    `script_dir` is the lossy path text, `filter` is present with a null value, and no
-    `file_scan`/`cache_dir` key exists (twin-only markers)
-  No mapped test exists.
+  Étant donné n'importe quel run de script stub réussi avec `-f` absent
+  When 
+  Then 
+    `script_dir` est le texte de chemin lossy, `filter` est présent avec une valeur nulle, et
+    aucune clé `file_scan`/`cache_dir` n'existe (marqueurs propres au twin)
+  Aucun test mappé n'existe.

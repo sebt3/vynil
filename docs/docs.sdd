@@ -1,21 +1,21 @@
-# Directory spec for the project documentation site.
+# Spécification de répertoire pour le site de documentation du projet.
 
 Spec: docs
 
 Platform: Markdown/mkdocs
 
 Purpose:
-  The user and operator documentation published with mkdocs: concepts, CRD reference, package
-  format and lifecycle, JukeBox sources, CLI reference, operations, and an English/French mirror.
+  La documentation utilisateur et opérateur publiée avec mkdocs : concepts, référence des CRD, format
+  et cycle de vie des paquets, sources JukeBox, référence CLI, opérations, et un miroir anglais/français.
 
 Structure:
-  ./*.md: Top-level English pages (index, concepts, architecture, crds, cli, installation,
+  ./*.md: Pages anglaises de premier niveau (index, concepts, architecture, crds, cli, installation,
     distribution, reconciliation, build-signing, gen-package)
-  ./packages/: Package format, lifecycle, and portability
-  ./jukebox/: Source types and registry maintenance
-  ./operations/: Operations and security guidance
-  ./tooling/: Package lint and test tooling
-  ./fr/: French mirror, same structure and filenames
+  ./packages/: Format des paquets, cycle de vie et portabilité
+  ./jukebox/: Types de sources et maintenance du registre
+  ./operations/: Opérations et recommandations de sécurité
+  ./tooling/: Outils de lint et de test des paquets
+  ./fr/: Miroir français, même structure et mêmes noms de fichiers
 
 Owns:
   ./*.md
@@ -26,14 +26,14 @@ Owns:
   ./fr/**
 
 Must:
-  Keep the French mirror in structural parity with English: same paths and filenames, enforced by
-    the CI parity check in /.github/workflows/workflows.sdd.
-  Treat ./architecture.md as the authoritative description of crate responsibilities and the
-    reconciliation flow.
-  Describe the security posture of the cluster-admin agent and unverified package signatures.
+  Maintenir le miroir français en parité structurelle avec l'anglais : mêmes chemins et noms de
+    fichiers, garanti par le contrôle de parité CI dans /.github/workflows/workflows.sdd.
+  Considérer ./architecture.md comme la description faisant autorité des responsabilités des crates
+    et du flux de réconciliation.
+  Décrire la posture de sécurité de l'agent cluster-admin et des signatures de paquets non vérifiées.
 
 Must not:
-  Treat the retired ./conception/ directory as documentation; it is not owned and not published.
+  Considérer le répertoire retiré ./conception/ comme de la documentation ; il n'est pas possédé et n'est pas publié.
 
 Depends on:
   ../mkdocs.yml

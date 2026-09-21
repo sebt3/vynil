@@ -1,268 +1,268 @@
 Spec: TenantReconfigureCmd
 
 Purpose:
-  Out of the build graph — this file is dead: ./mod.rs keeps `//mod reconfigure;`, the
-    @Commands::Reconfigure variant and the exit-6 arm all commented (frozen in
-    ./mod.sdd), so nothing here ever compiles, cargo never tests it, and it is
-    unreachable from clap. Everything below is the PROPOSAL frozen verbatim from the
-    source, labelled as such — live behaviour only "if reconnected".
-  If reconnected, back the tenant lane of `agent tenant reconfigure`: resolve one
-    @TenantInstance by namespace and name, publish it as the process-wide owner
-    context and as the Rhai variable `instance`, inject the parsed CLI flags as
-    `args`, then hand off in order to the Rhai modules `context` and `reconfigure`.
-    This file runs no reconfigure stage itself and writes no `status` — engine prep
-    and handoff only.
-  Diff-verified against the dead twin ./../service/reconfigure.rs: exactly two hunks
-    differ. Line 1: the @use line (@set_tenant/@TenantInstance over
-    @set_service/@ServiceInstance). Hunk `@@ -78`: the four `format!` sites at lines
-    81–84 drop `.display()` and rename the `{script_dir}/service` segment to
-    `{script_dir}/tenant`, and lines 86–87 swap @ServiceInstance::get/@set_service
-    for @TenantInstance::get/@set_tenant. The ten-flag block, the derives, the
-    `args` @unwrap error channel and the four-statement snippet are byte-identical.
-  The dropped `.display()` calls are not cosmetic: this copy does NOT compile as
-    written while the twin does — see `[?]` Tasks; every entry below assumes the
-    frozen proposal is revived with that repaired.
+  Hors du graphe de build — ce fichier est mort : ./mod.rs garde `//mod reconfigure;`, la
+    variante @Commands::Reconfigure et la branche exit-6 toutes commentées (gelées dans
+    ./mod.sdd), donc rien d'ici ne compile jamais, cargo ne le teste jamais, et il est
+    inaccessible depuis clap. Tout ce qui suit est la PROPOSITION gelée verbatim de la
+    source, étiquetée comme telle — comportement live seulement "si reconnecté".
+  Si reconnecté, porter la voie tenant de `agent tenant reconfigure`: résoudre un
+    @TenantInstance par namespace et nom, le publier comme contexte owner du
+    processus et comme variable Rhai `instance`, injecter les flags CLI parsés comme
+    `args`, puis passer la main dans l'ordre aux modules Rhai `context` et `reconfigure`.
+    Ce fichier ne lance lui-même aucune étape de reconfigure et n'écrit aucun `status` —
+    préparation moteur et passage de main seulement.
+  Diff vérifié contre le jumeau mort ./../service/reconfigure.rs: exactement deux hunks
+    diffèrent. Ligne 1: la ligne @use (@set_tenant/@TenantInstance au lieu de
+    @set_service/@ServiceInstance). Hunk `@@ -78`: les quatre sites `format!` des lignes
+    81–84 suppriment `.display()` et renomment le segment `{script_dir}/service` en
+    `{script_dir}/tenant`, et les lignes 86–87 échangent @ServiceInstance::get/@set_service
+    contre @TenantInstance::get/@set_tenant. Le bloc des dix flags, les derives, le
+    canal d'erreur @unwrap de `args` et les quatre instructions du snippet sont identiques octet pour octet.
+  Les appels `.display()` supprimés ne sont pas cosmétiques: cette copie ne compile PAS
+    telle qu'écrite alors que le jumeau le fait — voir `[?]` Tasks; chaque entrée ci-dessous
+    suppose la proposition gelée réanimée avec cette réparation.
 
 Structure:
-  ./reconfigure.rs: dead source, compiled only if the commented triplet in ./mod.rs
-    is uncommented per ./mod.sdd — and it then fails the build as-is (Tasks)
+  ./reconfigure.rs: source morte, compilée seulement si le triplet commenté de ./mod.rs
+    est décommenté selon ./mod.sdd — elle échoue alors au build en l'état (Tasks)
 
 References:
-  ./mod.sdd — owns the freeze: commented `//mod reconfigure;`, the
-    @Commands::Reconfigure variant and the exit-6 error lane
-    `Reconfiguring of a package failed with: {e:}` that would drive this file.
-  ./../service/reconfigure.sdd — the dead twin; shared flag, JSON and handoff
-    contracts plus the sibling revive-or-delete decision (read-only comparison).
-  ./install.sdd — tenant shape ancestor: same ten flags and step order except the
-    two instance-flag doc words, the `args` injection lane (@unwrap here,
-    @map_err + `?` there) and the snippet's last import.
-  /agent/src/linting/rhai_checker.rs — package entry-point pattern
-    `reconfigure.rhai`, the contract revival would have to satisfy.
+  ./mod.sdd — possède le gel: `//mod reconfigure;` commenté, la variante
+    @Commands::Reconfigure et la voie d'erreur exit-6
+    `Reconfiguring of a package failed with: {e:}` qui piloterait ce fichier.
+  ./../service/reconfigure.sdd — le jumeau mort; contrats partagés de flags, JSON et
+    passage de main, plus la décision frangine réanimer-ou-supprimer (comparaison seule lecture).
+  ./install.sdd — ancêtre de forme tenant: mêmes dix flags et même ordre d'étapes sauf les
+    deux mots de doc du flag instance, la voie d'injection de `args` (@unwrap ici,
+    @map_err + `?` là-bas) et le dernier import du snippet.
+  /agent/src/linting/rhai_checker.rs — motif de point d'entrée de package
+    `reconfigure.rhai`, le contrat que la réanimation devrait satisfaire.
 
 Depends on:
-  /common/src/rhaihandler.sdd — @Script::new resolver-directory semantics and full
-    registration set (new_core plus http, s3, the three instance kinds with
-    @tenant_rhai_register, jukebox, k8s registrars), @Script::eval error lane, and
-    @Script::set_dynamic / @Script::ctx reached through @std::ops::Deref onto the
-    core engine @Script.
-  /common/src/instancetenant.sdd — @TenantInstance and the awaited
-    @TenantInstance::get lookup, attached by @impl_instance_common!
-    (/common/src/instance_macros.sdd): one namespaced named read, client via
-    @get_client_async, kube failures wrapped as @common::Error::KubeError.
-  /common/src/context.sdd — @set_tenant store semantics and runtime preconditions
-    (@tokio::task::block_in_place needs a multi-thread runtime).
-  /common/src/lib.sdd — @common::Result, @common::Error variants and
-    @common::DEFAULT_AGENT_IMAGE as the `agent_image` clap default,
+  /common/src/rhaihandler.sdd — sémantique de répertoire résolveur de @Script::new et jeu
+    complet d'enregistrement (new_core plus http, s3, les trois sortes d'instance avec
+    @tenant_rhai_register, jukebox, les registrars k8s), voie d'erreur de @Script::eval, et
+    @Script::set_dynamic / @Script::ctx atteints via @std::ops::Deref sur le moteur
+    core @Script.
+  /common/src/instancetenant.sdd — @TenantInstance et le lookup attendu
+    @TenantInstance::get, attaché par @impl_instance_common!
+    (/common/src/instance_macros.sdd): une lecture nommée en namespace, client via
+    @get_client_async, échecs kube wrappés en @common::Error::KubeError.
+  /common/src/context.sdd — sémantique de stockage de @set_tenant et prérequis runtime
+    (@tokio::task::block_in_place exige un runtime multi-thread).
+  /common/src/lib.sdd — @common::Result, les variantes @common::Error et
+    @common::DEFAULT_AGENT_IMAGE comme défaut clap de `agent_image`,
     `docker.io/sebt3/vynil-agent:0.7.7`.
-  @clap @Args, @serde, @serde_json — flag parsing and the derives behind the `args`
-    JSON.
-  ./mod.rs — the sole caller, commented: the awaited call and exit-6
-    `unwrap_or_else` lane.
-  /agent/scripts/tenant/context.rhai — resolvable handoff script under the default
-    `--script-dir`; no shipped `reconfigure.rhai` counterpart exists anywhere (see
+  @clap @Args, @serde, @serde_json — parsage des flags et les derives derrière le JSON
+    de `args`.
+  ./mod.rs — le seul appelant, commenté: l'appel attendu et la voie
+    `unwrap_or_else` exit-6.
+  /agent/scripts/tenant/context.rhai — script de passage de main résolvable sous le
+    `--script-dir` par défaut; aucun `reconfigure.rhai` livré en vis-à-vis n'existe nulle part (voir
     Handles).
 
 Exposes:
-  @Parameters — clap @Args struct deriving @Debug, @Serialize, @Deserialize; would
-    mount on the commented @Commands::Reconfigure in ./mod.rs, so no live mount
-    today; all ten fields module-private, reached only by the derives and @run.
-  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()>; the
-    commented mod arm `reconfigure::run(args).await` already agrees with this
-    signature — the revival blockers are the `format!` asymmetry and the @unwrap
-    lint lane, not the call shape.
+  @Parameters — struct clap @Args dérivant @Debug, @Serialize, @Deserialize; se monterait
+    sur le @Commands::Reconfigure commenté de ./mod.rs, donc aucun montage live
+    aujourd'hui; les dix champs privés de module, atteints seulement par les derives et @run.
+  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()>; la branche
+    commentée du mod `reconfigure::run(args).await` concorde déjà avec cette
+    signature — les bloqueurs de réanimation sont l'asymétrie des `format!` et la voie
+    de lint @unwrap, pas la forme de l'appel.
 
 Accepts:
-  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, value name
-    `NAMESPACE`, @String, required.
-  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, value name
-    `INSTANCE`, @String, required; names the CR to fetch, never validated here.
+  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, nom de valeur
+    `NAMESPACE`, @String, requis.
+  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, nom de valeur
+    `INSTANCE`, @String, requis; nomme le CR à récupérer, jamais validé ici.
   @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env `VYNIL_NAMESPACE`,
-    value name `VYNIL_NAMESPACE`, @String, required; reaches scripts only through
+    nom de valeur `VYNIL_NAMESPACE`, @String, requis; ne parvient aux scripts que via
     `args`.
-  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, value
-    name `PACKAGE_DIRECTORY`, @std::path::PathBuf, clap default `/tmp/package`.
-  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, value name
-    `SCRIPT_DIRECTORY`, @std::path::PathBuf, clap default `./agent/scripts`.
+  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, nom
+    de valeur `PACKAGE_DIRECTORY`, @std::path::PathBuf, défaut clap `/tmp/package`.
+  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, nom de valeur
+    `SCRIPT_DIRECTORY`, @std::path::PathBuf, défaut clap `./agent/scripts`.
   @Parameters.template_dir — `-t` / `--template-dir`, env `TEMPLATE_DIRECTORY`,
-    value name `TEMPLATE_DIRECTORY`, @std::path::PathBuf, clap default
-    `./agent/templates`; read by nothing in this Rust lane.
-  @Parameters.agent_image — long-only `--agent-image`, env `AGENT_IMAGE`, value name
-    `AGENT_IMAGE`, @String, clap default @common::DEFAULT_AGENT_IMAGE.
-  @Parameters.tag — long-only `--tag`, env `TAG`, value name `TAG`, @String,
-    required, forwarded verbatim in `args`, never parsed or validated as a version
-    here.
-  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, value name
-    `CONFIG_DIR`, @std::path::PathBuf, clap default `.`.
-  @Parameters.controller_values — long-only `--controller-values`, env
-    `CONTROLLER_VALUES`, value name `CONTROLLER_VALUES`, @String, clap default the
-    two-character string `{}`.
-  Implicit runtime preconditions frozen as in ./install.sdd: a live tokio
-    multi-thread runtime for @set_tenant, and @common::context::init_k8s already
-    called by @tenant::run (inert either way).
+    nom de valeur `TEMPLATE_DIRECTORY`, @std::path::PathBuf, défaut clap
+    `./agent/templates`; lu par rien dans cette voie Rust.
+  @Parameters.agent_image — `--agent-image` seul, env `AGENT_IMAGE`, nom de valeur
+    `AGENT_IMAGE`, @String, défaut clap @common::DEFAULT_AGENT_IMAGE.
+  @Parameters.tag — `--tag` seul, env `TAG`, nom de valeur `TAG`, @String,
+    requis, transmis verbatim dans `args`, jamais parsé ni validé comme version
+    ici.
+  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, nom de valeur
+    `CONFIG_DIR`, @std::path::PathBuf, défaut clap `.`.
+  @Parameters.controller_values — `--controller-values` seul, env
+    `CONTROLLER_VALUES`, nom de valeur `CONTROLLER_VALUES`, @String, défaut clap la
+    chaîne de deux caractères `{}`.
+  Prérequis runtime implicites gelés comme dans ./install.sdd: un runtime tokio
+    multi-thread live pour @set_tenant, et @common::context::init_k8s déjà appelé
+    par @tenant::run (inerte dans les deux cas).
 
 Returns:
-  @Ok(@()) once the fixed snippet completes without a Rhai error — the snippet's
-    @Dynamic is discarded by `let _ =` and never inspected.
+  @Ok(@()) une fois le snippet fixe achevé sans erreur Rhai — le
+    @Dynamic du snippet est jeté par `let _ =` et jamais inspecté.
 
 Raises:
-  Frozen-if-recompiled error surface — nothing raises today (the file never runs),
-    and even a reconnected copy first trips the `format!` compile failure in Tasks
-    before any of this can fire.
-  @common::Error::KubeError from the `?` on the awaited @TenantInstance::get —
-    missing @TenantInstance (`NotFound` mapped whole, never defaulted), wrong
-    namespace, Forbidden — the first fallible step, nothing published when it fails.
-  @common::Error::Core (wrapping the Rhai error, Display `Rhai script error:
-    <rhai text>`) from the `?` on @Script::eval: snippet parse error, missing
-    `context` or `reconfigure` import, or a thrown error inside either module.
-  @std::panic! from @serde_json::to_value(args) followed by `@unwrap()` — a
-    serialization failure aborts by panic instead of yielding
-    @common::Error::SerializationError the way ./install.rs does; unreachable in
-    practice through the derives. The workspace deny on product-code @unwrap bites
-    this line at clap/clippy time once the file recompiles (see Tasks,
+  Surface d'erreur gelée-si-recompilée — rien ne lève d'erreur aujourd'hui (le fichier ne
+    tourne jamais), et même une copie reconnectée bute d'abord sur l'échec
+    `format!` des Tasks avant que quoi que ce soit ici ne puisse se déclencher.
+  @common::Error::KubeError depuis le `?` sur le @TenantInstance::get attendu —
+    @TenantInstance manquant (`NotFound` mappé en bloc, jamais de défaut), mauvais
+    namespace, Forbidden — la première étape faillible, rien de publié quand elle échoue.
+  @common::Error::Core (emballe l'erreur Rhai, Display `Rhai script error:
+    <rhai text>`) depuis le `?` sur @Script::eval : erreur de parse du snippet, import
+    `context` ou `reconfigure` manquant, ou erreur levée dans l'un des modules.
+  @std::panic! de @serde_json::to_value(args) suivi de `@unwrap()` — un échec de
+    sérialisation avorte par panic au lieu de rendre
+    @common::Error::SerializationError comme le fait ./install.rs ; inaccessible en
+    pratique via les derives. Le deny workspace sur @unwrap dans le code produit frappe
+    cette ligne à l'heure clap/clippy quand le fichier compilera (voir Tasks,
     /linting.sdd).
-  The context-owned @panic! `cannot create the Kubernetes client: {e}` surfacing
-    through @TenantInstance::get → @get_client_async with no resolvable cluster
-    configuration.
-  @set_tenant panics on a current-thread or absent runtime (contract in
-    /common/src/context.sdd), not catchable by the `?` lanes.
+  Le @panic! owned par le contexte `cannot create the Kubernetes client: {e}` qui remonte
+    via @TenantInstance::get → @get_client_async sans configuration de cluster
+    résoluble.
+  @set_tenant panique sur un runtime current-thread ou absent (contrat dans
+    /common/src/context.sdd), non rattrapable par les voies `?`.
 
 Handles:
-  Every @Err lane belongs to the commented mod arm — frozen @tracing::error line
-    `Reconfiguring of a package failed with:` then @process::exit(6) per ./mod.sdd;
-    this file logs nothing and never exits.
-  No shipped `reconfigure.rhai` anywhere in /agent/scripts — default revival
-    therefore dies at the second import unless the mounted package supplies
-    `scripts/reconfigure.rhai`, the first search directory; `context` resolves from
+  Toute voie @Err appartient à la branche commentée du mod — ligne @tracing::error gelée
+    `Reconfiguring of a package failed with:` puis @process::exit(6) selon ./mod.sdd ;
+    ce fichier ne log rien et ne sort jamais.
+  Aucun `reconfigure.rhai` livré nulle part dans /agent/scripts — la réanimation par défaut
+    meurt donc au second import sauf si le package monté fournit
+    `scripts/reconfigure.rhai`, le premier répertoire de recherche ; `context` se résout depuis
     `/agent/scripts/tenant`.
-  Eval failure after @set_tenant already ran — the process keeps the
-    @VynilContext::TenantInstance variant for the remaining process lifetime (it
-    ends in the exit-6).
-  Rerun over a configured instance — no `status` branch here: both modules replay;
-    any idempotence is script-side.
-  Flags with no local reader (`vynil_namespace`, `tag`, `template_dir`,
-    `agent_image`, `controller_values`) — their only observable use is the `args`
-    JSON the scripts consume.
+  Échec d'eval après que @set_tenant a déjà tourné — le processus garde la
+    variante @VynilContext::TenantInstance pour la fin de vie du processus (il
+    finit dans le exit-6).
+  Relance sur une instance configurée — aucune branche `status` ici : les deux modules se rejouent ;
+    toute idempotence est côté script.
+  Flags sans lecteur local (`vynil_namespace`, `tag`, `template_dir`,
+    `agent_image`, `controller_values`) — leur seul usage observable est le JSON
+    `args` que consomment les scripts.
 
 Must:
-  Execute in this order with nothing between: build the interpreter, fetch the CR,
-    publish context, inject `instance`, serialize and inject `args`, evaluate the
-    snippet, return @Ok — the @run skeleton of ./install.rs verbatim except the two
-    diffs named by the shape ancestor.
-  Build the interpreter with @Script::new on exactly four resolver directories in
-    this order: `{package_dir}/scripts`, `{config_dir}` (the bare directory),
-    `{script_dir}/tenant`, `{script_dir}/lib` — path text interpolation giving the
-    same strings as the twin's `@Path::display` sites, so a trailing `/` in a flag
-    doubles the separator; earlier entries win an `import`.
-  Fetch the CR with @TenantInstance::get on clones of @Parameters.namespace and
-    @Parameters.instance — one namespaced named read, never a list, watch or
-    create; an absent instance is an @Err, not a bootstrap path.
-  Publish the fetched CR twice from the value and one clone: @set_tenant stores the
-    clone as the process owner context and @rhai::Scope::set_value on @Script::ctx
-    moves the original into the script variable named `instance`.
-  Inject `args` as @Script::set_dynamic over @serde_json::to_value(args) — the
-    object then carries exactly the ten snake_case keys `namespace`, `instance`,
+  Exécuter dans cet ordre sans rien entre : construire l'interpréteur, récupérer le CR,
+    publier le contexte, injecter `instance`, sérialiser et injecter `args`, évaluer le
+    snippet, retourner @Ok — le squelette @run de ./install.rs verbatim sauf les deux
+    diffs nommés par l'ancêtre de forme.
+  Construire l'interpréteur avec @Script::new sur exactement quatre répertoires résolveurs dans
+    cet ordre : `{package_dir}/scripts`, `{config_dir}` (le répertoire nu),
+    `{script_dir}/tenant`, `{script_dir}/lib` — interpolation en texte de chemin donnant les
+    mêmes chaînes que les sites `@Path::display` du jumeau, donc un `/` final dans un flag
+    double le séparateur ; les entrées plus tôt gagnent un `import`.
+  Récupérer le CR avec @TenantInstance::get sur des clones de @Parameters.namespace et
+    @Parameters.instance — une lecture nommée en namespace, jamais de list, watch ni
+    create ; une instance absente est un @Err, pas un chemin de bootstrap.
+  Publier deux fois le CR récupéré depuis la valeur et un clone : @set_tenant stocke le
+    clone comme contexte owner du processus et @rhai::Scope::set_value sur @Script::ctx
+    déplace l'original dans la variable de script nommée `instance`.
+  Injecter `args` via @Script::set_dynamic sur @serde_json::to_value(args) — l'objet
+    porte alors exactement les dix clés snake_case `namespace`, `instance`,
     `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`, `agent_image`,
-    `tag`, `config_dir`, `controller_values` — @PathBuf values as path text,
-    `agent_image` as a string, `controller_values` as a JSON string (its default
-    renders `"{}"`, still a string).
-  Evaluate the fixed four-statement snippet, nothing configurable in it, `context`
-    first and `reconfigure` last:
+    `tag`, `config_dir`, `controller_values` — valeurs @PathBuf en texte de chemin,
+    `agent_image` en chaîne, `controller_values` en chaîne JSON (son défaut
+    rend `"{}"`, toujours une chaîne).
+  Évaluer le snippet fixe de quatre instructions, rien de configurable dedans, `context`
+    d'abord et `reconfigure` en dernier :
       `import("context") as ctx;` `let context = ctx::run(instance, args);`
       `import("reconfigure") as reconfigure;` `reconfigure::run(instance, context);`
-    — the map `ctx::run` returns becomes the second argument of
+    — la map que `ctx::run` retourne devient le second argument de
     `reconfigure::run`.
-  Mutate nothing on the cluster itself: every write happens inside the Rhai modules
-    through the registered @TenantInstance bridge; this lane reads the CR only.
-  Emit no log and no stdout/stderr.
+  Ne rien muter sur le cluster lui-même : chaque écriture a lieu dans les modules Rhai
+    via le bridge @TenantInstance enregistré ; cette voie ne lit que le CR.
+  N'émettre aucun log ni stdout/stderr.
 
 Must not:
-  Branch on `status`, `tag` or `controller_values` in Rust: what reconfigure skips
-    or replays is a script-side decision this lane never pre-empts.
-  Render templates or apply manifests from Rust — `template_dir` steers no Rust
-    code here, only the scripts through `args`.
+  Pas de branchement sur `status`, `tag` ou `controller_values` en Rust : ce que
+    reconfigure saute ou rejoue est une décision côté script que cette voie ne préempte jamais.
+  Pas de rendu de templates ni d'application de manifests depuis Rust — `template_dir`
+    ne pilote ici aucun code Rust, seulement les scripts via `args`.
 
 Tasks:
-  [ ] Decide revive vs delete: resurrect the commented triplet in ./mod.rs
-      (`//mod reconfigure;`, the @Commands::Reconfigure variant, the exit-6 arm) or
-      delete this file; the decision is shared with the matching tasks in ./mod.sdd
-      and ./../service/reconfigure.sdd and must close in lockstep across all three.
-  [ ] Untested: no test invokes @run — the file is never compiled, so none could;
-      if revived, first cover every Scenario under the project TTD rule.
-  [?] Twin compile asymmetry (frozen finding, verified): in hunk `@@ -78` the four
-      `format!` sites at lines 81–84 pass the @PathBuf fields straight into `{}`,
-      while the twin passes the `@Path::display` value. The premise that @PathBuf
-      is Display-formattable is false: `PathBuf` implements no @std::fmt::Display
-      (neither does @std::path::Path — which is why `@Path::display` exists), and
-      rustc rejects all four sites with E0277 under both `edition 2021` and
-      `edition 2024` (verified on rustc 1.97.1). So this copy does not compile
-      identically to the twin —
-      reconnected, lines 81–84 fail the build where the twin passes. Decide which
-      twin's formatting is canonical before reviving either (adding `.display()`
-      here restores parity).
-  [?] @unwrap vs @map_err: serialization failure panics here where ./install.rs
-      returns @common::Error::SerializationError; reconnected-and-compiling, the
-      deny on product-code @unwrap in /linting.sdd turns this line into a hard
-      clippy failure. Decide to normalize onto the install lane (or keep the
-      panic, contradicting the workspace rule).
-  [?] No shipped `reconfigure.rhai`: /agent/scripts carries `context.rhai` per kind
-      but no reconfigure script for any kind, so revival is inert-with-an-import-
-      error until either packages supply `scripts/reconfigure.rhai` (their
-      entry-point pattern per /agent/src/linting/rhai_checker.rs) or the agent
-      ships one. Decide the supplier before the flag contract goes live.
-  [?] Required-but-unread flags (`vynil_namespace`, `tag`) and the
-      deserialization-less @Deserialize derive match ./install.rs exactly; revival
-      inherits the open `[?]` set in ./install.sdd unchanged — resolve once there
-      instead of duplicating.
+  [ ] Décider réanimer vs supprimer : ressusciter le triplet commenté de ./mod.rs
+      (`//mod reconfigure;`, la variante @Commands::Reconfigure, la branche exit-6) ou
+      supprimer ce fichier ; la décision est partagée avec les tâches homologues de ./mod.sdd
+      et ./../service/reconfigure.sdd et doit se clore en lockstep dans les trois.
+  [ ] Non testé : aucun test n'invoque @run — le fichier n'est jamais compilé, donc aucun ne le pourrait ;
+      si réanimé, couvrir d'abord chaque Scenario sous la règle TTD du projet.
+  [?] Asymétrie de compile des jumeaux (finding gelé, vérifié) : dans le hunk `@@ -78` les quatre
+      sites `format!` des lignes 81–84 passent les champs @PathBuf directement dans `{}`,
+      alors que le jumeau passe la valeur `@Path::display`. L'hypothèse que @PathBuf
+      soit Display-formattable est fausse : `PathBuf` n'implémente aucun @std::fmt::Display
+      (ni @std::path::Path non plus — c'est pourquoi `@Path::display` existe), et
+      rustc rejette les quatre sites avec E0277 sous `edition 2021` comme sous
+      `edition 2024` (vérifié sur rustc 1.97.1). Donc cette copie ne compile pas
+      à l'identique du jumeau —
+      reconnectée, les lignes 81–84 échouent au build là où le jumeau passe. Décider quel
+      formatage jumeau est canonique avant d'en réanimer un (ajouter `.display()`
+      ici restaure la parité).
+  [?] @unwrap vs @map_err : un échec de sérialisation panique ici là où ./install.rs
+      retourne @common::Error::SerializationError ; reconnecté-et-compilant, le
+      deny sur @unwrap en code produit de /linting.sdd fait de cette ligne un échec
+      clippy dur. Décider de normaliser sur la voie de install (ou garder le
+      panic, en contredisant la règle workspace).
+  [?] Aucun `reconfigure.rhai` livré : /agent/scripts porte un `context.rhai` par sorte
+      mais aucun script reconfigure pour aucune sorte, donc la réanimation est inert-avec-une-erreur-d-import
+      tant que ni les packages ne fournissent `scripts/reconfigure.rhai` (leur
+      motif de point d'entrée selon /agent/src/linting/rhai_checker.rs) ni l'agent
+      n'en livre un. Décider du fournisseur avant que le contrat de flags ne passe en live.
+  [?] Flags requis-mais-non-lus (`vynil_namespace`, `tag`) et le derive @Deserialize
+      sans désérialisation correspondent exactement à ./install.rs ; la réanimation
+      hérite tels quels des `[?]` ouverts de ./install.sdd — à résoudre là-bas une fois
+      au lieu de dupliquer.
 
 Done when:
-  The revive-or-delete decision is on record here, in ./mod.sdd and in the twin
-    spec; if revived, the compile asymmetry and the @unwrap lane are decided away,
-    every Scenario has a passing test, and clippy and fmt are green.
+  La décision réanimer-ou-supprimer est consignée ici, dans ./mod.sdd et dans le spec
+    jumeau ; si réanimé, l'asymétrie de compile et la voie @unwrap sont tranchées,
+    chaque Scenario a un test qui passe, et clippy et fmt sont verts.
 
 Scenario: revival trips the compile asymmetry before anything runs
-  Given ./mod.rs revived verbatim — just the triplet uncommented, this source
-    unchanged — and the twin kept as canonical formatting
-  When cargo builds the agent crate
-  Then four E0277 errors land at the `format!` sites on lines 81–84 (`PathBuf` not
-    @std::fmt::Display), and the exit-6 wiring never links
+  Given ./mod.rs réanimé verbatim — juste le triplet décommenté, cette source
+    inchangée — et le jumeau gardé comme formatage canonique
+  When cargo construit le crate agent
+  Then quatre erreurs E0277 atterrissent sur les sites `format!` des lignes 81–84 (`PathBuf` pas
+    @std::fmt::Display), et le câblage exit-6 n'est jamais linké
 
 Scenario: full run hands off in order with a package-supplied script
-  Given all required flags supplied, an existing namespaced @TenantInstance, and
-    `reconfigure.rhai` shipped by the mounted package under its `scripts` directory
-    (the only default location it can resolve from)
-  When @run is awaited
-  Then @Script::new received the four search dirs `[package]/scripts`, `[config]`,
-    `[script]/tenant`, `[script]/lib` in that order
-  And before the eval @set_tenant published the tenant variant and `instance` and
-    `args` are bound
-  Then `ctx::run(instance, args)` executes before `reconfigure::run(instance,
-    context)`, and the map it returns is exactly the second argument
-    `reconfigure::run` receives
-  And @run returns @Ok(()) whatever the discarded @Dynamic was
+  Given tous les flags requis fournis, un @TenantInstance existant en namespace, et un
+    `reconfigure.rhai` livré par le package monté sous son répertoire `scripts`
+    (le seul emplacement par défaut d'où il peut se résoudre)
+  When @run est attendu
+  Then @Script::new a reçu les quatre répertoires de recherche `[package]/scripts`, `[config]`,
+    `[script]/tenant`, `[script]/lib` dans cet ordre
+  And avant l'eval @set_tenant a publié la variante tenant et `instance` et
+    `args` sont liés
+  Then `ctx::run(instance, args)` s'exécute avant `reconfigure::run(instance,
+    context)`, et la map qu'elle retourne est exactement le second argument que
+    reçoit `reconfigure::run`
+  And @run retourne @Ok(()) quel que soit le @Dynamic jeté
 
 Scenario: args JSON equals the install ten keys at defaults
-  Given a command line setting only the required flags
-  When @run serializes @Parameters into `args`
-  Then the object holds exactly the ten keys `namespace`, `instance`,
+  Given une ligne de commande qui ne pose que les flags requis
+  When @run sérialise @Parameters dans `args`
+  Then l'objet contient exactement les dix clés `namespace`, `instance`,
     `vynil_namespace`, `package_dir`, `script_dir`, `template_dir`, `agent_image`,
     `tag`, `config_dir`, `controller_values`
-  And `controller_values` is the JSON string `"{}"`, `template_dir` is
-    `./agent/templates` and `agent_image` is `docker.io/sebt3/vynil-agent:0.7.7`
+  And `controller_values` est la chaîne JSON `"{}"`, `template_dir` est
+    `./agent/templates` et `agent_image` est `docker.io/sebt3/vynil-agent:0.7.7`
 
 Scenario: missing CR fails before any handoff
-  Given no @TenantInstance at that namespace/name — or its read is Forbidden
-  When @run is awaited
-  Then the `?` on @TenantInstance::get returns @Err(@common::Error::KubeError)
-  And @set_tenant never ran, neither injection happened and the snippet never
-    evaluated, so the exit-6 lane would log
-    `Reconfiguring of a package failed with:` carrying the KubeError text
+  Given aucun @TenantInstance à ce namespace/nom — ou que sa lecture soit Forbidden
+  When @run est attendu
+  Then le `?` sur @TenantInstance::get retourne @Err(@common::Error::KubeError)
+  And @set_tenant n'a jamais tourné, aucune injection n'a eu lieu et le snippet ne s'est
+    jamais évalué, donc la voie exit-6 loggerait
+    `Reconfiguring of a package failed with:` portant le texte du KubeError
 
 Scenario: default script tree cannot satisfy the reconfigure import
-  Given a valid @TenantInstance, default `--script-dir` and a package directory
-    holding no `reconfigure.rhai`
-  When @run evaluates the snippet
-  Then the `context` import succeeds and the `reconfigure` import fails,
-    @Script::eval returns @Err(@common::Error::Core Display-prefixed
+  Given un @TenantInstance valide, un `--script-dir` par défaut et un répertoire de package
+    sans `reconfigure.rhai`
+  When @run évalue le snippet
+  Then l'import `context` réussit et l'import `reconfigure` échoue,
+    @Script::eval retourne @Err(@common::Error::Core Display-préfixé
     `Rhai script error:`)
-  And the process context already holds the tenant variant when the exit-6 log
-    fires
+  And le contexte du processus tient déjà la variante tenant quand le log exit-6
+    se déclenche

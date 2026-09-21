@@ -1,283 +1,289 @@
-# File spec for ./build.rs. The real packing lives in the Rhai lane this file evaluates
-# (/agent/scripts/packages/build.rhai, today unspecified) and in the pinned core `push_image`;
-# dispatcher and exit ladder are ./mod.sdd's, the inverse pull lane's is ./unpack.sdd's.
+# Spec fichier pour ./build.rs. L'empaquetage réel vit dans la lane Rhai que ce fichier évalue
+# (/agent/scripts/packages/build.rhai, non spécifiée à ce jour) et dans le `push_image` core épinglé ;
+# le dispatcher et l'échelle de sortie sont ceux de ./mod.sdd, ceux de la lane pull inverse sont ceux de ./unpack.sdd.
 
 Spec: PackageBuild
 
 Platform: Rust
 
 Purpose:
-  The `agent package build` leaf — the directory-to-image pack-and-push lane. The Rust side
-    owns only the CLI flag surface and the handoff: it serializes its parsed @Parameters to
-    JSON as the Rhai variable `args`, opens a live-surface @common::rhaihandler::Script over
-    three resolver dirs, and evaluates the two-line snippet `import("build")` plus
-    `build::run(args)`. Everything observable after that — staging, version resolution, the
-    OCI push, cosign signing, the completion print — happens lane-deep, not in this file.
+  La feuille `agent package build` — la lane d'empaquetage-poussée du répertoire vers l'image. Le côté
+    Rust ne possède que la surface de flags CLI et l'handoff : il sérialise ses @Parameters parsés en
+    JSON comme variable Rhai `args`, ouvre un @common::rhaihandler::Script à surface live sur
+    trois répertoires de résolution, et évalue le snippet `import("build")` suivi de
+    `build::run(args)`. Tout ce qui est observable après — staging, résolution de version, la
+    poussée OCI, la signature cosign, l'affichage de fin — se passe au fond de la lane, pas dans ce fichier.
 
 Owns:
   ./build.rs
 
 References:
-  ./mod.sdd — caller and exit lane: any @Err from @run prints
-    `Packing directory failed with: {e:}` (Display) via @tracing::error! then
+  ./mod.sdd — appelant et lane de sortie : tout @Err de @run affiche
+    `Packing directory failed with: {e:}` (Display) via @tracing::error! puis
     @std::process::exit(1).
-  ./unpack.sdd — inverse lane and the frozen @Registry::new credential-promotion rule the
-    script-side @new_registry shares; its `[?]` records the same sync-over-async runtime
-    posture this lane inherits.
-  /common/src/rhaihandler.sdd — @Script::new (full live-cluster surface, real core OCI
-    bindings `new_registry`/`push_image`/`sign_image`/`list_tags`), @Script::eval error
-    conversion (@Error::Core, display `Rhai script error: <rhai text>`), and the Deref'd core
-    @set_dynamic (its two @unwrap calls).
-  /common/src/lib.sdd — @common::Error / @common::Result; @Error::SerializationError display
-    `SerializationError: {0}`; @Error::Core transparent to core display text.
-  /agent/scripts/packages/build.rhai — the script-side `build` module (run/build/security_filter)
-    this file's snippet invokes; owned today by /agent/agent.sdd's `./scripts/**` with no own
-    spec — lane facts below are therefore pinned here.
-  /agent/tests/rhai_build.rs — mock-lane tests that cover script-side functions, never @run.
+  ./unpack.sdd — lane inverse et la règle de promotion de credentials @Registry::new gelée
+    que partage le @new_registry côté script ; son `[?]` consigne la même posture
+    sync-over-async que cette lane hérite.
+  /common/src/rhaihandler.sdd — @Script::new (surface live complète du cluster, vraies liaisons OCI
+    core `new_registry`/`push_image`/`sign_image`/`list_tags`), la conversion d'erreur de @Script::eval
+    (@Error::Core, affichage `Rhai script error: <rhai text>`), et le @set_dynamic
+    déréférencé du core (ses deux appels @unwrap).
+  /common/src/lib.sdd — @common::Error / @common::Result ; l'affichage de @Error::SerializationError
+    `SerializationError: {0}` ; @Error::Core transparent au texte d'affichage du core.
+  /agent/scripts/packages/build.rhai — le module `build` côté script (run/build/security_filter)
+    que le snippet de ce fichier invoque ; possédé aujourd'hui par le `./scripts/**` de
+    /agent/agent.sdd sans spec propre — les faits de lane ci-dessous sont donc gelés ici.
+  /agent/tests/rhai_build.rs — tests de lane mock couvrant les fonctions côté script, jamais @run.
 
 Must:
-  Freeze the ten-option clap surface exactly: `-o`/`--source`/env `SOURCE` default `/src`
-    (doc `Source directory`, @PathBuf); `-t`/`--temporary`/env `TEMPORARY` default
-    `/tmp/package` (doc `Temporary directory`, @PathBuf); `-b`/`--build-type`/env
-    `BUILD_TYPE` @BuildType default `alpha` (doc `Build type`); `-T`/`--tag`/env `TAG`
-    default `""` (doc `version`); `-r`/`--registry`/env `REGISTRY` default
-    `oci.solidite.fr` (doc `Registry`); `-n`/`--name`/env `IMAGE_NAME` required, no default
-    (doc rendered `Build type` — the copy-paste from `-b` is frozen, see Tasks);
-    `-u`/`--username`/env `USERNAME` default `""` (doc `Username`); `-p`/`--password`/env
-    `PASSWORD` default `""` (doc `Password`); `-s`/`--script-dir`/env `SCRIPT_DIRECTORY`
-    default `./agent/scripts` (doc `Agent script directory`, @PathBuf); `-k`/`--signing-key`/
-    env `SIGNING_KEY` default `""` (doc `Path to Cosign signing key (PEM). If empty, signing
-    is skipped.`, @String). Value names equal the uppercase env names; precedence flag over
-    env over default. `-o` and `-T` deliberately differ from `./unpack.sdd`'s `-d`/`-t` set.
-  Keep @BuildType's parse names and script text in one vocabulary: clap values `major`,
-    `minor`, `patch`, `beta`, `alpha` with both `#[default]` variant @BuildType::Alpha and
-    `default_value = "alpha"`; the serde `rename_all = "snake_case"` derive renders the
-    selected kind into the handoff JSON as those same lowercase words, which the script
-    `switch args.build` matches verbatim.
-  Hand off through @serde_json::to_value(args) mapped by @map_err to
-    @Error::SerializationError: a @serde_json::Value injected via Deref'd core @set_dynamic
-    under scope name `args`; the JSON keys are the Rust field names `source`, `temp`, `build`,
+  Geler exactement la surface clap à dix options : `-o`/`--source`/env `SOURCE` par défaut `/src`
+    (doc `Source directory`, @PathBuf) ; `-t`/`--temporary`/env `TEMPORARY` par défaut
+    `/tmp/package` (doc `Temporary directory`, @PathBuf) ; `-b`/`--build-type`/env
+    `BUILD_TYPE` @BuildType par défaut `alpha` (doc `Build type`) ; `-T`/`--tag`/env `TAG`
+    par défaut `""` (doc `version`) ; `-r`/`--registry`/env `REGISTRY` par défaut
+    `oci.solidite.fr` (doc `Registry`) ; `-n`/`--name`/env `IMAGE_NAME` requis, sans défaut
+    (doc rendu `Build type` — le copier-collé depuis `-b` est gelé, voir Tasks) ;
+    `-u`/`--username`/env `USERNAME` par défaut `""` (doc `Username`) ; `-p`/`--password`/env
+    `PASSWORD` par défaut `""` (doc `Password`) ; `-s`/`--script-dir`/env `SCRIPT_DIRECTORY`
+    par défaut `./agent/scripts` (doc `Agent script directory`, @PathBuf) ; `-k`/`--signing-key`/
+    env `SIGNING_KEY` par défaut `""` (doc `Path to Cosign signing key (PEM). If empty, signing
+    is skipped.`, @String). Les value names égalent les noms d'env en majuscules ; précédence
+    flag sur env sur défaut. `-o` et `-T` diffèrent délibérément du jeu `-d`/`-t` de
+    ./unpack.sdd.
+  Garder les noms d'analyse de @BuildType et le texte du script dans un seul vocabulaire : valeurs
+    clap `major`, `minor`, `patch`, `beta`, `alpha` avec à la fois la variante @BuildType::Alpha
+    `#[default]` et `default_value = "alpha"` ; le derive serde `rename_all = "snake_case"` rend
+    le type sélectionné dans le JSON d'handoff sous ces mêmes mots en minuscules, que le script
+    `switch args.build` apparie mot pour mot.
+  Assurer l'handoff via @serde_json::to_value(args) mappé par @map_err vers
+    @Error::SerializationError : une @serde_json::Value injectée via le @set_dynamic du core
+    déréférencé sous le nom de scope `args` ; les clés JSON sont les noms de champs Rust `source`, `temp`, `build`,
     `tag`, `registry`, `repository`, `username`, `password`, `script_dir`, `signing_key`,
-    paths serialized as strings.
-  Build the engine as @common::rhaihandler::Script::new — the live-cluster constructor — over
-    resolver dirs in this order: `{source}/scripts`, `{script_dir}/packages`,
-    `{script_dir}/lib`, each produced by string concatenation on lossy path text
-    (@PathBuf::to_string_lossy / @Display), not @Path::join.
-  Evaluate exactly the frozen snippet `import("build") as build;\nbuild::run(args);` and
-    drop the returned @rhai::Dynamic, propagate only the @Err; success is silent
-    from the Rust side — the only success output of the whole leaf is the script's own
-    `print` of `<repository> version <version> uploaded` to stdout.
-  Keep this file free of any Rust-side work: no @std::fs, no @common::ocihandler, no
-    @common::context::init_k8s, no existence or emptiness check on source, temp, registry or
-    repository — every path is created, read and validated lane-deep. The leaf runs fully
-    synchronously inside ./mod.sdd's match arm with no await.
-  Freeze the lane the snippet drives: stage `{source}` into `{temp}` (package.yaml validated
-    via pck module then Rust @read_package_yaml/@validate_options; type-gated directory
-    copies), then push unconditionally — there is no push-off or dry-run flag — through core
-    @Registry::push_image as `{registry}/{repository}:{version}` with `@Reference::with_tag`
-    tag-selected addressing; `{version}` is `--tag` verbatim when non-empty (no bump), else
-    the newest `--build-type`-flavoured bump of the highest registry semver, else a bump off
-    the seed `0.1.0`.
-  Freeze the image-config split: this lane sets only manifest annotations
-    `fr.solidite.vynil.metadata` and `fr.solidite.vynil.requirements` always, plus
-    `fr.solidite.vynil.options`, `fr.solidite.vynil.recommandations` and
-    `fr.solidite.vynil.value_script` when present and non-empty; `created`, the single gzip
-    layer of the whole `{temp}` content, `rootfs.diff_ids`, `os linux`, architecture `None`,
-    working dir `/` and the history entry `created_by: "vynil"` / `comment: "vynil.build"`
-    are stamped inside core `vynil-core` `0.7.7` @Registry::push_image, not here or in the
+    les chemins sérialisés comme chaînes.
+  Construire le moteur comme @common::rhaihandler::Script::new — le constructeur live-cluster — sur
+    des répertoires de résolution dans cet ordre : `{source}/scripts`, `{script_dir}/packages`,
+    `{script_dir}/lib`, chacun produit par concaténation de chaînes sur du texte de chemin lossy
+    (@PathBuf::to_string_lossy / @Display), pas @Path::join.
+  Évaluer exactement le snippet gelé `import("build") as build;\nbuild::run(args);` et
+    jeter le @rhai::Dynamic retourné, ne propager que l'@Err ; le succès est silencieux
+    du côté Rust — la seule sortie de succès de toute la feuille est le propre
+    `print` du script `<repository> version <version> uploaded` sur stdout.
+  Garder ce fichier exempt de tout traitement côté Rust : pas de @std::fs, pas de @common::ocihandler, pas
+    de @common::context::init_k8s, pas de vérification d'existence ou de vacuité de source, temp, registry ni
+    repository — chaque chemin est créé, lu et validé au fond de la lane. La feuille s'exécute
+    entièrement en synchrone dans le match arm de ./mod.sdd sans await.
+  Geler la lane que le snippet pilote : staging de `{source}` dans `{temp}` (package.yaml validé
+    via le module pck puis Rust @read_package_yaml/@validate_options ; copies de répertoires
+    conditionnées par le type), puis poussée inconditionnelle — il n'y a pas de flag de poussée
+    coupée ni de dry-run — via le core @Registry::push_image sous `{registry}/{repository}:{version}`
+    avec adressage par tag `@Reference::with_tag` ; `{version}` est `--tag` littéral quand non vide
+    (pas d'incrément), sinon l'incrément `--build-type` le plus récent du plus haut semver du registry,
+    sinon un incrément à partir de la graine `0.1.0`.
+  Geler la répartition de la config d'image : cette lane ne pose que les annotations de manifest
+    `fr.solidite.vynil.metadata` et `fr.solidite.vynil.requirements` toujours, plus
+    `fr.solidite.vynil.options`, `fr.solidite.vynil.recommandations` et
+    `fr.solidite.vynil.value_script` quand présentes et non vides ; `created`, la couche gzip
+    unique de tout le contenu de `{temp}`, `rootfs.diff_ids`, `os linux`, l'architecture `None`,
+    le répertoire de travail `/` et l'entrée d'historique `created_by: "vynil"` / `comment: "vynil.build"`
+    sont horodatés dans le `vynil-core` `0.7.7` @Registry::push_image du core, pas ici ni dans le
     script.
-  Keep the auth lane flag-only: `new_registry(registry, username, password)` — either half
-    empty yields @RegistryAuth::Anonymous, the rule frozen in ./unpack.sdd; there is no
-    `.dockerconfigjson`/pull-secret lane on this side.
-  Use the digest @Registry::push_image returns (the `sha256:` tail of the manifest URL) only
-    for signing: when @signing_key is non-empty, core shells `cosign sign --yes --key <key>
-    {registry}/{repository}:{version}@{digest}`; a non-zero cosign exit raises the rhai error
-    embedding `cosign sign failed for {registry}/{repository}:{version}@{digest}`; the
-    `""` default skips signing (script guard, plus core's own empty-key @Ok). The digest is
-    never printed, only the uploaded line is.
+  Garder la lane d'authentification limitée aux flags : `new_registry(registry, username, password)` —
+    la moitié vide, l'une ou l'autre, donne @RegistryAuth::Anonymous, la règle gelée dans ./unpack.sdd ;
+    il n'y a pas de lane `.dockerconfigjson`/pull-secret de ce côté.
+  Utiliser le digest que @Registry::push_image retourne (la fin `sha256:` de l'URL de manifest)
+    uniquement pour la signature : quand @signing_key est non vide, le core lance `cosign sign --yes --key <key>
+    {registry}/{repository}:{version}@{digest}` ; un code cosign non nul lève l'erreur rhai
+    embarquant `cosign sign failed for {registry}/{repository}:{version}@{digest}` ; le défaut
+    `""` saute la signature (garde du script, plus le propre @Ok du core à clé vide). Le digest
+    n'est jamais affiché, seule la ligne d'envoi l'est.
 
 Must not:
-  Validate or preflight anything in Rust (paths, registry host, repository syntax, tag text) —
-    every input reaches the script unfiltered; `--tag` text is judged only by script-side
-    @semver_from at version-resolution time.
-  Reach the cluster or a mock engine: the constructor is @Script::new with real OCI
-    registrations, never @Script::new_mock as /agent/tests/rhai_build.rs uses.
+  Valider ou faire du préflight quoi que ce soit côté Rust (chemins, hôte de registry, syntaxe de
+    repository, texte de tag) — chaque entrée parvient au script sans filtre ; le texte de `--tag`
+    n'est jugé que par le @semver_from côté script au moment de la résolution de version.
+  Atteindre le cluster ou un moteur mock : le constructeur est @Script::new avec de vraies
+    enregistrements OCI, jamais @Script::new_mock comme l'utilise /agent/tests/rhai_build.rs.
 
 Depends on:
-  @common::rhaihandler::Script — @Script::new / @Script::eval / Deref'd @set_dynamic
-    (/common/src/rhaihandler.sdd); the base engine's fs, semver, log and OCI helpers the
-    script lane runs on.
+  @common::rhaihandler::Script — @Script::new / @Script::eval / @set_dynamic déréférencé
+    (/common/src/rhaihandler.sdd) ; les aides fs, semver, log et OCI du moteur de base sur
+    lesquelles la lane du script s'appuie.
   @common::Error, @common::Result — /common/src/lib.sdd.
-  @clap::Args and @clap::ValueEnum derives; @serde/@serde_json `Serialize` for the handoff.
-  /agent/scripts/packages/build.rhai (via resolver dirs, not a Rust dependency) — the
-    `build` module: staging, version resolution, push, sign, print.
-  `vynil-core` `0.7.7` `@vynil_core::oci::Registry` — @push_image (manifest annotations,
-    gzip layer, `Utc::now()` stamps, digest return), @sign_image (cosign subprocess),
-    @rhai_list_tags (page of `100` tags max).
-  ./mod.sdd — the only caller of @run.
+  Les derives @clap::Args et @clap::ValueEnum ; @serde/@serde_json `Serialize` pour l'handoff.
+  /agent/scripts/packages/build.rhai (via les répertoires de résolution, pas une dépendance Rust) — le
+    module `build` : staging, résolution de version, poussée, signature, affichage.
+  `vynil-core` `0.7.7` `@vynil_core::oci::Registry` — @push_image (annotations de manifest,
+    couche gzip, horodatages `Utc::now()`, retour du digest), @sign_image (sous-processus cosign),
+    @rhai_list_tags (page de `100` tags au max).
+  ./mod.sdd — le seul appelant de @run.
 
 Exposes:
   @BuildType — @pub enum, derives @clap::ValueEnum/@Clone/@Debug/@Serialize/@Deserialize/
-    @Default; variants @BuildType::Major/@Minor/@Patch/@Beta (docs `Major new version`,
-    `Minor new version`, `Patch new version`, `Beta new version`) and @BuildType::Alpha
+    @Default ; variantes @BuildType::Major/@Minor/@Patch/@Beta (docs `Major new version`,
+    `Minor new version`, `Patch new version`, `Beta new version`) et @BuildType::Alpha
     (`#[default]`, doc `Alpha new version`).
-  @Parameters — @pub struct, `#[derive(@clap::Args, @Debug, @Serialize, @Deserialize)]`, all
-    ten fields private (@source, @temp, @build, @tag, @registry, @repository, @username,
-    @password, @script_dir, @signing_key) — externally reachable only through the CLI surface
-    and @Commands::Build; @repository carries the `--name`/env `IMAGE_NAME` flag.
-  @run — `pub fn @run(args: &@Parameters) -> @common::Result<@()>`; synchronous, awaited by
-    nobody; its success value is @Ok(()) with the script's print already emitted.
+  @Parameters — @pub struct, `#[derive(@clap::Args, @Debug, @Serialize, @Deserialize)]`, aux dix
+    champs privés (@source, @temp, @build, @tag, @registry, @repository, @username,
+    @password, @script_dir, @signing_key) — atteignables en externe seulement via la surface CLI
+    et @Commands::Build ; @repository porte le flag `--name`/env `IMAGE_NAME`.
+  @run — `pub fn @run(args: &@Parameters) -> @common::Result<@()>` ; synchrone, attendu par
+    personne ; sa valeur de succès est @Ok(()) avec l'affichage du script déjà émis.
 
 Accepts:
-  A clap-parsed @Parameters by reference; env fallbacks for all ten options, including the
-    generic shell names `SOURCE`/`TAG`/`USERNAME`/`PASSWORD`.
-  No syntax check on registry, repository, tag or paths before handoff; non-UTF-8 path text
-    reaches resolver strings and the handoff JSON as lossy strings (lossy Display/serde
-    render), not an error.
-  @signing_key as a filesystem PEM path; a non-empty value of any content arms the cosign leg.
+  Un @Parameters parsé par clap, par référence ; recours à l'environnement pour les dix options,
+    y compris les noms de shell génériques `SOURCE`/`TAG`/`USERNAME`/`PASSWORD`.
+  Aucun contrôle de syntaxe sur registry, repository, tag ou chemins avant l'handoff ; un texte de
+    chemin non UTF-8 parvient aux chaînes de résolution et au JSON d'handoff comme chaînes lossy
+    (rendu Display/serde lossy), pas comme une erreur.
+  @signing_key comme un chemin PEM sur le système de fichiers ; une valeur non vide, quel qu'en
+    soit le contenu, arme la jambe cosign.
 
 Returns:
-  @Ok(()) once the script's `run` finished — push and (optional) sign already done, upload
-    line printed; the script's return value itself is discarded here.
+  @Ok(()) une fois le `run` du script terminé — poussée et signature (éventuelle) déjà faites, ligne
+    d'envoi imprimée ; la valeur de retour du script elle-même est jetée ici.
 
 Raises:
-  @Error::SerializationError — @serde_json::to_value failure; effectively unreachable for
-    these all-string field types, yet wired with display `SerializationError: {0}`.
-  @Error::Core over core @Error::RhaiError — every script-side parse, module-not-found,
-    `throw` or registered-function failure, display `Rhai script error: <rhai text>`; the
-    script-lane stdio/OCI/cosign failures reach here re-embedded as rhai error text
+  @Error::SerializationError — échec de @serde_json::to_value ; en pratique inatteignable pour
+    ces types de champs tous chaînes, mais câblé avec l'affichage `SerializationError: {0}`.
+  @Error::Core sur l'@Error::RhaiError du core — chaque échec d'analyse côté script, module introuvable,
+    `throw` ou fonction enregistrée en échec, affichage `Rhai script error: <rhai text>` ; les
+    échecs stdio/OCI/cosign de la lane script y parviennent ré-embarqués comme texte d'erreur rhai
     (@rhai_err flattening, /common/src/lib.sdd).
-  Exit lane at ./mod.sdd: `Packing directory failed with: <display>` then
+  Lane de sortie dans ./mod.sdd : `Packing directory failed with: <display>` puis
     @std::process::exit(1).
-  Panic, never @Err — the sync-over-async bridge inside core push/list calls (Tasks).
+  Panic, jamais @Err — le pont sync-over-async dans les appels push/list du core (Tasks).
 
 Handles:
-  `--tag ""` (default) selects the auto-version lane; a set `--tag` bypasses registry listing
-    and any bump entirely.
-  Auto-lane listing failure (unreachable registry, unknown repository, transport): the script
-    catches, `log_warn`s the error text, and still pushes a bump of the seed `0.1.0` — a
-    listing outage looks like a first publish.
-  Registry tag hygiene in the listing path: empty tags and tags not starting with `v` or a
-    digit are rejected silently; digit/`v` tags failing @semver_from are rejected with the
-    warning `skipping non-semver tag {tag}` (kills `sha256-*.sig` cosign and `trivy-*` noise);
-    only the first page of `100` tags is considered for the max.
-  One-sided credentials — either @username or @password empty — push anonymously and let the
-    registry's auth rejection surface as an @Error::Core OCI text.
-  Re-runs against a warm `{temp}`: core @create_dir is @create_dir_all (idempotent), copies
-    merge with same-name overwrite (@std::fs::copy), and nothing purges paths a previous
-    stage put there but the current source no longer has — stale files ship in the image.
-  `{source}/scripts` precedence — a source directory carrying its own `build.rhai` overrides
-    the shipped build module (and any of its imports) for that one run.
+  `--tag ""` (défaut) sélectionne la lane d'auto-version ; un `--tag` posé court-circuite le
+    listing registry et tout incrément, complètement.
+  Échec de listing de l'auto-lane (registry injoignable, repository inconnu, transport) : le script
+    rattrape, `log_warn` le texte de l'erreur, et pousse quand même un incrément de la graine
+    `0.1.0` — une panne de listing ressemble à une première publication.
+  Hygiène des tags du registry dans le chemin de listing : les tags vides et ceux ne commençant pas
+    par `v` ou un chiffre sont rejetés silencieusement ; les tags chiffre/`v` en échec de @semver_from
+    sont rejetés avec l'avertissement `skipping non-semver tag {tag}` (tue le bruit cosign
+    `sha256-*.sig` et `trivy-*`) ; seule la première page de `100` tags est considérée pour le maximum.
+  Credentials unilatéraux — @username ou @password vide — poussent anonymement et laissent le rejet
+    d'authentification du registry remonter comme un texte OCI @Error::Core.
+  Relances contre un `{temp}` chaud : le core @create_dir est @create_dir_all (idempotent), les
+    copies fusionnent avec écrasement de même nom (@std::fs::copy), et rien ne purge les chemins qu'un
+    staging précédent y a mis mais que la source courante n'a plus — les fichiers périmés partent dans
+    l'image.
+  La précédence `{source}/scripts` — un répertoire source portant son propre `build.rhai` écrase
+    le module build livré (et l'une quelconque de ses imports) pour cette seule exécution.
 
 Tasks:
-  [ ] Cover @run/@Parameters end to end: build.rs has no `#[cfg(test)]` module and no
-      integration test drives `agent package build`; /agent/tests/rhai_build.rs maps only the
-      mock-engine lane (`security_filter` × 6, mock `push_image` digest return, sign
-      branch × 2 — map those to the scenario bullets below), never through this @run.
-  [ ] Fix the frozen help inversion: `-n`/`--name` renders doc `Build type` (copied from
-      `-b`); correct it once reviewed.
-  [?] The real push/list cores call @block_in_place + @tokio::runtime::Handle::block_on.
-      FACT VERIFIED: ./../main.rs uses a bare @tokio::main and the workspace @tokio carries
-      `rt-multi-thread`, so the runtime is MULTI-thread and @block_in_place does NOT panic
-      here (it parks one worker for the push). The panic risk that
-      /common/src/vynilpackage.sdd `[?]` flags applies only if a future host runs this on a
-      current_thread runtime. Still decide once across build/unpack/common whether the
-      sync-over-async bridge is the right shape, and confirm the real (non-mock) push lane
-      is exercised anywhere.
-  [?] The core push stamps @Utc::now() into config `created` and history, so rebuilding
-      identical content yields a new digest every run; is content-addressed digest
-      determinism a goal for package images or is tag stability enough?
-  [?] Auto-lane downgrade: a listing failure (network, 100-tag page cap hiding the real max,
-      typo-ed registry) still pushes a low bumped version onto the repository, where it can
-      later collide with or overwrite release numbering. Decide whether a listing failure
-      must fail the build.
-  [?] The `{source}/scripts` override is an undocumented shadowing surface: any package
-      source can replace the whole build lane. Decide whether it is an intended extension
-      point or should be locked to the bundled module.
-  [?] @Parameters and @BuildType carry @Deserialize, and @BuildType carries @Clone, that no
-      workspace code uses — args arrive from clap and leave via @Serialize only. Decide
-      whether to remove the dead derives or record their intended consumer.
+  [ ] Couvrir @run/@Parameters de bout en bout : build.rs n'a pas de module `#[cfg(test)]` et
+      aucun test d'intégration ne pilote `agent package build` ;
+      /agent/tests/rhai_build.rs ne cartographie que la lane à moteur mock (`security_filter` × 6,
+      retour de digest `push_image` mock, branche de signature × 2 — les mapper aux puces de
+      scenario ci-dessous), jamais via ce @run.
+  [ ] Corriger l'inversion gelée de l'aide : `-n`/`--name` rend la doc `Build type` (copiée de
+      `-b`) ; la corriger une fois relue.
+  [?] Les cores push/list réels appellent @block_in_place + @tokio::runtime::Handle::block_on.
+      FACT VERIFIED : ./../main.rs utilise un @tokio::main nu et le @tokio du workspace porte
+      `rt-multi-thread`, donc le runtime est MULTI-thread et @block_in_place ne panique PAS
+      ici (il gare un worker pour la poussée). Le risque de panique que
+      /common/src/vynilpackage.sdd signale dans son `[?]` ne s'applique que si un hôte futur
+      exécute ceci sur un runtime current_thread. Trancher quand même une fois pour toutes entre
+      build/unpack/common si le pont sync-over-async est la bonne forme, et confirmer que la lane
+      de poussée réelle (non-mock) est exercée quelque part.
+  [?] Le core push horodate @Utc::now() dans `created` de la config et l'historique, donc
+      reconstruire un contenu identique produit un nouveau digest à chaque exécution ; le
+      déterminisme du digest adressé par contenu est-il un objectif pour les images de paquets
+      ou la stabilité des tags suffit-elle ?
+  [?] Dégradation de l'auto-lane : un échec de listing (réseau, plafond de page de 100 tags
+      masquant le vrai max, registry mal orthographié) pousse quand même une version incrémentée
+      basse sur le repository, où elle peut plus tard entrer en collision avec la numérotation de
+      release ou l'écraser. Décider si un échec de listing doit faire échouer la construction.
+  [?] L'écrasement `{source}/scripts` est une surface d'occultation non documentée : n'importe
+      quelle source de paquet peut remplacer toute la lane de build. Décider si c'est un point
+      d'extension voulu ou s'il faut le verrouiller sur le module fourni.
+  [?] @Parameters et @BuildType portent @Deserialize, et @BuildType porte @Clone, qu'aucun code
+      du workspace n'utilise — les args viennent de clap et repartent via @Serialize seulement.
+      Décider s'il faut retirer les derives mortes ou consigner leur consommateur prévu.
 
 Done when:
-  Every scenario below carries a mapped passing test, the `[?]` decisions above are recorded,
-    and `cargo test -p agent` with clippy and `cargo +nightly fmt --check` stay green.
+  Chaque scenario ci-dessous porte un test réussissant mappé, les décisions `[?]` ci-dessus sont
+    consignées, et `cargo test -p agent` avec clippy et `cargo +nightly fmt --check` restent verts.
 
 Scenario: defaults plus required name push the literal tag anonymously
-  Given `-n my-app -T 1.2.3` over a valid package source, everything else defaulted
-  When @run runs
-  Then the push reference is `oci.solidite.fr/my-app:1.2.3` with @RegistryAuth::Anonymous
-    (both credential defaults empty) and manifest annotations `fr.solidite.vynil.metadata`
-    and `fr.solidite.vynil.requirements`
-  And stdout shows `my-app version 1.2.3 uploaded` and the leaf exits 0
-  No mapped test exists.
+  Given `-n my-app -T 1.2.3` sur une source de paquet valide, tout le reste par défaut
+  When @run s'exécute
+  Then la référence de poussée est `oci.solidite.fr/my-app:1.2.3` avec @RegistryAuth::Anonymous
+    (les deux défauts de credentials vides) et les annotations de manifest
+    `fr.solidite.vynil.metadata` et `fr.solidite.vynil.requirements`
+  And stdout affiche `my-app version 1.2.3 uploaded` et la feuille sort en 0
+  Aucun test mappé n'existe.
 
 Scenario: auto version bumps the highest listed semver
-  Given `--tag ""`, `-b minor`, and a registry listing for the repository whose highest
-    semver tag is `2.0.0`
-  When @run runs
-  Then the pushed and printed version is the minor bump `2.1.0` and no bump is applied to a
-    literal `--tag` in the sibling case
-  No mapped test exists.
+  Given `--tag ""`, `-b minor`, et un listing registry pour le repository dont le tag
+    semver le plus élevé est `2.0.0`
+  When @run s'exécute
+  Then la version poussée et imprimée est l'incrément minor `2.1.0` et aucun incrément n'est
+    appliqué à un `--tag` littéral dans le cas frère
+  Aucun test mappé n'existe.
 
 Scenario: listing outage still publishes a seed-based version
-  Given `--tag ""` and an unreachable registry or unknown repository
-  When @run runs
-  Then the auto lane `log_warn`s the failure text and pushes a `--build-type` bump off
-    `0.1.0` anyway — no @Err, exit 0
-  No mapped test exists; downgrade decision `[?]` in Tasks.
+  Given `--tag ""` et un registry injoignable ou un repository inconnu
+  When @run s'exécute
+  Then l'auto-lane `log_warn` le texte de l'échec et pousse quand même un incrément
+    `--build-type` sur `0.1.0` — pas d'@Err, sortie 0
+  Aucun test mappé n'existe ; décision de dégradation `[?]` dans Tasks.
 
 Scenario: invalid literal tag fails after staging and before any push
-  Given a valid source and `-T not-a-version`
-  When @run runs
-  Then `{temp}/package.yaml` and the staged directories already exist when the script-side
-    @semver_from @throw aborts the version lane, nothing is pushed
-  And ./mod.sdd logs `Packing directory failed with: Rhai script error: …` and exits 1
-  No mapped test exists.
+  Given une source valide et `-T not-a-version`
+  When @run s'exécute
+  Then `{temp}/package.yaml` et les répertoires stagés existent déjà quand le @semver_from
+    avec @throw côté script avorte la lane de version, rien n'est poussé
+  And ./mod.sdd journalise `Packing directory failed with: Rhai script error: …` et sort en 1
+  Aucun test mappé n'existe.
 
 Scenario: missing package.yaml exits 1 with the script throw text
-  Given `--source` a directory without `package.yaml`
-  When @run runs
-  Then `create_dir({temp})` still happens first, then the script throws the text
-    `{source}/package.yaml doesnt exist` (sic, ` doesnt exist`) as @Err @Error::Core
-  And the exit-1 lane prints `Packing directory failed with: Rhai script error:
+  Given `--source` un répertoire sans `package.yaml`
+  When @run s'exécute
+  Then `create_dir({temp})` a toujours lieu d'abord, puis le script lance le texte
+    `{source}/package.yaml doesnt exist` (sic, ` doesnt exist`) comme @Err @Error::Core
+  And la lane de sortie 1 imprime `Packing directory failed with: Rhai script error:
     {source}/package.yaml doesnt exist`
-  No mapped test exists.
+  Aucun test mappé n'existe.
 
 Scenario: signing runs only on a non-empty key and can fail the leaf
-  Given a successful push with `@signing_key` `""` — no cosign process at all
-  But Given `@signing_key /keys/cosign.key` — core runs
+  Given une poussée réussie avec `@signing_key` `""` — aucun processus cosign du tout
+  But Given `@signing_key /keys/cosign.key` — le core exécute
     `cosign sign --yes --key /keys/cosign.key {registry}/{repository}:{version}@{digest}`
-  And a non-zero cosign exit yields the error text embedding
+  And un code cosign non nul donne le texte d'erreur embarquant
     `cosign sign failed for {registry}/{repository}:{version}@{digest}` → exit 1
-  Maps mock-lane tests @build_sign_image_skipped_when_no_key,
-    @build_sign_image_called_when_key_provided (mock digest lane only, never cosign itself).
+  Mappe les tests de lane mock @build_sign_image_skipped_when_no_key,
+    @build_sign_image_called_when_key_provided (lane de digest mock seulement, jamais cosign lui-même).
 
 Scenario: cosign and trivy tag noise never seeds a version
-  Given registry tags `sha256-deadbeef.sig`, `trivy--apps-auth`, `latest`, `1.2.3`, `v2.0.0`,
-    `""` during the auto lane
-  When the script filter runs
-  Then the first three and the empty tag are dropped with no @Error-level log (a filterable
-    non-semver like `2.x` warns `skipping non-semver tag {tag}`), and the max is taken from
-    the semver remainder
-  Maps tests @build_security_filter_cosign_tag_no_error_log,
+  Given les tags registry `sha256-deadbeef.sig`, `trivy--apps-auth`, `latest`, `1.2.3`,
+    `v2.0.0`, `""` pendant l'auto-lane
+  When le filtre du script s'exécute
+  Then les trois premiers et le tag vide sont écartés sans log de niveau @Error (un non-semver
+    filtrable comme `2.x` avertit `skipping non-semver tag {tag}`), et le max est pris sur le
+    reliquat semver
+  Mappe les tests @build_security_filter_cosign_tag_no_error_log,
     @build_security_filter_trivy_tag_no_error_log, @build_security_filter_latest_tag_no_error_log,
     @build_security_filter_semver_tag_accepted, @build_security_filter_v_prefixed_semver_accepted,
-    @build_security_filter_empty_string_rejected (script lane, mock engine).
+    @build_security_filter_empty_string_rejected (lane script, moteur mock).
 
 Scenario: warm temp merges, stale files ship
-  Given a second consecutive build against the same `{temp}` whose source lost a formerly
-    staged `files/old.hbs`
-  When staging and push run
-  Then same-name staged paths are overwritten, `{temp}/files/old.hbs` from the previous run
-    survives and lands in the pushed layer — no purge or emptiness check exists on that path
-  No mapped test exists.
+  Given une deuxième construction consécutive contre le même `{temp}` dont la source a perdu un
+    `files/old.hbs` jadis stagé
+  When staging et poussée s'exécutent
+  Then les chemins stagés de même nom sont écrasés, `{temp}/files/old.hbs` de l'exécution
+    précédente survit et se retrouve dans la couche poussée — aucune purge ni contrôle de vacuité
+    n'existe sur ce chemin
+  Aucun test mappé n'existe.
 
 Example:
-  defaults: push anonymous to `oci.solidite.fr/<repository>:<auto version>` from staged
-    `/tmp/package` with resolvers `<source>/scripts`, `./agent/scripts/packages`,
+  defaults : poussée anonyme vers `oci.solidite.fr/<repository>:<version auto>` depuis le
+    `/tmp/package` stagé, avec les résolveurs `<source>/scripts`, `./agent/scripts/packages`,
     `./agent/scripts/lib`
-  handoff JSON: `{"source":"/src","temp":"/tmp/package","build":"alpha","tag":"",
+  JSON d'handoff : `{"source":"/src","temp":"/tmp/package","build":"alpha","tag":"",
     "registry":"oci.solidite.fr","repository":"<name>","username":"","password":"",
-    "script_dir":"./agent/scripts","signing_key":""}` bound as `args`
-  optional annotations added only when present: `fr.solidite.vynil.options`,
+    "script_dir":"./agent/scripts","signing_key":""}` lié comme `args`
+  annotations optionnelles ajoutées seulement si présentes : `fr.solidite.vynil.options`,
     `fr.solidite.vynil.recommandations`, `fr.solidite.vynil.value_script`

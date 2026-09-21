@@ -1,253 +1,271 @@
-# File spec for ./lint.rs. The dispatcher and the exit-1 trap belong to ./mod.sdd.
-# Every lint RULE outside this file lives under ./../linting/ whose specs are pending —
-# it is named as collaborator here, never restated.
+# Spec de fichier pour ./lint.rs. Le dispatcher et le piège exit 1 appartiennent à ./mod.sdd.
+# Toute lint RULE hors de ce fichier vit sous ./../linting/ dont les specs sont pending —
+# elle est nommée ici comme collaboratrice, jamais re-décrite.
 
 Spec: PackageLint
 
 Platform: Rust
 
 Purpose:
-  The `agent package lint` leaf — the static, offline package linter driver: parse the CLI
-    flags, gate `package.yaml` (missing/parse/unfilled-field cases short-circuit), apply the
-    structure and manifest rules this file owns (unexpected directory, required fields,
-    OpenAPI option schemas, pre-release versions with text-scanned line attribution), then
-    orchestrate the delegated Handlebars and Rhai checkers over the whole package tree and
-    the two inline script sites, print the report in `text` or `json` through the shared
-    collector, optionally write a JUnit XML artifact, and turn "any Error-level finding"
-    into one @Err (@common::Error::YamlError) that ./mod.sdd traps as exit 1.
+  La feuille `agent package lint` — le driver du linter de packages statique et hors-ligne :
+    parser les flags CLI, gate `package.yaml` (les cas absent/parse/champ non rempli font
+    court-circuit), appliquer les règles de structure et de manifeste que ce fichier possède
+    (répertoire inattendu, champs requis, schémas d'options OpenAPI, versions pré-release
+    avec attribution de ligne par scan de texte), puis orchestrer les checkeurs Handlebars
+    et Rhai délégués sur tout l'arbre du package et les deux sites de script inline, imprimer
+    le rapport en `text` ou `json` via le collecteur partagé, écrire éventuellement un
+    artefact JUnit XML, et transformer « tout finding de niveau Error » en un seul @Err
+    (@common::Error::YamlError) que ./mod.sdd piège en exit 1.
 
 References:
-  ./mod.sdd — caller and exit lane: any @Err from @run is Display-logged
-    `Linting the package failed with: {e:}` via @tracing::error! then @std::process::exit(1);
-    @Ok falls off the dispatcher and exits 0; this file neither logs nor exits.
+  ./mod.sdd — appelant et voie de sortie : tout @Err de @run est loggé en Display —
+    `Linting the package failed with: {e:}` via @tracing::error! puis
+    @std::process::exit(1) ; @Ok retombe hors du dispatcher et sort 0 ; ce fichier ne logge
+    ni ne sort.
   ./../linting/mod.rs, ./../linting/config.rs, ./../linting/hbs_checker.rs,
-    ./../linting/rhai_checker.rs — every one spec pending: the @LintResultCollector /
-    @LintFinding / @LintLevel model, @LintConfig::load + rule-level resolution and inline
-    disables, and all `hbs/…` and `rhai/…` rules; named here only as call-site contract,
-    their behaviour is owned there.
+    ./../linting/rhai_checker.rs — chacun en spec pending : le modèle
+    @LintResultCollector / @LintFinding / @LintLevel, @LintConfig::load + résolution des
+    niveaux de règle et désactivations inline, et toutes les règles `hbs/…` et `rhai/…` ;
+    nommés ici seulement comme contrat de site d'appel, leur comportement leur appartient
+    là-bas.
   /common/src/vynilpackage.sdd — @read_package_yaml, @VynilPackageSource, @VynilPackageType,
-    @VynilPackageRequirement::Prefly and the @Schema (openapiv3) re-export the option check
-    round-trips against.
-  /common/src/lib.sdd — @common::Error / @common::Result contract; every raise here is
+    @VynilPackageRequirement::Prefly et le ré-export @Schema (openapiv3) contre quoi le
+    round-trip du check d'options s'exécute.
+  /common/src/lib.sdd — contrat @common::Error / @common::Result ; chaque levée ici est
     @Error::YamlError.
-  ./test.sdd — sibling leaf defining the twin @OutputFormat (duplication `[?]` is tracked
-    there).
-  /common/src/tools.sdd — approved calibration reference for style and detail.
-  /docs/cli.md, /docs/tooling/lint.md — user docs for this subcommand; both diverge from the
-    code today (see Tasks).
+  ./test.sdd — feuille voisine définissant le @OutputFormat jumeau (la duplication `[?]` est
+    suivie là-bas).
+  /common/src/tools.sdd — référence de calibration approuvée pour le style et le détail.
+  /docs/cli.md, /docs/tooling/lint.md — docs utilisateur de cette sous-commande ; les deux
+    divergent du code aujourd'hui (voir Tasks).
 
 Depends on:
-  ./../linting/: @LintResultCollector (@new/@add/@extend/@has_errors/@prefix_files/@to_text/
-    @to_json/@to_junit), @LintFinding, @LintLevel (@Info/@Warn/@Error, @Ord = display rank),
-    @LintConfig::load, @find_option_line_numbers, @hbs_checker::HbsChecker,
-    @rhai_checker::RhaiChecker — pending specs.
-  @common::vynilpackage::read_package_yaml and the source model — manifest load.
-  @clap (@Args, @ValueEnum), @serde_json (option round-trip), @std::fs — direct.
-  JUnit XML generation is not here: it lives in @LintResultCollector::to_junit (pending).
+  ./../linting/ : @LintResultCollector (@new/@add/@extend/@has_errors/@prefix_files/@to_text/
+    @to_json/@to_junit), @LintFinding, @LintLevel (@Info/@Warn/@Error, @Ord = rang
+    d'affichage), @LintConfig::load, @find_option_line_numbers, @hbs_checker::HbsChecker,
+    @rhai_checker::RhaiChecker — specs pending.
+  @common::vynilpackage::read_package_yaml et le modèle source — chargement du manifeste.
+  @clap (@Args, @ValueEnum), @serde_json (round-trip d'options), @std::fs — directs.
+  La génération de JUnit XML n'est pas ici : elle vit dans
+    @LintResultCollector::to_junit (pending).
 
 Exposes:
-  @Parameters — `#[derive(@clap::Args, @Debug)]`, all fields @pub (unlike ./test.sdd's); six
-    args frozen verbatim: `-p`/`--package-dir`/env `PACKAGE_DIRECTORY` default `/tmp/package`
-    (@package_dir); `-c`/`--config-dir`/env `CONFIG_DIR` default `.` (@config_dir, help text
-    `Configuration directory` but it only feeds the Rhai import resolver — see Tasks);
-    `-s`/`--script-dir`/env `SCRIPT_DIRECTORY` with matching value name, default
-    `./agent/scripts`, @Option<@std::path::PathBuf> @script_dir — declared @Option yet clap
-    fills the default, so it never reaches @None after a parse; `--format` with
-    `default_value = "text"` and no env; `--level` with `default_value = "all"` and no env;
-    `--junit-output-filename`/env `JUNIT_OUTPUT_FILENAME` optional, its doc help text is
-    `` `JUnit` output file `` — the literal ASCII backticks around JUnit are part of the
-    help string in source. Env binds only when the flag is absent; flag over env over
-    default.
+  @Parameters — `#[derive(@clap::Args, @Debug)]`, tous les champs @pub (contrairement à
+    ./test.sdd) ; six args gelés verbatim : `-p`/`--package-dir`/env `PACKAGE_DIRECTORY` de
+    défaut `/tmp/package` (@package_dir) ; `-c`/`--config-dir`/env `CONFIG_DIR` de défaut `.`
+    (@config_dir, aide texte `Configuration directory` mais il ne nourrit que le résolveur
+    d'imports Rhai — voir Tasks) ; `-s`/`--script-dir`/env `SCRIPT_DIRECTORY` avec value
+    name correspondant, défaut `./agent/scripts`, @Option<@std::path::PathBuf> @script_dir —
+    déclaré @Option et pourtant clap remplit le défaut, il n'atteint donc jamais @None après
+    un parse ; `--format` avec `default_value = "text"` et sans env ; `--level` avec
+    `default_value = "all"` et sans env ; `--junit-output-filename`/env
+    `JUNIT_OUTPUT_FILENAME` optionnel, son aide doc est `` `JUnit` output file `` — les
+    backticks ASCII littéraux autour de JUnit font partie de la chaîne d'aide dans le
+    source. L'env ne se bind que quand le flag est absent ; flag sur env sur défaut.
   @OutputFormat — @pub @clap::ValueEnum @Text/`text`, @Json/`json` (`#[value(name = …)]`,
-    @Clone/@Debug, no @Default — the arg default string arms it); duplicated by ./test.rs's
-    identical enum (pending `[?]` there).
-  @LevelFilter — @pub @clap::ValueEnum @All/`all`, @Warn/`warn`, @Error/`error`; display
-    floor only, @level_filter_to_lint_level maps All→@LintLevel::Info, Warn→@Warn,
-    Error→@Error.
-  @run — `pub fn @run(args: &@Parameters) -> @common::Result<@()>`; synchronous, called by
-    ./mod.sdd's exit-1 arm.
-  All four exist only within the crate: `mod lint;` in ./mod.rs is private.
-  File-private machinery (not surface, frozen below): @expected_dirs, @check_unexpected_dirs,
-    @check_manifest_fields, @check_options, @check_prerelease_versions, @is_prerelease,
-    @find_line_with_key, @find_image_tag_line, @run_hbs_checks, @run_rhai_checks,
-    @scan_hbs_files, @scan_rhai_files, @scan_rhai_files_for_values, @format_output,
-    @level_filter_to_lint_level.
+    @Clone/@Debug, sans @Default — la chaîne de défaut de l'arg l'arme) ; dupliqué par
+    l'enum identique de ./test.rs (pending `[?]` là-bas).
+  @LevelFilter — @pub @clap::ValueEnum @All/`all`, @Warn/`warn`, @Error/`error` ; plancher
+    d'affichage seulement, @level_filter_to_lint_level mappe All→@LintLevel::Info,
+    Warn→@Warn, Error→@Error.
+  @run — `pub fn @run(args: &@Parameters) -> @common::Result<@()>` ; synchrone, appelé par
+    la branche exit-1 de ./mod.sdd.
+  Les quatre n'existent que dans le crate : `mod lint;` dans ./mod.rs est privé.
+  Mécanique privée du fichier (non surface, gelée plus bas) : @expected_dirs,
+    @check_unexpected_dirs, @check_manifest_fields, @check_options,
+    @check_prerelease_versions, @is_prerelease, @find_line_with_key, @find_image_tag_line,
+    @run_hbs_checks, @run_rhai_checks, @scan_hbs_files, @scan_rhai_files,
+    @scan_rhai_files_for_values, @format_output, @level_filter_to_lint_level.
 
 Accepts:
-  A clap-parsed @Parameters by reference; no path existence check before the manifest gate —
-    a bogus or missing @package_dir simply fails the gate below.
-  A package directory whose `package.yaml` deserializes as @VynilPackageSource per
-    /common/src/vynilpackage.sdd (unknown and extra files are fine, absent sections fine).
-  An optional `<package_dir>/.vynil-lint.yaml` consumed by @LintConfig::load (pending); a
-    missing/invalid file falls back to defaults there, never an error here.
+  Un @Parameters parsé par clap, par référence ; aucun test d'existence de chemin avant le
+    gate du manifeste — un @package_dir bidon ou manquant échoue simplement au gate plus
+    bas.
+  Un répertoire de package dont `package.yaml` se désérialise en @VynilPackageSource selon
+    /common/src/vynilpackage.sdd (fichiers inconnus et supplémentaires acceptés, sections
+    absentes acceptées).
+  Un `<package_dir>/.vynil-lint.yaml` optionnel consommé par @LintConfig::load (pending) ;
+    fichier manquant/invalide retombe sur ses défauts là-bas, jamais une erreur ici.
 
 Returns:
-  @Ok(()) iff zero findings carry @LintLevel::Error after the full pipeline — Warn/Info-only
-    runs and fully clean runs both land here, and the dispatcher exits 0.
-  @Err @common::Error::YamlError in exactly four lanes (Raises); ./mod.sdd turns each into
-    the exit-1 line.
+  @Ok(()) ssi aucun finding ne porte @LintLevel::Error après le pipeline complet — les runs
+    uniquement Warn/Info et les runs totalement propres arrivent ici, et le dispatcher
+    sort 0.
+  @Err @common::Error::YamlError dans exactement quatre voies (Raises) ; ./mod.sdd convertit
+    chacune en ligne exit-1.
 
 Raises:
-  @Error::YamlError("Missing package manifest") — `package.yaml` absent at @package_dir
-    (the path `exists()` gate, so an existing-but-unreadable file takes the parse lane
-    instead); the `package/missing-manifest` @Error finding is printed before this @Err.
-  @Error::YamlError("Invalid package manifest") — @read_package_yaml failed for any reason
-    (I/O or serde — the distinction survives only inside the printed
-    `Failed to parse package.yaml: {e}` finding text).
-  @Error::YamlError("Failed to write JUnit output: {e}") — @std::fs::write of the JUnit file
-    (missing parent dir first among them), via @map_err.
-  @Error::YamlError("Linting failed with errors") — @LintResultCollector::has_errors after
-    output and junit lanes; the failing findings themselves are in the printed report only.
-  The three non-parse lanes misuse the @YamlError variant for non-YAML failures (Tasks).
-  No panic site exists inside this file: zero @unwrap/@expect/@panic! and no indexing (see
-    Must posture); the JUnit lane crosses into @to_junit, documented pending-side to
-    @panic! only on in-memory-serialization impossibilities.
+  @Error::YamlError("Missing package manifest") — `package.yaml` absent dans @package_dir
+    (le gate `exists()` du chemin, donc un fichier existant-mais-illisible prend la voie
+    parse à la place) ; le finding @Error `package/missing-manifest` est imprimé avant cet
+    @Err.
+  @Error::YamlError("Invalid package manifest") — @read_package_yaml a échoué pour une
+    raison quelconque (I/O ou serde — la distinction ne survit que dans le texte de finding
+    imprimé `Failed to parse package.yaml: {e}`).
+  @Error::YamlError("Failed to write JUnit output: {e}") — @std::fs::write du fichier JUnit
+    (répertoire parent manquant en tête des causes), via @map_err.
+  @Error::YamlError("Linting failed with errors") — @LintResultCollector::has_errors après
+    les voies output et junit ; les findings fautifs eux-mêmes ne sont que dans le rapport
+    imprimé.
+  Les trois voies non-parse abusent de la variante @YamlError pour des échecs non-YAML
+    (Tasks).
+  Aucun site de panic n'existe dans ce fichier : zéro @unwrap/@expect/@panic! et aucun
+    indexage (voir posture Must) ; la voie JUnit traverse vers @to_junit, documenté côté
+    pending comme allant au @panic! seulement sur impossibilités de sérialisation en
+    mémoire.
 
 Handles:
-  @package_dir missing entirely — indistinguishable from an empty one: same
-    `package/missing-manifest` short-circuit.
-  Manifest parses but fields are present-yet-empty (serde requires the keys, so only
-    `name: ""`-style values reach this) — one `Missing required field: {field}` @Error per
-    field, checks continue.
-  Options section absent — @check_options returns after the (already-executed)
-    @find_option_line_numbers file read; no findings.
-  Option line key missing from the @find_option_line_numbers scan — @None line, finding
-    stands without a line number.
-  Directory walks that fail at OS level (@read_dir unreadable, non-UTF-8 file read) —
-    silently skipped by @if-@Ok/@let-@Ok guards; the scan fns therefore always return
-    @Ok(@()) and the `?` propagation in @run_hbs_checks/@run_rhai_checks is dead in practice
-    (Tasks `[?]`).
-  @metadata.usage — @VynilPackageType drives @expected_dirs; the serde default `tenant` type
-    is reached whenever `type:` is omitted upstream.
+  @package_dir totalement absent — indiscernable d'un répertoire vide : même court-circuit
+    `package/missing-manifest`.
+  Manifeste parsé mais champs présents mais vides (serde exige les clés, donc seules des
+    valeurs du genre `name: ""` atteignent ceci) — un @Error `Missing required field:
+    {field}` par champ, les checks continuent.
+  Section options absente — @check_options revient après la lecture du fichier
+    @find_option_line_numbers (déjà exécutée) ; aucun finding.
+  Clé de ligne d'option absente du scan @find_option_line_numbers — @None ligne, le finding
+    tient sans numéro de ligne.
+  Walks de répertoire en échec au niveau OS (@read_dir illisible, lecture de fichier
+    non-UTF-8) — silencieusement passés par les gardes @if-@Ok/@let-@Ok ; les fns de scan
+    retournent donc toujours @Ok(@()) et la propagation `?` dans
+    @run_hbs_checks/@run_rhai_checks est morte en pratique (Tasks `[?]`).
+  @metadata.usage — @VynilPackageType pilote @expected_dirs ; le type par défaut serde
+    `tenant` est atteint dès que `type:` est omis en amont.
 
 Must:
-  # Pipeline order (frozen exactly; each step feeds the one collector)
-  Gate 1: `package.yaml` must @Path::exists at @package_dir; absent → add the
-    `package/missing-manifest` Error finding, @prefix_files, @println! the filtered report,
-    and return the missing-manifest @Err — no other checker runs and the junit lane is never
-    reached on this path.
-  Gate 2: @read_package_yaml @Err → add `package/invalid-manifest` Error with the @serde_yaml
-    detail interpolated into the message, @prefix_files, @println! the report, return the
-    invalid-manifest @Err — same full short-circuit.
-  Then in order: @check_manifest_fields (empty-field scan for `name`, `category`,
-    `description`, `apiVersion`, `kind` → each an @Error `package/invalid-manifest` finding
-    addressed to file `package.yaml`, then dispatch to @check_options and
-    @check_prerelease_versions); @check_unexpected_dirs; @run_hbs_checks (fresh
-    @LintConfig::load a second time, fresh @HbsChecker::new); @run_rhai_checks (fresh
-    @RhaiChecker::new with @package_dir, @config_dir, @script_dir.as_deref(), package,
-    config); @prefix_files(@package_dir); @println! the filtered report; the junit lane;
-    the @has_errors verdict.
-  The first @LintConfig::load result (into `_config`) is dropped unused before the pipeline —
-    dead state, the second load is the one that flows (Tasks `[?]`).
-  # Structure rule
-  @expected_dirs freezes the per-type expected sets: @VynilPackageType::System → `systems`,
-    `crds`, `scripts`, `handlebars`; ::Service → `vitals`, `scalables`, `others`, `befores`,
-    `posts`, `handlebars`, `scripts`, `crds`; ::Tenant → the Service set without `crds`.
-  @check_unexpected_dirs inspects immediate children of @package_dir only: directories whose
-    name does not start with `.`, is not in the expected set, and IS in the ten-name
-    known list `systems`, `crds`, `vitals`, `scalables`, `others`, `befores`, `posts`,
-    `pods`, `handlebars`, `scripts` → @Warn `package/unexpected-dir` per directory.
-    Names outside that list (`tests/`, `notes/`, …) are never flagged; the known list hard
-    includes `pods` which no type expects, so a `pods/` dir warns on every package
-    (Tasks `[?]`).
-  # Option-schema rules (@check_options, findings in @BTreeMap key order)
-  Every @options value must be a JSON object; scalar/array/null → @Error
-    `package/invalid-option-schema` (`got scalar value` wording even for arrays/null) and
-    continue to the next option.
-  Object → serde round-trip @serde_json::to_string then @serde_json::from_str::<@Schema>
-    (the /common/src/vynilpackage.sdd openapiv3 re-export; this file does NOT call
-    @VynilPackageSource::validate_options, it repeats the round-trip locally); rejection →
-    @Error `invalid OpenAPI schema: {e}` and continue; the to_string failure path
-    @unwrap_or_default-s to an empty string that then fails the from_str with an
-    empty-input parse error (Tasks `[?]`).
-  Surviving schema object must carry a type indicator key among `type`, `$ref`, `oneOf`,
-    `anyOf`, `allOf`, else @Error `missing 'type' field` — and this branch does NOT continue:
-    description and object-shape checks still run on it.
-  Missing `description` key → @Info `package/option-missing-description`.
-  `type` == `object` AND a `properties` key present → @Warn
-    `package/object-properties-unsupported` pointing at the flat-default alternative.
-  # Pre-release rule
-  @is_prerelease is a lowercase-substring test: the version is @Warn-worthy iff its
-    lowercased text contains `alpha`, `beta` or `rc` anywhere (Tasks `[?]` for the
-    false-positive/false-negative edges).
-  @check_prerelease_versions warns `package/prerelease-version` on @metadata.app_version when
-    set-and-marked, and once per @images entry whose @Image.tag is set-and-marked, iterating
-    the @BTreeMap in key order.
-  # Line attribution (best-effort, @None tolerated, each call re-reads the manifest text)
-  @find_line_with_key returns the first 1-based line whose left-trimmed text starts with
-    `{key}:` (so an indented nested key can match) or @None.
-  @find_image_tag_line runs a miniature indented-YAML scan: find the `images:` line, then the
-    first entry line starting `{name}:` deeper than it, then the first deeper `tag:` line →
-    its 1-based line, skipping blank and `#` lines, @None when the shape deviates
-    (quoted keys, flow maps, multi-document).
-  Option lines come from the delegated @find_option_line_numbers scan (pending).
-  # Walk scope (all three scans, recursive)
-  @run_hbs_checks does two full passes over the immediate subdirectories of @package_dir
-    (every directory, hidden ones included): pass 1 @scan_hbs_files reads each `hbs`-extension
-    file (extension match case-sensitive via @Path::extension) and feeds
-    @HbsChecker::check_file with the @strip_prefix-relative path; pass 2
-    @scan_rhai_files_for_values feeds every `rhai` source's text to
+  # Ordre du pipeline (gelé exactement ; chaque étape alimente l'unique collecteur)
+  Gate 1 : `package.yaml` doit @Path::exists dans @package_dir ; absent → ajouter le finding
+    Error `package/missing-manifest`, @prefix_files, @println! le rapport filtré, et
+    retourner l'@Err missing-manifest — aucun autre checker ne tourne et la voie junit n'est
+    jamais atteinte sur ce chemin.
+  Gate 2 : @read_package_yaml @Err → ajouter le finding Error
+    `package/invalid-manifest` avec le détail @serde_yaml interpolé dans le message,
+    @prefix_files, @println! le rapport, retourner l'@Err invalid-manifest — même
+    court-circuit complet.
+  Puis dans l'ordre : @check_manifest_fields (scan des champs vides pour `name`, `category`,
+    `description`, `apiVersion`, `kind` → chacun un finding @Error `package/invalid-manifest`
+    adressé au fichier `package.yaml`, puis dispatch vers @check_options et
+    @check_prerelease_versions) ; @check_unexpected_dirs ; @run_hbs_checks (@LintConfig::load
+    une seconde fois, @HbsChecker::new frais) ; @run_rhai_checks (@RhaiChecker::new frais
+    avec @package_dir, @config_dir, @script_dir.as_deref(), package, config) ;
+    @prefix_files(@package_dir) ; @println! le rapport filtré ; la voie junit ; le verdict
+    @has_errors.
+  Le premier résultat de @LintConfig::load (dans `_config`) est jeté sans usage avant le
+    pipeline — état mort, le second load est celui qui circule (Tasks `[?]`).
+  # Règle de structure
+  @expected_dirs gèle les ensembles attendus par type : @VynilPackageType::System →
+    `systems`, `crds`, `scripts`, `handlebars` ; ::Service → `vitals`, `scalables`, `others`,
+    `befores`, `posts`, `handlebars`, `scripts`, `crds` ; ::Tenant → l'ensemble Service sans
+    `crds`.
+  @check_unexpected_dirs inspecte uniquement les enfants immédiats de @package_dir : les
+    répertoires dont le nom ne commence pas par `.`, n'est pas dans l'ensemble attendu, et
+    EST dans la liste connue de dix noms `systems`, `crds`, `vitals`, `scalables`, `others`,
+    `befores`, `posts`, `pods`, `handlebars`, `scripts` → un @Warn `package/unexpected-dir`
+    par répertoire. Les noms hors de cette liste (`tests/`, `notes/`, …) ne sont jamais
+    signalés ; la liste connue inclut en dur `pods` qu'aucun type n'attend, donc un
+    répertoire `pods/` warn sur tous les packages (Tasks `[?]`).
+  # Règles de schéma d'option (@check_options, findings dans l'ordre de clés @BTreeMap)
+  Chaque valeur @options doit être un objet JSON ; scalaire/tableau/null → @Error
+    `package/invalid-option-schema` (formulation `got scalar value` même pour tableaux/null)
+    et on passe à l'option suivante.
+  Objet → round-trip serde @serde_json::to_string puis @serde_json::from_str::<@Schema> (le
+    ré-export openapiv3 de /common/src/vynilpackage.sdd ; ce fichier n'appelle PAS
+    @VynilPackageSource::validate_options, il répète le round-trip localement) ; rejet →
+    @Error `invalid OpenAPI schema: {e}` et on continue ; le chemin d'échec de to_string
+    passe par @unwrap_or_default vers une chaîne vide qui échoue alors from_str avec une
+    erreur de parse d'entrée vide (Tasks `[?]`).
+  L'objet de schéma survivant doit porter une clé d'indicateur de type parmi `type`, `$ref`,
+    `oneOf`, `anyOf`, `allOf`, sinon @Error `missing 'type' field` — et cette branche ne
+    continue PAS : les checks description et forme-d'objet tournent quand même dessus.
+  Clé `description` absente → @Info `package/option-missing-description`.
+  `type` == `object` ET clé `properties` présente → @Warn
+    `package/object-properties-unsupported` pointant l'alternative flat-default.
+  # Règle pré-release
+  @is_prerelease est un test de sous-chaîne en minuscules : la version mérite un @Warn ssi
+    son texte passé en minuscules contient `alpha`, `beta` ou `rc` n'importe où (Tasks `[?]`
+    pour les cas-limite faux-positif/faux-négatif).
+  @check_prerelease_versions warn `package/prerelease-version` sur @metadata.app_version
+    quand défini-et-marqué, et une fois par entrée @images dont @Image.tag est
+    défini-et-marqué, en itérant le @BTreeMap dans l'ordre des clés.
+  # Attribution de ligne (best-effort, @None toléré, chaque appel relit le texte du manifeste)
+  @find_line_with_key retourne la première ligne 1-based dont le texte gauche-trimé commence
+    par `{key}:` (donc une clé imbriquée indentée peut matcher) ou @None.
+  @find_image_tag_line exécute un scan YAML indenté miniature : trouver la ligne `images:`,
+    puis la première ligne d'entrée commençant par `{name}:` plus profonde qu'elle, puis la
+    première ligne `tag:` plus profonde encore → sa ligne 1-based, en sautant les lignes
+    vides et `#`, @None quand la forme dévie (clés quotées, maps en flux, multi-document).
+  Les lignes d'options viennent du scan délégué @find_option_line_numbers (pending).
+  # Périmètre de walk (les trois scans, récursifs)
+  @run_hbs_checks fait deux passes complètes sur les sous-répertoires immédiats de
+    @package_dir (tous les répertoires, cachés inclus) : passe 1 @scan_hbs_files lit chaque
+    fichier d'extension `hbs` (match d'extension sensible à la casse via @Path::extension)
+    et nourrit @HbsChecker::check_file avec le chemin relatif à @strip_prefix ; passe 2
+    @scan_rhai_files_for_values nourrit le texte de chaque source `rhai` aux
     @HbsChecker::scan_rhai_for_values/@scan_rhai_for_partials/@scan_rhai_for_images/
-    @scan_rhai_for_resources (usage collection, emits nothing directly); then
-    @HbsChecker::finalize findings (@Warn-level unused-helper/unused-partial/unused-option
-    family, pending spec) are @extend-ed. Unreadable files are skipped silently; a file that
-    won't strip-prefix is skipped.
-  @run_rhai_checks walks the whole tree again for `rhai` files (@scan_rhai_files →
-    @RhaiChecker::check_file, so every `.rhai` text is read twice across the two phases),
-    then runs the inline lanes: @value_script under the virtual path
-    `package.yaml#value_script`, then each @VynilPackageRequirement::Prefly in declaration
-    order under `package.yaml#prefly({name})` ({name} is the requirement's own name), both
-    through the identical @check_file path — the source comment asserts operator-context
-    full-API with no import-resolution expected, honouring that is pending-side.
-    @RhaiChecker::finalize findings (rhai/unused-script, rhai/unused-function, pending) are
-    @extend-ed last.
-  @prefix_files rewrites EVERY relative finding path (including the virtual
-    `package.yaml#…` identities) onto @package_dir before printing, so files print absolute
-    when `-p` is absolute.
-  # Output, artifact and exit lanes
-  stdout is exactly one @println! of @format_output: @Json → @to_json, @Text → @to_text
-    (framing — `[LEVEL] rule file[:line]` blocks, the French `Résultat : N erreur(s),
-    M warning` footer, the JSON findings/summary shape — owned by ./../linting/mod.rs,
-    pending). The report prints on every non-early path and also on both early-return
-    gates, always before any @Err.
-  `--level` is display-only: it maps through @level_filter_to_lint_level into the collector's
-    `>=` filter; it never changes which findings exist, which files prefix, whether junit is
-    written, or the verdict.
-  The junit lane runs only after the report println!, only when @junit_output_filename is
-    @Some, writes @to_junit over the FULL unfiltered finding set via @std::fs::write
-    (truncate-or-create, parents never created), and its @Err preempts the verdict @Err.
-  Exit contract, frozen: @Err fires iff any finding has @LintLevel::Error —
-    `@has_errors` tests equality with @Error only. Findings owned here that BLOCK exit:
-    `package/missing-manifest`, `package/invalid-manifest` (both texts),
-    `package/invalid-option-schema` (all three texts). Findings owned here that only WARN
-    and keep @Ok → exit 0: `package/unexpected-dir`, `package/prerelease-version`,
-    `package/object-properties-unsupported` (@Warn), `package/option-missing-description`
-    (@Info). Delegated `hbs/…` and `rhai/…` findings feed the same verdict by their
-    effective level; @LintConfig override/disable (pending) can demote even an Error-level
-    rule to non-blocking or silence it entirely, so the blocking set is
-    `.vynil-lint.yaml`-dependent through the checkers' @resolve_level call sites.
-  # Posture and state
-  Read-only over the package tree: this file writes exactly two things — stdout report via
-    @println! and the optional junit file; no temp dirs, no mutations, nothing deleted.
-  No cache and no cross-run state: manifest text is re-read per @find_line_with_key /
-    @find_image_tag_line call, option lines are scanned once per @check_options run, and the
-    two checkers keep only their own accumulator sets (helper/usage/import/function tracking,
-    pending-owned) built eagerly at @new from directory listings.
-  Panic posture frozen: product code here has zero @unwrap/@expect/@panic! and no indexing;
-    every fallible std call is guarded (@if-@Ok on @read_dir/@read_to_string, @let-@Ok chains,
-    @saturating_add/@saturating_sub in line math, @map_err on the junit write); the only
-    reachable panic surface is the documented pending-side @to_junit.
+    @scan_rhai_for_resources (collecte d'usage, n'émet rien directement) ; puis les findings
+    @HbsChecker::finalize (famille unused-helper/unused-partial/unused-option de niveau
+    @Warn, spec pending) sont @extend. Les fichiers illisibles sont passés silencieusement ;
+    un fichier qui ne se strip-prefix pas est passé.
+  @run_rhai_checks parcourt encore tout l'arbre pour les fichiers `rhai` (@scan_rhai_files →
+    @RhaiChecker::check_file, donc chaque texte `.rhai` est lu deux fois à travers les deux
+    phases), puis exécute les voies inline : @value_script sous le chemin virtuel
+    `package.yaml#value_script`, puis chaque @VynilPackageRequirement::Prefly dans l'ordre
+    de déclaration sous `package.yaml#prefly({name})` ({name} est le nom propre de
+    l'exigence), les deux par le chemin @check_file identique — le commentaire source
+    affirme une API complète en contexte opérateur sans résolution d'import attendue,
+    l'honorer est côté pending. Les findings @RhaiChecker::finalize (rhai/unused-script,
+    rhai/unused-function, pending) sont @extend en dernier.
+  @prefix_files réécrit CHAQUE chemin de finding relatif (y compris les identités virtuelles
+    `package.yaml#…`) sur @package_dir avant impression, donc les fichiers s'impriment en
+    absolu quand `-p` est absolu.
+  # Voies output, artefact et sortie
+  stdout est exactement un seul @println! de @format_output : @Json → @to_json, @Text →
+    @to_text (l'encadrement — blocs `[LEVEL] rule file[:line]`, le pied de page français
+    `Résultat : N erreur(s), M warning`, la forme JSON findings/summary — appartient à
+    ./../linting/mod.rs, pending). Le rapport s'imprime sur tout chemin non-early et aussi
+    sur les deux gates de retour anticipé, toujours avant tout @Err.
+  `--level` est purement affichage : il passe par @level_filter_to_lint_level dans le filtre
+    `>=` du collecteur ; il ne change jamais quels findings existent, quels fichiers sont
+    préfixés, si junit est écrit, ni le verdict.
+  La voie junit ne tourne qu'après le println! du rapport, seulement quand
+    @junit_output_filename est @Some, écrit @to_junit sur l'ENSEMBLE complet non filtré de
+    findings via @std::fs::write (truncate-or-create, parents jamais créés), et son @Err
+    précède l'@Err de verdict.
+  Contrat de sortie, gelé : @Err se déclenche ssi un finding a @LintLevel::Error —
+    `@has_errors` ne teste que l'égalité avec @Error. Findings possédés ici qui BLOQUENT la
+    sortie : `package/missing-manifest`, `package/invalid-manifest` (les deux textes),
+    `package/invalid-option-schema` (les trois textes). Findings possédés ici qui ne font
+    que WARN et gardent @Ok → exit 0 : `package/unexpected-dir`,
+    `package/prerelease-version`, `package/object-properties-unsupported` (@Warn),
+    `package/option-missing-description` (@Info). Les findings `hbs/…` et `rhai/…` délégués
+    alimentent le même verdict par leur niveau effectif ; surcharge/désactivation
+    @LintConfig (pending) peut rétrograder même une règle de niveau Error en non-bloquant ou
+    la faire taire entièrement, donc l'ensemble bloquant dépend de `.vynil-lint.yaml` via
+    les sites d'appel @resolve_level des checkers.
+  # Posture et état
+  Lecture seule sur l'arbre du package : ce fichier écrit exactement deux choses — le rapport
+    stdout via @println! et le fichier junit optionnel ; pas de répertoires temporaires, pas
+    de mutations, rien de supprimé.
+  Pas de cache ni d'état entre runs : le texte du manifeste est relu par appel à
+    @find_line_with_key / @find_image_tag_line, les lignes d'options sont scannées une fois
+    par run de @check_options, et les deux checkers ne gardent que leurs propres ensembles
+    accumulateurs (suivi helper/usage/import/function, propriété pending) construits
+    avidement à @new depuis les listings de répertoires.
+  Posture panic gelée : le code produit ici a zéro @unwrap/@expect/@panic! et aucun indexage ;
+    chaque appel std faillible est gardé (@if-@Ok sur @read_dir/@read_to_string, chaînes
+    @let-@Ok, @saturating_add/@saturating_sub dans les maths de ligne, @map_err sur
+    l'écriture junit) ; la seule surface de panic atteignable est @to_junit documenté côté
+    pending.
 
 Example:
-  The seven rule codes owned by this file and all eleven distinct message templates, verbatim
-    (interpolations in `{}`; `file` = `package.yaml` or the dir name, `line` = @None unless
-    the locator resolves):
+  Les sept codes de règle possédés par ce fichier et les onze gabarits de message distincts,
+    verbatim (interpolations dans `{}` ; `file` = `package.yaml` ou le nom du répertoire,
+    `line` = @None sauf si le localisateur résout) :
   - `package/missing-manifest` @Error — `package.yaml is missing`
   - `package/invalid-manifest` @Error — `Failed to parse package.yaml: {e}`
   - `package/invalid-manifest` @Error — `Missing required field: {field}` (field ∈ name,
       category, description, apiVersion, kind)
   - `package/unexpected-dir` @Warn — `Directory '{dir_name}' is not expected for {usage:?}
-      packages` — {usage:?} is the @VynilPackageType @Debug rendering `Tenant`/`System`/
+      packages` — {usage:?} est le rendu @Debug de @VynilPackageType `Tenant`/`System`/
       `Service`
   - `package/prerelease-version` @Warn — `app_version '{app_version}' contains a pre-release
       marker (alpha/beta/rc)`
@@ -262,150 +280,167 @@ Example:
   - `package/object-properties-unsupported` @Warn — `Option '{key}': nested 'properties'
       sub-schema is not supported for type:object; use a flat 'default:' map at the option
       root instead`
-  @Err-lane strings (all @Error::YamlError): `Missing package manifest`,
+  Chaînes des voies @Err (toutes @Error::YamlError) : `Missing package manifest`,
     `Invalid package manifest`, `Failed to write JUnit output: {e}`,
     `Linting failed with errors`.
-  Delegated rule codes observed at these call sites only (levels/framing pending-owned, not
-    enumerated): `hbs/syntax`, `hbs/unused-helper`, `hbs/unused-partial`, `hbs/unused-option`
-    (./../linting/hbs_checker.rs) and `rhai/syntax`, `rhai/unresolved-import`,
-    `rhai/unused-script`, `rhai/unused-function` plus the per-file AST rules
-    (./../linting/rhai_checker.rs and its walker).
+  Codes de règle délégués observés à ces seuls sites d'appel (niveaux/encadrement propriété
+    pending, non énumérés) : `hbs/syntax`, `hbs/unused-helper`, `hbs/unused-partial`,
+    `hbs/unused-option` (./../linting/hbs_checker.rs) et `rhai/syntax`,
+    `rhai/unresolved-import`, `rhai/unused-script`, `rhai/unused-function` plus les règles
+    AST par fichier (./../linting/rhai_checker.rs et son walker).
 
 Tasks:
-  [ ] Cover @expected_dirs + @check_unexpected_dirs: per-type expected sets, known-but-wrong
-      dir warns, unknown dir silent, hidden dir silent, `pods/` warns on every type, the
-      {usage:?} Debug rendering in the message.
-  [ ] Cover @run end to end: missing-manifest gate (report prints before the @Err, no junit
-      file on this path), parse-failure message interpolation, error-finding → @Err verdict,
-      warn/Info-only → @Ok, and `--level` filtering the print but never the verdict.
-  [ ] Cover @format_output both lanes and @level_filter_to_lint_level mapping (the pending
-      collector carries the framing, but the selection branch is here).
-  [ ] Cover the inline-script lane: `@value_script` present, @Prefly present, the exact
-      post-prefix virtual files `…/package.yaml#value_script` and
-      `…/package.yaml#prefly({name})`, and multiple-prefly ordering.
-  [ ] Cover the recursive walkers: nested `.hbs`/`.rhai` discovery, hidden-directory
-      inclusion, uppercase-extension files skipped, unreadable file silently skipped,
-      unreadable directory truncating the walk silently.
-  [ ] Cover @find_line_with_key and @find_image_tag_line attribution: found, indented
-      false-match, comment/blank skip, missing key → @None line on the finding.
-  [ ] Cover @is_prerelease boundaries: the three markers cased-insensitively (partly covered
-      via @app_version tests), plus a stable version containing an `rc`/`beta` letter run
-      that the substring rule flags.
-  [ ] Cover the `--junit-output-filename` lane: file written after the stdout report, writes
-      the unfiltered set, write failure @Err preempts the verdict @Err.
-  [?] @LintConfig::load is called twice in @run (L214 result bound to `_config` and dropped;
-      L258 load feeds the checkers). Decide whether the first load is vestigial and remove it.
-  [?] The scan walkers swallow every @read_dir/@read_to_string failure behind `if let @Ok`/
-      `let @Ok` guards and always return @Ok(@()), so the `@Result` returns and `?` lanes of
-      @run_hbs_checks/@run_rhai_checks are dead and their `# Errors` doc comments ("returns
-      … when directory walks fail at OS level") are wrong: an unreadable subtree is linters-
-      blind silently. Decide whether walk failures should surface (as findings or @Err).
-  [?] Four @Err lanes all reuse @common::Error::YamlError though only the parse lane is YAML:
-      missing manifest drops the filesystem detail entirely, "Linting failed with errors" is
-      a generic non-YAML payload, and a @std::io::Error junit write failure is re-wrapped as
-      YamlError text. Decide per-variant identity (bootstrap.project stable-error-identity
-      rule leans on message uniqueness only).
-  [?] @is_prerelease matches `alpha`/`beta`/`rc` as substrings anywhere in the lowercased
-      text — a tag such as `2.1-orce-1` or a version word containing `rc`/`beta` warns, while
-      other pre-release idioms (`preview`, `snapshot`, `dev`, `latest`) pass; no semver
-      pre-release structure is consulted (contrast /common/src/vynilpackage.sdd @Semver).
-      Decide whether to parse properly.
-  [?] `"pods"` sits in the known-directory list of @check_unexpected_dirs but no
-      @expected_dirs arm expects it, so any `pods/` directory warns under every package type.
-      Decide whether `pods` is a future type directory or a stale list entry.
-  [?] `-c`/`@config_dir` is help-labelled `Configuration directory`, yet @LintConfig reads
-      `.vynil-lint.yaml` only from @package_dir — config_dir only extends the Rhai import
-      resolver. Decide whether the lint config should also resolve from it or the help text
-      should change.
-  [?] Docs drift, both against this frozen behaviour: /docs/cli.md's exit table claims
-      `2: lint with warnings only` while warn-only lint is @Ok → exit 0, and
-      /docs/tooling/lint.md advertises `--format junit` while the flag accepts only
-      `text`/`json`. Fix docs (agent.sdd pins cli.md stable — docs owner, not this file).
-  [?] @check_options labels every non-object value as `got scalar value` even for JSON arrays
-      and @null, and its @serde_json::to_string @unwrap_or_default path turns a serialization
-      failure into a misleading `invalid OpenAPI schema` parse error on empty input. Decide
-      faithful wording/error handling.
-  [?] @check_options_non_object_with_properties_key_no_extra_warn (the #[cfg(test)] lane) is
-      mislabelled: its fixture has no `properties` key at all, so the branch its name claims
-      (non-object carrying `properties`) stays untested. Rename or fix the fixture.
-  [?] @OutputFormat is duplicated between this file and ./test.rs (identical text/json
-      ValueEnums); the shared-or-duplicate decision already sits `[?]` in ./test.sdd — keep
-      one home for it.
+  [ ] Couvrir @expected_dirs + @check_unexpected_dirs : ensembles attendus par type,
+      répertoire connu-mais-faux qui warn, répertoire inconnu silencieux, répertoire caché
+      silencieux, `pods/` qui warn sur chaque type, le rendu Debug {usage:?} dans le message.
+  [ ] Couvrir @run de bout en bout : gate missing-manifest (le rapport s'imprime avant
+      l'@Err, pas de fichier junit sur ce chemin), interpolation du message d'échec de parse,
+      finding error → verdict @Err, uniquement warn/Info → @Ok, et `--level` qui filtre
+      l'impression mais jamais le verdict.
+  [ ] Couvrir les deux voies de @format_output et le mapping
+      @level_filter_to_lint_level (le collecteur pending porte l'encadrement, mais la branche
+      de sélection est ici).
+  [ ] Couvrir la voie script inline : @value_script présent, @Prefly présent, les fichiers
+      virtuels exacts post-préfixe `…/package.yaml#value_script` et
+      `…/package.yaml#prefly({name})`, et l'ordre multi-prefly.
+  [ ] Couvrir les walkers récursifs : découverte `.hbs`/`.rhai` imbriquée, inclusion des
+      répertoires cachés, fichiers à extension majuscule passés, fichier illisible
+      silencieusement passé, répertoire illisible qui tronque le walk silencieusement.
+  [ ] Couvrir l'attribution @find_line_with_key et @find_image_tag_line : trouvée,
+      faux-match indenté, saut de commentaire/ligne vide, clé absente → @None ligne sur le
+      finding.
+  [ ] Couvrir les frontières de @is_prerelease : les trois marqueurs insensibles à la casse
+      (partiellement couverts via les tests @app_version), plus une version stable contenant
+      une suite de lettres `rc`/`beta` que la règle de sous-chaîne signale.
+  [ ] Couvrir la voie `--junit-output-filename` : fichier écrit après le rapport stdout,
+      écrit l'ensemble non filtré, l'@Err d'échec d'écriture précède l'@Err de verdict.
+  [?] @LintConfig::load est appelé deux fois dans @run (résultat L214 lié à `_config` et
+      jeté ; le load L258 alimente les checkers). Décider si le premier load est vestigial
+      et le retirer.
+  [?] Les walkers de scan avalent chaque échec @read_dir/@read_to_string derrière des gardes
+      `if let @Ok`/`let @Ok` et retournent toujours @Ok(@()), donc les retours @Result et les
+      voies `?` de @run_hbs_checks/@run_rhai_checks sont morts et leurs commentaires doc
+      `# Errors` (« retourne … quand les walks de répertoire échouent au niveau OS ») sont
+      faux : un sous-arbre illisible échappe silencieusement aux linters. Décider si les
+      échecs de walk doivent remonter (en findings ou @Err).
+  [?] Les quatre voies @Err réutilisent toutes @common::Error::YamlError bien que seule la
+      voie parse soit YAML : manifeste manquant perd entièrement le détail filesystem,
+      "Linting failed with errors" est un payload générique non-YAML, et un échec d'écriture
+      junit @std::io::Error est re-wrappé en texte YamlError. Décider l'identité par
+      variante (la règle bootstrap.project stable-error-identity ne mise que sur l'unicité
+      du message).
+  [?] @is_prerelease matche `alpha`/`beta`/`rc` en sous-chaînes n'importe où dans le texte
+      passé en minuscules — un tag genre `2.1-orce-1` ou un mot de version contenant
+      `rc`/`beta` warn, tandis que d'autres idiomes pré-release (`preview`, `snapshot`,
+      `dev`, `latest`) passent ; aucune structure pré-release semver n'est consultée
+      (contraste /common/src/vynilpackage.sdd @Semver). Décider s'il faut parser
+      correctement.
+  [?] `"pods"` siège dans la liste de répertoires connus de @check_unexpected_dirs mais
+      aucune branche @expected_dirs ne l'attend, donc tout répertoire `pods/` warn sous
+      chaque type de package. Décider si `pods` est un répertoire de type futur ou une
+      entrée périmée de la liste.
+  [?] `-c`/`@config_dir` est étiqueté à l'aide `Configuration directory`, pourtant
+      @LintConfig ne lit `.vynil-lint.yaml` que depuis @package_dir — config_dir n'étend que
+      le résolveur d'imports Rhai. Décider si la config de lint doit aussi s'y résoudre ou
+      si l'aide doit changer.
+  [?] Dérive des docs, les deux contre ce comportement figé : la table des sorties de
+      /docs/cli.md revendique `2: lint with warnings only` alors qu'un lint warn-only est
+      @Ok → exit 0, et /docs/tooling/lint.md annonce `--format junit` alors que le flag
+      n'accepte que `text`/`json`. Corriger les docs (agent.sdd épingle cli.md stable —
+      propriétaire des docs, pas ce fichier).
+  [?] @check_options étiquette toute valeur non-objet comme `got scalar value` même pour les
+      tableaux JSON et @null, et son chemin @serde_json::to_string @unwrap_or_default
+      transforme un échec de sérialisation en trompeuse erreur de parse `invalid OpenAPI
+      schema` sur entrée vide. Décider une formulation/gestion fidèle.
+  [?] @check_options_non_object_with_properties_key_no_extra_warn (la voie #[cfg(test)]) est
+      mal étiquetée : sa fixture n'a aucune clé `properties`, donc la branche que son nom
+      revendique (non-objet portant `properties`) reste non testée. Renommer ou corriger la
+      fixture.
+  [?] @OutputFormat est dupliqué entre ce fichier et ./test.rs (ValueEnums text/json
+      identiques) ; la décision partagé-ou-dupliqué siège déjà `[?]` dans ./test.sdd — lui
+      garder un seul foyer.
 
 Done when:
-  Each Scenario above carries mapped passing tests and every Tasks coverage hole closes, the
-    `[?]` decisions are recorded, and `cargo test -p agent`, clippy and `cargo +nightly
-    fmt --check` stay green.
+  Chaque Scenario ci-dessus porte des tests mappés passants et chaque trou de couverture des
+    Tasks est comblé, les décisions `[?]` sont consignées, et `cargo test -p agent`, clippy
+    et `cargo +nightly fmt --check` restent verts.
 
 Scenario: missing manifest short-circuits before any checker
-  Given `-p /pkg` with no `package.yaml` (also a nonexistent `/pkg`)
-  When @run runs
-  Then exactly one report prints — the `package/missing-manifest` Error block plus the
-    collector tally — showing the prefixed file path
-  And @Err @Error::YamlError("Missing package manifest") returns; ./mod.sdd logs the exit-1
-    line; the `hbs`/`rhai`/option/prerelease lanes never execute and no junit file is written
-  No mapped test exists.
+  Given `-p /pkg` sans `package.yaml` (aussi bien un `/pkg` inexistant)
+  When @run s'exécute
+  Then exactement un rapport s'imprime — le bloc Error `package/missing-manifest` plus le
+    total du collecteur — montrant le chemin de fichier préfixé
+  And @Err @Error::YamlError("Missing package manifest") revient ; ./mod.sdd logge la ligne
+    exit-1 ; les voies `hbs`/`rhai`/option/prerelease ne s'exécutent jamais et aucun fichier
+    junit n'est écrit
+  Aucun test mappé n'existe.
 
 Scenario: unparsable manifest reports the parse detail then fails
-  Given a `package.yaml` holding `metadata: "nope"` (or unreadable bytes)
-  When @run runs
-  Then the `package/invalid-manifest` Error finding interpolates the @serde_yaml message as
-    `Failed to parse package.yaml: {e}` and prints before the @Err
+  Given un `package.yaml` contenant `metadata: "nope"` (ou des octets illisibles)
+  When @run s'exécute
+  Then le finding Error `package/invalid-manifest` interpole le message @serde_yaml comme
+    `Failed to parse package.yaml: {e}` et s'imprime avant l'@Err
     @Error::YamlError("Invalid package manifest")
-  No mapped test exists.
+  Aucun test mappé n'existe.
 
 Scenario: Errors block, warnings only pass — the exit-1 contract
-  Given a run whose findings mix levels (e.g. one `package/invalid-option-schema` @Error plus
-    a `package/prerelease-version` @Warn) versus warn-only versus clean
-  When @run runs
-  Then the mixed and warn-only runs print the full report while only the mixed run returns
-    @Err("Linting failed with errors"); warn-only and clean return @Ok(@()) and exit 0
-  And `--level error` hides the @Warn from the print but neither adds nor removes
-    blocking findings, and `--level all` (default) additionally shows @Info items like
-    `package/option-missing-description` without changing anything else
-  Mapped tests cover only the level-independent helper verdicts (@has_errors via
-    @check_options/@check_manifest_fields tests); the exit contract itself has none.
+  Given un run dont les findings mélangent les niveaux (p. ex. un
+    `package/invalid-option-schema` @Error plus un `package/prerelease-version` @Warn)
+    versus warn-only versus propre
+  When @run s'exécute
+  Then les runs mixte et warn-only impriment le rapport complet alors que seul le run mixte
+    retourne @Err("Linting failed with errors") ; warn-only et propre retournent @Ok(@())
+    et sortent 0
+  And `--level error` masque le @Warn de l'impression mais n'ajoute ni ne retire de finding
+    bloquant, et `--level all` (défaut) montre de plus les @Info comme
+    `package/option-missing-description` sans rien changer d'autre
+  Les tests mappés ne couvrent que les verdicts de helper indépendants du niveau
+    (@has_errors via les tests @check_options/@check_manifest_fields) ; le contrat de sortie
+    lui-même n'en a aucun.
 
 Scenario: unexpected known directory warns per type
-  Given `type: system` with sibling directories `vitals/` (Service/Tenant-only), `notes/`
-    (unknown) and `.git/` (hidden)
-  When @run runs
-  Then exactly one `package/unexpected-dir` @Warn prints for `vitals` with the Debug-rendered
-    `not expected for System packages` text; `notes` and `.git` produce nothing
-  And a `pods/` directory would warn under every type (frozen oddity, Tasks `[?]`)
-  No mapped test exists.
+  Given `type: system` avec les répertoires voisins `vitals/` (Service/Tenant seulement),
+    `notes/` (inconnu) et `.git/` (caché)
+  When @run s'exécute
+  Then exactement un @Warn `package/unexpected-dir` s'imprime pour `vitals` avec le texte
+    rendu en Debug `not expected for System packages` ; `notes` et `.git` ne produisent
+    rien
+  And un répertoire `pods/` warn sous tous les types (bizarrerie figée, Tasks `[?]`)
+  Aucun test mappé n'existe.
 
 Scenario: inline scripts report under virtual manifest paths
-  Given a package with `value_script:` set and two @Prefly requirements named `auth` and `net`
-  When @run_rhai_checks runs
-  Then @RhaiChecker::check_file runs first on `package.yaml#value_script`, then on
-    `package.yaml#prefly(auth)` and `package.yaml#prefly(net)` in requirement order, and any
-    findings come back filed under those virtual files after @prefix_files
-  No mapped test exists.
+  Given un package avec `value_script:` défini et deux exigences @Prefly nommées `auth` et
+    `net`
+  When @run_rhai_checks s'exécute
+  Then @RhaiChecker::check_file tourne d'abord sur `package.yaml#value_script`, puis sur
+    `package.yaml#prefly(auth)` et `package.yaml#prefly(net)` dans l'ordre des exigences,
+    et tout finding revient classé sous ces fichiers virtuels après @prefix_files
+  Aucun test mappé n'existe.
 
 Scenario: option schema findings cascade on one key
-  Given option `solver` = `{"type": "object", "properties": {…}}` (valid indicator, no
-    description, nested properties)
-  When @check_options runs
-  Then the type-indicator pass does not short-circuit the later rules: `@Info` `no description
-    provided` and `@Warn` `nested 'properties' sub-schema is not supported …` both fire on the
-    same key at the option's scanned line
+  Given l'option `solver` = `{"type": "object", "properties": {…}}` (indicateur valide,
+    sans description, properties imbriquées)
+  When @check_options s'exécute
+  Then le passage de l'indicateur de type ne court-circuite pas les règles suivantes :
+    l'@Info `no description provided` et le @Warn `nested 'properties' sub-schema is not
+    supported …` se déclenchent tous deux sur la même clé à la ligne scannée de l'option
   But Given `solver2` = `{"type": "object", "default": {"k": "v"}, "description": "…"}` —
-    clean, no warn, the flat-default shape
-  And Given a scalar option `n = 42` → the `got scalar value` @Error and none of the
-    description/properties checks
-  Mapped tests @check_options_object_with_nested_properties_warns,
+    propre, sans warn, la forme flat-default
+  And Given une option scalaire `n = 42` → l'@Error `got scalar value` et aucune des checks
+    description/properties
+  Les tests mappés @check_options_object_with_nested_properties_warns,
     @check_options_object_with_flat_default_passes, @check_options_scalar_reports_key_name,
-    @check_options_missing_description_is_info pin the pieces; the simultaneous
-    Info+Warn cascade on one key is not asserted.
+    @check_options_missing_description_is_info épinglent les morceaux ; la cascade
+    Info+Warn simultanée sur une clé n'est pas assertée.
 
 Scenario: pre-release markers warn with best-effort lines
-  Given `app_version: 1.0.0-ALPHA.1` and `images.app.tag: v1-rc2` with the tag lines present
-    in the manifest text
-  When @check_prerelease_versions runs
-  Then both `package/prerelease-version` @Warns print, line-located via @find_line_with_key /
-    @find_image_tag_line (the uppercase `ALPHA` matches the lowercase substring rule)
-  But Given a manifest where the tag line is unrecognizable to the mini-YAML scan — the finding
-    still prints with @None line
-  Mapped tests @check_prerelease_versions_* pin the warn/no-warn matrix on in-memory models;
-    line attribution itself has none.
+  Given `app_version: 1.0.0-ALPHA.1` et `images.app.tag: v1-rc2` avec les lignes de tag
+    présentes dans le texte du manifeste
+  When @check_prerelease_versions s'exécute
+  Then les deux @Warn `package/prerelease-version` s'impriment, localisés par ligne via
+    @find_line_with_key / @find_image_tag_line (`ALPHA` en majuscules matche la règle de
+    sous-chaîne en minuscules)
+  But Given un manifeste où la ligne de tag est méconnaissable par le mini-scan YAML — le
+    finding s'imprime quand même avec @None ligne
+  Les tests mappés @check_prerelease_versions_* épinglent la matrice warn/pas-warn sur des
+    modèles en mémoire ; l'attribution de ligne elle-même n'en a aucun.

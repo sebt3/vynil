@@ -1,169 +1,181 @@
-# File spec for ./test.rhai — the shipped, currently UNCALLED script lane of
-# `agent package test`: the Rust @TestHandler::run_test_inner duplicates the context+install
-# chain as an inline snippet and never imports this module. Script semantics only; the clap
-# surface, the engine, the TestSet/Test model, the verdict and the exit ladder belong to
-# /agent/src/package/test.sdd and /agent/src/testing/*.sdd — named, never restated.
-# Calibrated on ./build.sdd (packages-lane shape) and ./../lib/secret_dockerconfigjson.sdd
-# (Rhai-module shape).
+# File spec de ./test.rhai — la lane de script livrée, actuellement JAMAIS APPELÉE, de
+# `agent package test` : @TestHandler::run_test_inner côté Rust duplique la chaîne contexte+install
+# en snippet inline et n'importe jamais ce module. Sémantique de script seulement : la surface
+# clap, le moteur, le modèle TestSet/Test, le verdict et l'échelle des sorties appartiennent à
+# /agent/src/package/test.sdd et /agent/src/testing/*.sdd — nommés, jamais redits.
+# Calibré sur ./build.sdd (forme des lanes packages) et ./../lib/secret_dockerconfigjson.sdd
+# (forme de module Rhai).
 
 Spec: PackagesTest
 
-Platform: Rhai script (vynil-core 0.7.7 engine / locked rhai)
+Platform: script Rhai (moteur vynil-core 0.7.7 / rhai verrouillé)
 
 Purpose:
-  Stage-rehearse install on whatever engine imports it: stage the package sources into
-    `{args.temp}` via @build::build, retarget `args.package_dir` at the staged tree, seed
-    `args.tag` from `instance.status.tag` else the literal `0.0.1`, then run the shared
-    @ctx::run + @install::run chain — the type-agnostic superset of the Rust test engine's
-    inline install snippet. No importer exists in the repository today: the module ships
-    orphaned (Tasks holds the seam decision).
-  Complete file structure: three top-level @import lines (`build`, `context` as ctx,
-    `install`) and one @fn definition (@run) — importing the module runs those three imports
-    and defines the fn, with no other top-level effect.
+  Faire la générale de l'install sur tout moteur qui l'importe : poser les sources du paquet dans
+    `{args.temp}` via @build::build, rediriger `args.package_dir` sur l'arbre stagé, amorcer
+    `args.tag` depuis `instance.status.tag` sinon le littéral `0.0.1`, puis dérouler la chaîne
+    partagée @ctx::run + @install::run — le superset type-agnostique du snippet d'install inline
+    du moteur de test Rust. Aucun importateur n'existe dans le dépôt aujourd'hui : le module est
+    livré orphelin (Tasks porte la décision de la couture).
+  Structure complète du fichier : trois lignes @import de plus haut niveau (`build`, `context`
+    alias ctx, `install`) et une définition @fn (@run) — importer le module exécute ces trois
+    imports et définit le fn, sans aucun autre effet de plus haut niveau.
 
 Exposes:
-  @run(instance, args) — the module's sole @fn, called as `test::run(instance, args)`; the
-    same composable signature lane as the @ctx::run/@install::run calls it chains. Nothing in
-    the repo (Rust, Rhai, product or test) imports this module, so nothing reaches it.
-  Import contract: `import "test"` names this file only for resolver sets built with
-    `{script_dir}/packages` (the build/update/validate Rust lanes); none of them imports `test`.
+  @run(instance, args) — le seul @fn du module, appelé comme `test::run(instance, args)` ; la même
+    lane de signature composable que les appels @ctx::run/@install::run qu'il enchaîne. Rien dans
+    le dépôt (Rust, Rhai, produit ou test) n'importe ce module, donc rien ne l'atteint.
+  Contrat d'import : `import "test"` ne nomme ce fichier que pour des jeux de résolvers construits
+    avec `{script_dir}/packages` (les lanes Rust build/update/validate) ; aucune d'elles n'importe
+    `test`.
 
 Accepts:
-  @instance — a map or registered instance readable at `.status` and `.status.tag` (the reads
-    are guarded for `()`; a non-map @instance would raise on the first property access).
-  @args — the caller's map, mutated in place: keys read `temp` (log text, then @build::build),
-    `namespace` and `instance` (log texts, both passed to callees); keys written before the
-    chain `package_dir` := `args.temp` and `tag` := status tag or `0.0.1`.
-  @build::build additionally reads `source` and `temp` (./build.sdd); @ctx::run and
-    @install::run read further keys from the same map per their own modules. No existence,
-    type or completeness preflight of any key or path here.
+  @instance — une carte ou une instance enregistrée lisible en `.status` et `.status.tag` (les
+    lectures sont gardées pour `()` ; un @instance non-carte lèverait au premier accès de
+    propriété).
+  @args — la carte de l'appelant, mutée en place : clés lues `temp` (texte de log, puis
+    @build::build), `namespace` et `instance` (textes de log, tous deux passés aux appelés) ; clés
+    écrites avant la chaîne `package_dir` := `args.temp` et `tag` := le tag du statut ou `0.0.1`.
+  @build::build lit en plus `source` et `temp` (./build.sdd) ; @ctx::run et @install::run lisent
+    d'autres clés de la même carte selon leurs modules propres. Aucune préflight d'existence, de
+    type ou de complétude d'aucune clé ni chemin ici.
 
 Returns:
-  @run — the value of the trailing @install::run call, with no pinned meaning and no consumer.
-    The file mints no verdict, no assert row, no tally and no summary.
+  @run — la valeur de l'appel @install::run de queue, sans signification épinglée ni consommateur.
+    Le fichier ne mint aucun verdict, aucune ligne d'assert, aucun décompte et aucun résumé.
 
 Raises:
-  Zero local @throw, zero try/catch — every callee failure propagates raw as an interpreter
-    error; the exit lane would be the importing Rust arm's (`Rhai script error:` text).
-  At module evaluation, before @run exists: the three bare imports are strict — a
-    module-not-found on any aborts the whole import; notably the `agent package test` mock
-    engine's resolver set ({package_dir}/scripts, config_dir, {script_dir}/{type},
-    {script_dir}/lib) carries no `{script_dir}/packages`, so `import "build"` dies first and
-    this module cannot load there at all (Tasks). The core @import_run debug-skip posture
-    belongs to other shims, not to these bare imports.
-  @build::build legs fire between the first log and the rewrites: staging and manifest throws
-    owned by ./build.sdd (among them `{source}/package.yaml doesnt exist`).
-  Missing-key shape errors: an absent key reads as @(); a JSON-injected engine-style args map
-    without `source`/`temp` dies inside @build::build's path concat as a function-call error,
-    never a fallback (./build.sdd posture).
+  Zéro @throw local, zéro try/catch — chaque échec d'appelé se propage nu en erreur
+    d'interpréteur ; la lane de sortie serait celle du bras Rust qui importe (texte
+    `Rhai script error:`).
+  À l'évaluation du module, avant que @run existe : les trois imports bruts sont stricts — un
+    module-not-found sur l'un quelconque avorte l'import tout entier ; notamment le jeu de
+    résolvers du moteur mock de `agent package test` ({package_dir}/scripts, config_dir,
+    {script_dir}/{type}, {script_dir}/lib) ne porte pas `{script_dir}/packages`, donc
+    `import "build"` meurt d'abord et ce module ne peut même pas s'y charger (Tasks). La posture
+    debug-skip de l'@import_run central appartient à d'autres shims, pas à ces imports bruts.
+  Les jambes de @build::build partent entre le premier log et les réécritures : staging et levées
+    de manifeste possédés par ./build.sdd (parmi elles `{source}/package.yaml doesnt exist`).
+  Erreurs de forme sur clés manquantes : une clé absente se lit @() ; une carte d'args
+    style-engine injectée en JSON sans `source`/`temp` meurt dans la concaténation de chemins de
+    @build::build en erreur d'appel de fonction, jamais en retombée (posture ./build.sdd).
 
 Handles:
-  `instance.status` or `.status.tag` absent — the two `!= ()` guards short-circuit before the
-    nested read and the seed `0.0.1` is assigned; an empty `status {}` map (the test engine's
-    virtual instance mock shape) takes the seed leg.
-  Nothing else defensively: no empty/missing checks on args, no callee return inspection.
+  `instance.status` ou `.status.tag` absent — les deux gardes `!= ()` court-circuitent avant la
+    lecture imbriquée et l'amorce `0.0.1` est assignée ; une carte `status {}` vide (la forme de
+    l'instance virtuelle mock du moteur de test) prend la jambe d'amorce.
+  Rien d'autre de défensif : pas de contrôle vide/manquant sur args, pas d'inspection des retours
+    d'appelés.
 
 Must:
-  Run @run in this exact order: @log_info `Building to ${args.temp}` → @build::build(@args) →
-    `args.package_dir = args.temp` → tag assignment via the guard expression → @log_info
+  Lancer @run dans cet ordre exact : @log_info `Building to ${args.temp}` → @build::build(@args) →
+    `args.package_dir = args.temp` → assignation du tag via l'expression gardée → @log_info
     `Generating context for ${args.namespace} ${args.instance}` → @ctx::run(@instance, @args) →
     @log_info `Installing ${args.namespace} ${args.instance}` → @install::run(@instance,
-    @context). Exactly those three log texts, at those three positions.
-  Call @build::build, never @build::run — staging only, so nothing lists, pushes, signs or
-    @prints in this module; the tag rewrite sits AFTER the staging leg, so a status tag can
-    never reach it (@build reads no tag in any case — ./build.sdd).
-  Retarget install by mutating the shared map: `package_dir := args.temp` lands before
-    @ctx::run, and the ctx/install lanes read package_dir from that map, installing from the
-    staged tree instead of the source package directory; the caller's @resolver_path list is a
-    separate Rust-built collection this assignment never touches.
-  Keep the seed tag the literal `0.0.1` — a different seed from the `0.1.0` @build::run and the
-    Rust @build_test_args carry (Tasks).
-  Stay type-agnostic: no `service`/`system`/`tenant` branch or name here; the `context`/`install`
-    aliases resolve to whichever type directory the importing engine's resolvers carry, so one
-    module serves all three package types.
-  Keep the engine surface consumed here to @log_info (core-registered tracing `info` sink — not
-    stdout; this file has no @print), the three bare @imports, property/index reads, `!=`
-    against `()` and backtick interpolation; fs, yaml, registry and cluster contact live
-    exclusively in the callee modules.
-  Consume no Test/TestSet document and no created-object sink: the TestSet/Test model, mock
-    injection, assert evaluation and verdict aggregation are owned by /agent/src/testing/handler.sdd
-    and /agent/src/package/test.sdd — a crashing @install::run would propagate to the
-    importer untouched, which is where (never, today) it would be folded into a failed
-    `execution` assert.
+    @context). Exactement ces trois textes de log, à ces trois positions.
+  Appeler @build::build, jamais @build::run — staging seul, donc rien ne liste, ne pousse, ne
+    signe ni ne @prints dans ce module ; la réécriture du tag se situe APRÈS la jambe de staging,
+    donc un tag du statut ne peut jamais l'atteindre (@build ne lit aucun tag de toute façon —
+    ./build.sdd).
+  Rediriger l'install en mutant la carte partagée : `package_dir := args.temp` atterrit avant
+    @ctx::run, et les lanes ctx/install lisent package_dir dans cette carte, installant depuis
+    l'arbre stagé au lieu du répertoire source du paquet ; la liste @resolver_path de l'appelant
+    est une collection distincte bâtie côté Rust que cette assignation ne touche jamais.
+  Garder l'amorce de tag au littéral `0.0.1` — une amorce distincte du `0.1.0` porté par
+    @build::run et du tag @build_test_args de Rust (Tasks).
+  Rester type-agnostique : aucune branche ni nom `service`/`system`/`tenant` ici ; les alias
+    `context`/`install` résolvent vers le répertoire de type que les résolvers du moteur qui
+    importent portent, si bien qu'un seul module sert les trois types de paquets.
+  Garder la surface moteur consommée ici à @log_info (sink `info` de tracing enregistré au core —
+    pas stdout ; ce fichier n'a aucun @print), les trois @imports bruts, les lectures de
+    propriété/index, `!=` contre `()` et l'interpolation backtick ; fs, yaml, registre et contact
+    cluster vivent exclusivement dans les modules appelés.
+  Ne consommer aucun document Test/TestSet ni aucun sink d'objets créés : le modèle TestSet/Test,
+    l'injection de mock, l'évaluation des asserts et l'agrégation du verdict sont possédés par
+    /agent/src/testing/handler.sdd et /agent/src/package/test.sdd — un @install::run qui lève se
+    propagerait intact à l'importateur, là où (jamais, aujourd'hui) il serait fondu dans une assert
+    `execution` en échec.
 
 Must not:
-  Produce a summary line, a JUnit file or a @common::Error::TestFailure — that contract is
-    /agent/src/package/test.sdd's and is unreached by this module even in a failing chain.
-  Read or write the filesystem, contact a registry or cluster, or mutate @instance — @args is
-    the only object this file writes.
+  Produire une ligne de résumé, un fichier JUnit ou un @common::Error::TestFailure — ce contrat est
+    celui de /agent/src/package/test.sdd et n'est atteint par ce module même dans une chaîne en
+    échec.
+  Lire ou écrire le système de fichiers, contacter un registre ou un cluster, ni muter @instance —
+    @args est le seul objet que ce fichier écrit.
 
 Depends on:
-  ./build.rhai (./build.sdd) — imported as `build`; sole use is the @build staging leg.
+  ./build.rhai (./build.sdd) — importé comme `build` ; seul usage : la jambe de staging @build.
   ./../../service/context.rhai, ./../../system/context.rhai, ./../../tenant/context.rhai —
-    imported as `ctx`, one per caller resolver set; no same-basename specs exist yet.
+    importés comme `ctx`, un par jeu de résolvers de l'appelant ; aucun spec de même basename
+    n'existe encore.
   ./../../service/install.rhai, ./../../system/install.rhai, ./../../tenant/install.rhai —
-    imported as `install`; run(instance, context) is the terminal call; no same-basename specs.
-  /common/src/rhaihandler.sdd — @Script::new_mock and friends: which engine can even resolve the
-    three imports.
-  /agent/src/testing/handler.sdd — the real consumer of this file's context+install chain (as an
-    inline snippet) and its would-be caller.
+    importés comme `install` ; run(instance, context) est l'appel terminal ; pas de specs de même
+    basename.
+  /common/src/rhaihandler.sdd — @Script::new_mock et consorts : quel moteur peut même résoudre les
+    trois imports.
+  /agent/src/testing/handler.sdd — le vrai consommateur de la chaîne contexte+install de ce
+    fichier (comme snippet inline) et son appelant putatif.
 
 References:
-  /agent/src/package/test.sdd — the Rust lane this script was presumed to feed: @run_test_inner
-    evaluates its own five-line context+install snippet against @build_test_args keys, with no
-    build leg, no rewrites and no `import "test"` — the presumed seam does not exist (Tasks).
-  /agent/tests/rhai_build.rs — shows a test harness CAN build a `{base}/scripts/packages`
-    resolver set, yet imports only `build`; `test` is imported nowhere.
+  /agent/src/package/test.sdd — la lane Rust que ce script était censé nourrir : @run_test_inner
+    évalue son propre snippet contexte+install de cinq lignes contre les clés @build_test_args,
+    sans jambe de build, sans réécriture ni `import "test"` — la couture supposée n'existe pas
+    (Tasks).
+  /agent/tests/rhai_build.rs — montre qu'un harnais de test PEUT construire un jeu de résolvers
+    `{base}/scripts/packages`, mais n'importe seulement `build` ; `test` n'est importé nulle part.
 
 Tasks:
-  [?] Seam is dead code: nothing repo-wide imports `"test"`, and the test engine cannot — the
-    mock resolvers lack `{script_dir}/packages` and @run_test_inner inlines the chain instead.
-    Decide: route run_test_inner (and a future build-staged lane) through `import_run("test")`,
-    or delete this file.
-  [?] Args contract if wired: @build_test_args injects namespace/instance/dirs/tag/
-    controller_values and none of `source`/`temp`/`registry` that @build::build needs — the
-    first leg would crash even after fixing resolvers. Decide the injected args shape (and the
-    mock-OCI story around a staging-only build).
-  [?] Seed divergence `0.0.1` (here) vs `0.1.0` (@build::run seed and Rust @build_test_args tag).
-    Decide the single seed.
-  [?] `package_dir → temp` retarget while the caller resolver list keeps the ORIGINAL
-    `{package_dir}/scripts`: freeze as intended staged-tree rehearsal or pair the two.
-  [ ] Zero coverage: no /agent/tests/rhai_*.rs imports or runs this module (no `import "test"`
-    anywhere in ./../../tests). When the seam decision lands, cover the scenarios below from a
-    packages-resolver Rhai lane; until then no scenario is executable.
+  [?] La couture est du code mort : rien dans le dépôt n'importe `"test"`, et le moteur de test ne
+      le peut pas — les résolvers mock n'ont pas `{script_dir}/packages` et @run_test_inner inline
+      la chaîne. Décider : router run_test_inner (et une future lane stagée par build) via
+      `import_run("test")`, ou supprimer ce fichier.
+  [?] Contrat d'args si câblé : @build_test_args injecte namespace/instance/dirs/tag/
+      controller_values et aucune des clés `source`/`temp`/`registry` que @build::build exige — la
+      première jambe crèverait même après réparation des résolvers. Décider la forme des args
+      injectés (et l'histoire du mock-OCI autour d'un build limité au staging).
+  [?] Divergence d'amorce `0.0.1` (ici) contre `0.1.0` (amorce de @build::run et tag
+      @build_test_args de Rust). Décider l'amorce unique.
+  [?] La redirection `package_dir → temp` alors que la liste de résolvers de l'appelant garde
+      l'ORIGINAL `{package_dir}/scripts` : geler comme générale voulue sur arbre stagé, ou apparier
+      les deux.
+  [ ] Zéro couverture : aucun /agent/tests/rhai_*.rs n'importe ni n'exécute ce module (pas
+      d'`import "test"` nulle part dans ./../../tests). Quand la décision de couture tombera,
+      couvrir les scenarios ci-dessous depuis une lane Rhai à résolvers packages ; d'ici là, aucun
+      scenario n'est exécutable.
 
 Done when:
-  The seam `[?]` is decided (wired-and-scenario-tested, or the file deleted), and
-    `cargo test -p agent` plus `specdd lint` stay green.
+  La couture `[?]` a une décision (câblée-et-testée-par-scenario, ou fichier supprimé), et
+    `cargo test -p agent` plus `specdd lint` restent verts.
 
 Scenario: staged rehearsal installs from the temp tree
-  Given a resolver set carrying `packages` plus one type directory, an args map with a valid
-    `source`/`temp`, and an instance whose `status.tag` is `2.3.4`
-  When @run(instance, args) runs
-  Then the order is log, @build::build, `package_dir = temp`, `tag = 2.3.4`, @ctx::run,
-    log, @install::run(@instance, @context) — and no registry call is made (staging only)
-  No mapped test exists.
+  Given un jeu de résolvers portant `packages` plus un répertoire de type, une carte d'args
+    avec `source`/`temp` valides, et une instance dont `status.tag` vaut `2.3.4`
+  When @run(instance, args) s'exécute
+  Then l'ordre est log, @build::build, `package_dir = temp`, `tag = 2.3.4`, @ctx::run, log,
+    @install::run(@instance, @context) — et aucun appel de registre n'est émis (staging seul)
+  Aucun test mappé n'existe.
 
 Scenario: statusless instance seeds the tag
-  Given `instance.status` is `()` or an empty map
-  Then the guards read no deeper, `args.tag` is the literal `0.0.1` before @ctx::run, and the
-    chain proceeds
-  No mapped test exists.
+  Given que `instance.status` vaut `()` ou une carte vide
+  Then les gardes ne lisent pas plus profond, `args.tag` est le littéral `0.0.1` avant @ctx::run,
+    et la chaîne se poursuit
+  Aucun test mappé n'existe.
 
 Scenario: staging failure aborts before any rewrite
-  Given @build::build raising (e.g. the missing-`package.yaml` throw of ./build.sdd)
-  Then `args.package_dir` and `args.tag` keep their caller values, no further log line prints,
-    and the context/install modules are never reached beyond their already-run imports
-  No mapped test exists.
+  Given @build::build qui lève (p. ex. la levée « `package.yaml` manquant » de ./build.sdd)
+  Then `args.package_dir` et `args.tag` gardent leurs valeurs d'appelant, aucune autre ligne de
+    log ne s'imprime, et les modules context/install ne sont jamais atteints au-delà de leurs
+    imports déjà exécutés
+  Aucun test mappé n'existe.
 
 Scenario: import from the package-test mock engine dies at evaluation
-  Given the `agent package test` mock-engine resolver set
-  When any script attempts `import "test"`
-  Then the bare `import "build"` aborts the import itself as module-not-found — the
-    `{script_dir}/packages` dir is absent from the set and bare imports never debug-skip
-  No mapped test exists.
+  Given le jeu de résolvers du moteur mock de `agent package test`
+  When un script tente `import "test"`
+  Then le `import "build"` brut avorte l'import lui-même en module-not-found — le répertoire
+    `{script_dir}/packages` est absent du jeu et les imports bruts ne font jamais de debug-skip
+  Aucun test mappé n'existe.
 
 Example:
-  engine surface consumed: `log_info` only (three calls) + bare `import` × 3;
-  arg writes verbatim: `args.package_dir = args.temp;` and
+  surface moteur consommée : `log_info` seulement (trois appels) + `import` brut × 3 ;
+  écritures d'args verbatim : `args.package_dir = args.temp;` et
   `args.tag = if instance.status != () && instance.status.tag != () {instance.status.tag} else {"0.0.1"};`

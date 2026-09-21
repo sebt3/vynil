@@ -1,316 +1,318 @@
 Spec: FileJukeBox
 
 Purpose:
-  Provide the cluster-less JukeBox variant for the agent's file-scan flow: a @FileJukeBox holds a
-    parsed @FileScanSpec and a local cache directory, mirrors the @JukeBox-shaped `spec` and
-    `status` property maps that shared scan scripts read, and persists scanned @VynilPackage sets
-    into an `index.yaml` plus one `{category}_{name}.yaml` bundle per package — a package catalog
-    can therefore be scanned and re-read offline with no kube client, no CRD status patch and no
-    cluster events.
+  Fournir la variante JukeBox sans cluster pour le flux de scan de fichiers de l'agent : un
+    @FileJukeBox porte un @FileScanSpec parsé et un répertoire de cache local, miroite les cartes
+    de propriétés `spec` et `status` en forme de @JukeBox que lisent les scripts de scan partagés,
+    et persiste les ensembles de @VynilPackage scannés dans un unique `index.yaml` plus un bundle
+    `{category}_{name}.yaml` par paquet — un catalogue de paquets peut donc être scanné
+    et relu hors ligne, sans client kube, sans patch de statut CRD et sans
+    événements du cluster.
 
 Owns:
   ./jukebox_file.rs
 
 References:
-  ./jukebox.sdd — @JukeBoxDef is the @FileScanSpec.source payload, and ./jukebox.rs's
-    @JukeBoxSpec and @JukeBoxStatus key sets are the shapes the two property getters mirror.
-  ./vynilpackage.sdd — @VynilPackage is the cache payload and the accept-boundary for every
-    @rhai::Dynamic handed to the setters.
-  ./tools.sdd — approved calibration reference.
+  ./jukebox.sdd — @JukeBoxDef est la charge utile de @FileScanSpec.source, et les jeux de clés
+    @JukeBoxSpec et @JukeBoxStatus de ./jukebox.rs sont les formes que miroitent les deux getters de propriété.
+  ./vynilpackage.sdd — @VynilPackage est la charge utile du cache et la frontière d'acceptation de tout
+    @rhai::Dynamic transmis aux setters.
+  ./tools.sdd — référence de calibration approuvée.
 
 Must:
-  The cache is two fixed artifacts under @cache_dir and nothing else defines it: a literal
-    `index.yaml` @CacheIndex plus one `./`-relative bundle per package named `{category}_{name}.yaml`.
-    Every read is index-driven — the packages come exclusively from @CacheIndexEntry.file entries,
-    there is no directory traversal, and a yaml file present but absent from the index is never
-    seen; every write addresses the computed filename directly.
-  Wire keys freeze at field names: @FileScanSpec is `source` and `pull_secret`, @CacheIndex is
-    `packages`, @CacheIndexEntry is `category`, `name`, `file`; no struct carries
-    `deny_unknown_fields` or a rename, so foreign keys in the spec or index files are silently
-    ignored while every listed key is required on deserialize — @CacheIndex.packages carries no
-    `#[serde(default)]` attribute, so the @Vec::new default exists only on the explicit
-    @CacheIndex::default() branch taken when the file is absent, and a present `index.yaml` without
-    `packages` is a deserialization failure on both cache paths (see Handles).
-  @read_all_from_cache returns @Ok(Vec::new()) when `index.yaml` does not exist; otherwise it walks
-    index order, and for each entry whose `cache_dir.join(@CacheIndexEntry.file)` path exists it
-    appends the full @Vec<@VynilPackage> sequence deserialized from that bundle (scan order inside
-    the file is kept); an entry whose file is missing is skipped silently, so the result may be
-    shorter than the index claims. Any unreadable bundle or undecryptable document aborts the walk
-    fail-fast — collected packages are discarded and only @crate::Error escapes.
-  @write_to_cache groups the input with a @std::collections::BTreeMap keyed
-    (@metadata.category, @metadata.name), keeping scan order within each group, then: loads the
-    existing index (or @CacheIndex::default()) before touching any bundle, serializes each whole
-    group over its bundle file — a rescan replaces that package's complete version history, it is
-    a replace, never a version-level merge — pushes a fresh @CacheIndexEntry only when no existing
-    entry shares the same `category` and `name`, and rewrites `index.yaml` in full last, even for
-    an empty input list.
-  The cache accumulates across calls: packages of a (category, name) absent from the latest write
-    keep their bundle file and index entry and keep being returned by later reads; nothing in this
-    file prunes, expires or TTL-checks anything — neither artifact carries a timestamp and no age
-    check exists anywhere, so a cold index is trusted forever.
-  @FileJukeBox::get_spec answers a synthetic map of exactly the four keys `source`, `maturity`,
-    `pull_secret`, `schedule` — the @JukeBoxSpec key set — where `maturity` is hardcoded `alpha`
-    and `schedule` hardcoded `""` because @FileScanSpec carries no such fields; `source` arrives as
-    the externally tagged snake_case @JukeBoxDef form and a @None source or pull_secret arrives as
-    JSON null, which the locked @rhai serde bridge surfaces as Rhai unit, the value scripts test
-    against with `!= ()`.
-  @FileJukeBox::get_status reads the whole cache from disk at every property access — no in-memory
-    packages buffer exists — and answers a map of exactly `conditions` hardcoded `[]` plus
-    `packages` in read-all order; file scans record no conditions, and a never-scanned box yields
-    `packages: []`, never a missing key.
-  The in-memory @FileJukeBox state is immutable after @FileJukeBox::new: no setter mutates @spec or
-    creates a directory, the two setters only write the cache and answer @Ok(self.clone()) — a
-    copy with the same fields, no shared handle — and @FileJukeBox::rhai_set_status_failed records
-    nothing (no cache write) while always answering @Err.
-  @FileJukeBox::rhai_set_status_packages_merge is observable-identical to
-    @FileJukeBox::rhai_set_status_updated: its filter text travels to @write_to_cache and is bound
-    to `let _ = filter;`, so neither call prunes or scopes the cache; the cluster-side
-    @JukeBox::set_status_packages_merge filter semantics have no file-side counterpart.
-  @file_jukebox_rhai_register freezes the script surface: the Rust type @FileJukeBox under Rhai
-    type name `"FileJukeBox"`, member fns `set_status_updated(list)`,
-    `set_status_packages_merge(filter, list)` and `set_status_failed(reason)`, and property getters
-    `spec` and `status` — the same script-facing names @jukebox_rhai_register installs for the
-    cluster @JukeBox, so one scan script drives either box shape interchangeably.
+  Le cache est constitué de deux artefacts fixes sous @cache_dir et rien d'autre ne le définit : un
+    @CacheIndex littéral dans `index.yaml` plus un bundle relatif à `./` par paquet nommé
+    `{category}_{name}.yaml`. Toute lecture pilotée par l'index — les paquets proviennent
+    exclusivement des entrées @CacheIndexEntry.file, il n'y a pas de parcours de répertoire,
+    et un fichier yaml présent mais absent de l'index n'est jamais vu ; chaque écriture adresse
+    directement le nom de fichier calculé.
+  Les clés wire sont figées aux noms des champs : @FileScanSpec porte `source` et `pull_secret`,
+    @CacheIndex porte `packages`, @CacheIndexEntry porte `category`, `name`, `file` ; aucune structure ne porte
+    `deny_unknown_fields` ni de rename, si bien que les clés étrangères des fichiers spec ou index sont
+    silencieusement ignorées alors que toute clé listée est requise à la désérialisation — @CacheIndex.packages ne porte
+    aucun attribut `#[serde(default)]`, si bien que le défaut @Vec::new n'existe que sur la branche
+    explicite @CacheIndex::default() suivie quand le fichier est absent, et un `index.yaml`
+    présent sans `packages` est un échec de désérialisation sur les deux chemins du cache (voir Handles).
+  @read_all_from_cache renvoie @Ok(Vec::new()) quand `index.yaml` n'existe pas ; sinon il parcourt l'ordre
+    de l'index et, pour chaque entrée dont le chemin `cache_dir.join(@CacheIndexEntry.file)` existe, ajoute la
+    séquence complète @Vec<@VynilPackage> désérialisée depuis ce bundle (l'ordre de scan dans le
+    fichier est conservé) ; une entrée dont le fichier manque est silencieusement ignorée, si bien que le
+    résultat peut être plus court que ne l'annonce l'index. Tout bundle illisible ou document indécodable
+    interrompt la marche en fail-fast — les paquets collectés sont jetés et seul @crate::Error sort.
+  @write_to_cache groupe l'entrée dans un @std::collections::BTreeMap indexé par
+    (@metadata.category, @metadata.name), en conservant l'ordre de scan dans chaque groupe, puis : charge
+    l'index existant (ou @CacheIndex::default()) avant de toucher un bundle, sérialise chaque groupe
+    entier sur son fichier bundle — un rescan remplace tout l'historique de versions du paquet, c'est
+    un remplacement, jamais une fusion au niveau des versions —, pousse une nouveau @CacheIndexEntry
+    seulement quand aucune entrée existante ne porte le même `category` et le même `name`, et
+    réécrit `index.yaml` en entier en dernier, même pour une liste d'entrée vide.
+  Le cache s'accumule d'un appel à l'autre : les paquets d'un (category, name) absent de la dernière
+    écriture gardent leur fichier bundle et leur entrée d'index, et restent retournés par les lectures
+    suivantes ; rien dans ce fichier ne purge, n'expire ni ne vérifie un TTL — aucun des deux artefacts ne porte
+    d'horodatage et aucun test d'ancienneté n'existe nulle part, si bien qu'un index froid est cru pour toujours.
+  @FileJukeBox::get_spec répond une carte synthétique de exactement quatre clés `source`, `maturity`,
+    `pull_secret`, `schedule` — le jeu de clés @JukeBoxSpec — où `maturity` est codé en dur `alpha`
+    et `schedule` codé en dur `""` car @FileScanSpec ne porte pas de tels champs ; `source` arrive dans la
+    forme snake_case à tag externe de @JukeBoxDef et un source ou pull_secret @None arrive comme un
+    null JSON, que le pont serde @rhai verrouillé expose comme unité Rhai, la valeur que les scripts
+    testent avec `!= ()`.
+  @FileJukeBox::get_status relit tout le cache sur disque à chaque accès de propriété — aucun tampon
+    de paquets en mémoire n'existe — et répond une carte de exactement `conditions` codé en dur `[]` plus
+    `packages` dans l'ordre de read-all ; les scans de fichiers n'enregistrent aucune condition, et une
+    box jamais scannée donne `packages: []`, jamais une clé manquante.
+  L'état en mémoire de @FileJukeBox est immuable après @FileJukeBox::new : aucun setter ne mute @spec ni
+    ne crée de répertoire, les deux setters écrivent seulement le cache et répondent @Ok(self.clone()) — une
+    copie aux mêmes champs, sans handle partagé — et @FileJukeBox::rhai_set_status_failed n'enregistre
+    rien (aucune écriture de cache) tout en répondant toujours @Err.
+  @FileJukeBox::rhai_set_status_packages_merge est observablement identique à
+    @FileJukeBox::rhai_set_status_updated : son texte de filtre voyage jusqu'à @write_to_cache et y est lié
+    à `let _ = filter;`, si bien qu'aucun des deux appels ne purge ni ne borne le cache ; la sémantique de
+    filtre côté cluster de @JukeBox::set_status_packages_merge n'a pas d'équivalent côté fichier.
+  @file_jukebox_rhai_register gèle la surface script : le type Rust @FileJukeBox sous le nom de type
+    Rhai `"FileJukeBox"`, les fns membres `set_status_updated(list)`,
+    `set_status_packages_merge(filter, list)` et `set_status_failed(reason)`, et les getters de propriété
+    `spec` et `status` — les mêmes noms exposés aux scripts que @jukebox_rhai_register installe pour le
+    @JukeBox du cluster, si bien qu'un seul script de scan pilote indifféremment l'une ou l'autre forme de box.
 
 Depends on:
-  @crate::jukebox::JukeBoxDef (./jukebox.rs) — the @FileScanSpec.source payload, serialized through
-    its externally tagged snake_case shape.
-  @crate::vynilpackage::VynilPackage (./vynilpackage.rs) — the cached document; its serde shape
-    decides what a @rhai::Dynamic setter argument must carry.
-  @crate::Error, @crate::Result, @crate::rhai_err in `/common/src/lib.rs` — the only variants this
-    file produces are @crate::Error::Stdio, @crate::Error::YamlError,
-    @crate::Error::SerializationError and @crate::Error::Other; @crate::rhai_err flattens all of
-    them into the @Display text of a boxed @rhai::EvalAltResult.
-  @rhai `1.20.0` requested / `1.25.1` locked with workspace features `sync`, `serde`, `internals`
-    (`/common/Cargo.toml`) — the @rhai::Dynamic serde bridge every getter/setter conversion rides,
-    and @rhai::Engine registration.
-  @serde, @serde_json `1.0.150` and @serde_yaml `0.9.34` locked (`/Cargo.lock`) — Dynamic↔JSON
-    conversion in the public methods; the index and bundle codec (block-style YAML) in the private
-    cache helpers.
-  @std::fs::read_to_string, @std::fs::write and @std::path::Path::exists plus
-    @std::path::Path::join — the entire IO surface; @tempfile `3` dev-dependency tests pin it in
-    ./jukebox_file.rs's test module.
+  @crate::jukebox::JukeBoxDef (./jukebox.rs) — la charge utile de @FileScanSpec.source, sérialisée par sa
+    forme snake_case à tag externe.
+  @crate::vynilpackage::VynilPackage (./vynilpackage.rs) — le document mis en cache ; sa forme serde décide ce
+    qu'un argument @rhai::Dynamic des setters doit porter.
+  @crate::Error, @crate::Result, @crate::rhai_err dans `/common/src/lib.rs` — les seules variantes que ce
+    fichier produit sont @crate::Error::Stdio, @crate::Error::YamlError,
+    @crate::Error::SerializationError et @crate::Error::Other ; @crate::rhai_err les aplatit toutes dans le
+    texte @Display d'un @rhai::EvalAltResult boxed.
+  @rhai `1.20.0` demandé / `1.25.1` verrouillé avec les features workspace `sync`, `serde`, `internals`
+    (`/common/Cargo.toml`) — le pont serde @rhai::Dynamic sur lequel repose chaque conversion des
+    getters/setters, et l'enregistrement @rhai::Engine.
+  @serde, @serde_json `1.0.150` et @serde_yaml `0.9.34` verrouillés (`/Cargo.lock`) — la conversion
+    Dynamic↔JSON dans les méthodes publiques ; le codec des index et bundles (YAML en style bloc) dans les
+    helpers privés du cache.
+  @std::fs::read_to_string, @std::fs::write et @std::path::Path::exists plus
+    @std::path::Path::join — toute la surface IO ; les tests de la dev-dependency @tempfile `3` l'épinglent dans
+    le module de tests de ./jukebox_file.rs.
 
 Exposes:
-  @FileScanSpec — @Serialize, @Deserialize, @Clone, @Debug and @Default; fields `source` →
-    @Option<@crate::jukebox::JukeBoxDef> and `pull_secret` → @Option<@String>, both @None on
-    @Default; not @JsonSchema — it is a plain YAML file input, not a CRD.
-  @CacheIndex — @Serialize, @Deserialize, @Clone, @Debug and @Default; field `packages` →
-    @Vec<@CacheIndexEntry>, required by serde despite the derived @Default.
-  @CacheIndexEntry — @Serialize, @Deserialize, @Clone and @Debug (no @Default); required fields
+  @FileScanSpec — @Serialize, @Deserialize, @Clone, @Debug et @Default ; champs `source` →
+    @Option<@crate::jukebox::JukeBoxDef> et `pull_secret` → @Option<@String>, tous deux @None sur
+    @Default ; pas @JsonSchema — c'est une simple entrée de fichier YAML, pas un CRD.
+  @CacheIndex — @Serialize, @Deserialize, @Clone, @Debug et @Default ; champ `packages` →
+    @Vec<@CacheIndexEntry>, requis par serde malgré le @Default dérivé.
+  @CacheIndexEntry — @Serialize, @Deserialize, @Clone et @Debug (pas de @Default) ; champs requis
     `category` → @String, `name` → @String, `file` → @String.
-  @FileJukeBox — @Clone and @Debug only (no serde derives); private fields @spec: @FileScanSpec and
-    @cache_dir: @std::path::PathBuf, reachable only through the methods below.
+  @FileJukeBox — @Clone et @Debug seulement (aucun derive serde) ; champs privés @spec: @FileScanSpec et
+    @cache_dir: @std::path::PathBuf, accessibles seulement par les méthodes ci-dessous.
   @FileJukeBox::new — `#[must_use]` @pub @const fn(@spec: @FileScanSpec, @cache_dir:
     @std::path::PathBuf) -> @Self.
-  @FileJukeBox::get_spec — @pub fn(&mut @self) -> @crate::RhaiRes<@rhai::Dynamic>; key contract in
+  @FileJukeBox::get_spec — @pub fn(&mut @self) -> @crate::RhaiRes<@rhai::Dynamic> ; contrat des clés dans
     `Must`.
-  @FileJukeBox::get_status — @pub fn(&mut @self) -> @crate::RhaiRes<@rhai::Dynamic>; key contract in
+  @FileJukeBox::get_status — @pub fn(&mut @self) -> @crate::RhaiRes<@rhai::Dynamic> ; contrat des clés dans
     `Must`.
   @FileJukeBox::rhai_set_status_updated — @pub fn(&mut @self, @list: @rhai::Dynamic) ->
-    @crate::RhaiRes<@Self>; full-list cache write, then @Ok(clone) of the box.
+    @crate::RhaiRes<@Self> ; écriture du cache de la liste entière, puis @Ok(clone) de la box.
   @FileJukeBox::rhai_set_status_packages_merge — @pub fn(&mut @self, @filter: @String, @list:
-    @rhai::Dynamic) -> @crate::RhaiRes<@Self>; filter inert per `Must`.
+    @rhai::Dynamic) -> @crate::RhaiRes<@Self> ; filtre inerte selon `Must`.
   @FileJukeBox::rhai_set_status_failed — @pub fn(&mut @self, @reason: @String) ->
-    @crate::RhaiRes<@Self>; infallibly @Err, see Raises.
-  @read_all_from_cache / @write_to_cache — private cache engine with @self receivers, full contract
-    in `Must`; in-file tests call them directly because the test module is inside the file.
-  @file_jukebox_rhai_register — @pub fn(@engine: &mut @rhai::Engine); freezes only, never registers
-    global fns; six registrations on the passed engine.
-  All of the above is crate-public reach: `/common/src/lib.rs` declares `pub mod jukebox_file;`, so
-    each @pub item is external API surface of the `common` crate.
+    @crate::RhaiRes<@Self> ; toujours @Err, voir Raises.
+  @read_all_from_cache / @write_to_cache — moteur de cache privé à récepteur @self, contrat complet dans
+    `Must` ; les tests du fichier les appellent directement car le module de tests est dans le fichier.
+  @file_jukebox_rhai_register — @pub fn(@engine: &mut @rhai::Engine) ; ne gèle que, n'enregistre jamais de
+    fns globales ; six enregistrements sur l'engine passé.
+  Tout ce qui précède est de portée pub du crate : `/common/src/lib.rs` déclare `pub mod jukebox_file;`, si
+    bien que chaque item @pub est de la surface API externe du crate `common`.
 
 Accepts:
-  @FileJukeBox::new accepts any @FileScanSpec — both fields @None included — and any @PathBuf: no
-    existence check, no directory creation, construction cannot fail.
-  @FileJukeBox::get_spec touches no disk; @FileJukeBox::get_status accepts whatever the cache
-    directory holds at call time.
-  Both Dynamic setters accept any @Dynamic whose JSON encoding is an array of maps satisfying the
-    @VynilPackage required keys (`registry`, `image`, `tag`, `metadata` with `name`, `category`,
-    `description`, `type`, `features`, and `requirements`); unknown keys are ignored, and a
-    @Dynamic holding a registered custom type (which @serde_json cannot encode) fails at the encode
-    leg.
-  @FileJukeBox::rhai_set_status_packages_merge accepts any @String filter, and @FileJukeBox::rhai_set_status_failed
-    any @String reason, including `""`.
-  @file_jukebox_rhai_register accepts any live @rhai::Engine and appends its registrations; under
-    the locked @rhai registry a repeated call simply re-binds the same names.
+  @FileJukeBox::new accepte n'importe quel @FileScanSpec — les deux champs @None compris — et n'importe quel
+    @PathBuf : aucun test d'existence, aucune création de répertoire, la construction ne peut échouer.
+  @FileJukeBox::get_spec ne touche aucun disque ; @FileJukeBox::get_status accepte ce que le répertoire de
+    cache contient au moment de l'appel.
+  Les deux setters Dynamic acceptent tout @Dynamic dont l'encodage JSON est un tableau de cartes
+    satisfaisant les clés requises de @VynilPackage (`registry`, `image`, `tag`, `metadata` avec `name`,
+    `category`, `description`, `type`, `features`, et `requirements`) ; les clés inconnues sont ignorées,
+    et un @Dynamic portant un type custom enregistré (que @serde_json ne peut encoder) échoue sur la
+    jambe d'encodage.
+  @FileJukeBox::rhai_set_status_packages_merge accepte n'importe quel @String de filtre, et
+    @FileJukeBox::rhai_set_status_failed n'importe quel @String de raison, `""` compris.
+  @file_jukebox_rhai_register accepte n'importe quel @rhai::Engine vivant et ajoute ses enregistrements ; sous
+    le registre @rhai verrouillé, un appel répété re-link simplement les mêmes noms.
 
 Returns:
-  Both setters return @Ok(clone of the box) — a value copy with the same @spec and @cache_dir — on a
-    successful write; the scan scripts discard it.
-  @FileJukeBox::get_status returns the `{ conditions: [], packages: […] }` map; package elements
-    carry the full @VynilPackage JSON shape with explicit nulls for @None option fields.
-  @read_all_from_cache returns @Vec<@VynilPackage> in index order, files concatenated in listed-file
-    order, `[]` for a cold cache.
-  @write_to_cache returns @Ok(()) after writing bundles and the rewritten index — including for an
-    empty slice, which still (re)writes `index.yaml`.
+  Les deux setters retournent @Ok(clone de la box) — une copie de valeur aux mêmes @spec et @cache_dir — sur
+    une écriture réussie ; les scripts de scan la jettent.
+  @FileJukeBox::get_status retourne la carte `{ conditions: [], packages: […] }` ; les éléments paquets portent
+    la forme JSON complète de @VynilPackage avec des nulls explicites pour les champs option @None.
+  @read_all_from_cache retourne un @Vec<@VynilPackage> dans l'ordre de l'index, fichiers concaténés dans
+    l'ordre des fichiers listés, `[]` pour un cache froid.
+  @write_to_cache retourne @Ok(()) après avoir écrit les bundles et l'index réécrit — y compris pour une
+    tranche vide, qui (ré)écrit quand même `index.yaml`.
 
 Raises:
-  @FileJukeBox::get_spec maps its @serde_json::from_value failure to @crate::Error::SerializationError
-    wrapped by @crate::rhai_err (text `SerializationError: …`); @FileJukeBox::get_status first
-    surfaces the whole @read_all_from_cache channel — unreadable files as text `Stdio error …`,
-    undecoded YAML as text `YamlError: <@serde_yaml @Display>`.
-  Both Dynamic setters fail inside the @Dynamic to @Vec<@VynilPackage> JSON roundtrip with text
-    `SerializationError: …` — @serde_json missing-field, invalid-type or custom-type encode
-    complaints — before the cache is touched, and afterwards with the same `Stdio error …` /
-    `YamlError: …` texts from @write_to_cache.
-  @write_to_cache loads the existing index before writing, so a corrupt or key-incomplete
-    `index.yaml` aborts a whole write with `YamlError: …` while every bundle file stays untouched;
-    a missing or unwritable @cache_dir fails as text `Stdio error …` because no call here ever
-    creates the directory.
-  @FileJukeBox::rhai_set_status_failed always returns @Err with the boxed message
-    `SCAN-FILE-001: Scan failed: {reason}` (@crate::Error::Other @Display), never @Ok.
-  On the Rhai side every crate variant is already flattened to its @Display string by
-    @crate::rhai_err — scripts see text, not variant identity.
+  @FileJukeBox::get_spec convert son échec @serde_json::from_value en @crate::Error::SerializationError
+    emballé par @crate::rhai_err (texte `SerializationError: …`) ; @FileJukeBox::get_status
+    expose d'abord tout le canal @read_all_from_cache — fichiers illisibles en texte `Stdio error …`, YAML
+    non décodé en texte `YamlError: <@serde_yaml @Display>`.
+  Les deux setters Dynamic échouent dans le roundtrip JSON de @Dynamic vers @Vec<@VynilPackage> avec le texte
+    `SerializationError: …` — plaintes @serde_json de champ manquant, type invalide ou encodage de
+    type custom — avant que le cache soit touché, et ensuite avec les mêmes textes `Stdio error …` /
+    `YamlError: …` de @write_to_cache.
+  @write_to_cache charge l'index existant avant d'écrire, si bien qu'un `index.yaml` corrompu ou
+    incomplet en clés interrompt toute l'écriture avec `YamlError: …` pendant que chaque fichier bundle reste
+    intact ; un @cache_dir manquant ou non inscriptible échoue en texte `Stdio error …` car aucun appel
+    d'ici ne crée jamais le répertoire.
+  @FileJukeBox::rhai_set_status_failed retourne toujours @Err avec le message boxed
+    `SCAN-FILE-001: Scan failed: {reason}` (@Display de @crate::Error::Other), jamais @Ok.
+  Côté Rhai, chaque variante du crate est déjà aplatie dans sa chaîne @Display par
+    @crate::rhai_err — les scripts voient du texte, pas l'identité de la variante.
 
 Handles:
-  Cold cache (no `index.yaml`) — reads empty, writes seed the index from @CacheIndex::default() and
-    produce the index artifact even for a zero-package scan.
-  Index entry whose bundle disappeared (deleted, partial earlier write) — skipped with no error and
-    no index repair.
-  Empty index `{}` or corrupt YAML — the key-less form fails the required `packages` field and both
-    operations abort with `YamlError: …` before any file state changes.
-  Repeated scan of the same packages — bundle overwritten, index entry kept once; the whole
-    duplicate-key history never grows the index.
-  A package scanned with zero versions in a later call — the (category, name) group keeps whatever
-    the latest call supplied; a group simply missing from the call keeps its old bundle.
-  `source` / `pull_secret` @None — `spec` emits null-rendered keys and the getters stay @Ok.
+  Cache froid (pas d'`index.yaml`) — les lectures répondent vide, les écritures amorcent l'index depuis
+    @CacheIndex::default() et produisent l'artefact d'index même pour un scan à zéro paquet.
+  Entrée d'index dont le bundle a disparu (supprimé, écriture partielle antérieure) — ignorée sans erreur
+    et sans réparation de l'index.
+  Index vide `{}` ou YAML corrompu — la forme sans clé échoue sur le champ requis `packages` et les deux
+    opérations abandonnent avec `YamlError: …` avant tout changement d'état des fichiers.
+  Scan répété des mêmes paquets — bundle écrasé, entrée d'index gardée une fois ; tout l'historique de clés
+    dupliquées ne fait jamais grossir l'index.
+  Paquet scanné avec zéro versions dans un appel ultérieur — le groupe (category, name) garde ce que le
+    dernier appel a fourni ; un groupe simplement absent de l'appel garde son ancien bundle.
+  `source` / `pull_secret` @None — `spec` émet des clés rendues null et les getters restent @Ok.
 
 Tasks:
-  [ ] Cover @FileJukeBox::get_spec: the four frozen keys, hardcoded `alpha`/`""`, the tagged
-      @JukeBoxDef rendering under `source`, and the @None → unit legs.
-  [ ] Cover @FileJukeBox::rhai_set_status_failed: always @Err, message pinned
-      `SCAN-FILE-001: Scan failed: {reason}`, cache untouched by the call.
-  [ ] Cover @FileJukeBox::rhai_set_status_packages_merge writing the same cache state as
-      @FileJukeBox::rhai_set_status_updated for a filter that would prune on the cluster side.
-  [ ] Cover @read_all_from_cache skipping an index-listed bundle that is absent while returning the
-      rest, and failing fail-fast (no partial vec) on a corrupt bundle.
-  [ ] Cover corrupt and key-less `index.yaml`: read fails `YamlError`, merge-write aborts before
-      touching bundle files.
-  [ ] Cover @write_to_cache against a nonexistent @cache_dir: @Err `Stdio error …` and no directory
-      created.
-  [ ] Cover the Dynamic accept boundary: missing `image`/`metadata` keys and a non-array payload
-      reject with `SerializationError: …` and no disk write.
-  [ ] Cover the zero-package write creating `index.yaml` with `packages: []`, and cross-call
-      accumulation: a category absent from the second scan still reads back.
-  [?] The @write_to_cache filter parameter is inert (`let _ = filter;`), so
-      `set_status_packages_merge` is dead-distinct from `set_status_updated`; decide later whether
-      the cluster-style filter-scoped merge lands on the cache or the parameter is dropped.
-  [?] Index entries are only appended and never reconciled: a pre-existing entry matching
-      (category, name) with a stale `file` value keeps pointing at the old path while the new
-      `{category}_{name}.yaml` becomes unreachable through the index; duplicate same-key entries
-      would double-read the same bundle. Decide later whether index repair belongs here.
-  [?] @FileJukeBox::get_spec hardcodes `maturity: "alpha"` — so an http/s3 source listing is never
-      maturity-filtered on the file-scan path — and any `maturity`/`schedule` keys an operator writes into
-      the spec YAML are unknown-field drops that the hardcodes overwrite anyway. Decide later whether
-      @FileScanSpec should grow real fields.
-  [?] The cache is timeless by construction (no timestamp field exists in @CacheIndex): staleness policy,
-      if file-scan output is ever mirrored or shipped, is enforced nowhere. Decide later whether an age
-      or revision marker is needed.
-  [?] @CacheIndexEntry.file / the computed bundle name are raw string joins: a `category` or `name`
-      containing `/` yields nested paths (or @Err on a missing parent), and an absolute or `..`
-      `file` value in a foreign index escapes @cache_dir. Decide later whether names are sanitized.
-  [?] @serde_yaml errors are kept as @e.to_string() inside @crate::Error::YamlError, losing the variant
-      type, and the @crate::Error::Stdio, @crate::Error::YamlError and
-      @crate::Error::SerializationError texts here carry no stable unique id
-      unlike `SCAN-FILE-001`, against the project error-tagging rule. Decide later whether cache
-      errors are tagged or the rule excludes them.
-  [?] @FileJukeBox::rhai_set_status_failed and @FileJukeBox::get_spec keep fallible @crate::RhaiRes legs that
-      pure formatting / the @rhai serde bridge's total @Dynamic deserialization are not known to reach.
-      Decide later whether the fallible shapes stay for registrar compatibility.
+  [ ] Couvrir @FileJukeBox::get_spec : les quatre clés gelées, `alpha`/`""` codés en dur, le rendu
+      @JukeBoxDef taggé sous `source`, et les jambes @None → unité.
+  [ ] Couvrir @FileJukeBox::rhai_set_status_failed : toujours @Err, message épinglé
+      `SCAN-FILE-001: Scan failed: {reason}`, cache intact après l'appel.
+  [ ] Couvrir @FileJukeBox::rhai_set_status_packages_merge écrivant le même état de cache que
+      @FileJukeBox::rhai_set_status_updated pour un filtre qui purgerait côté cluster.
+  [ ] Couvrir @read_all_from_cache ignorant un bundle listé dans l'index mais absent tout en retournant le
+      reste, et échouant en fail-fast (pas de vec partiel) sur un bundle corrompu.
+  [ ] Couvrir `index.yaml` corrompu et sans clés : la lecture échoue `YamlError`, l'écriture-fusion abandonne avant de
+      toucher les fichiers bundles.
+  [ ] Couvrir @write_to_cache contre un @cache_dir inexistant : @Err `Stdio error …` et aucun répertoire
+      créé.
+  [ ] Couvrir la frontière d'acceptation Dynamic : les clés `image`/`metadata` manquantes et une charge
+      non-tableau rejettent avec `SerializationError: …` et aucune écriture disque.
+  [ ] Couvrir l'écriture à zéro paquet créant `index.yaml` avec `packages: []`, et l'accumulation
+      inter-appels : une catégorie absente du second scan se relit quand même.
+  [?] Le paramètre de filtre de @write_to_cache est inerte (`let _ = filter;`), si bien que
+      `set_status_packages_merge` est distinct à mort de `set_status_updated` ; décider plus tard si la
+      fusion bornée par filtre façon cluster atterrit dans le cache ou si le paramètre est abandonné.
+  [?] Les entrées d'index ne sont qu'ajoutées et jamais réconciliées : une entrée existante correspondant à
+      (category, name) avec une valeur `file` obsolète pointe encore vers l'ancien chemin pendant que le nouveau
+      `{category}_{name}.yaml` devient inaccessible via l'index ; des entrées dupliquées de même clé
+      reliraient deux fois le même bundle. Décider plus tard si la réparation d'index appartient ici.
+  [?] @FileJukeBox::get_spec code en dur `maturity: "alpha"` — si bien qu'un listing de source http/s3 n'est
+      jamais filtré en maturité sur le chemin de scan fichier — et toute clé `maturity`/`schedule` qu'un opérateur écrit dans
+      le YAML du spec est une perte de champ inconnu que les codages en dur écrasent de toute façon. Décider plus tard si
+      @FileScanSpec devrait grossir en vrais champs.
+  [?] Le cache est intemporel par construction (aucun champ horodatage n'existe dans @CacheIndex) : la politique de
+      péremption, si la sortie du scan fichier est un jour miroitée ou transportée, n'est appliquée nulle part. Décider plus tard si un marqueur
+      d'âge ou de révision est nécessaire.
+  [?] @CacheIndexEntry.file / le nom de bundle calculé sont de bruts assemblages de chaînes : un `category` ou `name`
+      contenant `/` produit des chemins imbriqués (ou @Err sur parent manquant), et une valeur `file` absolue ou `..`
+      dans un index étranger s'échappe de @cache_dir. Décider plus tard si les noms sont assainis.
+  [?] Les erreurs @serde_yaml sont conservées en @e.to_string() dans @crate::Error::YamlError, perdant le
+      type de variante, et les textes @crate::Error::Stdio, @crate::Error::YamlError et
+      @crate::Error::SerializationError d'ici ne portent pas d'identifiant unique stable
+      contrairement à `SCAN-FILE-001`, au regard de la règle de taggage d'erreurs du projet. Décider plus tard si les erreurs de cache
+      sont tagguées ou si la règle les exclut.
+  [?] @FileJukeBox::rhai_set_status_failed et @FileJukeBox::get_spec gardent des jambes @crate::RhaiRes faillibles que le
+      formatage pur / la désérialisation @Dynamic totale du pont serde @rhai ne sont pas connus atteindre.
+      Décider plus tard si les formes faillibles restent pour la compatibilité du registrar.
 
 Done when:
-  Every Scenario above has a passing mapped in-file test or a recorded Task exemption, the
-    coverage `[ ]` tasks are green, the `[?]` decisions are recorded, and `cargo test -p common` is
-    green.
+  Chaque Scenario ci-dessus a un test mappé passant dans le fichier ou une exemption de Task enregistrée, les
+    tâches `[ ]` de couverture sont vertes, les décisions `[?]` sont enregistrées, et `cargo test -p common` est
+    vert.
 
 Scenario: First cache write creates the bundle and the index
-  Given a freshly created temp directory and one `database`/`postgresql` @VynilPackage
-  When @write_to_cache stores the list
-  Then `database_postgresql.yaml` and `index.yaml` both exist and the index holds exactly one entry
-    with category `database`, name `postgresql`
+  Given un répertoire temporaire fraîchement créé et un @VynilPackage `database`/`postgresql`
+  When @write_to_cache stocke la liste
+  Then `database_postgresql.yaml` et `index.yaml` existent tous deux et l'index contient exactement une entrée
+    avec category `database`, name `postgresql`
   Maps to test @write_to_cache_creates_files
 
 Scenario: Repeated scan of the same package leaves one index entry
-  Given the same package written twice through @write_to_cache
-  When the index is re-read
-  Then it still holds exactly one entry for that (category, name)
+  Given le même paquet écrit deux fois via @write_to_cache
+  When l'index est relu
+  Then il contient toujours exactement une entrée pour ce (category, name)
   Maps to test @write_to_cache_no_duplicate_in_index
 
 Scenario: Index-driven read concatenates every bundle
-  Given two scanned packages across `database` and `monitoring`
-  When @read_all_from_cache runs
-  Then both packages return
+  Given deux paquets scannés répartis sur `database` et `monitoring`
+  When @read_all_from_cache s'exécute
+  Then les deux paquets sont retournés
   Maps to test @read_all_from_cache_returns_packages
 
 Scenario: Cache directory without an index reads as empty
-  Given an empty temp directory
-  When @read_all_from_cache runs
-  Then it returns an empty vec — the cold-cache leg never errors
+  Given un répertoire temporaire vide
+  When @read_all_from_cache s'exécute
+  Then il retourne un vec vide — la jambe de cache froid n'erreure jamais
   Maps to test @read_all_from_cache_no_index_returns_empty
 
 Scenario: Status exposes cached packages as script-visible maps
-  Given one `database`/`postgresql` package in the cache
-  When @FileJukeBox::get_status runs
-  Then the `packages` array holds one map whose `metadata.category` is `database` and
-    `metadata.name` is `postgresql`
+  Given un paquet `database`/`postgresql` dans le cache
+  When @FileJukeBox::get_status s'exécute
+  Then le tableau `packages` contient une carte dont `metadata.category` vaut `database` et
+    `metadata.name` vaut `postgresql`
   Maps to test @get_status_returns_correct_packages
 
 Scenario: Spec getter answers the JukeBox-shaped four-key map
-  Given a @FileJukeBox over any @FileScanSpec, with or without source and pull_secret
-  When @FileJukeBox::get_spec runs
-  Then the map carries exactly `source`, `maturity`, `pull_secret`, `schedule` with `maturity` `alpha`
-    and `schedule` `""`, and @None fields surface as Rhai unit
+  Given un @FileJukeBox sur n'importe quel @FileScanSpec, avec ou sans source et pull_secret
+  When @FileJukeBox::get_spec s'exécute
+  Then la carte porte exactement `source`, `maturity`, `pull_secret`, `schedule` avec `maturity` `alpha`
+    et `schedule` `""`, et les champs @None ressortent comme unité Rhai
   No mapped test exists.
 
 Scenario: Failed scans only error and record nothing
-  Given a @FileJukeBox over any cache state and any reason text, even `""`
-  When @FileJukeBox::rhai_set_status_failed runs
-  Then it returns @Err with text `SCAN-FILE-001: Scan failed: {reason}` and the cache artifacts stay
-    as they were
+  Given un @FileJukeBox sur n'importe quel état de cache et n'importe quel texte de raison, même `""`
+  When @FileJukeBox::rhai_set_status_failed s'exécute
+  Then il retourne @Err avec le texte `SCAN-FILE-001: Scan failed: {reason}` et les artefacts du cache restent
+    tels qu'ils étaient
   No mapped test exists.
 
 Scenario: Packages merge ignores its filter
-  Given a cached `database`/`postgresql` package and a filter pointing elsewhere
-  When @FileJukeBox::rhai_set_status_packages_merge writes a fresh list
-  Then the cache ends in the state @FileJukeBox::rhai_set_status_updated would produce for the same
-    list — the filter prunes nothing
+  Given un paquet `database`/`postgresql` en cache et un filtre pointant ailleurs
+  When @FileJukeBox::rhai_set_status_packages_merge écrit une nouvelle liste
+  Then le cache finit dans l'état que @FileJukeBox::rhai_set_status_updated produirait pour la même
+    liste — le filtre ne purge rien
   No mapped test exists.
 
 Scenario: Corrupt or key-less index aborts reads and writes untouched
-  Given an `index.yaml` that is either malformed YAML or a mapping without the `packages` key
-  When @read_all_from_cache or @write_to_cache runs
-  Then the call fails with `YamlError: …` text and, on the write leg, no bundle file is created or
-    altered because the index load precedes them
+  Given un `index.yaml` qui est soit du YAML malformé soit un mapping sans la clé `packages`
+  When @read_all_from_cache ou @write_to_cache s'exécute
+  Then l'appel échoue avec un texte `YamlError: …` et, sur la jambe d'écriture, aucun fichier bundle n'est créé ni
+    altéré car le chargement de l'index les précède
   No mapped test exists.
 
 Scenario: Unwritable cache directory fails without creating it
-  Given a @cache_dir path that does not exist
-  When @write_to_cache runs
-  Then it fails with `Stdio error …` and the directory is still not created afterwards
+  Given un chemin de @cache_dir qui n'existe pas
+  When @write_to_cache s'exécute
+  Then il échoue avec `Stdio error …` et le répertoire n'est toujours pas créé après coup
   No mapped test exists.
 
 Scenario: Malformed Rhai payload never reaches disk
-  Given a @Dynamic that is not an array or whose items lack the required @VynilPackage keys
-  When either Dynamic setter runs
-  Then it fails with `SerializationError: …` text before any cache file is touched
+  Given un @Dynamic qui n'est pas un tableau ou dont les items n'ont pas les clés @VynilPackage requises
+  When l'un ou l'autre des setters Dynamic s'exécute
+  Then il échoue avec un texte `SerializationError: …` avant qu'un fichier du cache soit touché
   No mapped test exists.
 
 Scenario: Scans accumulate and zero-package scans still create the index
-  Given a cache holding `database`/`postgresql`, scanned again with only `monitoring`/`prometheus`,
-    and a third call with an empty list
-  When each write completes
-  Then both categories' bundles stay indexed and readable, and the empty write (re)writes
-    `index.yaml` without adding entries
+  Given un cache tenant `database`/`postgresql`, rescané avec seulement `monitoring`/`prometheus`,
+    et un troisième appel avec une liste vide
+  When chaque écriture se termine
+  Then les bundles des deux catégories restent indexés et lisibles, et l'écriture vide (ré)écrit
+    `index.yaml` sans ajouter d'entrées
   No mapped test exists.
 
 Example:
-  index.yaml after the @write_to_cache_creates_files case: `packages:` then one entry mapping
+  index.yaml après le cas @write_to_cache_creates_files : `packages:` puis une entrée mappant
     `category: database`, `name: postgresql`, `file: database_postgresql.yaml`
-  bundle `database_postgresql.yaml`: a top-level @serde_yaml sequence of scanned @VynilPackage maps
-    in scan order, each opening `registry: docker.io`, `image: database/postgresql`, `tag: 1.0.0`
-    with the `metadata` map carrying `name` and `category`
-  Rhai surface on a box var: `box.spec` → keys `source`, `maturity`, `pull_secret`, `schedule`;
-    `box.status` → keys `conditions` (always `[]`) and `packages`;
+  bundle `database_postgresql.yaml` : une séquence @serde_yaml de cartes @VynilPackage scannées dans
+    l'ordre de scan, chacune ouvrant sur `registry: docker.io`, `image: database/postgresql`, `tag: 1.0.0`
+    avec la carte `metadata` portant `name` et `category`
+  Surface Rhai sur une variable box : `box.spec` → clés `source`, `maturity`, `pull_secret`, `schedule` ;
+    `box.status` → clés `conditions` (toujours `[]`) et `packages` ;
     `box.set_status_updated(list)`, `box.set_status_packages_merge(filter, list)`,
     `box.set_status_failed(reason)`

@@ -3,74 +3,74 @@ Spec: TemplateMod
 Platform: Rust
 
 Purpose:
-  Sub-command dispatcher for `agent template …`: owns the private `tenant`, `service`
-    and `system` leaf modules — the offline Helm-less templating lane (render package
-    manifests locally) — plus the shared @Contexts enum their leaves embed.
+  Dispatcheur de sous-commandes pour `agent template …` : possède les modules feuilles
+    privés `tenant`, `service` et `system` — la voie de templating hors ligne sans Helm
+    (rendre les manifestes de package en local) — plus l'enum partagée @Contexts que leurs feuilles intègrent.
 
 Owns:
   ./mod.rs
 
 Exposes:
-  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
-    ./../main.rs (`Template` dispatch arm; spec pending ./../main.sdd).
-  @Commands — clap `Subcommand`, `Debug`, exactly three variants with `///` doc help
-    verbatim: @Tenant(tenant::Parameters) doc `Template a tenant package`,
+  @Parameters — clap `Parser`, `Debug` ; champ unique @command: @Commands. Consommé par
+    ./../main.rs (bras de dispatch `Template` ; spec en attente ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, exactement trois variantes avec l'aide doc `///`
+    verbatim : @Tenant(tenant::Parameters) doc `Template a tenant package`,
     @Service(service::Parameters) doc `Template a service package`,
     @System(system::Parameters) doc `Template a system package`.
-  @Contexts — clap @ValueEnum, @Default (`@Simple` arm carries `#[default]`),
-    @Debug, @Clone, serde @Serialize + @Deserialize; arms exactly: @Simple doc
-    `Minimal context`, @HA doc `High-availibity context` — the misspelling in that
-    doc string is frozen (never rename without a contract review; help output shows
-    it verbatim).
+  @Contexts — clap @ValueEnum, @Default (le bras `@Simple` porte `#[default]`),
+    @Debug, @Clone, serde @Serialize + @Deserialize ; bras exactement : @Simple doc
+    `Minimal context`, @HA doc `High-availibity context` — la faute d'orthographe de
+    cette chaîne de doc est gelée (ne jamais renommer sans revue de contrat ; l'aide
+    l'affiche verbatim).
 
 Accepts:
-  A parsed @Commands tree; leaf flag contracts in ./tenant.sdd, ./service.sdd,
+  Un arbre @Commands parsé ; contrats de flags des feuilles dans ./tenant.sdd, ./service.sdd,
     ./system.sdd.
 
 Returns:
-  `()` — @run is NOT async (unlike the system/service/tenant/boxes dispatchers);
-    success falls off the end, @Err lanes end in @std::process::exit.
+  `()` — @run n'est PAS async (contrairement aux dispatcheurs system/service/tenant/boxes) ;
+    le succès retombe en fin de fonction, les voies @Err se terminent par @std::process::exit.
 
 Handles:
-  Leaf @Err (leaves are sync): Tenant `Templating a tenant package failed with: {e:}`
-    → exit 1; Service `Templating a service package failed with: {e:}` → exit 1;
+  @Err des feuilles (feuilles sync) : Tenant `Templating a tenant package failed with: {e:}`
+    → exit 1 ; Service `Templating a service package failed with: {e:}` → exit 1 ;
     System `Templating a system package failed with: {e:}` → exit 3.
-  Panics inside leaves — unwound; main's #[tokio::main] runtime is still alive because
-    template::run is called synchronously from the async main body.
+  Panics dans les feuilles — débobinés ; le runtime #[tokio::main] de main est encore vivant
+    car template::run est appelé de façon synchrone depuis le corps async de main.
 
 Must:
-  Keep `mod service; mod system; mod tenant;` private and re-export nothing but the
-    items listed under Exposes (@Contexts is the only symbol other leaves import as
-    `super::Contexts`).
-  Call NO @common::context::init_k8s(): this is the one dispatcher with no kube
-    client dependency at the dispatch level; leaf need is frozen per their specs.
-  Keep @HA doc-string typo `High-availibity` byte-exact.
-  Return from @run without any @await — the three leaf @run calls are synchronous.
+  Garder `mod service; mod system; mod tenant;` privés et ne ré-exporter rien d'autre que
+    les éléments listés sous Exposes (@Contexts est le seul symbole que les autres feuilles
+    importent comme `super::Contexts`).
+  Ne PAS appeler @common::context::init_k8s() : c'est le seul dispatcheur sans dépendance
+    de client kube au niveau du dispatch ; le besoin des feuilles est gelé selon leurs specs.
+  Garder la faute de doc-string @HA `High-availibity` exacte octet pour octet.
+  Revenir de @run sans aucun @await — les trois appels @run des feuilles sont synchrones.
 
 Depends on:
-  ./tenant.sdd, ./service.sdd, ./system.sdd — leaf contracts (each embeds @Contexts
-    via its @Parameters).
-  ./../main.rs — caller (`template::run(args)`, no await); spec pending ./../main.sdd.
+  ./tenant.sdd, ./service.sdd, ./system.sdd — contrats des feuilles (chacune intègre @Contexts
+    via ses @Parameters).
+  ./../main.rs — appelant (`template::run(args)`, sans await) ; spec en attente ./../main.sdd.
 
 Tasks:
-  [ ] Decide later whether `High-availibity` is corrected (help-text-only change,
-      but frozen until reviewed) and whether @Contexts serde derives need a stable
-      wire representation (lowercase? today serde defaults to "Simple"/"HA").
-  [ ] Decide the tenant/system exit-code story (1 vs 3 mirrors system-mod's install
-      vs delete split with no operator consumer documented).
-  [ ] Cover the dispatcher with tests; none exist in this file.
+  [ ] Décider plus tard si `High-availibity` est corrigé (changement de texte d'aide
+      seulement, mais gelé jusqu'à revue) et si les derives serde de @Contexts exigent une
+      représentation wire stable (minuscules ? aujourd'hui serde émet "Simple"/"HA" par défaut).
+  [ ] Trancher l'histoire des codes de sortie tenant/system (1 vs 3 reproduit la scission
+      install vs delete de system-mod, sans consommateur operator documenté).
+  [ ] Couvrir le dispatcheur par des tests ; aucun n'existe dans ce fichier.
 
 Done when:
-  Dispatch, @Contexts shape/defaults/typo, and the sync-no-k8s posture hold under
-    tests.
+  Le dispatch, la forme/défauts/faute de @Contexts et la posture sync-sans-k8s tiennent
+    sous les tests.
 
 Scenario: contexts enum defaults to Simple
   Given `TemplateMod` @Contexts
-  When @Default::default is called
-  Then @Simple is returned and clap renders `Minimal context` in help
-  And @HA still renders its frozen `High-availibity context` typo
+  When @Default::default est appelée
+  Then @Simple est renvoyé et clap affiche `Minimal context` dans l'aide
+  And @HA affiche toujours sa faute gelée `High-availibity context`
 
 Scenario: system templating failure exits 3
-  Given @Commands::System whose sync leaf returns @Err
-  When @run reaches the system arm
-  Then the frozen system log line prints and @process::exit(3) is reached
+  Given @Commands::System dont la feuille sync renvoie @Err
+  When @run atteint le bras system
+  Then la ligne de log system gelée s'affiche et @process::exit(3) est atteint

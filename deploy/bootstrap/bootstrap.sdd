@@ -1,31 +1,31 @@
-# Directory spec for the cluster bootstrap resources.
+# Spécification de répertoire pour les ressources de bootstrap du cluster.
 
 Spec: bootstrap
 
 Platform: Kubernetes/kustomize
 
 Purpose:
-  The privileged bootstrap step that prepares a cluster for Vynil: it creates the
-  `vynil-system` namespace resources, a cluster-admin service account used only for initial
-  reconciliation setup, and the starter `@JukeBox` pointing at the trusted package source.
+  L'étape de bootstrap privilégiée qui prépare un cluster pour Vynil : elle crée les ressources du
+  namespace `vynil-system`, un service account cluster-admin utilisé uniquement pour la mise en place
+  initiale de la réconciliation, et le `@JukeBox` de démarrage pointant vers la source de paquets de confiance.
 
 Structure:
-  ./bootstrap.yaml: Service account, cluster-admin ClusterRole and binding, and starter JukeBox
-  ./kustomization.yaml: Patches the agent image tag and the `vynil-system` namespace
+  ./bootstrap.yaml: Service account, ClusterRole cluster-admin et binding, et JukeBox de démarrage
+  ./kustomization.yaml: Patche le tag de l'image de l'agent et le namespace `vynil-system`
 
 Owns:
   ./bootstrap.yaml
   ./kustomization.yaml
 
 Must:
-  Bind `vynil-bootstrap` to cluster-admin only in namespace `vynil-system`.
-  Pin the `docker.io/sebt3/vynil-agent` image tag through the kustomization.
-  Declare the starter `@JukeBox` source list with `maturity: stable`.
+  Lier `vynil-bootstrap` à cluster-admin uniquement dans le namespace `vynil-system`.
+  Épingler le tag de l'image `docker.io/sebt3/vynil-agent` via la kustomization.
+  Déclarer la liste de sources du `@JukeBox` de démarrage avec `maturity: stable`.
 
 Must not:
-  Grant cluster-admin rights outside the bootstrap service account.
-  Reference development or mutable image tags without an explicit override.
+  Accorder des droits cluster-admin en dehors du service account de bootstrap.
+  Référencer des tags d'image de développement ou mutables sans override explicite.
 
 Done when:
-  `kustomize build ./deploy/bootstrap` yields the namespace-scoped service account, the cluster
-    binding, and the stable JukeBox.
+  `kustomize build ./deploy/bootstrap` produit le service account scopé au namespace, le cluster
+    binding, et le JukeBox stable.

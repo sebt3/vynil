@@ -1,314 +1,336 @@
 Spec: LibBuildContext
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Build the render/execution `context` map every instance operation and the offline
-    template lane runs on: the shared assembly of `cluster` (agent.yaml + live or
-    enum-default storage classes/CRDs/nodes/services), `controller`, `instance`
-    (identity, package metadata, labels, selector, images, resources, appslug,
-    current/requested tags), `values` masked from `defaults`, plus `defaults`,
-    `package_dir` and `config_dir`. Two lanes of one contract: @template renders a
-    cluster-free context from hardcoded profiles for offline `agent template`, and
-    @run gathers the same shape from the real cluster for install/update flows. Since
-    this is Rhai and not plain Rust, every failure mode is an interpreter error unless
-    this file wraps it.
+  Construit la carte `context` de rendu/exécution sur laquelle s'appuient toute opération
+    d'instance et la lane de gabarit hors-ligne : l'assemblage partagé de `cluster`
+    (agent.yaml + storage classes/CRDs/nodes/services live ou par défaut d'énumération),
+    `controller`, `instance` (identité, métadonnées du package, labels, selector,
+    images, resources, appslug, tags courant/demandé), `values` masquées depuis
+    `defaults`, plus `defaults`, `package_dir` et `config_dir`. Deux lanes d'un seul
+    contrat : @template rend un contexte sans cluster depuis des profils codés en dur
+    pour `agent template` hors-ligne, et @run collecte la même forme depuis le cluster
+    réel pour les flux install/update. Comme il s'agit de Rhai et non de Rust pur,
+    chaque mode d'échec est une erreur d'interpréteur sauf si ce fichier l'encapsule.
 
 Exposes:
-  @template(instance, args) — offline context builder, the `template` entry point name
-    recognized by @ENTRY_POINT_FUNCTIONS (/agent/src/linting/rhai_checker.rs); reads no
-    cluster object.
-  @run(instance, args) — live context builder, the `run` entry point; the only lane that
-    touches @k8s_resource and @get_tenant_name.
+  @template(instance, args) — constructeur de contexte hors-ligne, le nom de point
+    d'entrée `template` reconnu par @ENTRY_POINT_FUNCTIONS (/agent/src/linting/rhai_checker.rs) ; ne lit
+    aucun objet de cluster.
+  @run(instance, args) — constructeur de contexte live, le point d'entrée `run` ; la
+    seule lane qui touche @k8s_resource et @get_tenant_name.
   @appslug(pkg, inst), @get_default(def), @get_values(options, defaults),
-    @get_default_context(args) — module-visible helpers (Rhai module functions are all
-    importable), also reached by templates only through the frozen output keys.
-  Importer convention `import "build_context" as build` then `build::template` /
-    `build::run` — frozen in the three per-kind wrappers (Depends on); those wrappers
-    own the hook chain (`context_pre`/`context_post`/…) and the lane-specific keys
-    `template_dir`, `agent_image`, `tenant`, `namespace` — this file mints none of them.
+    @get_default_context(args) — helpers visibles du module (toutes les fonctions de
+    module Rhai sont importables), également atteignables par les gabarits uniquement
+    via les clés de sortie gelées.
+  Convention d'import `import "build_context" as build` puis `build::template` /
+    `build::run` — gelée dans les trois wrappers per-kind (Depends on) ; ces wrappers
+    portent la chaîne de hooks (`context_pre`/`context_post`/…) et les clés propres aux
+    lanes `template_dir`, `agent_image`, `tenant`, `namespace` — ce fichier n'en mint
+    aucune.
 
 Accepts:
-  @instance — a typed CR @Dynamic or deserialized map. @template reads only
-    `metadata.name` and `metadata.namespace` (ungated: missing either is an interpreter
-    error; `spec` is never read, so the synthesized template-lane instance needs none).
-    @run additionally reads `spec["package"]` (bracket index), `spec.jukebox`,
-    `spec.category`, `spec.options`, and optional `status.tag` (guarded); when
-    @type_of(instance) == `TenantInstance` it calls @instance.get_tenant_name().
-  @args — map with keys read verbatim, both lanes unless noted: `package_dir`
-    (holds `package.yaml`), `config_dir` (holds optional `agent.yaml`),
-    `controller_values` (a JSON `string` — a non-string value fails @json_decode and
-    degrades, see Handles), `vynil_namespace`, `tag` (the requested version, surfaced
-    as `instance.requested` ungated). @template only: `context_name`, matched against
-    the literal `HA` string (the @Contexts enum serde spelling,
-    /agent/src/template/mod.rs); every other value — including absent — selects the
-    simple profile.
-  No environment variables, no Secret reads: every input is an `args` key, one of two
-    files under the args dirs, or a cluster read.
+  @instance — un @Dynamic de CR typé ou une carte désérialisée. @template ne lit que
+    `metadata.name` et `metadata.namespace` (non gardé : l'absence de l'un ou l'autre
+    est une erreur d'interpréteur ; `spec` n'est jamais lu, donc l'instance synthétisée
+    de la lane gabarit n'en a besoin d'aucune). @run lit en plus `spec["package"]`
+    (index par crochet), `spec.jukebox`, `spec.category`, `spec.options`, et
+    `status.tag` optionnel (gardé) ; quand @type_of(instance) == `TenantInstance` il
+    appelle @instance.get_tenant_name().
+  @args — carte aux clés lues verbatim, les deux lanes sauf mention : `package_dir`
+    (porte `package.yaml`), `config_dir` (porte `agent.yaml` optionnel),
+    `controller_values` (une `string` JSON — une valeur non-string fait échouer
+    @json_decode et dégrade, voir Handles), `vynil_namespace`, `tag` (la version
+    demandée, exposée comme `instance.requested` non gardé). @template uniquement :
+    `context_name`, apparié au literal `HA` (l'orthographe serde de l'enum @Contexts,
+    /agent/src/template/mod.rs) ; toute autre valeur — y compris absente — sélectionne
+    le profil simple.
+  Pas de variables d'environnement, pas de lecture de Secret : chaque entrée est une
+    clé `args`, un des deux fichiers sous les répertoires des args, ou une lecture de
+    cluster.
 
 Returns:
-  One map with top-level keys `cluster`, `controller`, `instance`, `values`,
-    `defaults`, `package_dir`, `config_dir` (the last two echo the args values).
-  `cluster`: the decoded `${args.config_dir}/agent.yaml` map or `#{}` when @is_file is
-    false, then ALWAYS overwritten: `storage_classes` (enriched, below), `crds` (list of
-    name strings), `services` (`[]`), `vynil_namespace` (args value); overwritten only
-    when the merged map lacks the key: `prefered_storage` (@get_prefered_sc of the
-    enriched classes) and `ha` (boolean).
-  `instance`: `name`, `namespace`, `package`, `labels`, `selector`, `images`,
+  Une carte aux clés de premier niveau `cluster`, `controller`, `instance`, `values`,
+    `defaults`, `package_dir`, `config_dir` (les deux dernières répètent les valeurs
+    passées dans les args).
+  `cluster` : la carte `${args.config_dir}/agent.yaml` décodée ou `#{}` quand @is_file
+    est false, puis TOUJOURS écrasée : `storage_classes` (enrichies, ci-dessous),
+    `crds` (liste de chaînes de noms), `services` (`[]`), `vynil_namespace` (valeur des
+    args) ; écrasées seulement quand la carte fusionnée n'a pas la clé :
+    `prefered_storage` (@get_prefered_sc des classes enrichies) et `ha` (booléen).
+  `instance` : `name`, `namespace`, `package`, `labels`, `selector`, `images`,
     `resources`, `current`, `requested`, `appslug`.
-    `package` — @template: `name` (pkg metadata), `jukebox` literal `box`, `category`,
-      `app_version`, `options`; @run adds `type` (pkg metadata `type`) and
-      `backup_affinity`, with `jukebox` from `spec.jukebox` — the template lane mints
-      neither `type` nor `backup_affinity` keys at all (Tasks).
-    `labels` — six keys, `app.kubernetes.io/name`, `app.kubernetes.io/instance`,
+    `package` — @template : `name` (métadonnées pkg), `jukebox` literal `box`,
+      `category`, `app_version`, `options` ; @run ajoute `type` (`type` des
+      métadonnées pkg) et `backup_affinity`, avec `jukebox` depuis `spec.jukebox` — la
+      lane gabarit ne mint aucune des clés `type` ni `backup_affinity` (Tasks).
+    `labels` — six clés, `app.kubernetes.io/name`, `app.kubernetes.io/instance`,
       `app.kubernetes.io/managed-by` literal `vynil`,
       `vynil.solidite.fr/owner-namespace`, `vynil.solidite.fr/owner-category`,
-      `vynil.solidite.fr/owner-type`. Name source: pkg `metadata.name` in @template,
-      `instance.spec["package"]` in @run; owner-type: literal `system` in @template
-      (all three kinds), `pkg.metadata["type"]` in @run (Tasks).
-    `selector` — the same `app.kubernetes.io/name` + `app.kubernetes.io/instance` pair,
-      same per-lane sources.
-    `images` / `resources` — passed through from `pkg.images` / `pkg.resources`
-      untouched (raw-map values in @template, typed maps in @run).
-    `current` — `""` always in @template; `instance.status.tag` when `status` and `tag`
-      both exist in @run, else `""`. `requested` — `args.tag`.
-    `appslug` — @appslug(package-name, instance-name) (below).
-  `values` / `defaults` — `defaults` is the @get_default(pkg.options) map; @template
-    returns `values` from `get_values(#{}, defaults)` (a top-level copy of `defaults` —
-    the synthesized instance cannot supply options), @run from
-    `get_values(instance.spec.options, defaults)`.
+      `vynil.solidite.fr/owner-type`. Source du nom : `metadata.name` du pkg dans
+      @template, `instance.spec["package"]` dans @run ; owner-type : literal `system`
+      dans @template (les trois kinds), `pkg.metadata["type"]` dans @run (Tasks).
+    `selector` — la même paire `app.kubernetes.io/name` +
+      `app.kubernetes.io/instance`, mêmes sources par lane.
+    `images` / `resources` — passés tels quels depuis `pkg.images` /
+      `pkg.resources` (valeurs de cartes brutes dans @template, cartes typées dans
+      @run).
+    `current` — `""` toujours dans @template ; `instance.status.tag` quand `status` et
+      `tag` existent tous deux dans @run, sinon `""`. `requested` — `args.tag`.
+    `appslug` — @appslug(nom-du-package, nom-de-l'instance) (ci-dessous).
+  `values` / `defaults` — `defaults` est la carte @get_default(pkg.options) ;
+    @template retourne `values` depuis `get_values(#{}, defaults)` (une copie de
+    premier niveau de `defaults` — l'instance synthétisée ne peut pas fournir
+    d'options), @run depuis `get_values(instance.spec.options, defaults)`.
 
 Raises:
-  This file never calls @throw. Interpreter errors escape wherever unguarded:
-    `package.yaml`: @template does @file_read + @yaml_decode of `${package_dir}/package.yaml`
-      (missing file / bad YAML raise), @run does the typed @read_package_yaml
-      (/common/src/vynilpackage.sdd — validation and normalization run only on this
-      lane, Tasks); bad `${config_dir}/agent.yaml` YAML raises (the @is_file gate tests
-      existence, not parseability); `instance.metadata.*` and `args.tag`,
-      `args.vynil_namespace`, `args.package_dir`, `args.config_dir` missing keys/props;
-      a `pkg.options` map whose entry is not itself a map breaks the
-      `def[k]["default"]` index in @get_default.
-  @run cluster reads are unguarded except the @ServiceInstance block: the
-    `StorageClass` @k8s_resource @list, and the two @list_meta reads of kinds
-    `CustomResourceDefinition` / `Node`, abort @run on failure; the
-    tenant @get_tenant_name is inside the guarded block so its @Err leg degrades
-    instead (a Rust-side panic from client build would not be catchable —
-    /common/src/context.sdd).
-  Missing map keys answer `()` rather than raising: the locked rhai `1.25.1` engine
-    leaves `fail_on_invalid_map_property` at its default (`false`), so
-    `agent.yaml`-absent fields, absent SC annotations, and absent `status` fields walk
-    the guards as `()`; out-of-range array indexing and registered-CR property misses
-    are a different lane (raise).
+  Ce fichier n'appelle jamais @throw. Erreurs d'interpréteur propagées partout où non
+    gardé : `package.yaml` : @template fait @file_read + @yaml_decode de
+    `${package_dir}/package.yaml` (fichier manquant / YAML invalide lèvent), @run fait
+    le typé @read_package_yaml (/common/src/vynilpackage.sdd — validation et
+    normalisation ne tournent que sur cette lane, Tasks) ; un YAML invalide de
+    `${config_dir}/agent.yaml` lève (le gate @is_file teste l'existence, pas la
+    parsabilité) ; clés/props manquantes `instance.metadata.*` et `args.tag`,
+    `args.vynil_namespace`, `args.package_dir`, `args.config_dir` ; une carte
+    `pkg.options` dont une entrée n'est pas elle-même une carte casse l'index
+    `def[k]["default"]` dans @get_default.
+  Les lectures de cluster de @run sont non gardées sauf le bloc @ServiceInstance : le
+    @list @k8s_resource des `StorageClass`, et les deux lectures @list_meta des kinds
+    `CustomResourceDefinition` / `Node`, interrompent @run en cas d'échec ; le
+    @get_tenant_name du tenant est dans le bloc gardé donc sa branche @Err dégrade au
+    contraire (une panique côté Rust de la construction du client ne serait pas
+    rattrapable — /common/src/context.sdd).
+  Les clés de carte manquantes répondent `()` plutôt que de lever : le moteur rhai
+    `1.25.1` verrouillé laisse `fail_on_invalid_map_property` à son défaut (`false`),
+    donc les champs absents de `agent.yaml`, les annotations SC absentes et les champs
+    `status` absents traversent les gardes comme `()` ; l'indexation de tableau hors
+    bornes et les props absentes d'un CR enregistré sont une autre lane (lèvent).
 
 Handles:
-  `controller_values` absent, non-JSON, or non-string — `try`/`catch` around
-    @json_decode; @type_of(e) `string` is @log_warn'd verbatim, any other error
-    @json_encode'd; `controller` stays `#{}` and no message is raised.
-  @ServiceInstance gather failure (list, tenant-name, or shape) — same @log_warn
-    pattern; `cluster.services` keeps its pre-seeded `[]` (the assembled list is
-    assigned only at the end of the guarded block).
-  `agent.yaml` absent — base `#{}`; own `prefered_storage`/`ha` in `agent.yaml` are
-    kept, every other overwritten key above is replaced even if `agent.yaml` set it.
-  `context_name` — exact `"HA"` gives the hardcoded profile; case differs → simple.
-  `StorageClass` defaulting — `is_default` is annotation
-    `storageclass.kubernetes.io/is-default-class` == `true` only; an absent
-    `annotations` map yields `false`.
-  Tenant visibility — in @run each `svc.status.services` entry gains
-    `instance` and `package` submaps (overwriting any pre-existing values), and
-    flattens its `service` payload into the entry (`s += s.service` then
-    @remove) where present. For a @TenantInstance caller: untagged entries and entries
-    whose `tenant` equals @get_tenant_name() are kept (tag removed on match); foreign
-    tags are dropped. For every other caller type: `tenant`-tagged entries are dropped
-    entirely. Entries under a `status` that is not a map or `status.services` that is
-    not an array are skipped silently.
-  Absent `pkg.options` (`()` or non-map) — `defaults` and `values` are `#{}`, matching
-    the linting claim frozen at /agent/src/linting/hbs_checker.sdd.
+  `controller_values` absent, non-JSON ou non-string — `try`/`catch` autour de
+    @json_decode ; @type_of(e) `string` est relayé verbatim par @log_warn, toute autre
+    erreur est @json_encode'ée ; `controller` reste `#{}` et aucun message n'est levé.
+  Échec de la collecte @ServiceInstance (list, tenant-name, ou forme) — même motif
+    @log_warn ; `cluster.services` garde son `[]` pré-seminé (la liste assemblée n'est
+    assignée qu'à la fin du bloc gardé).
+  `agent.yaml` absent — base `#{}` ; les `prefered_storage`/`ha` propres à
+    `agent.yaml` sont conservés, toute autre clé écrasée ci-dessus est remplacée même
+    si `agent.yaml` l'avait posée.
+  `context_name` — `"HA"` exact donne le profil codé en dur ; casse différente →
+    simple.
+  Défaut `StorageClass` — `is_default` est l'annotation
+    `storageclass.kubernetes.io/is-default-class` == `true` seulement ; une carte
+    `annotations` absente donne `false`.
+  Visibilité tenant — dans @run chaque entrée `svc.status.services` gagne des
+    sous-cartes `instance` et `package` (écrasant toute valeur préexistante), et
+    aplatit sa charge `service` dans l'entrée (`s += s.service` puis @remove) quand
+    présente. Pour un appelant @TenantInstance : les entrées sans tag et celles dont
+    le `tenant` égale @get_tenant_name() sont conservées (tag retiré sur
+    correspondance) ; les tags étrangers sont écartés. Pour tout autre type d'appelant
+    : les entrées taguées `tenant` sont entièrement écartées. Les entrées sous un
+    `status` qui n'est pas une carte ou un `status.services` qui n'est pas un tableau
+    sont passées silencieusement.
+  `pkg.options` absent (`()` ou non-carte) — `defaults` et `values` sont `#{}`,
+    cohérent avec l'affirmation de linting gelée dans
+    /agent/src/linting/hbs_checker.sdd.
 
 Must:
-  @appslug(pkg, inst): return @inst when @pkg equals @inst (no length guard); else when
-    `${inst}-${pkg}` exceeds 28 characters return it cut by @truncate to 28 (rhai `len`
-    and `truncate` are both char-based on the locked build); else return
-    `${inst}-${pkg}`. Both lanes pass (package-name, instance-name) in that order, so
-    the slug is `<instance>-<package>`.
-  @get_default(def): `#{}` unless @def is a map; then copy each top-level key from
-    `def[k]["default"]` — shallow, one level, missing `default` copies as `()` — so
-    `defaults` keys mirror `pkg.options` key-for-key.
-  @get_values(options, defaults): `()` options → return @defaults whole; two maps →
-    recurse keyed off the `defaults` map keys only (result top-level keys are exactly
-    `defaults` keys; option-only keys are dropped at every level, values from options
-    where present, defaults otherwise); any other shape → return @options. Invariant:
-    `values` top-level keys ⊆ `pkg.options` top-level keys.
-  @get_default_context(args): `HA` → `nodes` of the eight names `master01`, `master02`,
-    `master03`, `worker01`, `worker02`, `worker03`, `worker04`, `worker05`, a 156-name
-    `crds` snapshot
-    over 34 api-groups (cert-manager/acme, cilium, rook-ceph, the kubevirt family incl.
-    CDI/snapshot/clone/pool/export/migrations/instancetype, flux toolkit, cnpg,
-    rabbitmq, grafana + monitoring.coreos.com, traefik, secretgenerator, redis,
-    objectbucket/objectstorage, whereabouts, namecheap, kuberest/kacp/vynil
-    solidite.fr) — the verbatim list is source-of-truth; `scs` `rook-cephfs`
-    (`storage.cephfs.csi.ceph.com`, default), `rook-ceph-block`
-    (`storage.rbd.csi.ceph.com`), `local-path` (`rancher.io/local-path`). Else:
-    `nodes` `["single"]`, `crds` `[]`, `scs` default-priority `local-path` alone.
-    `ha` on this lane is `nodes.len() > 1` on that literal list, not a node read.
-  Feed @classes_enrich the three-field maps only: @template passes the static `scs`
-    profile entries; @run maps listed StorageClass objects to
-    `#{name, provisioner, is_default}` before enrichment (all other SC fields are
-    dropped, the annotation check above). The enriched list — with `volumeMode`,
-    `capabilities`, `accessModes`, `allAccessModes` and the extra Block clone for raw
-    drivers, per ./storage_class_enrich.rhai — is what lands in
-    `cluster.storage_classes` on both lanes; @get_prefered_sc consumes that same
-    enriched list.
-  @run live reads: `cluster.crds` from @k8s_resource @list_meta of kind
-    `CustomResourceDefinition` items' `metadata.name`; `cluster.ha` (when agent.yaml
-    omits it) from @k8s_resource @list_meta of kind `Node`, count > 1;
-    `cluster.services` gathered from a cluster-wide @k8s_resource @list of kind
-    `ServiceInstance` under the Handles visibility rules.
-  Emit the context keys exactly as spelled in Returns — those names are the contract
-    surface for the counterpart contracts listed in Depends on (rendered placeholders,
-    selector lookups, lint allowlists), so a rename there must be a coordinated change
-    of both specs.
-  Run the two lanes' package.yaml loads differently but never let it change key names:
-    typed load on @run, raw @yaml_decode on @template.
-  Import-time surface: the module body executes exactly one
-    `import "storage_class_enrich" as sce` resolution plus six `fn` declarations
-    (@appslug, @get_default, @get_values, @get_default_context, @template, @run) — no
-    top-level statements log, call the engine, or mutate state at import.
+  @appslug(pkg, inst) : retourner @inst quand @pkg égale @inst (pas de garde de
+    longueur) ; sinon quand `${inst}-${pkg}` dépasse 28 caractères, le retourner coupé
+    par @truncate à 28 (les `len` et `truncate` rhai sont tous deux en caractères sur
+    le build verrouillé) ; sinon retourner `${inst}-${pkg}`. Les deux lanes passent
+    (nom-du-package, nom-de-l'instance) dans cet ordre, donc le slug est
+    `<instance>-<package>`.
+  @get_default(def) : `#{}` sauf si @def est une carte ; sinon copier chaque clé de
+    premier niveau depuis `def[k]["default"]` — superficiel, un niveau, un `default`
+    manquant se copie comme `()` — donc les clés de `defaults` miment `pkg.options`
+    clé pour clé.
+  @get_values(options, defaults) : options `()` → retourner @defaults en entier ; deux
+    cartes → récursion pilotée par les clés de la carte `defaults` uniquement (les clés
+    de premier niveau du résultat sont exactement les clés de `defaults` ; les clés
+    propres aux options sont écartées à chaque niveau, valeurs prises des options quand
+    présentes, des defaults sinon) ; toute autre forme → retourner @options.
+    Invariant : clés de premier niveau de `values` ⊆ clés de premier niveau de
+    `pkg.options`.
+  @get_default_context(args) : `HA` → `nodes` des huit noms `master01`, `master02`,
+    `master03`, `worker01`, `worker02`, `worker03`, `worker04`, `worker05`, un
+    instantané `crds` de 156 noms sur 34 api-groups (cert-manager/acme, cilium,
+    rook-ceph, la famille kubevirt incl. CDI/snapshot/clone/pool/export/migrations/instancetype,
+    flux toolkit, cnpg, rabbitmq, grafana + monitoring.coreos.com, traefik,
+    secretgenerator, redis, objectbucket/objectstorage, whereabouts, namecheap,
+    kuberest/kacp/vynil solidite.fr) — la liste verbatim fait foi ; `scs`
+    `rook-cephfs` (`storage.cephfs.csi.ceph.com`, défaut), `rook-ceph-block`
+    (`storage.rbd.csi.ceph.com`), `local-path` (`rancher.io/local-path`). Sinon :
+    `nodes` `["single"]`, `crds` `[]`, `scs` `local-path` seul en priorité-défaut.
+    `ha` sur cette lane est `nodes.len() > 1` sur cette liste littérale, pas une
+    lecture de nodes.
+  Ne nourrir @classes_enrich que de cartes à trois champs : @template passe les
+    entrées statiques `scs` du profil ; @run mappe les objets StorageClass listés en
+    `#{name, provisioner, is_default}` avant enrichissement (tous les autres champs SC
+    sont écartés, le test d'annotation ci-dessus). La liste enrichie — avec
+    `volumeMode`, `capabilities`, `accessModes`, `allAccessModes` et le clone Block
+    additionnel pour les drivers raw, selon ./storage_class_enrich.rhai — est ce qui
+    atterrit dans `cluster.storage_classes` sur les deux lanes ; @get_prefered_sc
+    consomme cette même liste enrichie.
+  Lectures live de @run : `cluster.crds` depuis @k8s_resource @list_meta du kind
+    `CustomResourceDefinition`, `metadata.name` des items ; `cluster.ha` (quand
+    agent.yaml l'omet) depuis @k8s_resource @list_meta du kind `Node`, count > 1 ;
+    `cluster.services` collecté depuis un @k8s_resource @list cluster-wide du kind
+    `ServiceInstance` sous les règles de visibilité de Handles.
+  Émettre les clés du contexte exactement comme orthographiées dans Returns — ces noms
+    sont la surface de contrat des contrats en miroir listés dans Depends on
+    (placeholders rendus, recherches de selector, allowlists de lint), donc un
+    renommage là doit être un changement coordonné des deux specs.
+  Faire tourner les deux chargements package.yaml des lanes différemment mais ne
+    jamais laisser cela changer les noms de clés : chargement typé sur @run,
+    @yaml_decode brut sur @template.
+  Surface à l'import : le corps du module exécute exactement une seule résolution
+    `import "storage_class_enrich" as sce` plus six déclarations `fn`
+    (@appslug, @get_default, @get_values, @get_default_context, @template, @run) —
+    aucun statement de premier niveau ne loggue, n'appelle le moteur ou ne mute
+    l'état à l'import.
 
 Depends on:
-  ./storage_class_enrich.rhai — @sce.classes_enrich + @sce.get_prefered_sc, the module
-    this file imports at line 2; its spec ./storage_class_enrich.sdd is being written by
-    a sibling agent and is not yet readable.
-  ./../system/context.rhai, ./../service/context.rhai, ./../tenant/context.rhai — the
-    only importers (`import "build_context" as build`); they own hook chains and
-    kind-specific keys. Indirect lanes: `import "context"` in
-    /agent/scripts/packages/test.rhai, the embedded snippets of
-    /agent/src/template/{system,service,tenant}.rs and
+  ./storage_class_enrich.rhai — @sce.classes_enrich + @sce.get_prefered_sc, le module
+    que ce fichier importe ligne 2 ; sa spec ./storage_class_enrich.sdd est en cours de
+    rédaction par un agent sibling et n'est pas encore lisible.
+  ./../system/context.rhai, ./../service/context.rhai, ./../tenant/context.rhai — les
+    seuls importeurs (`import "build_context" as build`) ; ils portent les chaînes de
+    hooks et les clés propres au kind. Lanes indirectes : `import "context"` dans
+    /agent/scripts/packages/test.rhai, les snippets embarqués de
+    /agent/src/template/{system,service,tenant}.rs et
     /agent/src/{system,service,tenant}/install.rs.
-  vynil-core `0.7.7` script surface (registrars behind /common/src/rhaihandler.sdd):
-    @file_read, @is_file, @yaml_decode, @json_decode, @json_encode, @log_warn,
-    @k8s_resource(...).@list/@list_meta.
-  /common/src/vynilpackage.sdd — @read_package_yaml typed load on the @run lane.
-  /common/src/instancetenant.sdd — @TenantInstance.get_tenant_name (cluster read on the
-    @tenant services path).
-  ./gen_package.rhai — generated `.hbs` are the largest structural consumers of the
-    key freeze: `{{instance.appslug}}`, `{{instance.namespace}}` and @ctx_have_crd over
-    `cluster.crds`; ./gen_package.sdd owns its side. /agent/src/linting/hbs_checker.sdd
-    records the runtime-root allowlist (`cluster`,`controller`,`instance`,`values`,
-    `defaults`,`package_dir`,`config_dir` — it believes EXISTENT-ONLY without validating
-    content) and the `values`-empty-without-options rule this file produces.
-    ./storage_class_selector.rhai reads `cluster.storage_classes` and
-    `cluster.prefered_storage` key names. Each is a counterpart contract, not a
-    dependency call edge: this module imports none of them.
-  @rhai `1.25.1` locked semantics: tolerant map-miss → `()`, char-based string
-    `len`/`truncate`.
+  La surface script vynil-core `0.7.7` (registrars derrière
+    /common/src/rhaihandler.sdd) : @file_read, @is_file, @yaml_decode, @json_decode,
+    @json_encode, @log_warn, @k8s_resource(...).@list/@list_meta.
+  /common/src/vynilpackage.sdd — le chargement typé @read_package_yaml sur la lane
+    @run.
+  /common/src/instancetenant.sdd — @TenantInstance.get_tenant_name (lecture de cluster
+    sur le chemin des services @tenant).
+  ./gen_package.rhai — les `.hbs` générés sont les plus gros consommateurs
+    structurels du gel des clés : `{{instance.appslug}}`, `{{instance.namespace}}` et
+    @ctx_have_crd sur `cluster.crds` ; ./gen_package.sdd porte son côté.
+    /agent/src/linting/hbs_checker.sdd enregistre l'allowlist des racines runtime
+    (`cluster`,`controller`,`instance`,`values`,`defaults`,`package_dir`,`config_dir`
+    — il ne croit qu'à l'EXISTENCE sans valider le contenu) et la règle
+    `values`-vide-sans-options que ce fichier produit.
+    ./storage_class_selector.rhai lit les noms de clés `cluster.storage_classes` et
+    `cluster.prefered_storage`. Chacun est un contrat en miroir, pas une arête d'appel
+    de dépendance : ce module n'importe aucun d'eux.
+  Sémantique @rhai `1.25.1` verrouillée : map-miss tolérant → `()`, `len`/`truncate`
+    de chaîne en caractères.
 
 Tasks:
-  [ ] Map every Scenario to a mock-engine test on the
-    ./../../tests/rhai_lib.rs harness (`make_lib_script_with_k8s` StorageClass/CRD/
-    Node/ServiceInstance mocks): today NO test imports `build_context` — neither
-    ./../../tests/rhai_lib.rs nor ./../../tests/rhai_build.rs (the latter covers
-    `packages/build.rhai` only) — and its `build_context_mock`/`build_instance_mock`
-    fixtures are `#[allow(dead_code)]`, pointing at a non-existent
-    `./../scripts/config` dir.
-  [ ] Cover @template end-to-end over the shipped `./../packages` shape (package.yaml +
-    optional agent.yaml fixtures) asserting the frozen key set of Returns.
-  [ ] Pin the @get_default non-map-entry raise and @appslug's `()` interpolation edge
-    (missing `metadata.name` stringifies as text into the slug) before deciding whether
-    guards belong here.
-  [ ] Decide the fate of the dead `build_context_mock` fixture (wire it into tests or
-    delete it) — currently a lint-visible `#[allow(dead_code)]`.
-  [?] @appslug: the equal-name branch skips the 28-char guard a DNS-1123 label needs,
-    and truncation can END on the joining `-` when the instance name is exactly 27
-    chars (`<27-char instance name>-` shape) — no sanitize/trim exists. Decide whether
-    the cap and a trailing-dash trim apply to every branch.
-  [?] @run maps `is_default` from the GA annotation only — the
-    `beta.storageclass.kubernetes.io/is-default-class` spelling is not checked even
-    though the code tolerates annotations being absent. Decide whether the beta
-    annotation join is intended.
-  [?] @template hardcodes `owner-type` `system` and omits `package.type` /
-    `package.backup_affinity`, so a service/tenant `agent template` render produces a
-    system-flavoured instance block; @run derives both from the package. Decide whether
-    the template lane follows package type (/agent/src/linting/hbs_checker.sdd's root
-    drift names the same seam).
-  [?] Label/selector source drift: `app.kubernetes.io/name` comes from the package
-    metadata on @template but from `instance.spec["package"]` on @run — equal in
-    practice, divergent on any rename. Decide the canonical source.
-  [?] @get_values silently drops every option key absent from `pkg.options` defaults
-    (user-set instance options with no declaration vanish from `values`);
-    /agent/src/linting/hbs_checker.sdd freezes the matching `properties` three-way
-    drift on the lint side. Decide whether undeclared options pass through.
-  [?] The HA `crds` snapshot is a static 156-name copy that will drift from any live
-    cluster's installed set (its @run twin reads CRDs live). Decide whether the profile
-    is maintained by hand or generated from `agent crds`.
-  [?] The @tenant gather lists ServiceInstances cluster-wide rather than in the
-    tenant/`vynil_namespace` scope. Decide whether the cross-namespace sweep is the
-    intended visibility.
+  [ ] Mapper chaque Scenario vers un test sur moteur mock du harness
+    ./../../tests/rhai_lib.rs (mocks `make_lib_script_with_k8s` de
+    StorageClass/CRD/Node/ServiceInstance) : aujourd'hui AUCUN test n'importe
+    `build_context` — ni ./../../tests/rhai_lib.rs ni ./../../tests/rhai_build.rs (ce
+    dernier ne couvre que `packages/build.rhai`) — et ses fixtures
+    `build_context_mock`/`build_instance_mock` sont `#[allow(dead_code)]` et pointent
+    vers un répertoire `./../scripts/config` inexistant.
+  [ ] Couvrir @template bout-en-bout sur la forme livrée de `./../packages` (fixtures
+    package.yaml + agent.yaml optionnel) en assertant le jeu de clés gelé de Returns.
+  [ ] Épingler la levée sur entrée non-carte de @get_default et le cas limite
+    d'interpolation `()` de @appslug (`metadata.name` manquant se-stringifie en texte
+    dans le slug) avant de décider si des gardes appartiennent ici.
+  [ ] Décider du sort de la fixture morte `build_context_mock` (la brancher dans des
+    tests ou la supprimer) — actuellement un `#[allow(dead_code)]` visible du lint.
+  [?] @appslug : la branche de noms égaux saute la garde des 28 caractères dont un
+    label DNS-1123 a besoin, et la troncature peut FINIR sur le `-` de jonction quand
+    le nom d'instance fait exactement 27 caractères (forme `<27-char instance name>-`)
+    — aucun sanitize/trim n'existe. Décider si le plafond et un trim du tiret final
+    s'appliquent à toutes les branches.
+  [?] @run mappe `is_default` depuis la seule annotation GA — l'orthographe
+    `beta.storageclass.kubernetes.io/is-default-class` n'est pas vérifiée alors que le
+    code tolère l'absence d'annotations. Décider si la jointure de l'annotation beta
+    est voulue.
+  [?] @template code en dur `owner-type` `system` et omet `package.type` /
+    `package.backup_affinity`, donc un rendu `agent template` de service/tenant
+    produit un bloc d'instance aromatisé system ; @run dérive les deux du package.
+    Décider si la lane gabarit suit le type du package (la dérive de racine de
+    /agent/src/linting/hbs_checker.sdd nomme la même couture).
+  [?] Dérive de source label/selector : `app.kubernetes.io/name` vient des
+    métadonnées du package sur @template mais de `instance.spec["package"]` sur @run —
+    égaux en pratique, divergents sur tout renommage. Décider la source canonique.
+  [?] @get_values écarte silencieusement toute clé d'option absente des defaults de
+    `pkg.options` (des options d'instance posées par l'utilisateur sans déclaration
+    disparaissent de `values`) ; /agent/src/linting/hbs_checker.sdd gèle la dérive
+    `properties` tripartite correspondante côté lint. Décider si les options non
+    déclarées passent.
+  [?] L'instantané `crds` HA est une copie statique de 156 noms qui divergera du jeu
+    installé de tout cluster live (son jumeau @run lit les CRDs en live). Décider si le
+    profil est maintenu à la main ou généré depuis `agent crds`.
+  [?] La collecte @tenant liste les ServiceInstances cluster-wide plutôt que dans le
+    scope tenant/`vynil_namespace`. Décider si le balayage cross-namespace est la
+    visibilité voulue.
 
 Done when:
-  Every Scenario has a mock-engine test, the key-spelling of Returns is cross-checked
-    against ./gen_package.sdd and /agent/src/linting/hbs_checker.sdd, the drift `[?]`s
-    are decided, and `specdd lint` is green.
+  Chaque Scenario a un test sur moteur mock, l'orthographe des clés de Returns est
+    recroisée avec ./gen_package.sdd et /agent/src/linting/hbs_checker.sdd, les
+    dérives `[?]` sont tranchées, et `specdd lint` est vert.
 
 Scenario: appslug concat, cap and equal-name passthrough
-  Given @appslug("web","web") — slug equals instance
-  Then the answer is `web` even if a longer equal pair would exceed 28 chars
+  Given @appslug("web","web") — le slug égale l'instance
+  Then la réponse est `web` même si une paire égale plus longue dépasserait 28 caractères
   Given @appslug("kube-prometheus-stack","monitoring")
-  Then the answer is `monitoring-kube-prometheus-sta` — joined `<instance>-<package>`
-    then cut at 28 characters
+  Then la réponse est `monitoring-kube-prometheus-sta` — `<instance>-<package>` joint
+    puis coupé à 28 caractères
   Given @appslug("box","web")
-  Then the answer is `web-box` untouched
+  Then la réponse est `web-box` sans retouche
 
 Scenario: context_name selects the offline profile, case-sensitively
-  Given @template args with `context_name` `HA`
-  Then `cluster.ha` is `true` (8-node list) and `cluster.crds` holds the 156-name
-    snapshot, `cluster.storage_classes` the enriched 3-entry profile (the
-    `rbd.csi.ceph.com` raw driver adds its Block clone)
-  But given `context_name` `ha` or absent
-  Then `cluster.ha` is `false`, `crds` is `[]` and `storage_classes` is the enriched
-    single `local-path`
+  Given des args @template avec `context_name` à `HA`
+  Then `cluster.ha` vaut `true` (liste de 8 nodes) et `cluster.crds` contient
+    l'instantané de 156 noms, `cluster.storage_classes` le profil enrichi à 3 entrées
+    (le driver raw `rbd.csi.ceph.com` y ajoute son clone Block)
+  But given `context_name` `ha` ou absent
+  Then `cluster.ha` vaut `false`, `crds` vaut `[]` et `storage_classes` est le
+    `local-path` unique enrichi
 
 Scenario: agent.yaml merge polarity
-  Given `${config_dir}/agent.yaml` containing `ha` `false`, `prefered_storage`
-    `#{}`, and a `vynil_namespace` `other`
-  When either @template or @run builds the context
-  Then `ha` and `prefered_storage` are the agent.yaml values kept, while
-    `vynil_namespace`, `storage_classes`, `crds` and `services` are the assembly's
-    values — the `.keys()` membership guard alone decides the first two
+  Given `${config_dir}/agent.yaml` contenant `ha` à `false`, `prefered_storage`
+    `#{}`, et un `vynil_namespace` à `other`
+  When soit @template soit @run construit le contexte
+  Then `ha` et `prefered_storage` sont les valeurs de agent.yaml conservées, alors que
+    `vynil_namespace`, `storage_classes`, `crds` et `services` sont les valeurs de
+    l'assemblage — la seule garde d'appartenance `.keys()` décide des deux premières
 
 Scenario: controller_values garbage degrades with a warning
-  Given `controller_values` is the string `not-json`
-  When either lane runs
-  Then `controller` is `#{}` and @log_warn carries the parse error text
-  And no error escapes
+  Given `controller_values` est la chaîne `not-json`
+  When l'une ou l'autre lane tourne
+  Then `controller` vaut `#{}` et @log_warn porte le texte de l'erreur de parse
+  And aucune erreur ne s'échappe
 
 Scenario: tenant callers see untagged and own-tagged services
-  Given a @TenantInstance whose @get_tenant_name answers `acme` and a @ServiceInstance
-    status.services entry tagged `tenant: acme` with a `service` payload
-  When @run gathers `cluster.services`
-  Then the entry is kept, the `tenant` key removed, `service` flattened into it, and
-    `instance`/`package` submaps attached to it
-  But given a @SystemInstance caller and an entry tagged `tenant: acme`
-  Then no such entry appears in `cluster.services`
+  Given un @TenantInstance dont @get_tenant_name répond `acme` et un
+    @ServiceInstance dont l'entrée status.services est taguée `tenant: acme` avec une
+    charge `service`
+  When @run collecte `cluster.services`
+  Then l'entrée est conservée, la clé `tenant` retirée, `service` aplati en elle, et
+    des sous-cartes `instance`/`package` attachées
+  But given un appelant @SystemInstance et une entrée taguée `tenant: acme`
+  Then aucune telle entrée n'apparaît dans `cluster.services`
 
 Scenario: @ServiceInstance gather failure yields empty services, not a failed run
-  Given @k8s_resource @list of kind `ServiceInstance` raises
-  When @run continues past the guarded block
-  Then `cluster.services` is `[]` and the error text was @log_warn'd
+  Given @k8s_resource @list du kind `ServiceInstance` lève
+  When @run poursuit au-delà du bloc gardé
+  Then `cluster.services` vaut `[]` et le texte d'erreur a été relayé par @log_warn
 
 Scenario: current tracks the live status tag only on the run lane
-  Given an instance with `status.tag` `1.4.0` and `args.tag` `2.0.0`
-  Then @run returns `instance.current` `1.4.0` and `requested` `2.0.0`
-  But @template on any instance returns `current` `""`
+  Given une instance avec `status.tag` à `1.4.0` et `args.tag` à `2.0.0`
+  Then @run retourne `instance.current` à `1.4.0` et `requested` à `2.0.0`
+  But @template sur toute instance retourne `current` à `""`
 
 Scenario: values mask and empty-options fallback
-  Given `defaults` `#{a: 1, b: 2}` and instance options `#{a: 9, x: 5}`
-  Then @get_values answers `#{a: 9, b: 2}` — `x` dropped, `b` from defaults
-  Given options `()`
-  Then @get_values answers `defaults` whole
-  Given a package.yaml without `options` on @template
-  Then both `defaults` and `values` are `#{}`
+  Given `defaults` à `#{a: 1, b: 2}` et des options d'instance `#{a: 9, x: 5}`
+  Then @get_values répond `#{a: 9, b: 2}` — `x` écarté, `b` des defaults
+  Given des options `()`
+  Then @get_values répond `defaults` en entier
+  Given un package.yaml sans `options` sur @template
+  Then `defaults` et `values` sont tous deux `#{}`
 
 Scenario: missing package.yaml aborts the build
-  Given `package_dir` without `package.yaml`
-  When @template (raw read) or @run (@read_package_yaml) runs
-  Then the interpreter surfaces the read/validation error — neither lane catches it
+  Given un `package_dir` sans `package.yaml`
+  When @template (lecture brute) ou @run (@read_package_yaml) tourne
+  Then l'interpréteur remonte l'erreur de lecture/validation — aucune lane ne la rattrape

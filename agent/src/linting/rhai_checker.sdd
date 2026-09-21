@@ -1,85 +1,90 @@
-# File spec for ./rhai_checker.rs — the Rhai static lane of the ./ linting tree. The
-# pipeline order, virtual-path feeding and exit verdict belong to ./../package/lint.sdd
-# (driver — reference shapes, never restate); the finding/level model is ./mod.sdd's, the
-# level-resolution + directive-PARSER contract is ./config.sdd's — THIS file owns the
-# rhai/… rule semantics, the suppression lane each rule wires to, and the frozen lint-vs-
-# runtime name tables. Calibration reference for style: /common/src/tools.sdd via siblings.
+# Spec fichier de ./rhai_checker.rs — la lane statique Rhai de l'arbre ./ de linting. L'ordre
+# du pipeline, l'alimentation en chemins virtuels et le verdict de sortie appartiennent à
+# ./../package/lint.sdd (driver — formes de référence, jamais de re-description) ; le modèle
+# finding/level est celui de ./mod.sdd, le contrat résolution-de-niveau + PARSER de directives
+# est celui de ./config.sdd — CE fichier possède la sémantique des règles `rhai/…`, la lane de
+# suppression à laquelle chaque règle se câble, et les tables de noms gelées lint-vs-runtime.
+# Référence de calibration pour le style : /common/src/tools.sdd via les siblings.
 
 Spec: RhaiChecker
 
 Platform: Rust
 
 Purpose:
-  Statically lint every Rhai source of a package — file-scanned AST rules plus cross-file
-    finalize rules — without ever running a script. The engine is the stock @rhai @Engine
-    (zero Vynil registrations): @Engine::compile is a pure syntax/structure scan, so no
-    function name is ever resolved, no module is ever opened (imports are only
-    existence-checked), and any call to any identifier parses clean. One @RhaiChecker
-    instance accumulates cross-file bookkeeping (imports, entry-point defining stems,
-    defined/called function names) across its per-file @check_file calls and discharges
-    `rhai/unused-script` and `rhai/unused-function` in @finalize. Owns all fourteen
-    `rhai/…` rule ids, their built-in levels, their message templates, and exactly which
-    suppression lane (config / file-union directive / per-line directive / none) each rule
-    is wired to — including the seven rules wired to no lane at all.
+  Linter statiquement chaque source Rhai d'un package — règles AST fichier-par-fichier plus
+    règles cross-file au finalize — sans jamais exécuter un script. Le moteur est l'@Engine
+    @rhai stock (zéro enregistrement Vynil) : @Engine::compile est un scan pur de
+    syntaxe/structure, donc aucun nom de fonction n'est jamais résolu, aucun module n'est
+    jamais ouvert (les imports sont seulement vérifiés en existence), et tout appel de tout
+    identifiant se parse proprement. Une instance @RhaiChecker accumule le bookkeeping
+    cross-file (imports, tiges définissant un entry-point, noms de fonctions
+    définies/appelées) au fil de ses @check_file par fichier et solde `rhai/unused-script` et
+    `rhai/unused-function` dans @finalize. Possède les quatorze ids de règle `rhai/…`, leurs
+    niveaux built-in, leurs gabarits de message, et exactement quelle lane de suppression
+    (config / directive file-union / directive par ligne / aucune) chaque règle câble — y
+    compris les sept règles câblées à aucune lane du tout.
 
 References:
-  ./mod.sdd — @LintFinding (built here per finding: rule/level/file/line/message) and
-    @LintLevel; the append-only collector contract, so this file's emission order IS the
-    report order the driver sees.
-  ./config.sdd — @resolve_level ladder and @parse_inline_disables map shape (1-based keys,
-    the key `0` never exists); THIS spec is the truth for the cross-seam item it carries:
-    which rhai rules pass which inline argument to @resolve_level and which report levels
-    @resolve_level never sees.
-  ./../package/lint.sdd — the only driver: builds @new with @package_dir, @config_dir,
-    @script_dir.as_deref(), package and config; @check_file per scanned `.rhai` file with
-    the @strip_prefix-relative @Path, then on the virtual `package.yaml#value_script` and
-    the prefly virtual paths; @finalize once, findings @extend-ed last.
-  /common/src/rhaihandler.sdd — THE runtime engine: constructor assemblies, resolver-dir
-    semantics, the `256`/`128` runtime expression depths, and the registrations the frozen
-    tables below diverge from.
-  /common/src/vynilpackage.sdd — @VynilPackageSource and @VynilPackageType: @usage drives
-    the @new resolver subdirectory and gates `rhai/wrong-package-type`.
+  ./mod.sdd — @LintFinding (construit ici finding par finding : rule/level/file/line/message)
+    et @LintLevel ; le contrat du collecteur append-only, donc l'ordre d'émission de ce
+    fichier EST l'ordre de rapport vu par le driver.
+  ./config.sdd — l'échelle @resolve_level et la forme de la carte @parse_inline_disables (clés
+    1-based, la clé `0` n'existe jamais) ; CETTE spec est la vérité pour l'item de seam
+    inter-fichiers qu'elle porte : quelles règles rhai passent quel argument inline à
+    @resolve_level et quels niveaux de rapport @resolve_level ne voit jamais.
+  ./../package/lint.sdd — l'unique driver : construit @new avec @package_dir, @config_dir,
+    @script_dir.as_deref(), package et config ; @check_file par fichier `.rhai` scanné avec le
+    @Path relatif après @strip_prefix, puis sur le virtuel `package.yaml#value_script` et les
+    chemins virtuels prefly ; @finalize une fois, findings @extend-és en dernier.
+  /common/src/rhaihandler.sdd — LE moteur runtime : assemblages des constructeurs, sémantique
+    des répertoires de résolution, les profondeurs d'expression runtime `256`/`128`, et les
+    enregistrements dont les tables gelées ci-dessous divergent.
+  /common/src/vynilpackage.sdd — @VynilPackageSource et @VynilPackageType : @usage pilote le
+    sous-répertoire de résolution de @new et garde `rhai/wrong-package-type`.
 
 Depends on:
-  @crate::linting — @LintConfig, @LintFinding, @LintLevel, @parse_inline_disables, bound
-    through the ./mod.rs re-exports rather than the ./config.rs paths.
-  @common::rhaihandler — import path only, for the re-exported @AST, @ASTNode, @Engine,
-    @Expr, @ParseError, @Stmt vocabulary; NO @Script constructor or registration of that
-    module is used here (the asymmetry is the subject of the name-drift tasks).
+  @crate::linting — @LintConfig, @LintFinding, @LintLevel, @parse_inline_disables, lié via les
+    re-exports de ./mod.rs plutôt que les chemins ./config.rs.
+  @common::rhaihandler — chemin d'import seulement, pour le vocabulaire @AST, @ASTNode,
+    @Engine, @Expr, @ParseError, @Stmt qu'il re-exporte ; AUCUN constructeur @Script ni
+    enregistrement de ce module n'est utilisé ici (l'asymétrie est l'objet des tasks
+    name-drift).
   @common::vynilpackage — @VynilPackageSource, @VynilPackageType.
-  @rhai `1.20.0` requested (workspace-locked), a DIRECT agent-crate dependency used only
-    for @OptimizationLevel; the engine types arrive through the @common re-export, so the
-    two import paths must stay version-locked together.
-  @std — @fs::read_dir and @Path::exists (list and existence only). This file NEVER reads
-    script content from disk: sources arrive as @check_file arguments; @PathBuf joins,
-    @HashSet/@HashMap bookkeeping, and string-table membership are its only other tools.
+  @rhai `1.20.0` requis (verrouillé par le workspace), dépendance DIRECTE du crate agent
+    utilisée seulement pour @OptimizationLevel ; les types moteur arrivent via le re-export
+    @common, donc les deux chemins d'import doivent rester verrouillés en version ensemble.
+  @std — @fs::read_dir et @Path::exists (liste et existence seulement). CE fichier ne lit
+    JAMAIS de contenu de script depuis le disque : les sources arrivent en arguments de
+    @check_file ; les jointures @PathBuf, le bookkeeping @HashSet/@HashMap et l'appartenance
+    aux tables de chaînes sont ses seuls autres outils.
 
 Exposes:
-  @RhaiChecker — `pub struct RhaiChecker<'a>` with private fields @pkg, @config,
+  @RhaiChecker — `pub struct RhaiChecker<'a>` aux champs privés @pkg, @config,
     @resolver_paths (@Vec<@PathBuf>), @entry_scripts (@HashSet<@PathBuf>),
     @imported_scripts (@HashSet<@String>), @scripts_with_entry_points (@HashSet<@String>),
-    @defined_functions (@Vec of name+@PathBuf pairs, declaration order), @called_functions
-    (@HashSet<@String>). Crate-only reach: the @mod linting declaration is private in
-    ./../main.rs and the lib target (named `client`) does not compile it — nothing outside
-    the agent binary depends on this surface.
-  @RhaiChecker::new — `pub fn` over (package_dir, config_dir, @Option @script_dir, pkg,
-    config). Freezes @resolver_paths in exactly this order: `{package_dir}/scripts`,
-    @config_dir, and — only when @script_dir is @Some — `{script_dir}/lib` and
-    `{script_dir}/{subdir}`, subdir named by @pkg usage: @VynilPackageType::Tenant yields
-    `tenant`, ::Service yields `service`, ::System yields `system`. Also scans
-    `{package_dir}/scripts` exactly once, flat/non-recursive: every entry whose extension
-    is exactly lowercase `rhai` joins @entry_scripts UNLESS its file NAME is in
-    @ENTRY_POINT_PATTERNS (`install.rhai`, `delete.rhai`, `reconfigure.rhai`) or starts
-    with `context_`. A missing scripts dir, a failed @read_dir and per-entry IO @Errs (the
-    @flatten skip) all silently shrink @entry_scripts.
-  @RhaiChecker::check_file — `pub fn` over (&@Path @file, &@str @source) returning
-    @Vec<@LintFinding>: per-file rules plus cross-file accumulation; findings unsorted
-    and undeduplicated by this file except the one name-sort noted in `Must`.
-  @RhaiChecker::finalize — `pub fn` over &@self returning @Vec<@LintFinding>: the
-    `rhai/unused-script` block first (iterated over the @entry_scripts @HashSet — the
-    candidate ORDER is process-random), then the `rhai/unused-function` block (over
-    @defined_functions — stable declaration order).
-  File-private machinery (not surface, behaviour frozen below): @check_imports,
+    @defined_functions (@Vec de paires nom+@PathBuf, ordre de déclaration), @called_functions
+    (@HashSet<@String>). Portée crate-only : la déclaration @mod linting est privée dans
+    ./../main.rs et la cible lib (nommée `client`) ne la compile pas — rien hors du binaire
+    agent ne dépend de cette surface.
+  @RhaiChecker::new — `pub fn` sur (package_dir, config_dir, @Option @script_dir, pkg,
+    config). Gèle @resolver_paths dans cet ordre exact : `{package_dir}/scripts`,
+    @config_dir, et — seulement quand @script_dir est @Some — `{script_dir}/lib` et
+    `{script_dir}/{subdir}`, subdir nommé par l'usage de @pkg : @VynilPackageType::Tenant
+    donne `tenant`, ::Service donne `service`, ::System donne `system`. Scanne aussi
+    `{package_dir}/scripts` exactement une fois, à plat/non récursif : chaque entrée dont
+    l'extension est exactement `rhai` en minuscules rejoint @entry_scripts SAUF si le NOM du
+    fichier est dans @ENTRY_POINT_PATTERNS (`install.rhai`, `delete.rhai`, `reconfigure.rhai`)
+    ou commence par `context_`. Un répertoire scripts absent, un @read_dir en échec et les
+    @Errs d'IO par entrée (le skip du @flatten) réduisent tous silencieusement
+    @entry_scripts.
+  @RhaiChecker::check_file — `pub fn` sur (&@Path @file, &@str @source) retournant
+    @Vec<@LintFinding> : règles par fichier plus accumulation cross-file ; findings non triés
+    ni déduppliqués par ce fichier sauf le tri par nom noté dans `Must`.
+  @RhaiChecker::finalize — `pub fn` sur &@self retournant @Vec<@LintFinding> : le bloc
+    `rhai/unused-script` d'abord (itéré sur le @HashSet @entry_scripts — l'ORDRE des
+    candidats est pseudo-aléatoire selon le processus), puis le bloc `rhai/unused-function`
+    (sur @defined_functions — ordre de déclaration stable).
+  Mécanique privée du fichier (pas une surface, comportement gelé ci-dessous) : @check_imports,
     @resolve_import, @accumulate_functions, @collect_used_vars_expr,
     @collect_used_vars_stmts, @collect_used_vars_stmt, @check_shadowing_scoped,
     @check_dead_code, @check_statements_for_dead_code, @collect_declared_vars_stmts,
@@ -91,521 +96,553 @@ Exposes:
     @FULL_ONLY_FUNCTIONS.
 
 Accepts:
-  @check_file: @file is whatever spelling the driver passes — package-root-relative (scan
-    lane), the virtual `package.yaml#…` identities, or absolute — and path-text rule tests
-    (substring / filename / @Path::starts_with) match those spellings verbatim; @file
-    carries NO existence or readability requirement (virtual paths never touch disk).
-    @source is opaque text: directive and script syntax are recognized from content alone.
-  @new: any directory paths (existence beyond the guarded listing is irrelevant) and a
-    @VynilPackageSource reference whose @usage is always decidable (serde default `tenant`).
-  A @None @script_dir config is accepted (the two-resolver-path arm).
+  @check_file : @file porte n'importe quelle orthographe passée par le driver — relatif à la
+    racine du package (lane de scan), les identités virtuelles `package.yaml#…`, ou absolu —
+    et les tests de règles sur le texte du chemin (substring / nom de fichier /
+    @Path::starts_with) comparent ces orthographes verbatim ; @file n'a AUCUNE exigence
+    d'existence ni de lisibilité (les chemins virtuels ne touchent jamais le disque).
+    @source est un texte opaque : la syntaxe des directives et des scripts est reconnue sur
+    le contenu seul.
+  @new : n'importe quels chemins de répertoire (l'existence au-delà du listing gardé est sans
+    importance) et une référence @VynilPackageSource dont l'@usage est toujours découvable
+    (défaut serde `tenant`).
+  Une config @None pour @script_dir est acceptée (la branche à deux chemins de résolution).
 
 Returns:
-  @check_file on a clean parse — findings in emission order:
+  @check_file sur un parse propre — findings dans l'ordre d'émission :
     `rhai/unresolved-import`, `rhai/dead-code`, `rhai/shadowed-variable`,
-    `rhai/unused-variable` (the shadowing pass runs inside the unused-variable pass and
-    emits first), `rhai/unused-parameter`, `rhai/empty-catch`, `rhai/undefined-variable`,
+    `rhai/unused-variable` (la passe de shadowing tourne dans la passe unused-variable et
+    émet en premier), `rhai/unused-parameter`, `rhai/empty-catch`, `rhai/undefined-variable`,
     `rhai/wrong-api-mode`, `rhai/wrong-package-type`, `rhai/k8s-resource-plural`,
-    `rhai/context-hook-no-return`; on @Engine::compile failure — exactly one
-    `rhai/syntax` finding and nothing else, bookkeeping included (cascade, `Handles`).
-  @finalize — `rhai/unused-script` findings, then `rhai/unused-function` findings.
-  Line-number accuracy, frozen per rule: `rhai/syntax` carries the @ParseError position
-    (@extract_position); `rhai/unused-parameter` carries the function body-block position
-    line; `rhai/k8s-resource-plural` the kind-literal line; `rhai/wrong-package-type` the
-    variable- or rhs-chain-line position verbatim (@Option, no collapse);
-    `rhai/unused-variable`, `rhai/shadowed-variable` and `rhai/empty-catch` report
-    position line but collapse a positionless node to @Some(0) via @unwrap_or — and 0 is
-    unsuppressible because @parse_inline_disables never keys it;
-    `rhai/unresolved-import` (the position IS in hand at the match and discarded),
+    `rhai/context-hook-no-return` ; en cas d'échec de @Engine::compile — exactement un finding
+    `rhai/syntax` et rien d'autre, bookkeeping compris (cascade, `Handles`).
+  @finalize — findings `rhai/unused-script`, puis findings `rhai/unused-function`.
+  Exactitude des numéros de ligne, gelée par règle : `rhai/syntax` porte la position du
+    @ParseError (@extract_position) ; `rhai/unused-parameter` porte la ligne de position du
+    bloc de corps de fonction ; `rhai/k8s-resource-plural` la ligne du littéral de kind ;
+    `rhai/wrong-package-type` la position verbatim de la ligne de la variable ou de la chaîne
+    rhs (@Option, pas d'écrasement) ; `rhai/unused-variable`, `rhai/shadowed-variable` et
+    `rhai/empty-catch` rapportent la ligne de position mais écrasent un noeud sans position à
+    @Some(0) via @unwrap_or — et 0 est insupprimable car @parse_inline_disables ne le clé
+    jamais ; `rhai/unresolved-import` (la position EST en main au match et jetée),
     `rhai/dead-code`, `rhai/undefined-variable`, `rhai/wrong-api-mode`,
-    `rhai/unused-script` and `rhai/unused-function` always carry @None.
+    `rhai/unused-script` et `rhai/unused-function` portent toujours @None.
 
 Raises:
-  Nothing, ever. Zero @unwrap, @expect or @panic sites in product code (verified split:
-    `46` @expect fixture loads, all inside the `#[cfg(@test)]` module). The only fallible
-    std calls are guarded (the single @read_dir behind @if-@Ok and its @flatten; @exists
-    is boolean); option/Result values otherwise totalize through four @unwrap_or and one
-    @unwrap_or_default; every @Stmt/@Expr @match destructure uses fixed-arity fields,
-    never slices.
+  Rien, jamais. Zéro site @unwrap, @expect ou @panic dans le code produit (répartition
+    vérifiée : `46` chargements de fixtures en @expect, tous dans le module
+    `#[cfg(@test)]`). Les seuls appels std faillibles sont gardés (l'unique @read_dir derrière
+    le @if-@Ok et son @flatten ; @exists est booléen) ; les valeurs option/Result se
+    totalisent sinon par quatre @unwrap_or et un @unwrap_or_default ; chaque déstructuration
+    @match de @Stmt/@Expr utilise des champs d'arité fixe, jamais de tranches.
 
 Handles:
-  Parse failure — the file contributes its one `rhai/syntax` finding and ZERO
-    bookkeeping: its imports never enter @imported_scripts, its entry-point definitions
-    never mark its stem into @scripts_with_entry_points, its definitions/calls never enter
-    the function sets. A broken file therefore cascades: a module it would have imported
-    can surface `rhai/unused-script`, and a function in another file that only it (would
-    have) called can surface `rhai/unused-function`.
-  Import path expressions that are not string literals — skipped entirely: no resolution
-    attempt, no `rhai/unresolved-import`, and no @imported_scripts entry (their real
-    targets can still be reported unused).
-  Names starting with `_` — exempt from the unused-variable, shadowed-variable,
-    unused-parameter and undefined-variable verdicts.
-  Closure definitions (rhai names starting with `anon$`) — skipped by the
-    undefined-variable pass and kept out of @defined_functions, but NOT skipped by
-    `rhai/unused-parameter`, so an uncalled closure parameter reports the template with a
-    verbatim internal name: Parameter `v` in function `anon$1` is never used.
-  Non-@System @usage — `rhai/wrong-package-type` never runs; @System packages with a path
-    starting `files/` (the context-builder hook convention) are exempt too.
-  Non-core script file — `rhai/wrong-api-mode` never runs; core-ness is EXACTLY filename
-    `build.rhai` or `validate.rhai`, or path-string substring `handlebars/helpers/`.
-  Scripts named `install.rhai`, `delete.rhai`, `reconfigure.rhai` or prefixed `context_`
-    — invisible to the unused-script lane regardless of use; scripts deeper than one level
-    under `{package_dir}/scripts` are equally invisible (flat scan), yet dotted import
-    strings still resolve whenever the joined path exists.
+  Échec de parse — le fichier contribue son unique finding `rhai/syntax` et ZÉRO bookkeeping :
+    ses imports n'entrent jamais dans @imported_scripts, ses définitions d'entry-point ne
+    marquent jamais sa tige dans @scripts_with_entry_points, ses définitions/appels n'entrent
+    jamais dans les ensembles de fonctions. Un fichier cassé cascade donc : un module qu'il
+    aurait importé peut faire surface en `rhai/unused-script`, et une fonction d'un autre
+    fichier que lui seul (aurait) appelée peut faire surface en `rhai/unused-function`.
+  Expressions de chemin d'import qui ne sont pas des littéraux chaîne — ignorées entièrement :
+    aucune tentative de résolution, aucun `rhai/unresolved-import`, aucune entrée
+    @imported_scripts (leurs vraies cibles peuvent rester rapportées inutilisées).
+  Noms commençant par `_` — exemptés des verdicts unused-variable, shadowed-variable,
+    unused-parameter et undefined-variable.
+  Définitions de closure (noms rhai commençant par `anon$`) — sautées par la passe
+    undefined-variable et tenues hors de @defined_functions, mais PAS sautées par
+    `rhai/unused-parameter`, donc un paramètre de closure jamais appelé rapporte le gabarit
+    avec un nom interne verbatim : Parameter `v` in function `anon$1` is never used.
+  @usage non-@System — `rhai/wrong-package-type` ne tourne jamais ; les packages @System dont
+    le chemin commence par `files/` (la convention de hook context-builder) sont exemptés
+    aussi.
+  Fichier script non-core — `rhai/wrong-api-mode` ne tourne jamais ; le caractère core est
+    EXACTEMENT le nom de fichier `build.rhai` ou `validate.rhai`, ou le substring de chemin
+    `handlebars/helpers/`.
+  Scripts nommés `install.rhai`, `delete.rhai`, `reconfigure.rhai` ou préfixés `context_` —
+    invisibles pour la lane unused-script quel que soit leur usage ; les scripts plus profonds
+    qu'un niveau sous `{package_dir}/scripts` sont tout aussi invisibles (scan à plat),
+    pourtant les chaînes d'import à points se résolvent toujours dès que le chemin joint
+    existe.
 
 Must:
-  # Parsing stance (the load-bearing one)
-  The engine is stock rhai — @Engine::new(), NOT any @common::rhaihandler @Script
-    constructor — tuned by @set_max_expr_depths(128, 64) and
-    @set_optimization_level(@OptimizationLevel::None); @Engine::compile is used solely to
-    parse to @AST (or @ParseError). Everything downstream is @AST inspection: @AST::walk
-    plus the hand-written recursive descents (@collect_used_vars_* collecting,
-    @check_shadowing_scoped, @check_statements_for_dead_code, @check_stmts_for_empty_catch)
-    — never text scoring on the source, never execution.
-  @AST::walk gaps are compensated deliberately, per the source's own comments on rhai
-    1.20: walk skips method-call ARGUMENTS and does not descend into try/catch bodies —
-    hence the custom usage/declaration collectors and the manual nested-catch recursion.
-  Runtime depth drift is structural: nesting beyond 128/64 fails @Engine::compile HERE
-    while the runtime engine accepts up to 256/128 (/common/src/rhaihandler.sdd) — a
-    deeply nested script receives an @Error `rhai/syntax` the runtime would never raise
-    (Tasks `[?]`).
-  Zero function-existence checking: no rule compares ANY called name against ANY
-    registration table; unknown helper names pass lint silently and fail only at runtime —
-    call-name drift is uncatchable by design (Tasks `[?]`).
-  # Name tables the checker assumes (verbatim; runtime comparison per pair)
-  @FULL_ONLY_FUNCTIONS, the 15 names forbidden to core scripts: `http_get`, `http_post`,
+  # Posture de parse (la porteuse de charge)
+  Le moteur est du rhai stock — @Engine::new(), PAS un constructeur @Script de
+    @common::rhaihandler — réglé par @set_max_expr_depths(128, 64) et
+    @set_optimization_level(@OptimizationLevel::None) ; @Engine::compile ne sert qu'à parser
+    vers @AST (ou @ParseError). Tout ce qui suit est inspection d'@AST : @AST::walk plus les
+    descentes récursives écrites à la main (@collect_used_vars_* en collecteurs,
+    @check_shadowing_scoped, @check_statements_for_dead_code, @check_stmts_for_empty_catch) —
+    jamais de scoring textuel sur la source, jamais d'exécution.
+  Les manques d'@AST::walk sont compensés volontairement, d'après les commentaires du source
+    lui-même sur rhai 1.20 : walk saute les ARGUMENTS d'appels de méthode et ne descend pas
+    dans les corps try/catch — d'où les collecteurs d'usage/déclaration sur mesure et la
+    récursion manuelle des catch imbriqués.
+  La dérive de profondeur runtime est structurelle : une imbrication au-delà de 128/64 fait
+    échouer @Engine::compile ICI alors que le moteur runtime accepte jusqu'à 256/128
+    (/common/src/rhaihandler.sdd) — un script fortement imbriqué reçoit un @Error
+    `rhai/syntax` que le runtime ne lèverait jamais (Tasks `[?]).
+  Zéro vérification d'existence de fonction : aucune règle ne compare un nom appelé,
+    n'importe lequel, à une table d'enregistrement, n'importe laquelle ; les noms de helpers
+    inconnus passent le lint silencieusement et ne échouent qu'au runtime — la dérive de noms
+    d'appel est insaisissable par conception (Tasks `[?]).
+  # Tables de noms que le checker suppose (verbatim ; comparaison runtime par paire)
+  @FULL_ONLY_FUNCTIONS, les 15 noms interdits aux scripts core : `http_get`, `http_post`,
     `http_put`, `http_delete`, `http_patch`, `get_service_instance`,
     `list_service_instances`, `get_system_instance`, `list_system_instances`,
     `get_tenant_instance`, `list_tenant_instances`, `get_jukebox`, `list_jukeboxes`,
     `k8s_resource`, `k8s_raw`, `k8s_workload`.
-  @K8S_RESOURCE_PLURAL_KINDS, the 8 (plural, singular) pairs: `Deployments`/`Deployment`,
+  @K8S_RESOURCE_PLURAL_KINDS, les 8 paires (pluriel, singulier) : `Deployments`/`Deployment`,
     `Endpoints`/`Endpoint`, `Issuers`/`Issuer`, `Namespaces`/`Namespace`, `Nodes`/`Node`,
-    `Secrets`/`Secret`, `Services`/`Service`, `TenantInstances`/`TenantInstance`; every
-    other kind string is unjudged (silently accepted).
-  @ENTRY_POINT_FUNCTIONS: `run`, `template`, `new`, `main` — exempt from
-    `rhai/unused-function`, and their presence marks the checked file's stem into
-    @scripts_with_entry_points (which exempts the matching entry script from
+    `Secrets`/`Secret`, `Services`/`Service`, `TenantInstances`/`TenantInstance` ; toute autre
+    chaîne de kind n'est pas jugée (acceptée silencieusement).
+  @ENTRY_POINT_FUNCTIONS : `run`, `template`, `new`, `main` — exemptés de
+    `rhai/unused-function`, et leur présence marque la tige du fichier vérifié dans
+    @scripts_with_entry_points (ce qui exempte le script d'entrée correspondant de
     `rhai/unused-script`).
-  Package-type special names: the bare Variable `tenant` anywhere in the walk, and bare
-    `context` accessed via Dot whose FIRST chain property (@first_property_in_dot_chain
-    descends rhai's right-associative Dot/Property nesting to the leftmost) is `namespace`
-    or `tenant`; `context.cluster` and every other property are clean; aliasing
-    (binding `tenant` to another name) flags only the aliasing use and misses the alias.
-  Runtime-name divergence, frozen (checker catalog vs /common/src registrars +
-    /common/src/rhaihandler.sdd): the real registrations read `get_service_instance` plus
-    `list_service_instance`, `get_system_instance` plus `list_system_instance`,
+  Noms spéciaux de type de package : la Variable nue `tenant` n'importe où dans le walk, et
+    `context` nu accédé via Dot dont la PREMIÈRE propriété de chaîne
+    (@first_property_in_dot_chain descend l'imbrication Dot/Property associative à droite de
+    rhai jusqu'à la plus à gauche) est `namespace` ou `tenant` ; `context.cluster` et toute
+    autre propriété sont propres ; l'aliasing (lier `tenant` à un autre nom) ne marque que
+    l'usage d'aliasing et manque l'alias.
+  Divergence des noms runtime, gelée (catalogue du checker vs registrars /common/src +
+    /common/src/rhaihandler.sdd) : les vrais enregistrements portent `get_service_instance`
+    plus `list_service_instance`, `get_system_instance` plus `list_system_instance`,
     `get_tenant_instance` plus `list_tenant_instance`, `get_jukebox` plus `list_jukebox`
-    (confirmed in @crate::instanceservice, @crate::instancesystem,
-    @crate::instancetenant, @crate::jukebox; the k8s mock mirror uses the same spellings) —
-    SINGULAR list forms. FOUR catalog names (`list_service_instances`,
-    `list_system_instances`, `list_tenant_instances`, `list_jukeboxes`) therefore match no
-    registration any engine carries: real list-call sites in a core script are
-    lint-INVISIBLE for `rhai/wrong-api-mode`, and a core script author using the plural
-    spellings passes lint and dies at runtime with function-not-found. The http quintet
-    and the k8s trio come from crates.io `vynil-core` registrars, so their spellings are
-    unverifiable from this repository; `k8s_resource` is corroborated in-repo only through
-    shipped /agent/scripts usage — which calls kinds far beyond the 8 pairs AND uses a
-    3-argument kind-plus-namespaces form whose kind sits at position 2 and is therefore
-    unchecked (Tasks `[?]`).
-  Full-mode surface absent from ANY table and never checked: `s3_get_yaml` and
-    `s3_list_keys` (named by /common/src/rhaihandler.sdd as the s3 registrar's script
-    face), the member functions scripts get on instance objects, the file-JukeBox set that
-    only the @Script::new_file_scan lane installs, the OCI names — this checker mirrors NO
-    registration function of the runtime; its tables are hand-typed literals and the
-    engine it compiles with is the empty stock one.
-  # Rule inventory — 14 ids, levels, lanes (freeze table)
-  # The seven rules that DO consult @resolve_level (`.vynil-lint.yaml` disable, override_
-    and first-matching-glob can reconfigure or silence them): `rhai/syntax` (built-in
+    (confirmé dans @crate::instanceservice, @crate::instancesystem, @crate::instancetenant,
+    @crate::jukebox ; le miroir mock k8s utilise les mêmes orthographes) — des formes de list
+    AU SINGULIER. QUATRE noms du catalogue (`list_service_instances`,
+    `list_system_instances`, `list_tenant_instances`, `list_jukeboxes`) ne correspondent donc
+    à aucun enregistrement porté par un moteur quelconque : les vrais sites d'appel de list
+    dans un script core sont INVISIBLES au lint pour `rhai/wrong-api-mode`, et un auteur de
+    script core utilisant les orthographes plurielles passe le lint et meurt au runtime avec
+    function-not-found. Le quintet http et le trio k8s viennent des registrars crates.io de
+    `vynil-core`, donc leurs orthographes sont invérifiables depuis ce dépôt ; `k8s_resource`
+    n'est corroboré dans le dépôt que par l'usage livré dans /agent/scripts — qui appelle des
+    kinds bien au-delà des 8 paires ET utilise une forme à 3 arguments kind-plus-namespaces
+    dont le kind est en position 2 et donc non vérifié (Tasks `[?]).
+  Surface full-mode absente de TOUTE table et jamais vérifiée : `s3_get_yaml` et
+    `s3_list_keys` (nommés par /common/src/rhaihandler.sdd comme la face script du registrar
+    s3), les fonctions membres que les scripts obtiennent sur les objets instance, le jeu
+    file-JukeBox que seule la lane @Script::new_file_scan installe, les noms OCI — ce checker
+    ne miroite AUCUNE fonction d'enregistrement du runtime ; ses tables sont des littéraux
+    tapés à la main et le moteur avec lequel il compile est le stock vide.
+  # Inventaire des règles — 14 ids, niveaux, lanes (table gelée)
+  # Les sept règles qui CONSULTENT @resolve_level (disable, override_ et glob-premier-match de
+    `.vynil-lint.yaml` peuvent les reconfigurer ou les faire taire) : `rhai/syntax` (built-in
     @Error), `rhai/unresolved-import` (@Error), `rhai/undefined-variable` (@Error),
     `rhai/unused-parameter` (@Warn), `rhai/k8s-resource-plural` (@Warn),
     `rhai/unused-script` (@Warn), `rhai/unused-function` (@Warn).
-  # The seven rules hardcoded-level and config-immune (settles the ./config.sdd finding):
-    @Warn — `rhai/shadowed-variable`, `rhai/dead-code`, `rhai/wrong-api-mode`,
-    `rhai/wrong-package-type`, `rhai/unused-variable`, `rhai/empty-catch`;
+  # Les sept règles à niveau codé en dur et immunisées contre la config (tranche la finding
+    ./config.sdd) : @Warn — `rhai/shadowed-variable`, `rhai/dead-code`, `rhai/wrong-api-mode`,
+    `rhai/wrong-package-type`, `rhai/unused-variable`, `rhai/empty-catch` ;
     @Error — `rhai/context-hook-no-return`.
-  # Directive lanes per rule, exactly:
-    FILE-UNION lane — the union of every rule id in the file's @parse_inline_disables
-    ranges is what those two @resolve_level calls receive, so ONE valid directive anywhere
-    suppresses the rule for the WHOLE file: `rhai/undefined-variable` and
-    `rhai/unused-parameter`. NOTE: ./config.sdd's example table labels
-    `rhai/undefined-variable` per-line — that label is WRONG; this file is truth.
-    PER-LINE lane through @resolve_level — the finding-line set only:
-    `rhai/k8s-resource-plural` (a @None-line finding feeds an EMPTY set there, making the
-    directive inert for it).
-    PER-LINE lane by raw map lookup, hardcoded level, outside config entirely:
-    `rhai/unused-variable` and `rhai/empty-catch` (the rule id string is tested against
-    @inline_disables at the declaration/catch line and reported regardless of config).
-    DIRECTIVE-INERT (@resolve_level called with a fresh empty @HashSet): `rhai/syntax`,
-    `rhai/unresolved-import`, `rhai/unused-script`, `rhai/unused-function` — the
-    ./config.sdd inert-seam item resolves here: those four sites, and no get-at-zero site
-    exists on this side.
-    NO LANE AT ALL (neither config nor directive can silence):
+  # Lanes de directive par règle, exactement :
+    Lane FILE-UNION — l'union de tous les ids de règle des plages @parse_inline_disables du
+    fichier est ce que reçoivent ces deux appels @resolve_level, donc UNE directive valide
+    n'importe où supprime la règle pour le FICHIER ENTIER : `rhai/undefined-variable` et
+    `rhai/unused-parameter`. NOTE : la table d'exemple de ./config.sdd étiquette
+    `rhai/undefined-variable` par ligne — cet étiquetage est FAUX ; ce fichier est la vérité.
+    Lane PAR-LIGNE via @resolve_level — seulement l'ensemble des lignes de finding :
+    `rhai/k8s-resource-plural` (un finding à ligne @None alimente là un ensemble VIDE,
+    rendant la directive inerte pour lui).
+    Lane PAR-LIGNE par lookup brut dans la carte, niveau codé en dur, entièrement hors config :
+    `rhai/unused-variable` et `rhai/empty-catch` (la chaîne d'id de règle est testée contre
+    @inline_disables à la ligne de déclaration/catch et rapportée quelle que soit la config).
+    DIRECTIVE-INERTE (@resolve_level appelé avec un @HashSet frais et vide) : `rhai/syntax`,
+    `rhai/unresolved-import`, `rhai/unused-script`, `rhai/unused-function` — l'item de seam
+    inerte de ./config.sdd se résout ici : ces quatre sites, et aucun site de lecture-à-zéro
+    n'existe de ce côté.
+    AUCUNE LANE (ni config ni directive ne peuvent faire taire) :
     `rhai/shadowed-variable`, `rhai/dead-code`, `rhai/wrong-api-mode`,
     `rhai/wrong-package-type`, `rhai/context-hook-no-return`.
-  # Trigger semantics (accept/reject sets)
-  — `rhai/syntax` @Error: reject iff @Engine::compile @Err; every other rule runs ONLY on
-    a clean parse; the position line is @ParseError @position @line (@Option).
-  — `rhai/unresolved-import` @Error: @Stmt::Import whose path is @Expr::StringConstant m
-    when NONE of the ordered @resolver_paths joined with `{m}.rhai` @Path::exists. The
-    name m enters @imported_scripts REGARDLESS of the verdict — an unresolvable import
-    still masks whatever stem it would name.
-  — `rhai/dead-code` @Warn (hardcoded): at each scanned level, every statement after a
-    @Stmt::Return or @Stmt::BreakLoop yields ONE identical finding each (N dead statements
-    produce N repeated findings, not one per block); scanned over top-level
-    @AST::statements() and manually descended Block/If/TryCatch/While/Do/For bodies;
-    FUNCTION BODIES ARE NEVER SCANNED (@AST::statements() is top-level; the ignored test
-    states the private-API reason); line always @None.
-  — `rhai/unused-variable` @Warn (hardcoded, per-line directives): declared = every
-    @Stmt::Var via @AST::walk; used = the @collect_used_vars_* traversal over top level
-    AND every function body — including try/catch bodies, method-call arguments,
-    assignment LHS and RHS sides, Dot/Index operands, array/map/interpolation parts,
-    And/Or/Coalesce arms, and @Expr::Stmt-wrapped if/while expressions (walk is used only
-    for declarations because of the gaps it has on those use shapes).
-  — `rhai/shadowed-variable` @Warn (hardcoded, no lane): @check_shadowing_scoped over a
-    live scope stack — top level seeds an empty frame, each function seeds a frame with
-    its PARAMS; @Stmt::Block pushes one frame; @Stmt::If and @Stmt::TryCatch push one
-    frame per body and per branch; @Stmt::While and @Stmt::Do one for the body; @Stmt::For
-    one seeded with the loop variable. A `_`-free re-declaration of a name present in ANY
-    live frame flags once, then re-inserts into the current frame (sibling scopes stay
-    clean; a nested re-declaration flags exactly once).
-  — `rhai/unused-parameter` @Warn (config-aware, file-union): per @iter_fn_def parameter
-    (closures included) absent from the body's @collect_used_vars_stmts set; `_` prefix
-    exempt; line = the @fn_def body position line (@None possible) — NOT the header line.
-  — `rhai/undefined-variable` @Error (config-aware, file-union): per function definition
-    whose name does not start with `anon$`, known = parameter names ∪
-    @collect_declared_vars_stmts (@Stmt::Var names, for-loop variables, TryCatch catch
-    bindings — the catch @Expr::Variable name); refs = @collect_used_vars_stmts over the
-    body; a ref outside known and without `_` prefix is flagged, DEDUPLICATED by name and
-    name-SORTED (the only order this file sorts); line @None. Closure bodies are never
-    descended (the collector does not match the closure expression and `anon$` defs are
-    skipped), names used ONLY inside closures therefore look unused to the
-    unused-variable pass; TOP-LEVEL statements are never checked for undefined references
-    at all; a top-level let REFERENCED inside a function body is NOT in that body's known
-    set and flags — whether such scripts run at all depends on rhai scoping semantics at
-    call time (Tasks `[?]`).
-  — `rhai/empty-catch` @Warn (hardcoded, per-line directives): @Stmt::TryCatch whose
-    branch block has ZERO statements; found via @AST::walk at the outer level plus manual
-    recursion into nested try/catch, block, if, while/do/for bodies; a catch WITH a
-    binding but no statements still flags.
-  — `rhai/wrong-api-mode` @Warn (hardcoded, no lane): @is_core_script(file) (filename
-    exactly `build.rhai` or `validate.rhai`, or lossy path-text CONTAINS
-    `handlebars/helpers/`) AND a bare @Expr::FnCall (method calls never count) whose name
-    is in @FULL_ONLY_FUNCTIONS.
-  — `rhai/wrong-package-type` @Warn (hardcoded, no lane): runs ONLY for
-    @VynilPackageType::System and NOT when @file @starts_with `files/`; flags the bare
-    variable `tenant` (line = its position) and `context.<namespace|tenant>` first
-    properties (line = the rhs-chain position, which on rhai's right-associative nesting
-    anchors at the first property) — two templates, listed in `Example`.
-  — `rhai/k8s-resource-plural` @Warn (config-aware, per-line): @Expr::FnCall named
-    `k8s_resource` with @Expr::StringConstant at ARGUMENT POSITION 1 equal to a plural
-    column member; the matching singular half is quoted as the fix.
-  — `rhai/context-hook-no-return` @Error (hardcoded, no lane): applies when the file's
-    lossy path text CONTAINS `context_` ANYWHERE — deliberately BROADER than @new's
-    FILENAME prefix `context_` exclusion: a file like `scripts/lib/my_context_lib.rhai`
-    gets the ERROR while remaining a plain unused-script candidate. The script is valid
-    iff ANY function definition's LAST body statement is @Stmt::Return or @Stmt::Expr, or
-    else the last TOP-LEVEL statement is (a @Stmt::Var as last statement invalidates; the
-    returned value itself is unchecked); one @None-line finding.
-  — `rhai/unused-script` @Warn (config-aware, directives inert): @entry_scripts member
-    whose stem is neither in @imported_scripts nor in @scripts_with_entry_points; the
-    finding's @file is the on-disk path anchored at @package_dir — the config glob layer
-    (which ./config.sdd documents against relative paths) therefore only reaches these
-    findings when the driver's directory flag was passed relative (Tasks `[?]`).
-  — `rhai/unused-function` @Warn (config-aware, directives inert): every
-    @defined_functions pair (all parsed-checked files collected by @accumulate_functions,
-    `anon$` names dropped) whose name is in neither @called_functions nor
-    @ENTRY_POINT_FUNCTIONS; membership is NAME-only across the whole package: any bare
-    call or method call with the same name anywhere satisfies the identically named
-    definition in ANY file, arity and receiver ignored.
-  # Cross-file state invariants
-  Accumulation happens ONLY on clean parses (see the cascade entry in `Handles`).
-  @imported_scripts keys are raw import strings; @entry_scripts keys are stems from a flat
-    disk scan — a dotted import string naming a nested module can satisfy @resolve_import
-    for that module while the module itself is not even an unused-script candidate, AND
-    that same string can never match a stem, so nested files rely on call-based
-    suppression alone.
-  Entry-point marking keys @Path::file_stem of the CHECKED @file. On the driver's virtual
-    paths the filename keeps the manifest name and the annotation together, so the stem
-    degenerates to the same constant string for both inline lanes: any of those inline
-    texts defining one of the four entry names marks that shared pseudo-stem — an actual
-    `package.rhai` script in the scripts dir would then be silenced by unrelated manifest
-    content (Tasks `[?]`).
-  The driver's VIRTUAL lanes still get package-side import resolution even though the
-    runtime runs @value_script and @Prefly on full-API engines with an EMPTY resolver list
-    (/common/src/vynilpackage.sdd): an import the linter resolves can still fail at
-    operator runtime, and inline-text imports can mask real orphan scripts (Tasks `[?]`).
+  # Sémantique de déclenchement (ensembles accept/reject)
+  — `rhai/syntax` @Error : reject ssi @Engine::compile @Err ; toute autre règle ne tourne QUE
+    sur un parse propre ; la ligne de position est @ParseError @position @line (@Option).
+  — `rhai/unresolved-import` @Error : un @Stmt::Import dont le chemin est un
+    @Expr::StringConstant m quand AUCUN des @resolver_paths ordonnés joints à `{m}.rhai` ne
+    @Path::exists. Le nom m entre dans @imported_scripts QUEL QUE SOIT le verdict — un import
+    irrésolvable masque quand même la tige qu'il nommerait.
+  — `rhai/dead-code` @Warn (codé en dur) : à chaque niveau scanné, chaque déclaration
+    suivant un @Stmt::Return ou un @Stmt::BreakLoop produit UN finding identique (N
+    déclarations mortes produisent N findings répétés, pas un par bloc) ; scanné sur les
+    @AST::statements() de premier niveau et les corps Block/If/TryCatch/While/Do/For descendus
+    manuellement ; LES CORPS DE FONCTIONS NE SONT JAMAIS SCANNÉS (@AST::statements() est le
+    niveau top ; le test ignoré énonce la raison d'API privée) ; ligne toujours @None.
+  — `rhai/unused-variable` @Warn (codé en dur, directives par ligne) : déclarés = chaque
+    @Stmt::Var via @AST::walk ; utilisés = le parcours @collect_used_vars_* sur le niveau top
+    ET chaque corps de fonction — corps try/catch, arguments d'appels de méthode, côtés LHS et
+    RHS des assignations, opérandes Dot/Index, parties de tableau/carte/interpolation, branches
+    And/Or/Coalesce et expressions if/while emballées dans @Expr::Stmt inclus (walk ne sert
+    qu'aux déclarations à cause de ses manques sur ces formes d'usage).
+  — `rhai/shadowed-variable` @Warn (codé en dur, sans lane) : @check_shadowing_scoped sur une
+    pile de scopes vivante — le niveau top amorce une frame vide, chaque fonction amorce une
+    frame avec ses PARAMS ; @Stmt::Block empile une frame ; @Stmt::If et @Stmt::TryCatch
+    empilent une frame par corps et par branche ; @Stmt::While et @Stmt::Do une pour le corps ;
+    @Stmt::For une amorcée avec la variable de boucle. Une re-déclaration sans `_` d'un nom
+    présent dans UNE frame vivante quelconque est marquée une fois, puis ré-insérée dans la
+    frame courante (les scopes frères restent propres ; une re-déclaration imbriquée est
+    marquée exactement une fois).
+  — `rhai/unused-parameter` @Warn (sensible à la config, file-union) : par paramètre de
+    @iter_fn_def (closures comprises) absent de l'ensemble @collect_used_vars_stmts du corps ;
+    préfixe `_` exempté ; ligne = la ligne de position du corps du @fn_def (@None possible) —
+    PAS la ligne d'en-tête.
+  — `rhai/undefined-variable` @Error (sensible à la config, file-union) : par définition de
+    fonction dont le nom ne commence pas par `anon$`, connus = noms de paramètres ∪
+    @collect_declared_vars_stmts (noms @Stmt::Var, variables de boucle for, bindings de catch
+    TryCatch — le nom @Expr::Variable du catch) ; références = @collect_used_vars_stmts sur le
+    corps ; une référence hors connus et sans préfixe `_` est marquée, DÉDUPLIQUÉE par nom et
+    TRIÉE par nom (le seul tri de ce fichier) ; ligne @None. Les corps de closures ne sont
+    jamais descendus (le collecteur ne matche pas l'expression de closure et les définitions
+    `anon$` sont sautées), les noms utilisés UNIQUEMENT dans des closures semblent donc
+    inutilisés à la passe unused-variable ; les déclarations DE PREMIER NIVEAU ne sont jamais
+    vérifiées pour des références indéfinies du tout ; un let de premier niveau RÉFÉRENCÉ dans
+    un corps de fonction n'est PAS dans l'ensemble connus de ce corps et est marqué — savoir
+    si de tels scripts tournent dépend de la sémantique de scope de rhai au moment de l'appel
+    (Tasks `[?]).
+  — `rhai/empty-catch` @Warn (codé en dur, directives par ligne) : @Stmt::TryCatch dont le
+    bloc de branche a ZÉRO déclaration ; trouvé via @AST::walk au niveau externe plus
+    récursion manuelle dans try/catch, block, if, corps while/do/for imbriqués ; un catch AVEC
+    binding mais sans déclarations est quand même marqué.
+  — `rhai/wrong-api-mode` @Warn (codé en dur, sans lane) : @is_core_script(file) (nom de
+    fichier exactement `build.rhai` ou `validate.rhai`, ou le texte lossy du chemin CONTIENT
+    `handlebars/helpers/`) ET un @Expr::FnCall nu (les appels de méthode ne comptent jamais)
+    dont le nom est dans @FULL_ONLY_FUNCTIONS.
+  — `rhai/wrong-package-type` @Warn (codé en dur, sans lane) : ne tourne QUE pour
+    @VynilPackageType::System et PAS quand @file @starts_with `files/` ; marque la variable
+    nue `tenant` (ligne = sa position) et les premières propriétés `context.<namespace|tenant>`
+    (ligne = la position de la chaîne rhs, qui sur l'imbrication associative à droite de rhai
+    s'ancre à la première propriété) — deux gabarits, listés dans `Example`.
+  — `rhai/k8s-resource-plural` @Warn (sensible à la config, par ligne) : @Expr::FnCall nommé
+    `k8s_resource` avec un @Expr::StringConstant en POSITION D'ARGUMENT 1 égal à un membre
+    pluriel de la colonne ; la moitié singulière correspondante est citée comme correctif.
+  — `rhai/context-hook-no-return` @Error (codé en dur, sans lane) : s'applique quand le texte
+    lossy du chemin du fichier CONTIENT `context_` N'IMPORTE OÙ — délibérément PLUS LARGE que
+    l'exclusion par PRÉFIXE DE NOM `context_` de @new : un fichier comme
+    `scripts/lib/my_context_lib.rhai` reçoit l'ERROR tout en restant un simple candidat
+    unused-script. Le script est valide ssi la DERNIÈRE déclaration du corps d'UNE définition
+    de fonction est @Stmt::Return ou @Stmt::Expr, ou sinon la dernière déclaration de PREMIER
+    NIVEAU l'est (un @Stmt::Var en dernière déclaration invalide ; la valeur retournée
+    elle-même n'est pas vérifiée) ; un finding à ligne @None.
+  — `rhai/unused-script` @Warn (sensible à la config, directives inertes) : membre de
+    @entry_scripts dont la tige n'est dans @imported_scripts ni dans
+    @scripts_with_entry_points ; le @file du finding est le chemin sur disque ancré à
+    @package_dir — la couche de globs de config (que ./config.sdd documente contre des chemins
+    relatifs) n'atteint donc ces findings que quand le flag de répertoire du driver a été
+    passé en relatif (Tasks `[?]).
+  — `rhai/unused-function` @Warn (sensible à la config, directives inertes) : chaque paire de
+    @defined_functions (tous les fichiers au parse vérifié collectés par
+    @accumulate_functions, noms `anon$` écartés) dont le nom n'est dans @called_functions ni
+    dans @ENTRY_POINT_FUNCTIONS ; l'appartenance se juge au NOM seul sur tout le package :
+    n'importe quel appel nu ou appel de méthode du même nom n'importe où satisfait la
+    définition identiquement nommée dans N'IMPORTE QUEL fichier, arité et récepteur ignorés.
+  # Invariants d'état cross-file
+  L'accumulation n'a lieu QUE sur des parses propres (voir l'entrée cascade dans `Handles`).
+  Les clés de @imported_scripts sont les chaînes d'import brutes ; les clés de @entry_scripts
+    sont des tiges d'un scan disque à plat — une chaîne d'import à points nommant un module
+    imbriqué peut satisfaire @resolve_import pour ce module alors que ce module n'est même pas
+    un candidat unused-script, ET cette même chaîne ne peut jamais matcher une tige, donc les
+    fichiers imbriqués ne comptent que sur la suppression par appel.
+  Le marquage d'entry-point clé le @Path::file_stem du @file VÉRIFIÉ. Sur les chemins
+    virtuels du driver, le nom de fichier garde ensemble nom du manifeste et annotation, donc
+    la tige dégénère en la même chaîne constante pour les deux lanes inline : la définition,
+    dans n'importe lequel de ces textes inline, de l'un des quatre noms d'entrée marque cette
+    pseudo-tige partagée — un vrai script `package.rhai` dans le répertoire scripts serait
+    alors réduit au silence par un contenu de manifeste sans rapport (Tasks `[?]).
+  Les lanes VIRTUELLES du driver bénéficient quand même de la résolution d'imports côté
+    package même si le runtime exécute @value_script et @Prefly sur des moteurs full-API avec
+    une liste de répertoires de résolution VIDE (/common/src/vynilpackage.sdd) : un import
+    résolu par le linter peut échouer au runtime de l'opérateur, et des imports de textes
+    inline peuvent masquer de vrais scripts orphelins (Tasks `[?]).
 
 Must not:
-  Execute, evaluate, or semantically resolve against a runtime: no registered Vynil
-    function is bound, called, or name-resolved during linting, and no imported module is
-    ever parsed.
-  Read script content from disk, write anything, or mutate the tree — its whole disk
-    surface is the @new directory listing and existence probes.
-  Compute the lint verdict: blocking arithmetic belongs to the collector and the driver;
-    this file only fixes levels (and for seven rules even the config cannot move those
-    levels).
+  Exécuter, évaluer, ou résoudre sémantiquement contre un runtime : aucune fonction Vynil
+    enregistrée n'est liée, appelée ou résolue en nom pendant le linting, et aucun module
+    importé n'est jamais parsé.
+  Lire du contenu de script depuis le disque, écrire quoi que ce soit, ou muter l'arborescence
+    — toute sa surface disque est le listing de répertoires de @new et les sondes d'existence.
+  Calculer le verdict du lint : l'arithmétique du bloquant appartient au collecteur et au
+    driver ; ce fichier ne fait que fixer les niveaux (et pour sept règles même la config ne
+    peut pas bouger ces niveaux).
 
 Example:
-  Message templates (verbatim rendering; braces show the interpolation points. Where the
-    note says backticked, the real message wraps that fragment in literal backticks):
+  Gabarits de message (rendu verbatim ; les accolades montrent les points d'interpolation.
+    Quand la note dit backticked, le message réel entoure ce fragment de backticks littéraux) :
     Syntax error: {e}
     Cannot resolve import "{m}"
     Unreachable code after return or break
     Variable {name} is declared but never used  — {name} backticked
     Variable {name} shadows a previous declaration — {name} backticked
-    Parameter {p} in function {f} is never used — {p} and {f} backticked
+    Parameter {p} in function {f} is never used — {p} et {f} backticked
     Empty catch block silently ignores errors
     Variable {name} is used but never declared — {name} backticked
     Function {name} is not available in core mode scripts — {name} backticked
     System packages cannot access tenant context
     System packages cannot access context.{prop} (not available for type:system)
-    The k8s message wraps the leading call fragment in literal backticks, then continues
-      outside the span; the shown form is: `k8s_resource("Secrets", ...)` uses plural
-      kind; use "Secret" instead — for pair (Secrets, Secret)
+    Le message k8s entoure le fragment d'appel initial de backticks littéraux, puis continue
+      hors de la portée ; la forme montrée est : `k8s_resource("Secrets", ...)` uses plural
+      kind; use "Secret" instead — pour la paire (Secrets, Secret)
     Context hook must return the context
     Script {stem} defined but never imported — {stem} backticked
     Function {name} defined but never called — {name} backticked
-  Unit-test map (46 tests, 1 ignored; every suite builds the checker with
-  @LintConfig::default() and @script_dir @None over the shared fixture manifest, whose
-  @usage is `system`):
-    syntax +/−: @rhai_syntax_error_detected, @valid_rhai_no_syntax_error
-    unresolved-import −/+/exactly-1: @resolved_import_no_error,
+  Carte des tests unitaires (46 tests, 1 ignoré ; chaque suite construit le checker avec
+  @LintConfig::default() et @script_dir @None sur le manifeste de fixture partagé, dont
+  l'@usage est `system`) :
+    syntax +/− : @rhai_syntax_error_detected, @valid_rhai_no_syntax_error
+    unresolved-import −/+/exactly-1 : @resolved_import_no_error,
       @unresolved_import_produces_error, @unresolved_import_no_duplicate
-    dead-code: @dead_code_after_return_detected — ignored, rule has NO live test
-    unused-script +/−: @unused_script_produces_warning,
-      @lifecycle_hook_script_not_flagged_as_unused (lean, see Tasks)
-    unused-variable −/+/RHS/LHS/underscore/try-block/dot-base/directive:
+    dead-code : @dead_code_after_return_detected — ignoré, la règle n'a AUCUN test vivant
+    unused-script +/− : @unused_script_produces_warning,
+      @lifecycle_hook_script_not_flagged_as_unused (maigre, voir Tasks)
+    unused-variable −/+/RHS/LHS/underscore/try-block/dot-base/directive :
       @used_variable_no_warning, @unused_variable_produces_warning,
       @variable_used_in_assignment_rhs_no_warning,
       @variable_used_in_assignment_lhs_no_warning, @underscore_variable_ignored,
       @variable_used_in_try_block_no_warning, @variable_used_via_dot_access_no_warning,
       @inline_disable_suppresses_unused_variable
-    shadowed-variable +/count-1/sibling-scope-clean/nested-flag:
+    shadowed-variable +/count-1/sibling-scope-clean/nested-flag :
       @shadowed_variable_produces_warning, @shadowed_variable_no_duplicate,
       @sibling_try_blocks_no_shadowing_warning, @nested_block_shadowing_still_warns
-    unused-parameter +/underscore/method-call-arg/if-expr-init/closure(vacuous)/directive:
+    unused-parameter +/underscore/method-call-arg/if-expr-init/closure(vacuous)/directive :
       @unused_parameter_produces_warning, @underscore_parameter_no_warning,
       @parameter_used_in_method_call_arg_no_warning,
       @parameter_used_in_if_expr_no_warning,
       @parameter_used_in_closure_operator_no_warning,
       @inline_disable_suppresses_unused_parameter
-    unused-function +/entry-point clean: @unused_function_produces_warning,
+    unused-function +/entry-point clean : @unused_function_produces_warning,
       @run_function_not_flagged_as_unused
-    wrong-api-mode +/−: @full_api_in_core_script_warns, @full_api_in_lifecycle_script_ok
-    wrong-package-type + for tenant / context-namespace / context-tenant, clean cluster:
+    wrong-api-mode +/− : @full_api_in_core_script_warns, @full_api_in_lifecycle_script_ok
+    wrong-package-type + pour tenant / context-namespace / context-tenant, propre cluster :
       @tenant_access_in_system_package_warns,
       @context_namespace_access_in_system_package_warns,
       @context_tenant_access_in_system_package_warns,
       @context_cluster_access_in_system_package_no_warn
-    context-hook-no-return clean/error: @context_hook_with_return_ok,
+    context-hook-no-return propre/erreur : @context_hook_with_return_ok,
       @context_hook_without_return_errors
-    undefined-variable +/params/let/catch/directive:
+    undefined-variable +/params/let/catch/directive :
       @undefined_variable_in_function_produces_error,
       @function_params_not_flagged_as_undefined, @let_variable_not_flagged_as_undefined,
       @catch_variable_not_flagged_as_undefined,
       @inline_disable_suppresses_undefined_variable
-    empty-catch +/clean/directive: @empty_catch_warns, @non_empty_catch_no_warning,
+    empty-catch +/propre/directive : @empty_catch_warns, @non_empty_catch_no_warning,
       @inline_disable_suppresses_empty_catch
-    k8s-resource-plural +/clean: @k8s_resource_plural_kind_produces_warning,
+    k8s-resource-plural +/propre : @k8s_resource_plural_kind_produces_warning,
       @k8s_resource_singular_kind_no_warning
-  Fixture honesty: unit tests read ONLY `package.yaml` content and the scripts-dir FILE
-    NAMES of ./../../tests/fixtures/lint/rhai-checks/; the script bodies of `broken.rhai`,
-    `dead.rhai`, `functions.rhai`, `params.rhai`, `variables.rhai`,
-    `missing_import.rhai`, `tenant_in_system.rhai`, both `context_` files and the whole
-    `handlebars/helpers/core_with_full_api.rhai` are content-dead (their NAMES or absence
-    do matter to the @entry_scripts scan).
+  Honnêteté des fixtures : les tests unitaires ne lisent QUE le contenu de `package.yaml` et
+    les NOMS DE FICHIERS du répertoire scripts de ./../../tests/fixtures/lint/rhai-checks/ ;
+    les corps de scripts de `broken.rhai`, `dead.rhai`, `functions.rhai`, `params.rhai`,
+    `variables.rhai`, `missing_import.rhai`, `tenant_in_system.rhai`, des deux fichiers
+    `context_` et de tout `handlebars/helpers/core_with_full_api.rhai` sont morts en contenu
+    (leurs NOMS ou leur absence comptent bien au scan @entry_scripts).
 
 Scenario: parse failure is the only finding, and erases the file's bookkeeping
-  Given source `let x = ;` → exactly the @Error `rhai/syntax` finding, message prefix
-    `Syntax error: ` with the position line; the file contributes no accumulation
-  Given clean source instead → no syntax finding
-  Then since accumulation is clean-parse-only, a broken import file can orphan its
-    would-be imported module, and a broken caller can orphan another file's function
-  Mapped tests @rhai_syntax_error_detected, @valid_rhai_no_syntax_error; the cascade arm
-    has none (Tasks).
+  Given la source `let x = ;` → exactement le finding @Error `rhai/syntax`, préfixe de message
+    `Syntax error: ` avec la ligne de position ; le fichier ne contribue aucune accumulation
+  Given une source propre à la place → aucun finding de syntaxe
+  Then puisque l'accumulation est réservée aux parses propres, un fichier d'import cassé peut
+    orpheliner le module qu'il aurait importé, et un appelant cassé peut orpheliner la
+    fonction d'un autre fichier
+  Tests mappés @rhai_syntax_error_detected, @valid_rhai_no_syntax_error ; la branche cascade
+    n'en a aucun (Tasks).
 
 Scenario: the import ladder, one finding per unresolved literal import, @None line
-  Given `import "mylib" as lib;` with scripts/mylib.rhai ON DISK → silent
-  Given `import "nonexistent" as x;` → EXACTLY ONE @Error with the import template and
-    line @None, and the name still counts as imported
-  But the @config_dir and both @script_dir resolver arms have NO test (every suite passes
-    @config_dir = the fixture dir and @script_dir @None)
-  Mapped tests @resolved_import_no_error, @unresolved_import_produces_error,
+  Given `import "mylib" as lib;` avec scripts/mylib.rhai SUR DISQUE → silencieux
+  Given `import "nonexistent" as x;` → EXACTEMENT UN @Error avec le gabarit d'import et la
+    ligne @None, et le nom compte quand même comme importé
+  But les branches de résolution @config_dir et des deux @script_dir n'ont AUCUN test (chaque
+    suite passe @config_dir = le répertoire des fixtures et @script_dir @None)
+  Tests mappés @resolved_import_no_error, @unresolved_import_produces_error,
     @unresolved_import_no_duplicate
 
 Scenario: finalize discharges the two cross-file rules
-  Given the fixture dir scan (candidates include the orphan stem) and a check of the
-    install hook defining fn run → @finalize names the orphan with the never-imported
-    template @Warn
-  Given a check of install_post content with fn run → `install_post` absent; NOTE the
-    hook file is NOT on disk, so it never entered @entry_scripts at all and the
-    @scripts_with_entry_points skip branch stays untested (Tasks)
-  Given `fn helper() { 42 }` with no caller anywhere → never-called @Warn; the same
-    file's `fn run(inst, ctx, args) { 42 }` clean via the entry-point table (run,
-    template, new, main)
-  Mapped tests @unused_script_produces_warning,
+  Given le scan du répertoire des fixtures (les candidats incluent la tige orpheline) et un
+    check du hook install définissant fn run → @finalize nomme l'orphelin avec le gabarit
+    jamais-importé @Warn
+  Given un check du contenu de install_post avec fn run → `install_post` absent ; NOTE que le
+    fichier hook n'est PAS sur disque, donc il n'est jamais entré du tout dans @entry_scripts
+    et la branche de skip @scripts_with_entry_points reste non testée (Tasks)
+  Given `fn helper() { 42 }` sans appelant nulle part → @Warn jamais-appelé ; le
+    `fn run(inst, ctx, args) { 42 }` du même fichier est propre via la table des entry-points
+    (run, template, new, main)
+  Tests mappés @unused_script_produces_warning,
     @lifecycle_hook_script_not_flagged_as_unused, @unused_function_produces_warning,
     @run_function_not_flagged_as_unused
 
 Scenario: variable pairs — use, shadow, and the per-line directive lane
-  Given used-variable, underscore, assignment-RHS, assignment-LHS, try-block-use and
-    dot-access sources → clean; a dead `let unused = 42;` → declared-never-used @Warn
-  Given two same-name top-level lets → EXACTLY ONE shadowed-variable @Warn; two
-    same-name lets in SIBLING try blocks clean (frames push/pop); a nested re-declare
-    flags
-  Given the unused-variable directive on the declaration line → that raw per-line lane
-    suppresses it (no config lane exists for this rule)
-  Mapped tests per the unit-test map above.
+  Given les sources used-variable, underscore, RHS d'assignation, LHS d'assignation, usage
+    dans un try-block et accès par point → propres ; un `let unused = 42;` mort → @Warn
+    déclaré-jamais-utilisé
+  Given deux lets de même nom au premier niveau → EXACTEMENT UN @Warn shadowed-variable ;
+    deux lets de même nom dans des try blocks FRÈRES restent propres (frames push/pop) ; une
+    re-déclaration imbriquée est marquée
+  Given la directive unused-variable sur la ligne de déclaration → cette lane par-ligne brute
+    la supprime (aucune lane config n'existe pour cette règle)
+  Tests mappés selon la carte des tests unitaires ci-dessus.
 
 Scenario: parameters and undefined variables share the file-union directive lane
-  Given `fn foo(used, unused) { used }` → the never-used-parameter @Warn at the body-block
-    line; `_context` params clean; a parameter used ONLY as a method-call argument or
-    inside an if-expression value stays clean
-  Given that code plus the unused-parameter directive on a line → WHOLE-FILE suppression
-    for that rule (the file-union lane, not per-line)
-  Given a function body using the undeclared `con_bug_text` (and calling the unchecked
-    helper name `log_info`) → one @Error never-declared finding at line @None; params,
-    lets and the catch-bound name stay clean; one undefined-variable directive anywhere in
-    the file suppresses the whole file
-  Mapped tests per the map; @parameter_used_in_closure_operator_no_warning asserts a
-    string the backtick template never emits — vacuous (Tasks).
+  Given `fn foo(used, unused) { used }` → le @Warn paramètre-jamais-utilisé à la ligne du
+    bloc de corps ; les paramètres `_context` propres ; un paramètre utilisé UNIQUEMENT en
+    argument d'appel de méthode ou dans une valeur d'expression if reste propre
+  Given ce code plus la directive unused-parameter sur une ligne → suppression SUR FICHIER
+    ENTIER pour cette règle (la lane file-union, pas par-ligne)
+  Given un corps de fonction utilisant le `con_bug_text` non déclaré (et appelant le nom de
+    helper non vérifié `log_info`) → un finding @Error jamais-déclaré à la ligne @None ; les
+    paramètres, les lets et le nom bound par catch restent propres ; une directive
+    undefined-variable n'importe où dans le fichier supprime tout le fichier
+  Tests mappés selon la carte ; @parameter_used_in_closure_operator_no_warning assert une
+    chaîne que le gabarit à backticks n'émet jamais — vacieux (Tasks).
 
 Scenario: empty catch — the only hardcoded rule with a working directive lane
-  Given an empty catch body → the silent-ignore @Warn at the try position
-  Given a catch body with a print call → clean; the empty case with the empty-catch
-    directive on that line → suppressed (per-line raw lookup, config cannot act either way)
-  Mapped tests @empty_catch_warns, @non_empty_catch_no_warning,
+  Given un corps de catch vide → le @Warn d'ignore-silencieux à la position du try
+  Given un corps de catch avec un appel print → propre ; le cas vide avec la directive
+    empty-catch sur cette ligne → supprimé (lookup par-ligne brut, la config ne peut rien
+    faire dans un sens ni l'autre)
+  Tests mappés @empty_catch_warns, @non_empty_catch_no_warning,
     @inline_disable_suppresses_empty_catch
 
 Scenario: core-mode API policy
-  Given a full-API call under a `handlebars/helpers/` path → the core-mode @Warn, line
-    @None, immune to config and directives; the same call in a scripts/install.rhai path
-    clean
-  Mapped tests @full_api_in_core_script_warns, @full_api_in_lifecycle_script_ok; the
-    `build.rhai` and `validate.rhai` filename arms have none (Tasks).
+  Given un appel full-API sous un chemin `handlebars/helpers/` → le @Warn core-mode, ligne
+    @None, immunisé contre config et directives ; le même appel sous un chemin
+    scripts/install.rhai est propre
+  Tests mappés @full_api_in_core_script_warns, @full_api_in_lifecycle_script_ok ; les
+    branches par nom de fichier `build.rhai` et `validate.rhai` n'en ont aucune (Tasks).
 
 Scenario: system-package context policy and context hooks
-  Given fixture usage `system`: bare `tenant` access in a scripts path → the tenant-
-    context @Warn at the variable line; `context.namespace` and `context.tenant` chains →
-    the per-property @Warns at the chain line; `context.cluster` clean
-  Given a `context_`-named path: body ending in a return of the context → clean; a
-    file whose last top-level statement is a @Stmt::Var → the @Error
-    context-hook-no-return at line @None; ANY function last-statement return satisfies
-  Mapped tests per the map; the `files/` exemption arm has none (Tasks).
+  Given l'usage `system` de la fixture : accès nu à `tenant` dans un chemin scripts → le
+    @Warn tenant-context à la ligne de la variable ; les chaînes `context.namespace` et
+    `context.tenant` → les @Warn par propriété à la ligne de la chaîne ; `context.cluster`
+    propre
+  Given un chemin nommé `context_` : un corps finissant par un return du contexte → propre ;
+    un fichier dont la dernière déclaration de premier niveau est un @Stmt::Var → l'@Error
+    context-hook-no-return à la ligne @None ; un return en dernière déclaration de N'IMPORTE
+    QUELLE fonction satisfait
+  Tests mappés selon la carte ; la branche d'exemption `files/` n'en a aucune (Tasks).
 
 Scenario: k8s kind plural table with per-line suppression
-  Given a plural Secrets call with a following chained get → the uses-plural @Warn naming
-    the singular fix, at the kind literal's line; the singular spelling clean; the
-    k8s-resource-plural directive on that line suppresses (the only ruleside with BOTH a
-    config call and a per-line set arriving)
-  Mapped tests @k8s_resource_plural_kind_produces_warning,
-    @k8s_resource_singular_kind_no_warning; the remaining seven pairs, unknown kinds,
-    directive behavior and @None-line inertness have none (Tasks).
+  Given un appel Secrets pluriel suivi d'un get chaîné → le @Warn kind-pluriel nommant le
+    correctif singulier, à la ligne du littéral de kind ; l'orthographe singulière propre ; la
+    directive k8s-resource-plural sur cette ligne supprime (le seul versant de règle avec À LA
+    FOIS un appel config et un ensemble par-ligne qui arrive)
+  Tests mappés @k8s_resource_plural_kind_produces_warning,
+    @k8s_resource_singular_kind_no_warning ; les sept paires restantes, les kinds inconnus, le
+    comportement de directive et l'inertie des lignes @None n'en ont aucun (Tasks).
 
 Scenario: dead code inside function bodies is a documented non-behaviour
-  Given code whose function returns then declares — nothing today: the scan covers
-    top-level statements only, and the private-AST comment carries the reason
-  Mapped test @dead_code_after_return_detected (ignored); the live top-level arm is
-    itself untested (Tasks).
+  Given du code dont une fonction return puis déclare — rien aujourd'hui : le scan couvre
+    uniquement les déclarations de premier niveau, et le commentaire d'AST privée porte la
+    raison
+  Test mappé @dead_code_after_return_detected (ignoré) ; la branche vivante de premier niveau
+    est elle-même non testée (Tasks).
 
 Scenario: config reconfiguration reaches exactly the seven resolve_level rules
-  Given a manifest disable of `rhai/k8s-resource-plural` → that @Warn can vanish; an
-    override of `rhai/syntax` to @Warn → the blocking verdict for broken sources can drop
-  But a disable entry naming any of the seven hardcoded ids (`rhai/wrong-api-mode` among
-    them) → structurally INERT; the uniformity decision sits in Tasks `[?]`).
-  Mapped test: none on this checker's side (./config.sdd tests its own file, not this
-    wiring).
+  Given un disable de manifeste pour `rhai/k8s-resource-plural` → ce @Warn peut disparaître ;
+    un override de `rhai/syntax` vers @Warn → le verdict bloquant pour les sources cassées
+    peut tomber
+  But une entrée disable nommant l'un des sept ids codés en dur (`rhai/wrong-api-mode` parmi
+    eux) → structurellement INERTE ; la décision d'uniformité est dans Tasks `[?]).
+  Test mappé : aucun de ce côté du checker (./config.sdd teste son propre fichier, pas ce
+    câblage).
 
 Tasks:
-  [ ] Add scenario-mapped coverage for the holes frozen above: `rhai/dead-code` live
-      top-level arm (and the function-body ambition behind the ignored test),
-      @resolve_import ladder arms 2–4 (the @config_dir entry, the lib entry, the
-      per-package-type entry under @script_dir), the finalize imported-script skip AND the
-      entry-point skip with a real on-disk hook, the @ENTRY_POINT_PATTERNS and
-      `context_` filename exclusions plus flat-scan and lowercase-extension guards in
-      @new, `rhai/wrong-api-mode` on the `build.rhai` and `validate.rhai` filenames,
-      `rhai/wrong-package-type` files-exemption, `rhai/context-hook-no-return` on a
-      path-CONTAINS non-prefix file, `rhai/k8s-resource-plural` remaining seven pairs +
-      unknown kind + @None-line inertness + per-line directive, the FILE-UNION vs
-      per-line split (directive on a DIFFERENT line suppressing
-      `rhai/undefined-variable`/`rhai/unused-parameter`), the parse-failure cascade, the
-      virtual manifest lanes end to end (including their shared pseudo-stem), and the
-      @Some(0)-line unsuppressible edges for `rhai/unused-variable`,
-      `rhai/shadowed-variable` and `rhai/empty-catch`.
-  [ ] Fix the vacuous @parameter_used_in_closure_operator_no_warning (it greps the message
-      for a double-quoted name the backtick template cannot emit) and
-      @lifecycle_hook_script_not_flagged_as_unused (its hook file is not on disk, so the
-      skip branch it believes it exercises never runs).
-  [ ] Rehome or delete the content-dead fixture scripts (`broken.rhai`, `dead.rhai`,
+  [ ] Ajouter une couverture mappée aux scenarios pour les trous gelés ci-dessus : la branche
+      vivante de premier niveau de `rhai/dead-code` (et l'ambition de corps de fonction
+      derrière le test ignoré), les échelons 2–4 de l'échelle @resolve_import (l'entrée
+      @config_dir, l'entrée lib, l'entrée par type de package sous @script_dir), le skip
+      imported-script du finalize ET le skip entry-point avec un vrai hook sur disque, les
+      exclusions par nom de fichier @ENTRY_POINT_PATTERNS et `context_` plus les gardes
+      scan-à-plat et extension-minuscule dans @new, `rhai/wrong-api-mode` sur les noms de
+      fichiers `build.rhai` et `validate.rhai`, l'exemption files d'`rhai/wrong-package-type`,
+      `rhai/context-hook-no-return` sur un fichier dont le chemin CONTIENT le motif sans être
+      un préfixe, les sept paires restantes + kind inconnu + inertie des lignes @None +
+      directive par ligne de `rhai/k8s-resource-plural`, la scission FILE-UNION vs par-ligne
+      (directive sur une AUTRE ligne supprimant
+      `rhai/undefined-variable`/`rhai/unused-parameter`), la cascade d'échec de parse, les
+      lanes de manifeste virtuelles de bout en bout (y compris leur pseudo-tige partagée), et
+      les bords insupprimables à ligne @Some(0) pour `rhai/unused-variable`,
+      `rhai/shadowed-variable` et `rhai/empty-catch`.
+  [ ] Corriger le test vacieux @parameter_used_in_closure_operator_no_warning (il grepe dans
+      le message un nom entre guillemets doubles que le gabarit à backticks ne peut pas
+      émettre) et @lifecycle_hook_script_not_flagged_as_unused (son fichier hook n'est pas sur
+      disque, donc la branche de skip qu'il croit exercer ne tourne jamais).
+  [ ] Recaser ou supprimer les fixtures scripts morts en contenu (`broken.rhai`, `dead.rhai`,
       `functions.rhai`, `params.rhai`, `variables.rhai`, `missing_import.rhai`,
-      `tenant_in_system.rhai`, the two `context_` fixtures, and
-      `handlebars/helpers/core_with_full_api.rhai` — the last one read by nothing).
-  [ ] Amend ./config.sdd when next touched: its example table labels
-      `rhai/undefined-variable` per-line while this file passes the FILE-UNION set, and
-      the `disable` list in its own schema instance names `rhai/empty-catch` — a rule
-      this checker hardcodes with no config call at all, so that entry can never act.
-  [?] Name-table drift (four wrong names): the catalog list names are plural while the
-      runtime registers SINGULAR (`list_service_instance` etc., confirmed across the four
-      registrars and the mock mirror) — fix @FULL_ONLY_FUNCTIONS to the singular reality,
-      or drop those four rather than keep a never-firing set; align docs either way.
-  [?] `rhai/wrong-api-mode` semantics: the message asserts core-mode UNAVAILABILITY, yet
-      every runnable lane this repository shows constructs engines carrying the full set
-      (the build/validate/template/boxes/render lanes all use the full constructor; the
-      file-scan lane even adds http and s3). Decide the policy: pin a genuinely minimal
-      surface by constructor choice, or rewrite the message into a package-portability
-      convention.
-  [?] Should this checker mirror the runtime at all? It parses with the empty @Engine::new
-      (zero registrations), depth 128/64 vs runtime 256/128, zero name resolution —
-      authors can get lint-GREEN on names that crash at runtime, and false @Error syntax
-      findings on deep nesting the runtime runs. Decide whether to build a real checked
-      name+depth contract from /common/src/rhaihandler.sdd (and the core crates it
-      attributes), or keep the intentionally-blind posture and document that lint never
-      guarantees callability.
-  [?] k8s kind posture: only position-1 string literals are judged, so the shipped
-      position-2 kind argument shape is unchecked entirely, and the 8-pair table covers
-      the same-file kinds only against the 20+ kinds used across /agent/scripts — sort
-      kind position per arity, widen the table from a documented source of truth, or
-      declare the gap intentional lint-lite.
-  [?] `rhai/undefined-variable` scoping: the per-function known set ignores top-level
-      declares, so a top-level variable read inside a function flags @Error HERE while
-      the SAME reference silences `rhai/unused-variable` — the pair can invert exactly at
-      that shape, and rhai's runtime scope-at-call decides which half is right; top-level
-      statements themselves are never checked. Decide the intended scoping model for
-      entry functions (they receive their data through parameters today — is that the
-      contract this rule enforces?).
-  [?] Closure posture: internal `anon$N` names leak into `rhai/unused-parameter`
-      messages; the undefined pass SKIPS `anon$` defs while the unused collector never
-      descends closure bodies, so names used only inside a closure read as unused to
-      `rhai/unused-variable` (the fixture closure test happens to carry a genuinely dead
-      let of its own to hide this). Normalize the three passes?
-  [?] Seven config-immune rules — five of those immune to directives too, and three of
-      THOSE (`rhai/wrong-api-mode`, `rhai/wrong-package-type`, `rhai/dead-code`) are the
-      likeliest author-noise generators: put every rule on the @resolve_level ladder with
-      per-line inline sets, normalizing the FILE-UNION lanes (one stray comment currently
-      mutes a whole file) and the two raw per-line lookups that can never receive an
-      override.
-  [?] `rhai/unused-script` wiring: directives inert (fresh empty set reaches
-      @resolve_level), iteration order process-random (@HashSet — the collector's
-      insertion-order promise becomes non-deterministic here), and the finding files under
-      the package-anchored on-disk path which the documented-relative glob layer cannot
-      reach when the driver's directory flag was absolute. Fix wiring and freeze order.
-  [?] Position-discard inventory: `rhai/unresolved-import` (position in hand, discarded),
-      `rhai/dead-code`, `rhai/undefined-variable`, `rhai/wrong-api-mode` and the two
-      finalize rules always report @None, while `rhai/unused-variable`,
-      `rhai/shadowed-variable` and `rhai/empty-catch` report @Some(0) for positionless
-      nodes — and 0 is outside @parse_inline_disables' 1-based range so no directive can
-      key it. Report best-known position or @None — not 0.
-  [?] Virtual-lane import contract: the driver comments declare operator-context full-API
-      with no import resolution expected, and the runtime indeed builds empty-resolver
-      engines for exactly those texts, yet this file resolves their imports against the
-      package-side list (emitting `rhai/unresolved-import` runtime does not mirror in the
-      same way, AND letting inline text mark real stems as imported). Skip import
-      machinery for the manifest virtual paths, or keep and document?
-  [?] Dead-code ambition: the ignored test names private @AST iteration as the blocker,
-      yet @iter_fn_def hands out the bodies and the statement-scanner could take them —
-      re-implement body scanning or retire the rule's function-body promise.
+      `tenant_in_system.rhai`, les deux fixtures `context_`, et
+      `handlebars/helpers/core_with_full_api.rhai` — la dernière n'est lue par rien).
+  [ ] Amender ./config.sdd à la prochaine retouche : sa table d'exemple étiquette
+      `rhai/undefined-variable` par ligne alors que ce fichier passe l'ensemble FILE-UNION, et
+      la liste `disable` de sa propre instance de schéma nomme `rhai/empty-catch` — une règle
+      que ce checker code en dur sans aucun appel config, donc cette entrée ne peut jamais
+      agir.
+  [?] Dérive des tables de noms (quatre noms faux) : les noms de list du catalogue sont au
+      pluriel alors que le runtime enregistre au SINGULIER (`list_service_instance` etc.,
+      confirmé sur les quatre registrars et le miroir mock) — corriger @FULL_ONLY_FUNCTIONS à
+      la réalité singulière, ou retirer ces quatre-là plutôt que garder un ensemble qui ne se
+      déclenche jamais ; aligner la doc dans les deux cas.
+  [?] Sémantique de `rhai/wrong-api-mode` : le message affirme l'INDISPONIBILITÉ en mode
+      core, pourtant toute lane exécutable que ce dépôt montre construit des moteurs portant
+      le jeu complet (les lanes build/validate/template/boxes/render utilisent toutes le
+      constructeur complet ; la lane file-scan ajoute même http et s3). Trancher la politique
+      : épingler une surface vraiment minimale par le choix du constructeur, ou réécrire le
+      message en convention de portabilité des packages.
+  [?] Ce checker doit-il miroiter le runtime ? Il parse avec l'@Engine::new vide (zéro
+      enregistrement), profondeur 128/64 contre 256/128 runtime, zéro résolution de noms — les
+      auteurs peuvent obtenir un lint VERT sur des noms qui plantent au runtime, et de faux
+      findings @Error de syntaxe sur des imbrications profondes que le runtime exécute. Décider
+      s'il faut construire un vrai contrat noms+profondeur vérifié depuis
+      /common/src/rhaihandler.sdd (et les crates core auxquels il les attribue), ou garder la
+      posture délibérément aveugle et documenter que le lint ne garantit jamais la
+      rappelabilité.
+  [?] Posture des kinds k8s : seuls les littéraux chaîne en position 1 sont jugés, donc la
+      forme d'argument kind en position 2 de la livraison n'est pas vérifiée du tout, et la
+      table des 8 paires ne couvre les kinds des mêmes fichiers que contre les 20+ kinds
+      utilisés dans /agent/scripts — trier la position du kind selon l'arité, élargir la table
+      depuis une source de vérité documentée, ou déclarer le trou un lint-lite intentionnel.
+  [?] Scope de `rhai/undefined-variable` : l'ensemble connus par fonction ignore les
+      déclarations de premier niveau, donc une variable de premier niveau lue dans une
+      fonction est marquée @Error ICI alors que la MÊME référence fait taire
+      `rhai/unused-variable` — la paire peut s'inverser exactement sur cette forme, et le
+      scope-at-call de rhai au runtime décide quelle moitié a raison ; les déclarations de
+      premier niveau elles-mêmes ne sont jamais vérifiées. Décider le modèle de scope voulu
+      pour les fonctions d'entrée (elles reçoivent leurs données par paramètres aujourd'hui —
+      est-ce le contrat que cette règle impose ?).
+  [?] Posture des closures : les noms internes `anon$N` fuient dans les messages de
+      `rhai/unused-parameter` ; la passe undefined SAUTE les définitions `anon$` alors que le
+      collecteur unused ne descend jamais les corps de closures, donc les noms utilisés
+      seulement dans une closure sont lus comme inutilisés par `rhai/unused-variable` (le test
+      de closure de la fixture porte justement un let réellement mort qui masque le problème).
+      Normaliser les trois passes ?
+  [?] Sept règles immunisées contre la config — cinq d'entre elles immunisées aux directives
+      aussi, et trois de CES-LÀ (`rhai/wrong-api-mode`, `rhai/wrong-package-type`,
+      `rhai/dead-code`) sont les plus probables générateurs de bruit pour les auteurs :
+      mettre chaque règle sur l'échelle @resolve_level avec des ensembles inline par ligne, en
+      normalisant les lanes FILE-UNION (un commentaire isolé réduit actuellement tout un
+      fichier au silence) et les deux lookups par-ligne bruts qui ne peuvent jamais recevoir
+      d'override.
+  [?] Câblage de `rhai/unused-script` : directives inertes (un ensemble vide frais atteint
+      @resolve_level), ordre d'itération pseudo-aléatoire selon le processus (@HashSet — la
+      promesse d'ordre d'insertion du collecteur devient non déterministe ici), et des fichiers
+      de finding sous le chemin sur disque ancré au package qu'une couche de globs
+      documentée-en-relatif ne peut atteindre quand le flag de répertoire du driver était
+      absolu. Corriger le câblage et geler l'ordre.
+  [?] Inventaire des positions jetées : `rhai/unresolved-import` (position en main, jetée),
+      `rhai/dead-code`, `rhai/undefined-variable`, `rhai/wrong-api-mode` et les deux règles du
+      finalize rapportent toujours @None, tandis que `rhai/unused-variable`,
+      `rhai/shadowed-variable` et `rhai/empty-catch` rapportent @Some(0) pour les noeuds sans
+      position — et 0 est hors de la plage 1-based de @parse_inline_disables donc aucune
+      directive ne peut le clé. Rapporter la meilleure position connue ou @None — pas 0.
+  [?] Contrat d'import des lanes virtuelles : les commentaires du driver déclarent un contexte
+      d'opérateur full-API sans résolution d'import attendue, et le runtime construit bien des
+      moteurs au répertoire de résolution vide pour ces textes-là, pourtant ce fichier résout
+      leurs imports contre la liste côté package (en émettant des `rhai/unresolved-import` que
+      le runtime ne miroite pas de la même façon, ET en laissant des textes inline marquer de
+      vraies tiges comme importées). Sauter la mécanique d'import pour les chemins virtuels du
+      manifeste, ou garder et documenter ?
+  [?] Ambition dead-code : le test ignoré nomme l'itération privée de l'@AST comme bloqueur,
+      alors que @iter_fn_def livre les corps et que le scanner de déclarations pourrait les
+      prendre — réimplémenter le scan des corps ou retirer la promesse de corps de fonction de
+      la règle.
 
 Done when:
-  Every Task coverage hole maps to a passing named test, the four-name catalog correction
-    ships or carries a recorded `[?]` verdict, `cargo test -p agent` stays green, and
-    `specdd lint` accepts this file.
+  Chaque trou de couverture des Tasks mappe à un test nommé qui passe, la correction des
+    quatre noms du catalogue est livrée ou porte un verdict `[?]` consigné,
+    `cargo test -p agent` reste vert, et `specdd lint` accepte ce fichier.

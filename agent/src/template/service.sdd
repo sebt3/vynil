@@ -3,325 +3,350 @@ Spec: TemplateService
 Platform: Rust
 
 Purpose:
-  Run `agent template service`: the offline, Helm-less templating leaf for the service
-    kind. It turns the parsed flags plus an on-disk package tree into a complete service
-    context without any cluster contact, renders the package manifests through
-    Handlebars scripts, and prints the result to stdout as multi-document YAML.
-    Dispatched by @Commands::Service in ./mod.rs.
+  Exécuter `agent template service` : la feuille de templating hors ligne, sans Helm,
+    pour le kind service. Sans aucun contact avec le cluster, elle transforme les flags
+    analysés et l'arborescence du package sur disque en un contexte de service complet,
+    rend les manifests du package via des scripts Handlebars et affiche le résultat
+    sur stdout en YAML multi-documents.
+    Dispatchée par @Commands::Service dans ./mod.rs.
 
 Depends on:
-  ./mod.sdd — owns the embedded @Contexts enum, the @Commands::Service wiring, and the
-    leaf-@Err lane (`Templating a service package failed with: {e:}` then
+  ./mod.sdd — possède l'enum @Contexts embarquée, le câblage @Commands::Service et la
+    voie leaf-@Err (`Templating a service package failed with: {e:}` puis
     @std::process::exit(1)).
-  ./tenant.sdd — reviewed sibling spec of the tenant-kind leaf. This file's Rust source is
-    that leaf modulo a single diff hunk: the third resolver segment `{}/tenant` →
-    `{}/service`; @Parameters, the embedded snippet text and the error lane are byte-shared.
-    The tenant/service behavioural drift is entirely script-side — different kind script
-    dirs, and the overlay-block naming: the tenant lane's `context["tenant"]`
-    (`name` `client`, a `namespaces` list, maintenance hour `1`) becomes this lane's
-    `context["namespace"]` (maintenance hour `0`, no name or namespaces).
-  /common/src/rhaihandler.sdd — @Script::new assembly and resolver-order semantics, the
-    @Script::eval @crate::Result conversion, the Deref'd @Script::set_dynamic, and the
-    missing-module skip behaviour of the script-level `import_run` / `import_template`
-    helpers. Engine contents are attributed to that build and `vynil-core` `0.7.7`.
-  /common/src/handlebarshandler.sdd — the `new_hbs` / `register_partial_dir` /
-    `register_helper_dir` / `render_named` script surface the render phase uses; render
-    semantics (strict mode, no-escape, same-name re-registration overwrite) are that
-    spec's contract, not restated here.
-  /common/src/context.sdd — documents that @common::context::init_k8s is not called by
-    this dispatcher or leaf; this file reaches nothing in the crate context module.
+  ./tenant.sdd — spec frangine.reviewée de la feuille de kind tenant. La source Rust
+    de ce fichier est cette feuille à un seul hunk de diff près : le troisième segment du resolver `{}/tenant` →
+    `{}/service` ; @Parameters, le texte du snippet embarqué et la voie d'erreur sont
+    partagés octet pour octet. La dérive comportementale tenant/service est entièrement
+    côté script — répertoires de scripts de kind différents, et nommage du bloc overlay :
+    le `context["tenant"]` de la voie tenant (`name` `client`, une liste `namespaces`,
+    heure de maintenance `1`) devient le `context["namespace"]` de cette voie
+    (heure de maintenance `0`, ni nom ni namespaces).
+  /common/src/rhaihandler.sdd — l'assemblage @Script::new et la sémantique d'ordre du
+    resolver, la conversion @Script::eval @crate::Result, le @Script::set_dynamic
+    Deref'd et le skip de module absent des helpers script `import_run` /
+    `import_template`. Le contenu du moteur est attribué à ce build et à `vynil-core` `0.7.7`.
+  /common/src/handlebarshandler.sdd — la surface script `new_hbs` / `register_partial_dir` /
+    `register_helper_dir` / `render_named` utilisée par la phase de rendu ; la sémantique
+    de rendu (mode strict, pas d'échappement, écrasement des ré-enregistrements de même
+    nom) est le contrat de cette spec, pas redite ici.
+  /common/src/context.sdd — documente que @common::context::init_k8s n'est appelée ni par
+    ce dispatcher ni par cette feuille ; ce fichier n'atteint rien du module context
+    du crate.
   /common/src/instanceservice.sdd, /common/src/vynilpackage.sdd — @service_rhai_register
-    and @package_rhai_register (with every other @Script::new registrar, sibling kinds
-    included) are installed by the chosen @Script::new engine but the frozen render path
-    never names them; the engine choice (full @Script::new, not @Script::new_core) is what
-    this reference freezes.
-  /common/src/lib.sdd — @common::Result, @common::Error::SerializationError, and the
-    @common::DEFAULT_AGENT_IMAGE default.
+    et @package_rhai_register (avec chaque autre registraire @Script::new, kinds frangins
+    compris) sont installés par le moteur @Script::new choisi mais le chemin de rendu
+    gelé ne les nomme jamais ; c'est le choix de moteur (@Script::new complet, pas
+    @Script::new_core) que cette référence gèle.
+  /common/src/lib.sdd — @common::Result, @common::Error::SerializationError et le
+    défaut @common::DEFAULT_AGENT_IMAGE.
   /agent/scripts/service/context.rhai, /agent/scripts/service/template.rhai,
     /agent/scripts/service/template_befores.rhai,
     /agent/scripts/service/template_vitals.rhai,
     /agent/scripts/service/template_others.rhai,
     /agent/scripts/service/template_scalables.rhai,
     /agent/scripts/service/template_posts.rhai,
-    /agent/scripts/service/context_service.rhai — the service modules the embedded snippet
-    imports and the per-category emitters they run; unspecified so far (open task in
-    /agent/agent.sdd), so this spec freezes the behaviour the leaf depends on.
-    `context_service` ships in the third resolver dir, so it resolves even with no package
-    hooks; its `template` is the default that completes the `namespace` block.
+    /agent/scripts/service/context_service.rhai — les modules de service que le snippet
+    embarqué importe et les émetteurs par catégorie qu'ils exécutent ; non spécifiés à ce
+    jour (tâche ouverte dans /agent/agent.sdd), donc cette spec gèle le comportement
+    dont la feuille dépend. `context_service` est livré dans le troisième répertoire du
+    resolver, il résout donc même sans hooks de package ; son `template` est le défaut
+    qui complète le bloc `namespace`.
   /agent/scripts/lib/build_context.rhai, /agent/scripts/lib/install_from_dir.rhai,
-    /agent/scripts/lib/storage_class_enrich.rhai — shared machinery the service modules
-    invoke transitively (context assembly, category rendering and stdout emission,
-    storage-class enrichment — a pure static table with no host or cluster calls).
-  Workspace @clap (argument parsing), @serde/@serde_json (@Parameters serde derives and
-    the args JSON), @std::path::PathBuf.
+    /agent/scripts/lib/storage_class_enrich.rhai — la machinerie partagée que les modules
+    de service invoquent transitivement (assemblage du contexte, rendu par catégorie et
+    émission sur stdout, enrichissement des storage classes — une simple table statique
+    sans appel d'hôte ni de cluster).
+  Workspace @clap (analyse des arguments), @serde/@serde_json (derives serde de
+    @Parameters et le JSON args), @std::path::PathBuf.
 
 Must:
-  Build the engine as exactly @Script::new(vec![`${package_dir}/scripts`,
-    `${config_dir}`, `${script_dir}/service`, `${script_dir}/lib`]) in that order, so
-    package scripts first, the config dir, the service category dir and the shared lib
-    dir resolve imports first-provider-wins — a package's `scripts/context.rhai` or
-    `scripts/template.rhai` therefore shadows the shipped service modules.
-  Inject `args` once via the Deref'd @Script::set_dynamic from the
-    @serde_json::to_value(@Parameters) JSON — keys are the Rust field names, paths are
-    display strings, @Contexts as `"Simple"`/`"HA"` — the only way @Parameters reaches
-    the scripts.
-  Execute exactly the embedded snippet sequence: `import("context")` as ctx; build the
-    `instance` map as `#{ metadata: #{ name: args.instance, namespace: args.namespace } }`;
-    `ctx::template(instance, args)`; `import("template")`; `template::run(instance,
-    context)`.
-  Stay cluster-free on the frozen path. The `instance` is synthesized from the two
-    flags only — no CR is ever fetched and no @kube::Client is built by any layer of the
-    fixed flow, which is why the missing @common::context::init_k8s and missing async
-    runtime upstream cost nothing here.
-  Read exactly these disk inputs — `${package_dir}/package.yaml` (mandatory),
-    `${config_dir}/agent.yaml` (optional), `is_dir` probes of all five category dirs,
-    and every file inside the present category dirs.
-  Assemble the context in this order (shared /agent/scripts/lib/build_context.rhai
-    `template` plus /agent/scripts/service/context.rhai): decode `package.yaml`; parse
-    `--controller-values` into `controller` (or `#{}` plus warn); build `cluster` from
-    `agent.yaml` or `#{}` then force `storage_classes` (enriched enum-default storage
-    classes), `crds` (enum-default list), `services` `[]`, and `vynil_namespace` from
-    the flag (overriding `agent.yaml`), with `prefered_storage` and `ha` set only when
-    `agent.yaml` omits them; take the cluster node/CRD/storage-class defaults from the
-    `--context` enum (`@Contexts::@HA` selects the eight-node/~160-CRD/three-storage-class
-    hardcoded profile, anything else the single-node/empty-CRD/one-storage-class profile,
-    matched as the string `args.context_name == "HA"`); set `defaults` to each
-    `package.yaml` option's `default` member and `values` equal to `defaults` (the shared
-    merge over empty options — the synthesized instance has no `spec`); build `instance`
-    with the package metadata block (`jukebox` hardcoded `box`, `images` and `resources`
-    passed through), labels/selector emitting `app.kubernetes.io/...` plus
-    `vynil.solidite.fr/owner-namespace`, `vynil.solidite.fr/owner-category` from the
-    package category and literal `vynil.solidite.fr/owner-type` `system`, `appslug`,
-    `current` `""` and `requested` from `--tag`; then overlay `template_dir` and
-    `agent_image` from the flags, `context_pre`, the hardcoded `context["namespace"]`
-    block `#{ maintenance_start_hour: "0", maintenance_start_minut: "0" }`,
-    `context_service`, `context_extra` into `extra`, `context_post`, `context_after` —
-    every hook guarded to replace the context only when it returns a map, except
-    `context_extra` whose result lands in `extra` unguarded. The shipped
-    `context_service` `template` completes the block: `name` = the instance namespace,
-    `use_backup` `false`, `ha` from `cluster.ha`.
-  Run the context-hook sequence `context_pre`, `context_service`, `context_extra`,
-    `context_post`, `context_after` in exactly that order — six context-stage slots in
-    this lane, one more than the tenant template lane, which stops at `context_post`;
-    `context_after` is otherwise the install lanes' hook.
-  Render and emit in this fixed order (shared /agent/scripts/lib/install_from_dir.rhai
-    reached via /agent/scripts/service/template.rhai): `install_pre` hook, then each
-    category whose directory exists, befores → vitals → others → scalables → posts;
-    each category runs its optional `install_<category>_pre`/`_post` merge hooks around
-    one emission pass by the shipped `template_<category>` module (no post hook for
-    scalables), that pass builds a fresh Handlebars engine per call (partials from
-    `${config_dir}` and `${package_dir}/handlebars/partials`, helpers from
-    `${package_dir}/handlebars/helpers`, strict mode), decodes `.yaml`/`.yml` files
-    directly and renders `.yaml.hbs`/`.yml.hbs` files through `render_named` per file
-    with the whole context as data; every other file yields no objects.
-  Print documents bucket-ordered by the shared first/middle/last kind lists (their
-    contents owned by /agent/scripts/lib/install_from_dir.rhai), source-file iteration
-    within a bucket, `---` before every document — with no lexicographic sort at any
-    stage, so byte-identical reruns ride on directory-iteration order (Tasks).
+  Construire le moteur exactement comme @Script::new(vec![`${package_dir}/scripts`,
+    `${config_dir}`, `${script_dir}/service`, `${script_dir}/lib`]) dans cet ordre, pour
+    que les scripts du package d'abord, le répertoire de config, le répertoire de
+    catégorie service et le répertoire lib partagé résolvent les imports premier
+    gagnant — le `scripts/context.rhai` ou `scripts/template.rhai` d'un package
+    assombrit donc les modules de service livrés.
+  Injecter `args` une seule fois via le @Script::set_dynamic Deref'd depuis le JSON
+    @serde_json::to_value(@Parameters) — les clés sont les noms de champs Rust, les
+    chemins sont des chaînes d'affichage, @Contexts en `"Simple"`/`"HA"` — la seule
+    façon dont @Parameters atteint les scripts.
+  Exécuter exactement la séquence du snippet embarqué : `import("context")` comme ctx ;
+    construire la map `instance` comme `#{ metadata: #{ name: args.instance, namespace:
+    args.namespace } }` ; `ctx::template(instance, args)` ; `import("template")` ;
+    `template::run(instance, context)`.
+  Rester sans cluster sur le chemin gelé. L'`instance` est synthétisée à partir des deux
+    seuls flags — aucun CR n'est jamais récupéré et aucun @kube::Client n'est construit
+    par une couche du flux figé, ce qui fait que le @common::context::init_k8s manquant
+    et le runtime async amont absent ne coûtent rien ici.
+  Lire exactement ces entrées disque — `${package_dir}/package.yaml` (obligatoire),
+    `${config_dir}/agent.yaml` (optionnel), les sondes `is_dir` des cinq répertoires de
+    catégorie, et chaque fichier dans les répertoires de catégorie présents.
+  Assembler le contexte dans cet ordre (le `template` partagé de
+    /agent/scripts/lib/build_context.rhai plus /agent/scripts/service/context.rhai) :
+    décoder `package.yaml` ; analyser `--controller-values` en `controller` (ou `#{}`
+    plus un warn) ; construire `cluster` depuis `agent.yaml` ou `#{}` puis forcer
+    `storage_classes` (les storage classes par défaut énumérées, enrichies), `crds`
+    (la liste par défaut énumérée), `services` `[]`, et `vynil_namespace` depuis le flag
+    (écrasant `agent.yaml`), avec `prefered_storage` et `ha` définis seulement quand
+    `agent.yaml` les omet ; prendre les noeuds/CRDs/storage classes par défaut du cluster
+    depuis l'enum `--context` (`@Contexts::@HA` sélectionne le profil codé en dur
+    huit-noeuds/~160-CRD/trois-storage-class, tout autre chose le profil
+    mono-noeud/CRD-vides/une-storage-class, comparé comme la chaîne
+    `args.context_name == "HA"`) ; définir `defaults` sur le membre `default` de chaque
+    option de `package.yaml` et `values` égal à `defaults` (la fusion partagée sur des
+    options vides — l'instance synthétisée n'a pas de `spec`) ; construire `instance`
+    avec le bloc de métadonnées du package (`jukebox` le `box` codé en dur, `images` et
+    `resources` passés tels quels), les labels/selector émettant `app.kubernetes.io/...`
+    plus `vynil.solidite.fr/owner-namespace`, `vynil.solidite.fr/owner-category` depuis
+    la catégorie du package et le littéral `vynil.solidite.fr/owner-type` `system`,
+    `appslug`, `current` `""` et `requested` depuis `--tag` ; puis overlay `template_dir`
+    et `agent_image` depuis les flags, `context_pre`, le bloc codé en dur
+    `context["namespace"]` `#{ maintenance_start_hour: "0", maintenance_start_minut: "0" }`,
+    `context_service`, `context_extra` dans `extra`, `context_post`, `context_after` —
+    chaque hook est gardé pour ne remplacer le contexte que s'il retourne une map, sauf
+    `context_extra` dont le résultat atterrit dans `extra` sans garde. Le `template`
+    `context_service` livré complète le bloc : `name` = le namespace de l'instance,
+    `use_backup` `false`, `ha` depuis `cluster.ha`.
+  Exécuter la séquence de hooks de contexte `context_pre`, `context_service`,
+    `context_extra`, `context_post`, `context_after` dans exactement cet ordre — six
+    emplacements d'étape contexte dans cette voie, un de plus que la voie de template
+    tenant, qui s'arrête à `context_post` ; `context_after` est sinon le hook des voies
+    d'install.
+  Rendre et émettre dans cet ordre fixe (/agent/scripts/lib/install_from_dir.rhai partagé
+    atteint via /agent/scripts/service/template.rhai) : le hook `install_pre`, puis chaque
+    catégorie dont le répertoire existe, befores → vitals → others → scalables → posts ;
+    chaque catégorie exécute ses hooks de fusion optionnels
+    `install_<category>_pre`/`_post` autour d'une passe d'émission par le module
+    `template_<category>` livré (pas de hook post pour scalables), cette passe construit
+    un moteur Handlebars neuf par appel (partials depuis `${config_dir}` et
+    `${package_dir}/handlebars/partials`, helpers depuis
+    `${package_dir}/handlebars/helpers`, mode strict), décode les fichiers
+    `.yaml`/`.yml` directement et rend les fichiers `.yaml.hbs`/`.yml.hbs` via
+    `render_named` fichier par fichier avec tout le contexte comme données ; tout autre
+    fichier ne produit aucun objet.
+  Afficher les documents groupés par les listes de kinds partagées first/middle/last
+    (dont le contenu appartient à /agent/scripts/lib/install_from_dir.rhai), itération
+    des fichiers sources dans un groupe, `---` avant chaque document — sans tri
+    lexicographique à aucune étape, donc des relances byte-identiques reposent sur
+    l'ordre d'itération des répertoires (Tasks).
 
 Must not:
-  Read a kubeconfig, construct a @kube::Client, or touch `vynil-core` cluster state on
-    the frozen path — the leaf's offline claim breaks the moment a fixed step calls a
-    registered cluster name, and the shipped service modules never do; only the
-    install-lane `run` bodies in those same script files reach the cluster.
-  Render the package through @read_package_yaml or the @VynilPackageSource model — the
-    template lane reads `package.yaml` as raw YAML (the validating reader belongs to the
-    install lane), so `agent template service` accepts documents the model would reject.
-  Write rendered output to files — stdout is the only output channel, so no collision
-    or overwrite decision exists to reinstate here.
+  Lire un kubeconfig, construire un @kube::Client, ou toucher l'état cluster de
+    `vynil-core` sur le chemin gelé — l'affirmation hors ligne de la feuille vole en
+    éclats dès qu'une étape figée appelle un nom cluster enregistré, et les modules de
+    service livrés ne le font jamais ; seules les bodies `run` des voies install de ces
+    mêmes fichiers de scripts atteignent le cluster.
+  Rendre le package via @read_package_yaml ou le modèle @VynilPackageSource — la voie de
+    template lit `package.yaml` en YAML brut (le lecteur validant appartient à la voie
+    install), donc `agent template service` accepte des documents que le modèle
+    rejetterait.
+  Écrire la sortie rendue dans des fichiers — stdout est le seul canal de sortie, donc
+    aucune décision de collision ou d'écrasement n'existe à réinstaurer ici.
 
 Exposes:
   @Parameters — `#[derive(@clap::Args, @std::fmt::Debug, serde @Serialize, @Deserialize)]
-    pub struct @Parameters` with exactly the eleven private fields listed in Accepts;
-    embedded as @Commands::Service in ./mod.rs and serialized into the script's `args`
-    dynamic under the Rust field names.
-  @run — `pub fn @run(@args: &@Parameters) -> @common::Result<@()>`: synchronous, called
-    un-awaited from ./mod.rs; no `@must_use`; the whole contract of the leaf.
+    pub struct @Parameters` avec exactement les onze champs privés listés dans Accepts ;
+    embarqué comme @Commands::Service dans ./mod.rs et sérialisé dans le dynamic `args`
+    du script sous les noms de champs Rust.
+  @run — `pub fn @run(@args: &@Parameters) -> @common::Result<@()>` : synchrone, appelé
+    sans await depuis ./mod.rs ; pas de `@must_use` ; tout le contrat de la feuille.
 
 Accepts:
-  `--namespace` / `-n`, env `NAMESPACE`, value name `NAMESPACE`, default `default` —
-    @Parameters.namespace, the instance namespace.
-  `--instance` / `-i`, env `INSTANCE`, value name `INSTANCE`, default `instance-name` —
-    @Parameters.instance, the instance name.
-  `--vynil-namespace` / `-v`, env `VYNIL_NAMESPACE`, default `vynil-system` —
+  `--namespace` / `-n`, env `NAMESPACE`, valeur nommée `NAMESPACE`, défaut `default` —
+    @Parameters.namespace, le namespace de l'instance.
+  `--instance` / `-i`, env `INSTANCE`, valeur nommée `INSTANCE`, défaut `instance-name` —
+    @Parameters.instance, le nom de l'instance.
+  `--vynil-namespace` / `-v`, env `VYNIL_NAMESPACE`, défaut `vynil-system` —
     @Parameters.vynil_namespace.
-  `--source` / `-o`, env `SOURCE`, default `/src` — @Parameters.package_dir, the package
-    tree root (Chart-less layout, see Must).
-  `--script-dir` / `-s`, env `SCRIPT_DIRECTORY`, default `./agent/scripts` —
-    @Parameters.script_dir, the shipped agent Rhai tree root.
-  `--template-dir` / `-t`, env `TEMPLATE_DIRECTORY`, default `./agent/templates` —
-    @Parameters.template_dir, used only by injection into the script context (kept here,
-    unlike the system twin).
-  `--agent-image`, env `AGENT_IMAGE`, default @common::DEFAULT_AGENT_IMAGE —
-    @Parameters.agent_image, used only by injection into the script context.
-  `--tag`, env `TAG`, default `1.0.0` — @Parameters.tag, the requested version.
-  `--config-dir` / `-c`, env `CONFIG_DIR`, default `.` — @Parameters.config_dir, also a
-    Handlebars partial dir and a resolver dir.
-  `--controller-values`, env `CONTROLLER_VALUES`, default `{}` —
-    @Parameters.controller_values, raw JSON text, never parsed on the Rust side.
-  `--context`, env `CONTEXT_NAME`, `value_enum` over ./mod.sdd's @Contexts,
-    `default_value_t` → @Contexts::@Simple — offline cluster-profile selector.
-  All flags are optional (the leaf runs with zero arguments); relative defaults resolve
-    against the process working directory.
-  Package tree read by the frozen path — `${package_dir}/package.yaml` mandatory (raw
-    read); optional `${package_dir}/handlebars/partials/` and
-    `${package_dir}/handlebars/helpers/`; optional category dirs befores, vitals,
-    others, scalables, posts containing multi-doc `.yaml`/`.yml` and their
-    `.yaml.hbs`/`.yml.hbs` template counterparts.
-  Hook modules resolved by name — context_pre, context_extra, context_post, context_after,
-    install_pre, install_`<category>`_pre and install_`<category>`_post (none for
-    scalables post) are package- or config-provided only; context_service ships as the
-    resolver fallback; optional cluster file `${config_dir}/agent.yaml`.
+  `--source` / `-o`, env `SOURCE`, défaut `/src` — @Parameters.package_dir, la racine de
+    l'arborescence du package (layout sans Chart, voir Must).
+  `--script-dir` / `-s`, env `SCRIPT_DIRECTORY`, défaut `./agent/scripts` —
+    @Parameters.script_dir, la racine de l'arbre Rhai d'agent livré.
+  `--template-dir` / `-t`, env `TEMPLATE_DIRECTORY`, défaut `./agent/templates` —
+    @Parameters.template_dir, utilisé seulement par injection dans le contexte du script
+    (conservé ici, contrairement au jumeau système).
+  `--agent-image`, env `AGENT_IMAGE`, défaut @common::DEFAULT_AGENT_IMAGE —
+    @Parameters.agent_image, utilisé seulement par injection dans le contexte du script.
+  `--tag`, env `TAG`, défaut `1.0.0` — @Parameters.tag, la version demandée.
+  `--config-dir` / `-c`, env `CONFIG_DIR`, défaut `.` — @Parameters.config_dir, aussi un
+    répertoire de partials Handlebars et un répertoire du resolver.
+  `--controller-values`, env `CONTROLLER_VALUES`, défaut `{}` —
+    @Parameters.controller_values, du texte JSON brut, jamais analysé côté Rust.
+  `--context`, env `CONTEXT_NAME`, `value_enum` sur @Contexts de ./mod.sdd,
+    `default_value_t` → @Contexts::@Simple — sélecteur de profil de cluster hors ligne.
+  Tous les flags sont optionnels (la feuille tourne avec zéro argument) ; les défauts
+    relatifs se résolvent depuis le répertoire de travail du processus.
+  Arborescence du package lue par le chemin gelé — `${package_dir}/package.yaml`
+    obligatoire (lecture brute) ; `${package_dir}/handlebars/partials/` et
+    `${package_dir}/handlebars/helpers/` optionnels ; répertoires de catégorie optionnels
+    befores, vitals, others, scalables, posts contenant des `.yaml`/`.yml` multi-documents
+    et leurs homologues templates `.yaml.hbs`/`.yml.hbs`.
+  Modules de hooks résolus par nom — context_pre, context_extra, context_post,
+    context_after, install_pre, install_`<category>`_pre et install_`<category>`_post
+    (aucun pour le post de scalables) ne viennent que du package ou de la config ;
+    context_service est livré comme repli du resolver ; fichier cluster optionnel
+    `${config_dir}/agent.yaml`.
 
 Returns:
-  @Ok(`()`) when the single embedded snippet completes; the script's final value is
-    discarded (`let _ = @Script::eval(…)?`), and success falls off ./mod.rs to exit 0.
-  During the run — rendered manifests on process stdout, one `---` line then one
-    `yaml_encode` document per object; logs go through @tracing and the script console
-    helpers, stdout through the engine print hook (both attributed to the core build).
-  Nothing is written to disk by this lane — file-collision and overwrite policy belong
-    to the install lanes, not here.
+  @Ok(`()`) quand l'unique snippet embarqué se termine ; la valeur finale du script est
+    jetée (`let _ = @Script::eval(…)?`), et le succès retombe de ./mod.rs jusqu'au code
+    de sortie 0.
+  Pendant l'exécution — les manifests rendus sur le stdout du processus, une ligne `---`
+    puis un document `yaml_encode` par objet ; les logs passent par @tracing et les
+    helpers console du script, stdout par le hook print du moteur (les deux attribués au
+    build core).
+  Rien n'est écrit sur disque par cette voie — la politique de collision de fichiers et
+    d'écrasement appartient aux voies install, pas ici.
 
 Raises:
-  @common::Error::SerializationError (display `SerializationError: {0}`) if
-    @serde_json::to_value(@Parameters) fails — see Tasks, that serialization is total
-    today.
-  @common::Error::Core wrapping the core Rhai failure (text `Rhai script error: <rhai
-    text>`, conversion owned by /common/src/rhaihandler.sdd) for snippet parse errors,
-    failure to resolve the `context` or `template` modules from the resolver path, an
-    unreadable or unparsable `package.yaml`, a Handlebars render or YAML parse failure
-    rethrown by the render phase, or any script `throw`.
-  The leaf catches nothing itself — ./mod.rs turns every @Err into the frozen service log
-    line and @std::process::exit(1).
+  @common::Error::SerializationError (affichage `SerializationError: {0}`) si
+    @serde_json::to_value(@Parameters) échoue — voir Tasks, cette sérialisation est
+    totale aujourd'hui.
+  @common::Error::Core enveloppant l'échec Rhai du core (texte `Rhai script error: <rhai
+    text>`, conversion appartenant à /common/src/rhaihandler.sdd) pour les erreurs de
+    parse du snippet, l'échec de résolution des modules `context` ou `template` depuis le
+    chemin du resolver, un `package.yaml` illisible ou infalsable, un échec de rendu
+    Handlebars ou de parse YAML relancé par la phase de rendu, ou tout `throw` de script.
+  La feuille ne rattrape rien elle-même — ./mod.rs convertit chaque @Err en la ligne de
+    log service gelée et @std::process::exit(1).
 
 Handles:
-  Invalid `--controller-values` JSON — the script catches, console-warns, and renders
-    with `controller` as the empty `#{}` map; the run continues.
-  Missing optional inputs (no `agent.yaml`, absent category dirs, absent hooks) —
-    empty-default branches, no error; absent `context_service` via a package shadow
-    without the `template` completion just leaves the maintenance-literal block.
-  Hook returning a non-map (including the missing-module skip unit) — context kept
-    unchanged, except the `context_extra` result which is assigned unguarded (Tasks).
-  Decoded documents that are not maps or lack `kind`/a map `metadata` — console-warned
-    and excluded from output.
-  No arguments at all — every default applies; the run then fails only because
-    `/src/package.yaml` is normally absent.
+  Un JSON `--controller-values` invalide — le script rattrape, avertit sur la console et
+    rend avec `controller` comme la map vide `#{}` ; l'exécution continue.
+  Des entrées optionnelles manquantes (pas d'`agent.yaml`, répertoires de catégorie
+    absents, hooks absents) — branches par défaut vides, pas d'erreur ; un
+    `context_service` absent via une ombre de package sans le `template` d'achèvement
+    ne laisse que le bloc littéral de maintenance.
+  Un hook retournant une non-map (y compris l'unité de skip du module absent) — le
+    contexte est gardé inchangé, sauf le résultat de `context_extra` qui est assigné sans
+    garde (Tasks).
+  Des documents décodés qui ne sont pas des maps ou qui n'ont pas de `kind`/de `metadata`
+    map — avertis sur la console et exclus de la sortie.
+  Aucun argument du tout — chaque défaut s'applique ; l'exécution n'échoue alors que parce
+    que `/src/package.yaml` est normalement absent.
 
 Tasks:
-  [ ] Cover the scenarios — the file has no @tests module and /agent/tests only matches
-      the word `template` inside unrelated Rhai lib/lifecycle fixtures. Name tests after
-      the scenarios and freeze the args-JSON key set plus the @Contexts wire strings
-      once.
-  [?] Cross-ref ./tenant.sdd Tasks — as the Rust files are a one-hunk twin, these open
-      tenant decisions bind this leaf verbatim: the unreachable
-      @map_err(@common::Error::SerializationError) arm, the unguarded `context["extra"]`
-      assignment, the no-sort plus plain `yaml_encode` determinism question (the ordered
-      variant's guarantees are /common/src/yamlhandler.sdd's), the `1.0.0`/
-      `instance-name`/@common::DEFAULT_AGENT_IMAGE placeholder defaults, the shared
-      @Script::new host powers on an offline lane, the three-leaf @Parameters
-      unification (the system twin dropping `--template-dir`/`--agent-image` is
-      ./system.rs's drift, not this file's), and the frozen-placeholder decision — of
-      which the `client`/`client-system` half has no twin here (this lane gets no such
-      block) while the literal `vynil.solidite.fr/owner-type` `system` still stamps
-      service renders.
-  [?] `context_after` executes in this lane's context sequence but not in the tenant
-      template lane — the two full twins disagree on the hook set without any
-      service-specific reason visible in code. Decide whether the template lanes share
-      one hook sequence (this settles the script-side half of ./tenant.sdd's twin-drift
-      entry).
-  [?] The `namespace` block's completeness is delegated to a shadowable resolver slot —
-      a package replacing `context_service` drops `name`/`ha`/`use_backup`, and strict
-      renders reading `namespace.name` then fail at render time, while the maintenance
-      hours (`"0"` here vs the tenant lane's `"1"`) are unconfigurable literals a
-      `context_pre` hook cannot influence. Decide whether the namespace skeleton belongs
-      in the kind module's fixed code instead of the hook.
+  [ ] Couvrir les scénarios — le fichier n'a pas de module @tests et /agent/tests ne
+      fait correspondre le mot `template` que dans des fixtures lib/lifecycle Rhai sans
+      rapport. Nommer les tests d'après les scénarios et geler une fois pour toutes le
+      jeu de clés du JSON args et les chaînes fil de @Contexts.
+  [?] Renvoi croisé vers les Tasks de ./tenant.sdd — les fichiers Rust étant un jumeau à
+      un hunk, ces décisions tenant ouvertes lient cette feuille verbatim : la branche
+      inaccessible @map_err(@common::Error::SerializationError), l'assignation sans garde
+      `context["extra"]`, la question du sans-tri plus `yaml_encode` simple (les garanties
+      de la variante ordonnée appartiennent à /common/src/yamlhandler.sdd), les défauts
+      placeholder `1.0.0`/`instance-name`/@common::DEFAULT_AGENT_IMAGE, les powers hôte
+      partagés de @Script::new sur une voie hors ligne, l'unification @Parameters des
+      trois feuilles (le twin système qui abandonne `--template-dir`/`--agent-image` est
+      la dérive de ./system.rs, pas de ce fichier), et la décision de placeholder gelé —
+      dont la moitié `client`/`client-system` n'a pas de jumeau ici (cette voie ne reçoit
+      pas un tel bloc) tandis que le littéral `vynil.solidite.fr/owner-type` `system`
+      tamponne encore les rendus service.
+  [?] `context_after` s'exécute dans la séquence de contexte de cette voie mais pas dans
+      la voie template tenant — les deux jumeaux complets divergent sur le jeu de hooks
+      sans raison propre au service visible dans le code. Décider si les voies template
+      partagent une seule séquence de hooks (cela règle la moitié côté script de l'entrée
+      twin-drift de ./tenant.sdd).
+  [?] L'exhaustivité du bloc `namespace` est déléguée à un emplacement de resolver
+      assombrissable — un package qui remplace `context_service` perd `name`/`ha`/
+      `use_backup`, et les rendus stricts lisant `namespace.name` échouent alors au rendu,
+      tandis que les heures de maintenance (`"0"` ici contre `"1"` pour la voie tenant)
+      sont des littéraux non configurables qu'un hook `context_pre` ne peut influencer.
+      Décider si le squelette du namespace appartient au code fixe du module de kind
+      plutôt qu'au hook.
 
 Done when:
-  Every scenario has a passing mapped test, the args-JSON shape and resolver shadow
-    order are pinned, and the three-leaf duplication carries either a unification or a
-    per-leaf written justification.
+  Chaque scénario a un test mappé qui passe, la forme du JSON args et l'ordre de shadowing
+    du resolver sont épinglés, et la duplication des trois feuilles porte soit une
+    unification soit une justification écrite par feuille.
 
 Scenario: Offline render of a full service package tree
-  Given a package dir with `package.yaml`, a populated `vitals` dir of `.yaml.hbs` files
-    and an unreachable cluster
-  When @run executes the frozen path
-  Then context assembly reads only disk inputs and no registration of the k8s surface is
-    ever called
-  And stdout carries `---` plus one YAML document per rendered object in first/middle/
-    last kind order
-  And @run returns @Ok
-  No mapped test exists.
+  Given un répertoire de package avec `package.yaml`, un répertoire `vitals` peuplé de
+    fichiers `.yaml.hbs` et un cluster inaccessible
+  When @run exécute le chemin gelé
+  Then l'assemblage du contexte ne lit que des entrées disque et aucune registration de
+    la surface k8s n'est jamais appelée
+  And stdout porte `---` plus un document YAML par objet rendu dans l'ordre de kinds
+    first/middle/last
+  And @run retourne @Ok
+  Aucun test mappé n'existe.
 
 Scenario: Namespace block completes from the maintenance literals
-  Given @run with only `--namespace shops --instance portal` and an otherwise default run
-  When context assembly finishes
-  Then `namespace` carries `maintenance_start_hour` `"0"`, `maintenance_start_minut`
-    `"0"`, `name` `shops`, `use_backup` `false` and `ha` of the selected profile
-  And no `context["tenant"]`-style block exists anywhere in the context
-  No mapped test exists.
+  Given @run avec seulement `--namespace shops --instance portal` et une exécution
+    autrement par défaut
+  When l'assemblage du contexte se termine
+  Then `namespace` porte `maintenance_start_hour` `"0"`, `maintenance_start_minut`
+    `"0"`, `name` `shops`, `use_backup` `false` et `ha` du profil sélectionné
+  And aucun bloc de style `context["tenant"]` n'existe nulle part dans le contexte
+  Aucun test mappé n'existe.
 
 Scenario: Context after hook lands in this lane only
-  Given a package whose `scripts/context_after.rhai` returns the context plus `from_after`
-    `true`
-  When @run assembles the context
-  Then `from_after` is present in the render data
-  But the same package under @Commands::@Tenant never reaches that hook
-  No mapped test exists.
+  Given un package dont `scripts/context_after.rhai` retourne le contexte plus
+    `from_after` `true`
+  When @run assemble le contexte
+  Then `from_after` est présent dans les données de rendu
+  But le même package sous @Commands::@Tenant n'atteint jamais ce hook
+  Aucun test mappé n'existe.
 
 Scenario: Absent category dirs and hooks skipped silently
-  Given a package tree with only `befores` present and no hook modules anywhere
-  When @run executes
-  Then the other four category dirs are probed with `is_dir` and skipped without error
-  And the context-stage hooks resolve to the missing-module skip or the shipped
-    `context_service` default and leave the context otherwise unchanged
-  No mapped test exists.
+  Given une arborescence de package avec seulement `befores` présent et aucun module de
+    hook nulle part
+  When @run exécute
+  Then les quatre autres répertoires de catégorie sont sondés avec `is_dir` et sautés sans
+    erreur
+  And les hooks d'étape contexte se résolvent vers le skip de module absent ou le défaut
+    `context_service` livré et laissent le contexte inchangé par ailleurs
+  Aucun test mappé n'existe.
 
 Scenario: Invalid controller values continue with empty controller
   Given `--controller-values not-json`
-  When context assembly parses it
-  Then the script catch console-warns and `controller` stays `#{}`
-  And rendering completes and @run returns @Ok
-  No mapped test exists.
+  When l'assemblage du contexte l'analyse
+  Then le catch du script avertit sur la console et `controller` reste `#{}`
+  And le rendu va à son terme et @run retourne @Ok
+  Aucun test mappé n'existe.
 
 Scenario: Context enum selects the offline cluster profile
-  Given the same package tree rendered twice, once with `--context HA` and once with the
-    @Contexts::@Simple default
-  When both runs finish
-  Then the HA run carries the eight-node profile, a non-empty default `crds` list and
-    three enriched storage classes
-  And the Simple run carries `nodes` `["single"]`, empty `crds` and one `local-path`
-    storage class
-  And `cluster.ha` is `true` for HA and `false` for Simple unless `agent.yaml` overrides
-  No mapped test exists.
+  Given la même arborescence de package rendue deux fois, une fois avec `--context HA` et
+    une fois avec le défaut @Contexts::@Simple
+  When les deux exécutions finissent
+  Then la run HA porte le profil huit-noeuds, une liste `crds` par défaut non vide et
+    trois storage classes enrichies
+  And la run Simple porte `nodes` `["single"]`, `crds` vide et une storage class
+    `local-path`
+  And `cluster.ha` est `true` pour HA et `false` pour Simple sauf override d'`agent.yaml`
+  Aucun test mappé n'existe.
 
 Scenario: Package scripts shadow the shipped service modules
-  Given `${package_dir}/scripts/template.rhai` defining `run` differs from
+  Given `${package_dir}/scripts/template.rhai` définissant un `run` différent de
     /agent/scripts/service/template.rhai
-  When @run imports `template`
-  Then the package copy resolves first per the resolver order and its emit set runs
-  No mapped test exists.
+  When @run importe `template`
+  Then la copie du package résout en premier selon l'ordre du resolver et son jeu
+    d'émission s'exécute
+  Aucun test mappé n'existe.
 
 Scenario: Unreadable package fails through the service exit lane
-  Given `--source` pointing at a directory with no `package.yaml`
-  When context assembly reads it
-  Then the script failure propagates as @common::Error::Core (`Rhai script error: …`)
-  And ./mod.rs logs `Templating a service package failed with: {e:}` and exits 1
-  No mapped test exists.
+  Given `--source` pointant vers un répertoire sans `package.yaml`
+  When l'assemblage du contexte le lit
+  Then l'échec du script se propage en @common::Error::Core (`Rhai script error: …`)
+  And ./mod.rs logge `Templating a service package failed with: {e:}` et sort avec 1
+  Aucun test mappé n'existe.
 
 Scenario: Malformed documents are dropped with a warning
-  Given a category file mixing a valid Deployment, a bare string entry and a map without
-    `kind`
-  When the render phase classifies the decoded documents
-  Then only the Deployment is printed
-  And the other two are console-warned as missing a kind
-  No mapped test exists.
+  Given un fichier de catégorie mélangeant un Deployment valide, une entrée chaîne brute
+    et une map sans `kind`
+  When la phase de rendu classe les documents décodés
+  Then seul le Deployment est affiché
+  And les deux autres sont avertis sur la console comme dépourvus de kind
+  Aucun test mappé n'existe.
 
 Example:
-  `args` as the scripts see it with all defaults: `namespace` `default`, `instance`
-    `instance-name`, `vynil_namespace` `vynil-system`, `package_dir` `/src`,
+  `args` tel que les scripts le voient avec tous les défauts : `namespace` `default`,
+    `instance` `instance-name`, `vynil_namespace` `vynil-system`, `package_dir` `/src`,
     `script_dir` `./agent/scripts`, `template_dir` `./agent/templates`, `agent_image`
     `docker.io/sebt3/vynil-agent:0.7.7`, `tag` `1.0.0`, `config_dir` `.`,
     `controller_values` `{}`, `context_name` `Simple`
-  final `namespace` block on a default profile run: `maintenance_start_hour` `"0"`,
-    `maintenance_start_minut` `"0"`, `name` `default`, `use_backup` `false`, `ha` `false`
-  stdout frame: `---` line, then one YAML document, per object; no closing separator.
+  bloc `namespace` final sur une exécution profil par défaut : `maintenance_start_hour`
+    `"0"`, `maintenance_start_minut` `"0"`, `name` `default`, `use_backup` `false`,
+    `ha` `false`
+  trame stdout : ligne `---`, puis un document YAML par objet ; pas de séparateur final.

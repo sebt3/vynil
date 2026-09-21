@@ -1,200 +1,200 @@
-# File spec for ./vyniltestset.rs — the TestSet document data contract. Loading,
-# merging, templating and assert evaluation belong to ./handler.rs and ./vyniltest.rs.
+# Spec fichier de ./vyniltestset.rs — le contrat de données du document TestSet. Le chargement,
+# la fusion, la tempolation et l'évaluation des asserts reviennent à ./handler.rs et ./vyniltest.rs.
 
 Spec: VynilTestSet
 
 Platform: Rust
 
 Purpose:
-  The declarative serde schema of the `TestSet` document kind plus the shared assert
-    vocabulary (@VynilAssert, @VynilAssertSelector, @VynilAssertMatch, @VynilAssertResult)
-    and the mock envelope (@VynilTestSetMocks) that @VynilTest reuses: pure data types
-    whose only behavioural lever is field requiredness. The file declares no function and
-    no impl block — parsing, the TestSet duplicate-name abort, reference validation
-    (@TestHandler::validate_refs, defined on @TestHandler in ./handler.rs with no current
-    caller) and every match semantic live in the consumer files, so this contract is
-    exactly the wire shape a `vinyl.solidite.fr/v1beta1` `TestSet` document and a
-    @VynilAssertResult result row must have.
+  Le schéma serde déclaratif du type de document `TestSet` plus le vocabulaire partagé
+    des asserts (@VynilAssert, @VynilAssertSelector, @VynilAssertMatch, @VynilAssertResult)
+    et l'enveloppe de mocks (@VynilTestSetMocks) que @VynilTest réutilise : types de
+    données purs dont la seule variante comportementale est le caractère obligatoire des
+    champs. Le fichier ne déclare aucune fonction ni bloc impl — le parsing, l'abandon sur
+    nom TestSet dupliqué, la validation des références (@TestHandler::validate_refs,
+    définie sur @TestHandler dans ./handler.rs sans appelant actuel) et toute la sémantique
+    de correspondance vivent dans les fichiers consommateurs, donc ce contrat est exactement
+    la forme filaire que doivent avoir un document `vinyl.solidite.fr/v1beta1` `TestSet` et une ligne de résultat @VynilAssertResult.
 
 Owns:
   ./vyniltestset.rs
 
 References:
-  ./../package/test.sdd — the parse-side freeze this shape must match: non-recursive
-    `.yml`/`.yaml` scan, the pre-parse apiVersion gate `vinyl.solidite.fr/v1beta1`
-    (literal `vinyl` spelling) and `kind` dispatch, parse failures surfaced as
-    @common::Error::YamlError with `{file}: `-prefixed messages, and Test/TestSet
-    duplicate-name abort keyed by @VynilTestSetMeta.name.
-  ./handler.rs — loader/merger/templater (./handler.sdd pending): deserializes these
-    types through @serde_json::from_value, aborts on a duplicate TestSet name reading
-    `duplicate TestSet '{name}'`, and owns @TestHandler::validate_refs, which checks each
-    loaded Test's `testSets[].testSet` keys against the loaded TestSet map and is never
-    called from ./../package/test.rs.
-  ./vyniltest.rs — consumer (./vyniltest.sdd pending): @VynilTest imports five of these
+  ./../package/test.sdd — le gel côté parsing que cette forme doit respecter : scan
+    `.yml`/`.yaml` non récursif, porte apiVersion d'avant-parsing `vinyl.solidite.fr/v1beta1`
+    (orthographe littérale `vinyl`) et dispatch par `kind`, échecs de parsing remontés en
+    @common::Error::YamlError avec des messages préfixés `{file}: `, et abandon sur nom
+    Test/TestSet dupliqué indexé par @VynilTestSetMeta.name.
+  ./handler.rs — chargeur/fusionneur/tempolateur (./handler.sdd en attente) : désérialise ces
+    types via @serde_json::from_value, abandonne sur un nom TestSet dupliqué avec le message
+    `duplicate TestSet '{name}'`, et possède @TestHandler::validate_refs, qui vérifie les clés
+    `testSets[].testSet` de chaque Test chargé contre la carte des TestSet chargés, sans jamais
+    être appelée depuis ./../package/test.rs.
+  ./vyniltest.rs — consommateur (./vyniltest.sdd en attente) : @VynilTest importe cinq de ces
     types (@VynilAssert, @VynilAssertMatch, @VynilAssertResult, @VynilAssertSelector,
-    @VynilTestSetMocks), owns selector/matcher semantics (@matches_selector,
-    @value_verdict, @count_verdict) and builds @VynilAssertResult rows in
+    @VynilTestSetMocks), possède la sémantique selector/matcher (@matches_selector,
+    @value_verdict, @count_verdict) et construit les lignes @VynilAssertResult dans
     @VynilTest::run_asserts.
-  ./result.rs — output-side consumer: embeds @Vec<@VynilAssertResult> in @TestResult and
-    renders @name/@description/@passed/@message into the text, json and JUnit outputs.
-  ./mod.rs — re-exports @VynilAssertResult alone at module level (the only item of this
-    file promoted to `client::testing::*`); the rest are reached under the
-    `vyniltestset::` path.
+  ./result.rs — consommateur côté sortie : embarque @Vec<@VynilAssertResult> dans @TestResult et
+    rend @name/@description/@passed/@message dans les sorties texte, json et JUnit.
+  ./mod.rs — ne réexporte que @VynilAssertResult au niveau module (le seul élément de ce
+    fichier promu dans `client::testing::*`) ; le reste s'atteint sous le chemin
+    `vyniltestset::`.
 
 Depends on:
-  `serde`/`serde_json` — the derives, and @serde_json::Value as the untyped payload
-    holder; the actual deserialization is YAML → @serde_json::Value → struct, both steps
-    performed consumer-side.
-  /common/src/lib.sdd — `common::httpmock::@HttpMockItem`, the HTTP mock item held in
+  `serde`/`serde_json` — les derives, et @serde_json::Value comme porteur de payload
+    non typé ; la désérialisation réelle est YAML → @serde_json::Value → struct, les deux
+    étapes étant exécutées côté consommateur.
+  /common/src/lib.sdd — `common::httpmock::@HttpMockItem`, l'élément de mock HTTP détenu dans
     @VynilTestSetMocks.http.
-  /common/src/rhaihandler.sdd — @Dynamic, the untyped Kubernetes mock object held in
+  /common/src/rhaihandler.sdd — @Dynamic, l'objet mock Kubernetes non typé détenu dans
     @VynilTestSetMocks.kubernetes.
 
 Exposes:
-  nine `pub` items, no functions; crate-wide reachable as `client::testing::vyniltestset::*`
-    because /agent/src/lib.rs declares `pub mod testing`:
-  @VynilTestSet — TestSet root with `#[allow(non_snake_case)]` and @Deserialize/@Serialize/
-    @Clone/@Debug: @apiVersion (@String), @kind (@String), @metadata (@VynilTestSetMeta),
+  neuf éléments `pub`, aucune fonction ; atteignables dans tout le crate sous `client::testing::vyniltestset::*`
+    car /agent/src/lib.rs déclare `pub mod testing` :
+  @VynilTestSet — racine TestSet avec `#[allow(non_snake_case)]` et @Deserialize/@Serialize/
+    @Clone/@Debug : @apiVersion (@String), @kind (@String), @metadata (@VynilTestSetMeta),
     @variables (@Option<@VynilTestSetVariablesSet>), @mocks (@Option<@VynilTestSetMocks>),
     @asserts (@Option<Vec<@VynilAssert>>).
   @VynilTestSetMeta — @name (@String), @description (@Option<@String>).
-  @VynilTestSetVariablesSet — `pub type` alias of @BTreeMap<@String, @VynilTestSetVariable>
-    (variable name → definition).
-  @VynilTestSetVariable — @var_type, renamed on the wire to `type` via
-    `#[serde(rename = "type")]` (@String), and @default (@Option<@serde_json::Value>).
-  @VynilAssertMatch — enum with `#[serde(rename_all = "snake_case")]` and variants
-    @Exact(@u64), @AtLeast(@u64), @AtMost(@u64), @All (carries `#[default]`), @Any,
-    @None; derives @PartialEq, @Eq and @Default besides @Clone/@Debug/serde.
-  @VynilAssertSelector — @kind, @name, @namespace, all @Option<@String>; interpretation
-    (match rules, empty-selector-selects-all) is owned by @matches_selector.
+  @VynilTestSetVariablesSet — alias `pub type` de @BTreeMap<@String, @VynilTestSetVariable>
+    (nom de variable → définition).
+  @VynilTestSetVariable — @var_type, renommé sur le fil en `type` via
+    `#[serde(rename = "type")]` (@String), et @default (@Option<@serde_json::Value>).
+  @VynilAssertMatch — enum avec `#[serde(rename_all = "snake_case")]` et les variantes
+    @Exact(@u64), @AtLeast(@u64), @AtMost(@u64), @All (porte `#[default]`), @Any,
+    @None ; derive @PartialEq, @Eq et @Default en plus de @Clone/@Debug/serde.
+  @VynilAssertSelector — @kind, @name, @namespace, tous @Option<@String> ; l'interprétation
+    (règles de correspondance, sélecteur vide sélectionne tout) appartient à @matches_selector.
   @VynilAssert — @name (@String), @description (@Option<@String>), @selector
-    (@VynilAssertSelector, not @Option), @matcher (@VynilAssertMatch, not @Option),
+    (@VynilAssertSelector, pas @Option), @matcher (@VynilAssertMatch, pas @Option),
     @value (@Option<@serde_json::Value>).
-  @VynilAssertResult — the output row @name (@String), @description (@Option<@String>),
-    @passed (@bool), @message (@String); derives @Clone/@Debug and fully qualified
-    @serde::Serialize/@serde::Deserialize.
-  @VynilTestSetMocks — mock envelope @http (@Option<Vec<@HttpMockItem>>), @kubernetes
-    (@Option<Vec<@Dynamic>>); despite the name it is also the shape of @VynilTest.mocks.
+  @VynilAssertResult — la ligne de sortie @name (@String), @description (@Option<@String>),
+    @passed (@bool), @message (@String) ; derive @Clone/@Debug ainsi que les formes
+    entièrement qualifiées @serde::Serialize/@serde::Deserialize.
+  @VynilTestSetMocks — enveloppe de mocks @http (@Option<Vec<@HttpMockItem>>), @kubernetes
+    (@Option<Vec<@Dynamic>>) ; malgré son nom c'est aussi la forme de @VynilTest.mocks.
 
 Must:
-  Freeze wire keys as the declared Rust field names: no struct carries a container
-    rename, so `apiVersion` stays camelCase (hence `#[allow(non_snake_case)]`: the only
-    rename in any struct here is @var_type → `type`) and all other keys are single
-    lowercase words (`kind`, `metadata`, `variables`, `mocks`, `asserts`, `name`,
+  Geler les clés du fil comme les noms de champs Rust déclarés : aucun struct ne porte de
+    renommage de conteneur, donc `apiVersion` reste en camelCase (d'où `#[allow(non_snake_case)]` : le seul
+    renommage de tous les structs ici est @var_type → `type`) et toutes les autres clés sont
+    des mots minuscules simples (`kind`, `metadata`, `variables`, `mocks`, `asserts`, `name`,
     `description`, `default`, `selector`, `matcher`, `value`, `http`, `kubernetes`,
     `passed`, `message`).
-  Allow unknown fields at every depth: no `#[serde(deny_unknown_fields)]` exists, so an
-    unrecognized key in any mapping (root, metadata, variable, selector, mocks, assert,
-    result) is silently dropped; unknown enum variants are still rejected (enum tagging,
-    not field tolerance).
-  Require exactly `apiVersion`, `kind`, `metadata` on the root, `name` inside metadata,
-    `name`/`selector`/`matcher` on each assert, `type` on each variable, and
-    `name`/`passed`/`message` on @VynilAssertResult; every other key is @Option and
-    absent-or-null on the wire. No `#[serde(default)]` attribute exists anywhere in this
-    file — optionality is @Option-only.
-  Keep @apiVersion, @kind and @var_type unconstrained @String: the apiVersion gate and
-    the `Test`/`TestSet` kind dispatch happen pre-parse in the scanner; nothing
-    post-parse inspects @kind or @apiVersion again, and @var_type's value is never read
-    by any consumer.
-  Encode @VynilAssertMatch externally tagged (serde default, no container attribute):
-    unit variants as the scalars `all`, `any`, `none`, count variants as single-key maps
-    `exact: N`, `at_least: N`, `at_most: N` with N a @u64 integer; a negative,
-    fractional or @u64-overflowing N is a parse error, and camelCase spellings such as
-    `atLeast` are unknown-variant errors because only snake_case variant names exist.
-  Treat absent keys and `null` identically as @Option::None for every @Option field —
-    including `asserts: null` vs `asserts: []`, which differ as @Option::None vs
-    @Option::Some of an empty vec and keep that difference in the loaded @VynilTestSet.
-  Order @variables deterministically: the @BTreeMap alias keeps entries sorted by
-    variable name for consumers walking the declarations.
-  Carry no logic here: no function, impl block, constructor or validation exists, the
-    only `#[default]` (@VynilAssertMatch::@All) can never fire because `matcher` has no
-    serde default, and every type is built by struct literal on all-`pub` fields — by
-    @serde_json::from_value in ./handler.rs, by hand for the synthetic `execution` and
-    `value_script` rows in ./handler.rs, and by @VynilTest::run_asserts in ./vyniltest.rs.
+  Autoriser les champs inconnus à chaque profondeur : aucun `#[serde(deny_unknown_fields)]` n'existe,
+    donc une clé non reconnue dans tout mapping (racine, metadata, variable, selector, mocks,
+    assert, result) est silencieusement éliminée ; les variantes d'enum inconnues restent rejetées
+    (tagging d'enum, pas de tolérance aux champs).
+  Exiger exactement `apiVersion`, `kind`, `metadata` à la racine, `name` dans metadata,
+    `name`/`selector`/`matcher` sur chaque assert, `type` sur chaque variable, et
+    `name`/`passed`/`message` sur @VynilAssertResult ; toute autre clé est @Option et
+    absente-ou-null sur le fil. Aucun attribut `#[serde(default)]` n'existe nulle part dans ce
+    fichier — l'optionalité est uniquement portée par @Option.
+  Garder @apiVersion, @kind et @var_type comme @String non contraints : la porte apiVersion et
+    le dispatch par kind `Test`/`TestSet` ont lieu avant parsing dans le scanner ; rien
+    post-parse n'inspecte de nouveau @kind ou @apiVersion, et la valeur de @var_type n'est
+    jamais lue par aucun consommateur.
+  Encoder @VynilAssertMatch en tagging externe (défaut serde, aucun attribut de conteneur) :
+    les variantes unitaires comme les scalaires `all`, `any`, `none`, les variantes de comptage
+    comme des maps à clé unique `exact: N`, `at_least: N`, `at_most: N` avec N un entier @u64 ;
+    un N négatif, fractionnaire ou dépassant @u64 est une erreur de parsing, et les orthographes
+    camelCase comme `atLeast` sont des erreurs de variante inconnue car seuls des noms snake_case existent.
+  Traiter les clés absentes et `null` identiquement comme @Option::None pour chaque champ @Option —
+    y compris `asserts: null` contre `asserts: []`, qui diffèrent comme @Option::None contre
+    @Option::Some d'un vec vide et conservent cette différence dans le @VynilTestSet chargé.
+  Ordonner @variables de façon déterministe : l'alias @BTreeMap garde les entrées triées par
+    nom de variable pour les consommateurs qui parcourent les déclarations.
+  Ne porter aucune logique ici : aucune fonction, bloc impl, constructeur ou validation
+    n'existe, le seul `#[default]` (@VynilAssertMatch::@All) ne peut jamais se déclencher car
+    `matcher` n'a aucun default serde, et chaque type est construit par littéral de struct sur
+    des champs tous `pub` — via @serde_json::from_value dans ./handler.rs, à la main pour les
+    lignes synthétiques `execution` et `value_script` dans ./handler.rs, et par @VynilTest::run_asserts dans ./vyniltest.rs.
 
 Accepts:
-  A @serde_json::Value mapping produced by the scanner from a `TestSet`-kind,
-    `vinyl.solidite.fr/v1beta1` YAML document — the type itself re-validates neither gate
-    and imposes no syntax on @name (empty and duplicate-looking names parse; dedup is
-    the loader's job).
-  @VynilAssertResult additionally accepts plain struct-literal construction from the
-    synthetic result rows written by @TestHandler::run_test and @TestHandler::run_test_inner.
+  Un mapping @serde_json::Value produit par le scanner depuis un document YAML de kind
+    `TestSet` et `vinyl.solidite.fr/v1beta1` — le type lui-même ne revalide aucune de ces
+    portes et n'impose aucune syntaxe à @name (les noms vides ou en apparence dupliqués se
+    parse ; le dedup est le travail du chargeur).
+  @VynilAssertResult accepte aussi la construction par simple littéral de struct depuis les
+    lignes de résultat synthétiques écrites par @TestHandler::run_test et @TestHandler::run_test_inner.
 
 Returns:
-  A fully populated struct on success, all fields readable (every field is `pub`, every
-    type @Clone and @Debug).
-  On the serialize side @VynilAssertResult is the only type ever actually serialized (by
-    ./result.rs): keys `name`, `description` (emitted as null when @Option::None),
-    `passed`, `message`; nothing serializes @VynilTestSet, @VynilAssert or @VynilTestSetMocks.
+  Un struct entièrement peuplé en cas de succès, tous les champs lisibles (chaque champ est
+    `pub`, chaque type @Clone et @Debug).
+  Côté sérialisation, @VynilAssertResult est le seul type jamais réellement sérialisé (par
+    ./result.rs) : clés `name`, `description` (émis comme null quand @Option::None),
+    `passed`, `message` ; rien ne sérialise @VynilTestSet, @VynilAssert ou @VynilTestSetMocks.
 
 Raises:
-  Nothing directly — a data-only file has no error lane. Shape violations surface as
-    @serde `missing field`, `invalid type` and unknown-variant errors inside the
-    consumer's @serde_json::from_value call and are mapped there to @Error::YamlError
-    with the `{file}: ` prefix (./../package/test.sdd).
+  Rien directement — un fichier purement données n'a aucune voie d'erreur. Les violations de
+    forme remontent comme erreurs @serde `missing field`, `invalid type` et variante inconnue
+    dans l'appel @serde_json::from_value du consommateur, où elles sont mappées en
+    @Error::YamlError avec le préfixe `{file}: ` (./../package/test.sdd).
 
 Handles:
-  `selector: {}` present-but-empty — deserializes to an all-@Option::None selector; the
-    key itself remains required on every assert.
-  `type: ""` or any arbitrary @type text — accepted at parse; no consumer interprets it.
-  Duplicate variable keys inside one document's mapping — resolved during JSON
-    construction before this type is reached; the alias itself defines no policy.
+  `selector: {}` présent mais vide — se désérialise en un selector tout @Option::None ; la
+    clé elle-même reste requise sur chaque assert.
+  `type: ""` ou tout texte @type arbitraire — accepté au parsing ; aucun consommateur ne l'interprète.
+  Clés de variables dupliquées dans le mapping d'un même document — résolues pendant la
+    construction JSON avant d'atteindre ce type ; l'alias ne définit aucune politique.
 
 Tasks:
-  [ ] Cover the schema with tests — no #[cfg(test)] module exists in this file and no
-      in-tree test deserializes a TestSet; the only nearby @VynilAssertResult constructions
-      are the helper fns in ./result.rs's tests. Map each scenario to a same-named test:
+  [ ] Couvrir le schéma par des tests — aucun module #[cfg(test)] n'existe dans ce fichier et aucun
+      test in-tree ne désérialise un TestSet ; les seules constructions @VynilAssertResult
+      voisines sont les fns utilitaires dans les tests de ./result.rs. Mapper chaque scénario vers un test du même nom :
       minimal-testset-parses, matcher-wire-forms, unknown-keys-ignored,
       asserts-null-vs-empty-list, count-payload-out-of-uint64, required-keys-enforced.
-  [?] `type` is required on the wire yet never read — @build_var_context consults only
-      @default. Decide whether to validate it against a declared vocabulary or drop the
-      requiredness.
-  [?] @VynilAssertMatch derives @Default with `#[default]` @All but no path can apply it
-      (`matcher` is required, no @serde(default), no @default() caller). Decide whether
-      `matcher` should default to `all` or the marker should be dropped.
-  [?] @VynilTestSetMocks is shared with @VynilTest.mocks and @TestHandler::get_templated_test
-      rebuilds it; the `TestSet` prefix in the name is misleading. Decide a rename or keep.
-  [?] @VynilAssertResult derives @Deserialize although nothing deserializes it (results
-      flow one way). Decide whether to keep the round-trip derive.
+  [?] `type` est requis sur le fil mais jamais lu — @build_var_context ne consulte que
+      @default. Décider s'il faut le valider contre un vocabulaire déclaré ou retirer le
+      caractère obligatoire.
+  [?] @VynilAssertMatch derive @Default avec `#[default]` @All mais aucun chemin ne peut l'appliquer
+      (`matcher` est requis, pas de @serde(default), pas d'appelant @default()). Décider si
+      `matcher` devrait valoir `all` par défaut ou si le marqueur doit être retiré.
+  [?] @VynilTestSetMocks est partagé avec @VynilTest.mocks et @TestHandler::get_templated_test
+      le reconstruit ; le préfixe `TestSet` dans le nom est trompeur. Décider d'un renommage ou garder.
+  [?] @VynilAssertResult derive @Deserialize bien que rien ne le désérialise (les résultats
+      ne circulent que dans un sens). Décider s'il faut garder le derive aller-retour.
 
 Done when:
-  Each scenario maps to a passing test, the `[?]` decisions above are recorded, and
-    `cargo test -p agent`, clippy, `cargo +nightly fmt --check` and `specdd lint` stay green.
+  Chaque scénario correspond à un test qui passe, les décisions `[?]` ci-dessus sont consignées, et
+    `cargo test -p agent`, clippy, `cargo +nightly fmt --check` et `specdd lint` restent verts.
 
 Scenario: minimal TestSet parses
-  Given a mapping with only `apiVersion`, `kind` and `metadata.name`
-  When @serde_json::from_value builds a @VynilTestSet
-  Then @variables, @mocks and @asserts are @Option::None, @description is @Option::None
-  And @apiVersion/@kind hold whatever strings arrived (a non-`TestSet` @kind parses too)
-  No mapped test exists.
+  Given un mapping avec seulement `apiVersion`, `kind` et `metadata.name`
+  When @serde_json::from_value construit un @VynilTestSet
+  Then @variables, @mocks et @asserts sont @Option::None, @description est @Option::None
+  And @apiVersion/@kind conservent les chaînes reçues (un @kind non-`TestSet` se parse aussi)
+  Aucun test associé n'existe.
 
 Scenario: matcher keeps its wire forms
-  Given `matcher` given as scalar `all`, `any`, `none`
-  When a @VynilAssert deserializes
-  Then the variant is @All, @Any, @None and a bare-count lane reads it later
-  And Given `exact: 2`, `at_least: 2` or `at_most: 2`
-  Then the variant is @Exact(2), @AtLeast(2), @AtMost(2)
-  And Given `atLeast: 2` or a missing `matcher` key
-  Then deserialization errors (unknown variant / missing field)
-  No mapped test exists.
+  Given `matcher` donné comme scalaire `all`, `any`, `none`
+  When un @VynilAssert se désérialise
+  Then la variante est @All, @Any, @None et une lane bare-count la lit plus tard
+  And Given `exact: 2`, `at_least: 2` ou `at_most: 2`
+  Then la variante est @Exact(2), @AtLeast(2), @AtMost(2)
+  And Given `atLeast: 2` ou une clé `matcher` manquante
+  Then erreur à la désérialisation (variante inconnue / champ manquant)
+  Aucun test associé n'existe.
 
 Scenario: unknown keys pass silently
-  Given a TestSet root carrying an extra `foo: 1` and an assert carrying an unknown
-    `operator` key
-  When the documents deserialize
-  Then both succeed with the unknown keys dropped and nothing warns
-  No mapped test exists.
+  Given une racine TestSet portant un `foo: 1` supplémentaire et un assert portant une clé
+    `operator` inconnue
+  When les documents se désérialisent
+  Then les deux réussissent avec les clés inconnues écartées et rien ne prévient
+  Aucun test associé n'existe.
 
 Scenario: asserts null differs from asserts empty
-  Given two TestSet documents, one with `asserts: null`, one with `asserts: []`
-  When each @VynilTestSet loads into the handler map
-  Then the first holds @Option::None and the second @Option::Some of an empty vec; the
-    @Option::Some/None split is what ./handler.rs templates over
-  No mapped test exists.
+  Given deux documents TestSet, un avec `asserts: null`, un avec `asserts: []`
+  When chaque @VynilTestSet est chargé dans la carte du handler
+  Then le premier contient @Option::None et le second @Option::Some d'un vec vide ; la
+    distinction @Option::Some/None est ce sur quoi ./handler.rs tempolate
+  Aucun test associé n'existe.
 
 Scenario: count payload bounds reject bad matcher counts
-  Given `exact: -1`, `exact: 2.5` or `exact: 18446744073709551616`
-  When the assert deserializes
-  Then the @u64 payload fails and the document aborts the load as a consumer-side
-    `{file}: `-prefixed @Error::YamlError
-  No mapped test exists.
+  Given `exact: -1`, `exact: 2.5` ou `exact: 18446744073709551616`
+  When l'assert se désérialise
+  Then le payload @u64 échoue et le document avorte le chargement en @Error::YamlError côté
+    consommateur, préfixé `{file}: `
+  Aucun test associé n'existe.

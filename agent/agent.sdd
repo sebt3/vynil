@@ -1,34 +1,34 @@
-# Directory spec for the `agent` crate: shipped binary + reusable library + package
-# tooling assets. Submodules and asset trees are specified by nearer specs.
+# Spec de répertoire de la crate `agent` : binaire livré + bibliothèque réutilisable + assets
+# d'outillage de package. Les sous-modules et arborescences d'assets sont spécifiés par des specs plus proches.
 
 Spec: agent
 
 Platform: Rust/Kubernetes
 
 Purpose:
-  The `agent` binary run inside Kubernetes Jobs and the developer CLI. It performs the actual
-  work a Job is dispatched for: the package OCI lifecycle (build, update, test, validate,
-  lint), instance operations (install, delete, backup, restore) for the three instance kinds,
-  CRD generation, and box/template/run utilities.
+  Le binaire `agent` exécuté dans les Jobs Kubernetes et le CLI développeur. Il effectue le
+  travail réel pour lequel un Job est dispatché : le cycle de vie OCI des packages (build,
+  update, test, validate, lint), les opérations d'instance (install, delete, backup, restore)
+  pour les trois types d'instances, la génération de CRD, et les utilitaires box/template/run.
 
 Structure:
-  ./src/main.rs: Binary entrypoint and clap `@Commands` dispatch (./src/main.sdd)
-  ./src/lib.rs: Library-target shim (`client`) — lint attributes + `pub mod testing;` only
-  ./src/package/: Package lifecycle subcommands, lint, and OCI packaging (./src/package/*.sdd)
-  ./src/{system,service,tenant}/: Per-kind instance operations (*/mod.sdd + leaf *.sdd)
-  ./src/linting/: Static lint of package structure, Handlebars, and Rhai (./src/linting/*.sdd)
-  ./src/testing/: `agent package test` engine and Rhai regression harness (./src/testing/*.sdd)
-  ./src/boxes/: box and file-scan operations (./src/boxes/*.sdd)
-  ./src/crdgen.rs: CRD manifest generation (./src/crdgen.sdd)
-  ./src/run.rs: `agent run` script runner (./src/run.sdd)
-  ./src/template/: `agent template` render helper (./src/template/*.sdd)
-  ./src/version.rs: version subcommand (./src/version.sdd)
-  ./templates/: Job/package Handlebars templates packaged into the image
-  ./scripts/: Rhai scripts packaged into the image
-  ./tests/: Rust integration and Rhai regression tests
-  ./Dockerfile: Runtime image build (contract in ./Dockerfile.sdd)
-  ./parent.toml: Standalone workspace manifest used only by the image build (generated)
-  ./providers.tf: OpenTofu provider pins pre-seeded into the image
+  ./src/main.rs: point d'entrée du binaire et dispatch clap `@Commands` (./src/main.sdd)
+  ./src/lib.rs: shim de cible de bibliothèque (`client`) — attributs lint + `pub mod testing;` uniquement
+  ./src/package/: sous-commandes de cycle de vie de package, lint et packaging OCI (./src/package/*.sdd)
+  ./src/{system,service,tenant}/: opérations d'instance par type (*/mod.sdd + feuilles *.sdd)
+  ./src/linting/: lint statique de la structure de package, de Handlebars et de Rhai (./src/linting/*.sdd)
+  ./src/testing/: moteur de `agent package test` et harnais de régression Rhai (./src/testing/*.sdd)
+  ./src/boxes/: opérations de box et de scan de fichiers (./src/boxes/*.sdd)
+  ./src/crdgen.rs: génération de manifestes CRD (./src/crdgen.sdd)
+  ./src/run.rs: exécuteur de scripts `agent run` (./src/run.sdd)
+  ./src/template/: helper de rendu `agent template` (./src/template/*.sdd)
+  ./src/version.rs: sous-commande version (./src/version.sdd)
+  ./templates/: templates Handlebars de Job/package empaquetés dans l'image
+  ./scripts/: scripts Rhai empaquetés dans l'image
+  ./tests/: tests d'intégration Rust et tests de régression Rhai
+  ./Dockerfile: build de l'image runtime (contrat dans ./Dockerfile.sdd)
+  ./parent.toml: manifeste de workspace autonome utilisé uniquement par le build de l'image (généré)
+  ./providers.tf: pins de providers OpenTofu pré-embarqués dans l'image
 
 Owns:
   ./src/main.rs
@@ -46,41 +46,41 @@ References:
     ./src/template/{mod,tenant,service,system}.sdd, ./src/boxes/{mod,scan,file_scan}.sdd,
     ./src/package/{mod,build,lint,update,validate,unpack,test}.sdd,
     ./src/testing/{handler,result,vyniltest,vyniltestset}.sdd, ./src/linting/{mod,config,hbs_checker,rhai_checker}.sdd
-    — the file-level contracts; this directory spec stays coarse and defers all file behavior
-    to them. Two shims carry no file spec per `.specdd/bootstrap.project.md`: `./src/lib.rs`
-    (4 lines: the shared `/linting.sdd` attribute pair + `pub mod testing;`; its `[lib]`
-    target is named `client` in ./Cargo.toml — the path the binary and integration tests use
-    to reach the harness) and `./src/testing/mod.rs` (private mods + four `pub use`
-    re-exports only). Service/tenant `reconfigure.rs` are OUT OF THE BUILD GRAPH (`//mod
-    reconfigure;`) and their specs freeze them as dormant; the tenant copy additionally does
-    not compile (bare-`{}` @PathBuf formats, E0277).
+    — les contrats de fichier ; cette spec de répertoire reste grossière et délègue tout le
+    comportement des fichiers à ceux-ci. Deux shims n'ont pas de spec de fichier selon
+    `.specdd/bootstrap.project.md` : `./src/lib.rs` (4 lignes : la paire d'attributs partagée
+    de `/linting.sdd` + `pub mod testing;` ; sa cible `[lib]` est nommée `client` dans ./Cargo.toml —
+    le chemin qu'empruntent le binaire et les tests d'intégration pour atteindre le harnais)
+    et `./src/testing/mod.rs` (mods privés + quatre `pub use` uniquement). Les `reconfigure.rs`
+    service/tenant sont HORS DU GRAPHE DE BUILD (`//mod reconfigure;`) et leurs specs les gèlent
+    dormants ; la copie tenant ne compile même pas (formats @PathBuf en `{}` nus, E0277).
 
 Must:
-  Build the standalone workspace through `./parent.toml` so the image builds without the other
-    binaries in the workspace.
-  Ship `./templates/` and `./scripts/` into the image under the paths set by `TEMPLATE_DIRECTORY`
-    and `SCRIPT_DIRECTORY`.
-  Keep the CLI flags and exit codes described in `/docs/cli.md` stable unless the owning
-    subcommand spec changes them.
+  Construire le workspace autonome via `./parent.toml` pour que l'image se construise sans les
+    autres binaires du workspace.
+  Embarquer `./templates/` et `./scripts/` dans l'image sous les chemins définis par
+    `TEMPLATE_DIRECTORY` et `SCRIPT_DIRECTORY`.
+  Garder stables les flags CLI et codes de sortie décrits dans `/docs/cli.md` sauf si la spec
+    de la sous-commande propriétaire les modifie.
 
 Must not:
-  Depend on the `operator` or `server` crates.
-  Hand-edit `./parent.toml`; regenerate it with `cargo cmd generate`.
+  Dépendre des crates `operator` ou `server`.
+  Éditer `./parent.toml` à la main ; le régénérer avec `cargo cmd generate`.
 
 Depends on:
   ./common/common.sdd
 
 Done when:
-  Each subcommand submodule has a reviewed same-basename or nested directory spec, and
-    `cargo test -p agent` is green.
+  Chaque sous-module de sous-commande a une spec same-basename ou de répertoire imbriqué revue,
+    et `cargo test -p agent` est vert.
 
 Tasks:
-  [x] #0 Spec the `./src/package/` and `./src/linting/` submodules.
-  [x] #1 Spec the instance-operation submodules and `./src/testing/` harness.
-  [x] #2 Spec the packaged `./scripts/` Rhai library under its own spec. Ledger
-      `./scripts/scripts.sdd` accounts for all 120 `.rhai` files (66 same-basename specs,
-      families, byte-identical twins with pointers); the five `./templates/*.hbs` ship with
-      their same-basename specs. `specdd lint agent` green (122 specs, 0 errors 0 warnings).
-  [ ] #3 Reconcile `/docs/cli.md` with the exit-code ladders and flag help frozen across the
-      new specs (docs claim 0/1/2 only; ladders now span 1–5; `template_crds` empty-document
-      and `High-availibity` typo also await a doc/decision pass).
+  [x] #0 Spécifier les sous-modules `./src/package/` et `./src/linting/`.
+  [x] #1 Spécifier les sous-modules d'opérations d'instance et le harnais `./src/testing/`.
+  [x] #2 Spécifier la bibliothèque Rhai `./scripts/` empaquetée sous sa propre spec. Le ledger
+      `./scripts/scripts.sdd` recense les 120 fichiers `.rhai` (66 specs same-basename,
+      familles, jumeaux identiques octet pour octet avec pointeurs) ; les cinq `./templates/*.hbs`
+      sont livrés avec leurs specs same-basename. `specdd lint agent` vert (122 specs, 0 erreurs 0 avertissements).
+  [ ] #3 Réconcilier `/docs/cli.md` avec les barèmes de codes de sortie et l'aide des flags
+      gelés dans les nouvelles specs (la doc n'annonce que 0/1/2 ; les barèmes vont désormais
+      de 1–5 ; document vide `template_crds` et coquille `High-availibity` attendent une passe doc/décision).

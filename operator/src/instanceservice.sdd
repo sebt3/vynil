@@ -1,237 +1,237 @@
 Spec: InstanceService
 
 Purpose:
-  Be the @ServiceInstance implementation of the shared reconcile engine: fix the service
-    kind's identity literals (`service`, its finalizer, the Service package type), forward the
-    macro-attached accessors and status setters to the CR model, run the service-side
-    requirement evaluator @VynilPackageRequirement::check_service, build recommendations with a
-    permanently empty tenant list, feed the two service metric slots, delegate @Reconciler to
-    @do_reconcile/@do_cleanup, and own the controller entry pair @reconcile/@error_policy that
-    ./manager.rs wires on the @ServiceInstance watch — including this kind's consumption of the
-    30-second @Error::CleanupInProgress transient lane and the 5-minute counted-failure lane.
+  Être l'implémentation @ServiceInstance du moteur de reconcile partagé : fixer les littéraux
+    d'identité du kind de service (`service`, son finalizer, le type de package Service), transmettre
+    tels quels au modèle CR les accesseurs et setters de statut attachés par macro, exécuter
+    l'évaluateur d'exigences côté service @VynilPackageRequirement::check_service, construire des
+    recommandations à liste de tenants définitivement vide, alimenter les deux emplacements métriques,
+    déléguer @Reconciler à @do_reconcile/@do_cleanup et porter la paire @reconcile/@error_policy
+    que ./manager.rs câble sur le watch @ServiceInstance — y compris la consommation par ce kind
+    de la voie transitoire @Error::CleanupInProgress de 30 s et de la voie d'échec compté de 5 min.
 
 References:
-  ./instance_common.sdd — @InstanceKind engine whose implementation this is: every method here
-    is bound by that contract (supertraits, the seventeen required methods, the two defaults a
-    service overrides, the discard-the-returned-@Self setter lanes, the verbatim
-    @InstanceKind::check_requirements action pass-through, engine-owned stages and durations);
-    @RecoContext, @run_with_finalizer, @do_reconcile, @do_cleanup and
-    @build_base_recommendations all run from there.
-  ./lib.sdd — @Reconciler implemented here per its Must; crate-root re-exported @ServiceInstance,
-    @Error and @Result are the names this file imports through @crate.
-  ./manager.sdd — @Context (its @metrics field is the only @Context member read here) and the
-    @Controller::@run wiring that pairs this file's @instanceservice::@reconcile with
-    @instanceservice::@error_policy on an @any_semantic cluster-wide watch.
-  ./metrics.sdd — @Metrics::service_instance, the @count_and_measure runs increment with the
-    five @LabelInstance labels, @reconcile_failure's single six-label increment and the
-    @ReconcileMeasurerInstance whose @Drop observes the duration; registry prefixes there.
-  /common/src/instanceservice.sdd — the @ServiceInstance CRD model this file attaches to
-    (same basename as this spec, different crate: that spec owns the type, its status probe
-    @ServiceInstance::have_child and the macro-attached method set; this spec owns only the
-    operator-side @crate impls and entry fns co-named in ./instanceservice.rs).
-  /common/src/instance_macros.sdd — the mutator contract the forwarding methods pass through
-    unchanged (@ServiceInstance::get_options_digest, @ServiceInstance::set_missing_box,
+  ./instance_common.sdd — moteur @InstanceKind dont ce fichier est une implémentation : chaque
+    méthode d'ici est liée par ce contrat (supertraits, les dix-sept méthodes requises, les deux
+    défauts qu'un service surcharge, les voies de setter qui jettent le @Self renvoyé, le
+    pass-through verbatim de l'action de @InstanceKind::check_requirements, les étapes et durées
+    du moteur) ; @RecoContext, @run_with_finalizer, @do_reconcile, @do_cleanup et
+    @build_base_recommendations s'exécutent tous depuis là.
+  ./lib.sdd — @Reconciler implémenté ici selon son Must ; @ServiceInstance, @Error et @Result,
+    ré-exportés à la racine du crate, sont les noms que ce fichier importe via @crate.
+  ./manager.sdd — @Context (son champ @metrics est le seul membre de @Context lu ici) et le
+    câblage @Controller::@run qui associe @instanceservice::@reconcile de ce fichier à
+    @instanceservice::@error_policy sur un watch @any_semantic à l'échelle du cluster.
+  ./metrics.sdd — @Metrics::service_instance, les incrémentations de @count_and_measure avec les
+    cinq labels @LabelInstance, l'unique incrément à six labels de @reconcile_failure et le
+    @ReconcileMeasurerInstance dont le @Drop observe la durée ; les préfixes de registre sont là-bas.
+  /common/src/instanceservice.sdd — le modèle CRD @ServiceInstance auquel ce fichier se rattache
+    (même basename que cette spec, crate différent : cette spec possède le type, sa sonde de
+    statut @ServiceInstance::have_child et le jeu de méthodes attaché par macro ; cette spec ne
+    possède que les impls @crate côté opérateur et les fns d'entrée homonymes de ./instanceservice.rs).
+  /common/src/instance_macros.sdd — le contrat de mutateurs que les méthodes de transmission
+    traversent sans changement (@ServiceInstance::get_options_digest, @ServiceInstance::set_missing_box,
     @ServiceInstance::set_missing_package, @ServiceInstance::set_missing_requirement,
-    @ServiceInstance::set_missing_init_version and the server-side patch/condition semantics
-    behind them).
-  /common/src/vynilpackage.sdd — @VynilPackageType::Service, @VynilPackageRecommandation and the
-    @VynilPackageRequirement::check_service evaluator, including its per-arm ttl seconds and the
-    always-satisfied catch-all arm.
-  /common/src/rhaihandler.sdd — @Script whose @ctx receives the instance binding.
+    @ServiceInstance::set_missing_init_version et la sémantique de patch/condition côté serveur
+    qui les sous-tend).
+  /common/src/vynilpackage.sdd — @VynilPackageType::Service, @VynilPackageRecommandation et
+    l'évaluateur @VynilPackageRequirement::check_service, y compris ses secondes de ttl par bras et
+    son bras fourre-tout toujours satisfait.
+  /common/src/rhaihandler.sdd — @Script dont le @ctx reçoit le binding de l'instance.
 
 Must:
-  Implement @InstanceKind for @ServiceInstance under @async_trait, overriding both engine
-    defaults: @InstanceKind::init_from_version and @InstanceKind::set_missing_init_version are
-    real service-lane methods, not the @None/@Ok(self) defaults.
-  Fix the three identity literals: @InstanceKind::type_name answers exactly `service` (pinning,
-    through the engine, the `service--<namespace>--<name>` Job name and the `package_type`
-    render key), @InstanceKind::finalizer_name answers exactly `serviceinstances.vynil.solidite.fr`
-    (the string kube adds on apply and removes after a @Ok cleanup), and
-    @InstanceKind::package_type answers @VynilPackageType::Service (the cache-lookup type clause).
-  Borrow @ServiceInstanceSpec::jukebox, @ServiceInstanceSpec::category and
-    @ServiceInstanceSpec::package verbatim from @InstanceKind::spec_jukebox,
-    @InstanceKind::spec_category and @InstanceKind::spec_package.
-  Gate install state in @InstanceKind::current_tag: `status.tag` clone when both the status and
-    the tag are present, the empty @String through @unwrap_or_default otherwise;
-    @InstanceKind::init_from_version answers the @Option<@InitFrom>::version borrow — @None when
-    `initFrom` or its `version` is absent.
-  Forward, unmodified, the model-owned methods: @InstanceKind::have_child calls the inherent
-    @ServiceInstance::have_child — Rust resolves the same-name call to the inherent probe, not
-    recursively to the trait method; @InstanceKind::get_options_digest passes the `&mut self`
-    receiver to the macro digest; the four setters @InstanceKind::set_missing_box,
-    @InstanceKind::set_missing_package, @InstanceKind::set_missing_requirement and
-    @InstanceKind::set_missing_init_version call their macro counterparts on the moved copy's
-    @&mut self and hand back the macro's @Result<Self> unchanged.
-  Run @InstanceKind::check_requirements as an in-order scan over the requirement list with the
-    moved @Client cloned per call: on the first @VynilPackageRequirement::check_service verdict
-    with a false outcome, record the message via @InstanceKind::set_missing_requirement on a
-    clone of self (its returned @Self discarded) and return @Some(@Action::requeue(
-    @tokio::time::@Duration::from_secs(ttl))) carrying that arm's ttl literal; evaluation @Err
-    propagates through `?` with no condition recorded; an all-true list answers @None.
-  Build @InstanceKind::build_recommendations as pure delegation plus an empty lane: the pair
-    from @build_base_recommendations becomes @RecoContext::crds and
-    @RecoContext::system_services, and @RecoContext::tenant_services is always @Vec::new() —
-    the service kind has no tenant recommendation path even when recos would mention one.
-  Bind, in @InstanceKind::set_rhai_instance, the cloned @ServiceInstance onto @Script::ctx under
-    the key `instance`, so value scripts see the type registered by
-    @service_rhai_register of /common/src/instanceservice.sdd.
-  Wire both metric slots to @Metrics::service_instance: @InstanceKind::count_and_measure_metrics
-    forwards to its @count_and_measure, @InstanceKind::record_reconcile_failure to its
-    @reconcile_failure; this file adds no label of its own.
-  Delegate @Reconciler wholly to the engine — @Reconciler::reconcile @Box::pins @do_reconcile
-    and @Reconciler::cleanup @Box::pins @do_cleanup on `&self` with the @Arc<@Context> moved in,
-    no service-specific step between.
-  Instrument @reconcile `#[instrument(skip(ctx, inst), fields(trace_id))]` — the span carries a
-    declared-empty `trace_id` field (the engine of ./instance_common.sdd records the same name on
-    the current @Span), hides both arguments, and its body is exactly
-    @Box::pin(@run_with_finalizer(inst, ctx)).await with @Ok/@Err passed through.
-  Split failure handling in @error_policy on @Error::CleanupInProgress as the first test: that
-    arm discards its @Job payload and answers @Action::requeue(@Duration::from_secs(30)) with no
-    log line, no metric and no @tracing::@warn!; every other @Error answers
-    @Action::requeue(@Duration::from_mins(5)) after the @tracing::@warn! line and exactly one
-    @InstanceKind::record_reconcile_failure increment, and is matched by nothing else.
+  Implémenter @InstanceKind pour @ServiceInstance sous @async_trait, en surchargeant les deux
+    défauts du moteur : @InstanceKind::init_from_version et @InstanceKind::set_missing_init_version
+    sont de vraies méthodes de la voie service, pas les défauts @None/@Ok(self).
+  Fixer les trois littéraux d'identité : @InstanceKind::type_name répond exactement `service`
+    (figeant, via le moteur, le nom du Job `service--<namespace>--<name>` et la clé de rendu
+    `package_type`), @InstanceKind::finalizer_name répond exactement
+    `serviceinstances.vynil.solidite.fr` (la chaîne que kube ajoute à l'apply, retire après un cleanup
+    @Ok), et @InstanceKind::package_type répond @VynilPackageType::Service (clause de type du lookup cache).
+  Emprunter @ServiceInstanceSpec::jukebox, @ServiceInstanceSpec::category et
+    @ServiceInstanceSpec::package tels quels depuis @InstanceKind::spec_jukebox,
+    @InstanceKind::spec_category et @InstanceKind::spec_package.
+  Conditionner l'état d'installation dans @InstanceKind::current_tag : clone de `status.tag` quand
+    le statut et le tag sont tous deux présents, @String vide via @unwrap_or_default sinon ;
+    @InstanceKind::init_from_version répond l'emprunt de @Option<@InitFrom>::version — @None quand
+    `initFrom` ou son `version` est absent.
+  Transmettre sans modification les méthodes possédées par le modèle : @InstanceKind::have_child
+    appelle le @ServiceInstance::have_child inhérent — Rust résout l'appel homonyme vers la sonde
+    inhérente, pas récursivement vers la méthode de trait ; @InstanceKind::get_options_digest passe
+    le récepteur `&mut self` au digest macro ; les quatre setters @InstanceKind::set_missing_box,
+    @InstanceKind::set_missing_package, @InstanceKind::set_missing_requirement et
+    @InstanceKind::set_missing_init_version appellent leurs homologues macro sur le @&mut self de
+    la copie déplacée et rendent le @Result<Self> de la macro inchangé.
+  Exécuter @InstanceKind::check_requirements comme un scan ordonné de la liste d'exigences avec le
+    @Client déplacé, cloné par appel : sur le premier verdict @VynilPackageRequirement::check_service
+    au résultat faux, enregistrer le message via @InstanceKind::set_missing_requirement sur un
+    clone de self (son @Self renvoyé est jeté) et renvoyer @Some(@Action::requeue(
+    @tokio::time::@Duration::from_secs(ttl))) portant le littéral ttl de ce bras ; une @Err
+    d'évaluation se propage via `?` sans condition enregistrée ; une liste toute vraie répond @None.
+  Construire @InstanceKind::build_recommendations comme une pure délégation plus une voie vide : la
+    paire issue de @build_base_recommendations devient @RecoContext::crds et
+    @RecoContext::system_services, et @RecoContext::tenant_services est toujours @Vec::new() — le
+    kind service n'a pas de chemin de recommandation tenant, même quand des recos en mentionneraient.
+  Lier, dans @InstanceKind::set_rhai_instance, le @ServiceInstance cloné à @Script::ctx sous la
+    clé `instance`, afin que les scripts de value voient le type enregistré par
+    @service_rhai_register de /common/src/instanceservice.sdd.
+  Câbler les deux emplacements métriques sur @Metrics::service_instance :
+    @InstanceKind::count_and_measure_metrics délègue à son @count_and_measure, et
+    @InstanceKind::record_reconcile_failure à son @reconcile_failure ; ce fichier n'ajoute aucun label.
+  Déléguer @Reconciler entièrement au moteur — @Reconciler::reconcile @Box::pins @do_reconcile
+    et @Reconciler::cleanup @Box::pins @do_cleanup sur `&self`, le @Arc<@Context> déplacé en entrée,
+    sans étape propre au service entre les deux.
+  Instrumenter @reconcile avec `#[instrument(skip(ctx, inst), fields(trace_id))]` — le span porte
+    un champ `trace_id` déclaré vide (le moteur de ./instance_common.sdd enregistre le même nom sur
+    le @Span courant), masque les deux arguments, et son corps est exactement
+    @Box::pin(@run_with_finalizer(inst, ctx)).await avec @Ok/@Err passés tels quels.
+  Diviser le traitement d'échec de @error_policy sur @Error::CleanupInProgress comme premier test :
+    ce bras jette son payload @Job et répond @Action::requeue(@Duration::from_secs(30)) sans ligne
+    de log, sans métrique et sans @tracing::@warn! ; tout autre @Error répond
+    @Action::requeue(@Duration::from_mins(5)) après la ligne @tracing::@warn! et exactement un
+    incrément de @InstanceKind::record_reconcile_failure, et n'est apparié par rien d'autre.
 
 Exposes:
   @reconcile — `#[instrument] pub async fn @reconcile(inst: @Arc<@ServiceInstance>, ctx:
-    @Arc<@Context>) -> @Result<@Action>`; the controller entry for the @ServiceInstance watch.
+    @Arc<@Context>) -> @Result<@Action>` ; l'entrée contrôleur du watch @ServiceInstance.
   @error_policy — `#[must_use] pub fn @error_policy(inst: @Arc<@ServiceInstance>, error:
-    &@Error, ctx: @Arc<@Context>) -> @Action`; consumes both @Arcs by value, borrows the error.
-  @InstanceKind for @ServiceInstance — `#[async_trait]` impl, surface and literals per Must.
-  @Reconciler for @ServiceInstance — `#[async_trait]` impl delegating to @do_reconcile and
+    &@Error, ctx: @Arc<@Context>) -> @Action` ; consomme les deux @Arc par valeur, emprunte l'erreur.
+  @InstanceKind pour @ServiceInstance — impl `#[async_trait]`, surface et littéraux selon Must.
+  @Reconciler pour @ServiceInstance — impl `#[async_trait]` déléguant à @do_reconcile et
     @do_cleanup.
 
 Accepts:
-  A watch-event-carried @ServiceInstance of any shape: `spec` strings unvalidated, `status`
-    @Option read opportunistically (@current_tag and @init_from_version never fail on absence),
-    a requirement list of any length or emptiness (empty answers @None without a single call),
-    and recos per the engine's @None-does-nothing rule.
-  @error_policy accepts the @Arcs moved — nothing reads them after the metric call (the trailing
-    @drop calls are explicit no-ops on already-unused owners) — and any @Error variant, the
-    @Error::CleanupInProgress arm discriminating on the variant only, payload ignored.
+  Un @ServiceInstance porté par un event de watch, de forme quelconque : chaînes de `spec` non
+    validées, `status` @Option lu opportunément (@current_tag et @init_from_version ne échouent
+    jamais sur une absence), une liste d'exigences de longueur quelconque, vide comprise (vide
+    répond @None sans un seul appel), et des recos selon la règle @None ne fait rien du moteur.
+  @error_policy accepte les @Arc déplacés — rien ne les lit après l'appel de métrique (les @drop
+    finaux sont des no-op explicites sur des propriétaires déjà inutilisés) — et toute variante
+    @Error, le bras @Error::CleanupInProgress discriminant sur la variante seule, payload ignoré.
 
 Returns:
-  @reconcile returns the @Action the engine pipeline produced for the service kind (15-minute
-    requeues, ttl requeues via the pass-through, @Action::await_change() releases) and @Err the
-    engine's errors — nothing here maps an @Err into an @Action.
-  @error_policy returns exactly one of two requeues: @Duration::from_secs(30) on the transient
-    cleanup arm, @Duration::from_mins(5) on everything else.
-  @InstanceKind::check_requirements returns @None or the single short-circuit @Some requeue;
-    @InstanceKind::build_recommendations a @RecoContext whose @RecoContext::tenant_services is
-    empty; @InstanceKind::count_and_measure_metrics the started @ReconcileMeasurerInstance.
+  @reconcile renvoie l'@Action produite par le pipeline du moteur pour le kind service (requeues
+    de 15 minutes, requeues de ttl via le pass-through, libérations @Action::await_change()) et
+    les @Err du moteur — rien ici ne mappe un @Err en @Action.
+  @error_policy renvoie exactement un des deux requeues : @Duration::from_secs(30) sur le bras de
+    cleanup transitoire, @Duration::from_mins(5) sur tout le reste.
+  @InstanceKind::check_requirements renvoie @None ou l'unique @Some de requeue à court-circuit ;
+    @InstanceKind::build_recommendations un @RecoContext dont @RecoContext::tenant_services est
+    vide ; @InstanceKind::count_and_measure_metrics le @ReconcileMeasurerInstance démarré.
 
 Raises:
-  None of its own: every fallible body forwards. @InstanceKind::set_missing_box,
+  Aucun qui lui soit propre : tout corps faillible forwards. @InstanceKind::set_missing_box,
     @InstanceKind::set_missing_package, @InstanceKind::set_missing_requirement,
-    @InstanceKind::set_missing_init_version, @InstanceKind::check_requirements (through
-    @VynilPackageRequirement::check_service and the condition write) and both @Reconciler
-    methods propagate model, requirement or engine @Error variants — the engine variant set
-    belongs to ./instance_common.sdd.
-  @reconcile surfaces the same engine @Err, dominated by @Error::FinalizerError on wrapper
-    failures; @error_policy is total and @Action-valued, and raises nothing in either arm.
+    @InstanceKind::set_missing_init_version, @InstanceKind::check_requirements (via
+    @VynilPackageRequirement::check_service et l'écriture de la condition) et les deux méthodes
+    @Reconciler propagent les variantes @Error du modèle, de l'exigence ou du moteur — le jeu de
+    variantes du moteur appartient à ./instance_common.sdd.
+  @reconcile expose les mêmes @Err du moteur, dominés par @Error::FinalizerError sur les échecs
+    du wrapper ; @error_policy est totale, valued @Action, et ne lève rien dans aucun de ses bras.
 
 Handles:
-  A delete Job still running (@Error::CleanupInProgress) — the expected-transient 30-second
-    lane: fast requeue, finalizer retained by the wrapper, runs already counted but no failure
-    increment; this file is the sole consumer of that engine variant.
-  Every other reconcile failure — one @tracing::@warn! naming kind, namespace and name, one
-    failures-series increment on `service_instance_reconcile_failures_total`, then the 5-minute
-    backoff; the warn @Debug-formats the @Option metadata, so absent-vs-present namespace reads
-    `Some("apps")` vs @None inside the message (Tasks `[?]`).
-  An unmet requirement — condition recorded on a discarded clone, only its ttl drives the
-    requeue, later requirements unevaluated; a requirement variant the service lane's catch-all
-    arm pronounces satisfied never reaches the condition write.
-  A `status`-less instance during selection gates — empty tag and @None init version are plain
-    answers, not errors.
+  Un Job de delete encore en cours (@Error::CleanupInProgress) — la voie transitoire attendue de
+    30 secondes : requeue rapide, finalizer retenu par le wrapper, runs déjà comptés mais aucun
+    incrément d'échec ; ce fichier est le seul consommateur de cette variante du moteur.
+  Tout autre échec de reconcile — un seul @tracing::@warn! nommant kind, namespace et name, un
+    incrément de la série failures sur `service_instance_reconcile_failures_total`, puis le backoff
+    de 5 minutes ; le warn formate en @Debug les métadonnées @Option, si bien qu'un namespace
+    absent-vs-présent se lit `Some("apps")` vs @None dans le message (Tasks `[?]`).
+  Une exigence non satisfaite — condition enregistrée sur un clone jeté, seul son ttl pilote le
+    requeue, les exigences suivantes non évaluées ; une variante d'exigence que le bras
+    fourre-tout de la voie service déclare satisfaite n'atteint jamais l'écriture de la condition.
+  Une instance sans `status` pendant les gates de sélection — un tag vide et une version init
+    @None sont de simples réponses, pas des erreurs.
 
 Depends on:
   ./instance_common.rs — @InstanceKind, @RecoContext, @build_base_recommendations,
     @run_with_finalizer, @do_reconcile, @do_cleanup.
-  ./manager.rs — @Context; read through the trait signatures, only @Context::metrics touched.
-  ./metrics.rs paths — @ReconcileMeasurerInstance named in the trait surface; the
-    @ReconcileMetricsServiceInstance methods run there.
+  ./manager.rs — @Context ; lu via les signatures de trait, seul @Context::metrics est touché.
+  chemins ./metrics.rs — @ReconcileMeasurerInstance nommé dans la surface de trait ; les méthodes
+    @ReconcileMetricsServiceInstance s'exécutent là-bas.
   @common — @rhaihandler::@Script, @vynilpackage::@VynilPackageRecommandation,
-    @VynilPackageRequirement and @VynilPackageType via the crate-root @ServiceInstance re-export.
-  @kube — @Client (cloned per requirement check), @kube::runtime::controller::@Action.
+    @VynilPackageRequirement et @VynilPackageType via le ré-export @ServiceInstance de la racine du crate.
+  @kube — @Client (cloné par vérification d'exigence), @kube::runtime::controller::@Action.
   @tokio::time::@Duration, @opentelemetry::trace::@TraceId, @tracing (@instrument, @warn),
     @async_trait, @std::sync::@Arc.
 
 Tasks:
-  [ ] No test anywhere covers this file: no in-file tests module, and ./instance_common.rs tests
-      exercise @TenantInstance/@SystemInstance selector lanes only. Cover from the Scenarios —
-      kind literals, tag/initFrom gates, requirement short-circuit ttl, empty tenant reco list,
-      both @error_policy lanes — per TTD, reusing the ./jukebox.rs fake-cluster harness style.
-  [?] @error_policy warn reads `reconcile failed for ServiceInstance '{:?}.{:?}': {:?}` with
-      namespace before name and @Debug on both @Option metadata fields, so shipped lines render
-      `Some("apps").Some("frontend")`; and the trailing @drop(inst)/@drop(ctx) are no-ops that
-      only appease move analysis. Decide whether to unwrap/flip to `name.namespace` and drop
-      the dead @drop calls together.
-  [?] @error_policy takes @Arcs by value while @Controller only ever needs borrows — the
-      signature survives solely to feed @drop; and @reconcile's `#[instrument]` sits above its
-      doc comment while the crate's other entry fns differ in order. Cosmetic-only drift:
-      decide whether entry-fn style is normalized per kind spec.
+  [ ] Aucun test ne couvre ce fichier : pas de module de tests in-file, et les tests de
+      ./instance_common.rs n'exercent que les voies sélecteur @TenantInstance/@SystemInstance.
+      Couvrir depuis les Scenarios — littéraux de kind, gates tag/initFrom, court-circuit ttl,
+      reco tenant vide, deux voies @error_policy — selon TTD, style du harnais faux-cluster ./jukebox.rs.
+  [?] Le warn de @error_policy lit `reconcile failed for ServiceInstance '{:?}.{:?}': {:?}` avec
+      namespace avant name et @Debug sur les deux champs de métadonnées @Option, si bien que les
+      lignes émises rendent `Some("apps").Some("frontend")` ; et les @drop(inst)/@drop(ctx) finaux
+      sont des no-op qui n'apaisent que l'analyse de move. Décider s'il faut unwrapper/inverser vers
+      `name.namespace` et supprimer ensemble les appels @drop morts.
+  [?] @error_policy prend les @Arc par valeur alors que @Controller n'a besoin que d'emprunts — la
+      signature ne survit que pour nourrir @drop ; et le `#[instrument]` de @reconcile siège
+      au-dessus de son doc comment alors que les autres fns d'entrée du crate diffèrent d'ordre.
+      Dérive purement cosmétique : décider si le style des fns d'entrée est normalisé par spec de kind.
 
 Done when:
-  Every Scenario has a green mapped test or a decided `[?]` Task, and
+  Chaque Scenario a un test mappé vert ou une Task `[?]` tranchée, et
   `cargo test -p operator`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo +nightly fmt --check` and `specdd lint` are green.
+  `cargo +nightly fmt --check` et `specdd lint` sont verts.
 
 Scenario: Kind literals pin the service identity
-  Given any @ServiceInstance
-  When @InstanceKind::type_name, @InstanceKind::finalizer_name and @InstanceKind::package_type
-    answer
-  Then they are exactly `service`, `serviceinstances.vynil.solidite.fr` and
-    @VynilPackageType::Service — so the engine names the agent Job `service--<ns>--<name>` and
-    the cache lookup matches only Service-type packages
-  No mapped test exists.
+  Given n'importe quel @ServiceInstance
+  When @InstanceKind::type_name, @InstanceKind::finalizer_name et @InstanceKind::package_type
+    répondent
+  Then ils sont exactement `service`, `serviceinstances.vynil.solidite.fr` et
+    @VynilPackageType::Service — donc le moteur nomme le Job agent `service--<ns>--<name>` et le
+    lookup du cache ne marrie que des packages de type Service
+  Aucun test mappé n'existe.
 
 Scenario: Tag and initFrom read the status gates
-  Given four instances — no status, status without `tag`, installed `tag` `1.2.3`, and a fresh
-    one whose `spec.initFrom.version` is `0.9.0`
-  When @InstanceKind::current_tag and @InstanceKind::init_from_version run
-  Then the first two answer the empty @String, the third answers `1.2.3` regardless of
-    initFrom (the engine ignores the pin once installed), and @InstanceKind::init_from_version
-    answers @Some(`0.9.0`) only for the fourth, @None whenever `initFrom` or its `version` is
+  Given quatre instances — sans status, un status sans `tag`, un `tag` `1.2.3` installé, et une
+    fraîche dont `spec.initFrom.version` vaut `0.9.0`
+  When @InstanceKind::current_tag et @InstanceKind::init_from_version s'exécutent
+  Then les deux premières répondent le @String vide, la troisième répond `1.2.3` quel que soit
+    initFrom (le moteur ignore le pin une fois installé), et @InstanceKind::init_from_version
+    répond @Some(`0.9.0`) seulement pour la quatrième, @None dès que `initFrom` ou son `version` est
     absent
-  No mapped test exists; the sibling lanes are frozen untested by ./instance_common.sdd's
-    selector-task entry, which tested tenant/system shapes only.
+  Aucun test mappé n'existe ; les voies soeurs sont gelées sans test par l'entrée de tâche
+    sélecteur de ./instance_common.sdd, qui ne testait que les formes tenant/system.
 
 Scenario: First unmet service requirement short-circuits on its own ttl
-  Given a requirement list whose second @VynilPackageRequirement fails @check_service with the
-    ttl of its arm
-  When @InstanceKind::check_requirements scans with a @Client
-  Then `set missing requirement` text from the evaluator is stored via
-    @InstanceKind::set_missing_requirement and the answer is @Some(@Action::requeue(ttl)) — the
-    third requirement is never evaluated
-  But an all-satisfied list answers @None with zero condition writes, and an evaluator @Err
-    propagates with no condition written
-  No mapped test exists.
+  Given une liste d'exigences dont le deuxième @VynilPackageRequirement échoue à @check_service
+    avec le ttl de son bras
+  When @InstanceKind::check_requirements scanne avec un @Client
+  Then le texte `set missing requirement` de l'évaluateur est stocké via
+    @InstanceKind::set_missing_requirement et la réponse est @Some(@Action::requeue(ttl)) — la
+    troisième exigence n'est jamais évaluée
+  But une liste toute satisfaite répond @None avec zéro écriture de condition, et une @Err de
+    l'évaluateur se propage sans condition écrite
+  Aucun test mappé n'existe.
 
 Scenario: Recommendations keep the tenant list empty
-  Given recos naming one installed CRD and one installed system service
-  When @InstanceKind::build_recommendations runs with @Some recos
-  Then @RecoContext carries the filtered sorted `crds` and `system_services` from
-    @build_base_recommendations and an empty @Vec for @tenant_services
-  No mapped test exists.
+  Given des recos citant un CRD installé et un system service installé
+  When @InstanceKind::build_recommendations s'exécute avec des recos @Some
+  Then @RecoContext porte les `crds` et `system_services` filtrés et triés issus de
+    @build_base_recommendations et un @Vec vide pour @tenant_services
+  Aucun test mappé n'existe.
 
 Scenario: CleanupInProgress requeues fast and uncounted
-  Given @error_policy met with @Error::CleanupInProgress carrying a @Job
-  When it runs
-  Then the answer is @Action::requeue(@tokio::time::@Duration::from_secs(30)), no @tracing::@warn!
-    line is written and the failures counter does not move
-  But met with any other @Error it warns once, increments
-    `service_instance_reconcile_failures_total` under the six labels of ./metrics.sdd exactly
-    once, and answers @Action::requeue(@tokio::time::@Duration::from_mins(5))
-  No mapped test exists.
+  Given @error_policy face à @Error::CleanupInProgress portant un @Job
+  When il s'exécute
+  Then la réponse est @Action::requeue(@tokio::time::@Duration::from_secs(30)), aucune ligne
+    @tracing::@warn! n'est écrite et le compteur de failures ne bouge pas
+  But face à tout autre @Error il warn une fois, incrémente exactement une fois
+    `service_instance_reconcile_failures_total` sous les six labels de ./metrics.sdd, et répond
+    @Action::requeue(@tokio::time::@Duration::from_mins(5))
+  Aucun test mappé n'existe.
 
 Scenario: Entry pair delegates with no local decision
-  Given a @ServiceInstance handed to @reconcile
-  When the call resolves
-  Then exactly @run_with_finalizer ran — dispatching @Reconciler::reconcile, which runs
-    @do_reconcile, and @Reconciler::cleanup, which runs @do_cleanup — the whole pipeline body
-    belonging to ./instance_common.sdd, this file contributing only literals and forwards
-  No mapped test exists.
+  Given un @ServiceInstance remis à @reconcile
+  When l'appel se résout
+  Then exactement @run_with_finalizer s'est exécuté — dispatchant @Reconciler::reconcile, qui
+    exécute @do_reconcile, et @Reconciler::cleanup, qui exécute @do_cleanup — tout le corps du
+    pipeline appartenant à ./instance_common.sdd, ce fichier ne contribuant que littéraux et forwards
+  Aucun test mappé n'existe.
 
 Example:
-  error_policy input/output pairs: @Error::CleanupInProgress(@Job) → requeue `30` s silent;
-    @Error::Other("E_X") → warn + one failure inc + requeue `5` min.
-  check_requirements on [ok, fail(ttl 300)] @Ok answer: @Some(requeue `300` s).
+  paires entrée/sortie de error_policy : @Error::CleanupInProgress(@Job) → requeue `30` s silencieux ;
+    @Error::Other("E_X") → warn + un incrément de failure + requeue `5` min.
+  check_requirements sur [ok, fail(ttl 300)] réponse @Ok : @Some(requeue `300` s).

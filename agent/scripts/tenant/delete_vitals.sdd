@@ -86,11 +86,11 @@ Done when:
     sans-kind, NotFound, exist-faux).
 
 Scenario: entrées périmées et disparues cohabitent
-  Etant donné `SuppressionVitalsTenant` avec `instance.status.vitals` mélangeant un Deployment
+  Given  `SuppressionVitalsTenant` avec `instance.status.vitals` mélangeant un Deployment
     encore posé, un Secret déjà supprimé (NotFound) et une entrée dont le kind n'existe
     plus (`exist()` faux)
-  Quand @run s'exécute
-  Alors les trois voies produisent respectivement : delete + wait_deleted 300 s, silence
+  When @run s'exécute
+  Then les trois voies produisent respectivement : delete + wait_deleted 300 s, silence
     avalé, silence ignoré
-  Et @run retourne le contexte sans aucun marqueur d'échec — l'orchestrateur ./delete.sdd
+  And @run retourne le contexte sans aucun marqueur d'échec — l'orchestrateur ./delete.sdd
     libérera le finalizer comme si tout avait été nettoyé

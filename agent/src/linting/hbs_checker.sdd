@@ -1,548 +1,565 @@
-# File spec for ./hbs_checker.rs — the Handlebars rule engine of the linting subsystem.
-# The finding/level model is ./mod.sdd, the level-resolution and directive PARSER is
-# ./config.sdd, the pass order and walked file set are ./../package/lint.sdd — referenced,
-# never restated. This file IS the owner of all 15 `hbs/…` rule ids, levels, messages and
-# wiring; the config.sdd Example table reads them from these call sites.
+# Spec fichier de ./hbs_checker.rs — le moteur de règles Handlebars du sous-système de lint.
+# Le modèle finding/level est ./mod.sdd, le PARSER de résolution de niveau et de directives est
+# ./config.sdd, l'ordre des passes et l'ensemble des fichiers parcourus sont ./../package/lint.sdd —
+# référencés, jamais réénoncés. Ce fichier EST le propriétaire des 15 ids de règle `hbs/…`, leurs
+# niveaux, messages et câblage ; la table Example de config.sdd les lit depuis ces sites d'appel.
 
 Spec: HbsChecker
 
 Platform: Rust
 
 Purpose:
-  Own every Handlebars lint rule of a package tree: compile each `.hbs` template with the
-    real handlebars compiler to an AST, walk that AST to flag syntax errors, unknown
-    helpers/partials/option-keys/image-keys/resource-keys, package-type and
-    context-prefix misuse, and unknown root variables; accumulate usage across every
-    template and every `.rhai` script of the package (via four naive text scanners); then
-    answer unused-helper / unused-partial / unused-option-family / unused-image /
-    unused-resource findings once per package in @finalize, each finding framed through
-    @LintConfig::resolve_level with the frozen inline-disable wiring enumerated below.
+  Posséder chaque règle de lint Handlebars d'un arbre de package : compiler chaque template
+    `.hbs` avec le vrai compilateur handlebars en un AST, parcourir cet AST pour signaler erreurs
+    de syntaxe, helpers/partials/option-keys/image-keys/resource-keys inconnus, mauvais usages
+    du type de package et du préfixe de contexte, et variables de racine inconnues ; accumuler
+    l'usage sur chaque template et chaque script `.rhai` du package (via quatre scanners texte
+    naïfs) ; puis répondre aux findings unused-helper / unused-partial / unused-option-family /
+    unused-image / unused-resource une fois par package dans @finalize, chaque finding cadré par
+    @LintConfig::resolve_level avec le câblage inline-disable gelé énuméré ci-dessous.
 
 References:
-  ./mod.sdd — @LintFinding/@LintLevel shapes and the 1-based line convention this file
-    fills; @find_option_line_numbers and @find_section_key_line_numbers (./mod.rs) are the
-    `package.yaml` line locators this file consumes.
-  ./config.sdd — @resolve_level semantics, @parse_inline_disables (the directive parser
-    lives THERE, not here); the `[?]` cross-seam finding config.sdd records about `&@HashSet::new()`
-    and `.get(&0)` call sites is VERIFIED here as truth (see Must wiring) — the fix decision
-    is picked up in Tasks below per config.sdd's own allocation.
-  ./../package/lint.sdd — the only driver: two passes (recursive `.hbs` → @check_file,
-    recursive `.rhai` → the four scan_rhai_* methods) over the immediate subdirectories of
-    @package_dir, then one @finalize; `.hbs` files at the package_dir root are never
-    checked (the walk enters child dirs only). Frozen there.
-  /common/src/handlebarshandler.sdd — @is_native_hbs_helper, the nine @VYNIL_HBS_HELPERS,
-    and the runtime engine whose registered surface this checker imitates; every drift
-    between this lint-time model and that engine is frozen here and Tasks `[?]`-owned here.
-  /common/src/vynilpackage.sdd — @VynilPackageSource (@options/@images/@resources @BTreeMap
-    key sets, @metadata.usage @VynilPackageType) — the manifest data this checker believes.
-  /agent/scripts/lib/build_context.rhai — runtime render-data root assembly (`cluster`,
-    `controller`, `instance`, `values`, `defaults`, `package_dir`, `config_dir`, hooks) —
-    evidence for the @KNOWN_HBS_ROOTS drift findings.
-  /agent/scripts/lib/install_from_dir.rhai — runtime partial/helper registration:
+  ./mod.sdd — les formes @LintFinding/@LintLevel et la convention de ligne 1-based que ce fichier
+    remplit ; @find_option_line_numbers et @find_section_key_line_numbers (./mod.rs) sont les
+    localisateurs de ligne `package.yaml` que ce fichier consomme.
+  ./config.sdd — la sémantique de @resolve_level, @parse_inline_disables (le parser de directives
+    vit LÀ-BAS, pas ici) ; le finding cross-seam `[?]` que config.sdd consigne sur les sites d'appel
+    `&@HashSet::new()` et `.get(&0)` est VÉRIFIÉ ici comme vrai (voir câblage Must) — la décision de
+    correctif est reprise dans Tasks ci-dessous selon l'allocation propre à config.sdd.
+  ./../package/lint.sdd — le seul driver : deux passes (`.hbs` récursif → @check_file,
+    `.rhai` récursif → les quatre méthodes scan_rhai_*) sur les sous-répertoires immédiats de
+    @package_dir, puis un seul @finalize ; les fichiers `.hbs` à la racine de package_dir ne sont
+    jamais vérifiés (la marche n'entre que dans les répertoires enfants). Gelé là-bas.
+  /common/src/handlebarshandler.sdd — @is_native_hbs_helper, les neuf @VYNIL_HBS_HELPERS,
+    et le moteur runtime dont ce checker imite la surface enregistrée ; toute dérive
+    entre ce modèle de lint-time et ce moteur est gelée ici et portée `[?]` par Tasks ici.
+  /common/src/vynilpackage.sdd — @VynilPackageSource (jeux de clés @options/@images/@resources
+    @BTreeMap, @metadata.usage @VynilPackageType) — les données de manifeste que ce checker croit.
+  /agent/scripts/lib/build_context.rhai — assemblage runtime de la racine des données de rendu
+    (`cluster`, `controller`, `instance`, `values`, `defaults`, `package_dir`, `config_dir`, hooks)
+    — preuve pour les findings de dérive @KNOWN_HBS_ROOTS.
+  /agent/scripts/lib/install_from_dir.rhai — enregistrement runtime des partials/helpers :
     `register_partial_dir(context.config_dir)` + `register_partial_dir(package)` +
-    `register_helper_dir(package)` (L34-36) — the config-dir partials this checker cannot
-    see (Tasks `[?]`).
+    `register_helper_dir(package)` (L34-36) — les partials du config-dir que ce checker ne peut
+    pas voir (Tasks `[?]`).
 
 Depends on:
-  @crate::linting — @LintFinding, @LintLevel, @LintConfig, @parse_inline_disables (through
-    the ./mod.rs re-export); ./../linting/mod.rs owns their behaviour.
-  ./mod.rs — @find_option_line_numbers, @find_section_key_line_numbers (`options`,
-    `images`, `resources` sections — this file is the only `images`/`resources` caller of
-    the generalized scanner, see Tasks cross-seam note).
+  @crate::linting — @LintFinding, @LintLevel, @LintConfig, @parse_inline_disables (via
+    le re-export de ./mod.rs) ; ./../linting/mod.rs possède leur comportement.
+  ./mod.rs — @find_option_line_numbers, @find_section_key_line_numbers (sections
+    `options`, `images`, `resources` — ce fichier est le seul appelant `images`/`resources` du
+    scanner généralisé, voir la note cross-seam de Tasks).
   @common::handlebarshandler — @HbsPath, @Parameter, @Template, @TemplateElement, @PathSeg
-    (re-exported handlebars `6.4.2` template AST) and @is_native_hbs_helper (const
-    membership of @vynil_core::hbs::CORE_HBS_HELPERS ∪ @VYNIL_HBS_HELPERS, engine not
-    consulted — the drift surface).
+    (AST de template handlebars `6.4.2` réexporté) et @is_native_hbs_helper (appartenance
+    const de @vynil_core::hbs::CORE_HBS_HELPERS ∪ @VYNIL_HBS_HELPERS, moteur non
+    consulté — la surface de dérive).
   @common::vynilpackage — @VynilPackageSource, @VynilPackageType.
-  @std — @fs::read_dir/@fs::read_to_string (guarded), @Path/@PathBuf, @HashMap/@HashSet,
-    @str::split scanning and @chars/@take_while char runs, @std::sync::LazyLock
+  @std — @fs::read_dir/@fs::read_to_string (gardés), @Path/@PathBuf, @HashMap/@HashSet,
+    le scanning par @str::split et les suites de @chars/@take_while, @std::sync::LazyLock
     (@NO_INLINE_DISABLES).
 
 Exposes:
-  @HbsChecker — `pub struct HbsChecker<'a>` — all fields private (@package_dir, @pkg,
-    @config borrows plus eight accumulator @HashSet sets: defined/used helpers,
-    defined/used partials, used_values, used_value_paths, used_images,
-    used_resources); no public accessor — usage leaves only through @finalize.
+  @HbsChecker — `pub struct HbsChecker<'a>` — tous champs privés (@package_dir, @pkg,
+    @config empruntés plus huit ensembles accumulateurs @HashSet : helpers définis/utilisés,
+    partials définis/utilisés, used_values, used_value_paths, used_images,
+    used_resources) ; aucun accesseur public — l'usage ne sort que par @finalize.
   @HbsChecker::new — `pub fn new(@package_dir: &@Path, @pkg: &@VynilPackageSource,
-    @config: &@LintConfig) -> @Self`; the ONLY disk-touching constructor step: non-recursive
-    @read_dir of `{package_dir}/handlebars/helpers` collecting `*.rhai` file stems into
-    defined_helpers, and of `{package_dir}/handlebars/partials` collecting `*.hbs` stems
-    into defined_partials (extension compare case-sensitive; non-UTF-8 stems skipped;
-    absent dirs → empty tables, silent).
+    @config: &@LintConfig) -> @Self` ; la SEULE étape du constructeur qui touche le disque :
+    @read_dir non récursif de `{package_dir}/handlebars/helpers` collectionnant les tiges de
+    fichiers `*.rhai` dans defined_helpers, et de `{package_dir}/handlebars/partials` collectionnant
+    les tiges `*.hbs` dans defined_partials (comparaison d'extension sensible à la casse ; tiges
+    non-UTF-8 ignorées ; répertoires absents → tables vides, silencieux).
   @HbsChecker::check_file — `pub fn check_file(&@mut self, @file: &@Path, @source: &@str)
-    -> @Vec<@LintFinding>`; @file is a driver-supplied package-root-relative path used
-    verbatim as finding identity; every call merges its usage into the checker sets
-    (accumulating, never resetting, never clearing on compile failure).
-  @HbsChecker::finalize — `pub fn finalize(&@self) -> @Vec<@LintFinding>`; read-only over
-    the accumulated state; emits the five unused-* rule families.
+    -> @Vec<@LintFinding>` ; @file est un chemin relatif à la racine du package fourni par le
+    driver, utilisé verbatim comme identité du finding ; chaque appel fusionne son usage dans les
+    ensembles du checker (accumulation, jamais de reset, jamais d'effacement sur échec de compilation).
+  @HbsChecker::finalize — `pub fn finalize(&@self) -> @Vec<@LintFinding>` ; lecture seule sur
+    l'état accumulé ; émet les cinq familles de règles unused-*.
   @HbsChecker::scan_rhai_for_values / @scan_rhai_for_images / @scan_rhai_for_resources /
-    @scan_rhai_for_partials — `pub fn scan_rhai_for_*(… &@mut self, @source: &@str)`;
-    pure text scanners over `.rhai` source, no path identity, no findings of their own —
-    they only feed the usage sets @finalize consumes.
-  File-private machinery (not surface, frozen here): @KNOWN_HBS_ROOTS (13-entry const
-    list), @NO_INLINE_DISABLES (@LazyLock empty @HashSet), @HelperWalker (+ @walk_template
+    @scan_rhai_for_partials — `pub fn scan_rhai_for_*(… &@mut self, @source: &@str)` ;
+    scanners texte purs sur source `.rhai`, sans identité de chemin, sans findings propres —
+    ils ne nourrissent que les ensembles d'usage que @finalize consomme.
+  Mécanique privée au fichier (non-surface, gelée ici) : @KNOWN_HBS_ROOTS (liste const de
+    13 entrées), @NO_INLINE_DISABLES (@LazyLock de @HashSet vide), @HelperWalker (+ @walk_template
     @visit_element @check_helper @check_values_path @check_image_resource_helper @check_path
     @check_root_var @check_partial), @collect_option_leaf_paths, @is_value_path_covered.
 
 Accepts:
-  @new: any @package_dir/@pkg/@config (tests construct via struct literal, bypassing the
-    dir scan); no existence preconditions.
-  @check_file: @source of ANY content and @file of ANY path — only the literal `.hbs`
-    extension gate upstream decides what arrives here; @parse_inline_disables runs on the
-    source before compiling (its result's only reads are the frozen dead lookups).
-  scan_rhai_*: whole `.rhai` texts from the driver's pass 2, in tree order; multiple calls
-    union, never subtract.
-  @finalize: nothing; preconditions none — safe on an unwalked checker (empty usage).
+  @new : n'importe quel @package_dir/@pkg/@config (les tests construisent via littéral de
+    structure, court-circuitant le scan de répertoire) ; aucunes préconditions d'existence.
+  @check_file : @source de TOUT contenu et @file de TOUT chemin — seul le garde d'extension
+    littérale `.hbs` en amont décide ce qui arrive ici ; @parse_inline_disables tourne sur la
+    source avant compilation (ses seules lectures sont les lookups morts gelés).
+  scan_rhai_* : textes `.rhai` entiers de la passe 2 du driver, dans l'ordre de l'arbre ;
+    appels multiples en union, jamais de soustraction.
+  @finalize : rien ; préconditions aucune — sûr sur un checker non parcouru (usage vide).
 
 Returns:
-  @check_file: `@Vec` in document order of the AST walk (elements, nesting depth-first,
-    children after their block element); on compile failure the single `hbs/syntax`
-    finding only.
-  @finalize: unused-helper block, then unused-partial block, then unused-option/
-    unused-option-field (per option, @BTreeMap key order, leaves in schema-recursion
-    order), then unused-image (@BTreeMap order), then unused-resource (@BTreeMap order);
-    the first two blocks iterate @HashSet order — the SAME package can print those
-    findings in different orders across runs (Must).
-  scan_rhai_*: @(); raises nothing; @finalize/@check_file return empty @Vec on clean input.
+  @check_file : `@Vec` dans l'ordre du document de la marche AST (éléments, profondeur d'abord,
+    enfants après leur élément bloc) ; sur échec de compilation, le seul finding `hbs/syntax`.
+  @finalize : bloc unused-helper, puis bloc unused-partial, puis unused-option/
+    unused-option-field (par option, ordre des clés @BTreeMap, feuilles dans l'ordre de
+    récursion du schéma), puis unused-image (ordre @BTreeMap), puis unused-resource (ordre
+    @BTreeMap) ; les deux premiers blocs itèrent l'ordre @HashSet — le MÊME package peut afficher
+    ces findings dans des ordres différents selon les runs (Must).
+  scan_rhai_* : @() ; ne lève rien ; @finalize/@check_file retournent un @Vec vide sur entrée propre.
 
 Raises:
-  Nothing — no @Result, no @common::Error, zero @unwrap/@expect/@panic! and zero
-  direct indexing or byte-slicing in product code: all Option reads are guarded
-  (@.get/@let-chains/@unwrap_or/@unwrap_or_default/@is_some_and), @tracing is unused in
-  this file (findings ARE the channel). The compile step delegates to @Template::compile
-  whose own `@unreachable!` (vendored handlebars `parse_name`) is upstream-owned and only
-  fires on an upstream parser bug.
+  Rien — pas de @Result, pas de @common::Error, zéro @unwrap/@expect/@panic! et zéro
+  indexage direct ou tranchage d'octets dans le code produit : toutes les lectures d'Option sont
+  gardées (@.get/@let-chains/@unwrap_or/@unwrap_or_default/@is_some_and), @tracing est inutilisé dans
+  ce fichier (les findings SONT le canal). L'étape de compilation délègue à @Template::compile
+  dont le propre `@unreachable!` (handlebars `parse_name` vendored) appartient à l'amont et ne se
+  déclenche que sur un bug du parser amont.
 
 Must:
-  # Parsing engine — real compiler for .hbs, text splitters for .rhai
-  Template analysis uses THE runtime parser: @Template::compile(source) is the locked
-    handlebars `6.4.2` pest compiler (same grammar the render engine compiles with) —
-    there is NO custom tokenizer on the .hbs side. Divergence from the runtime lies
-    entirely in the BELIEF sets (helpers, partials, roots) and in the four .rhai scanners,
-    which ARE naive: substring @str::split on the literals `context.values.`,
-    `context.images.`, `context.instance.resources.` and `{{>` — matches inside Rhai
-    strings and comments count as usage, `{{#>` block-partial syntax is missed, dynamic or
-    variable-aliased access (`let r = context.instance.resources; r.app`) is missed,
-    `mycontext.values.x` matches the `context.values.` suffix and records `x`, and
-    keys/stems are cut at the first char outside their take_while class (a hyphenated
-    resource key `my-img` records as used-`my`, leaving a false `hbs/unused-resource` for
-    `my-img`), `context.values.` with a following `[`/`"` records nothing.
-  # Element classification depends on CALL SHAPE (frozen from vendored grammar)
-  @Parameter::Name appears ONLY where the grammar matched `identifier ~ (hash|parameters)`
-    — helper calls WITH ≥1 param or hash (`{{foo x}}`), block starts (`{{#foo}}`), raw
-    blocks, decorators (`{{#*}}`) and close-tags; a bare expression `{{foo}}` (zero params)
-    parses as @Parameter::Path with one @Named segment, dotted names are ALWAYS @Path.
-    Consequence, frozen: @check_helper/`hbs/unknown-helper` cannot see a zero-argument
-    template `{{misspelled}}` nor any dotted-name call, `{{misspelled x}}`/`{{#misspelled}}`
-    DO fire; a bare single-segment @Path also slips @check_root_var (len ≥ 2 gate) and
-    @check_values_path (same gate), so `{{values}}` alone records no usage and
-    `{{port}}`-style bare vars are invisible to the root and values rules — the @tenant
-    rule is length-agnostic and DOES see bare `{{tenant}}`.
-  @Path::Local (@root/@key block-scoped data) and paths whose first segment is not
-    @PathSeg::Named (`../` parent, bracket forms) skip ALL @Parameter::Path rules; the
-    `!first.starts_with('@')` guard in @check_root_var is belt-and-braces on Local.
-  No rule anywhere reads @hash arguments: `{{foo v=values.x}}`, `{{lookup p key="missing"}}`
-    and `{{> p ctx=tenant.y}}` record and validate NOTHING.
-  Traversal: @walk_template recurses @HelperBlock .template+.inverse, @DecoratorBlock
-    .template, @PartialBlock .template — DecoratorBlock and PartialBlock check ONLY their
-    name (decorator name vs the helper tables, partial name vs defined_partials), never
-    their params (subexpressions inside partial/decorator params are unchecked);
-    @check_helper recursively visits @Parameter::Subexpression params, so subexpressions
-    in expression/helper positions ARE fully checked (@visit_element re-entry); comments
-    and raw-block bodies contribute nothing.
-  # Line model
-  Findings carry `line` = the 1-based source line of the FIRST line of the element, taken
-    from @TemplateMapping(@line, @col).0 positional pairing `elements[i] ↔ mapping[i]`
-    per template scope (nested block templates map through their own mapping; positions
-    stay absolute in the original source); mapping shortfall → @None (compiler never
-    produces it today). `hbs/syntax` and every finalize finding carry @line @None except
-    the four `package.yaml` rules, whose line is the ./mod.rs text-scanner locator result
-    for the key — a @None locator miss (odd YAML) keeps the finding, without a line.
+  # Moteur de parsing — vrai compilateur pour .hbs, découpeurs texte pour .rhai
+  L'analyse des templates utilise LE parser du runtime : @Template::compile(source) est le
+    compilateur pest handlebars `6.4.2` verrouillé (même grammaire que celle compilée par le
+    moteur de rendu) — il n'y a AUCUN tokenizer custom côté .hbs. La divergence avec le runtime
+    réside entièrement dans les ensembles de CROYANCE (helpers, partials, racines) et dans les
+    quatre scanners .rhai, qui EUX sont naïfs : @str::split en sous-chaîne sur les littéraux
+    `context.values.`, `context.images.`, `context.instance.resources.` et `{{>` — les
+    correspondances dans les chaînes et commentaires Rhai comptent comme usage, la syntaxe de
+    partial de bloc `{{#>` est manquée, l'accès dynamique ou aliasé par variable
+    (`let r = context.instance.resources; r.app`) est manqué, `mycontext.values.x` correspond au
+    suffixe `context.values.` et enregistre `x`, et les clés/tiges sont coupées au premier
+    caractère hors de leur classe take_while (une clé resource à trait d'union `my-img`
+    s'enregistre comme usage de `my`, laissant un faux `hbs/unused-resource` pour
+    `my-img`), `context.values.` suivi d'un `[`/`"` n'enregistre rien.
+  # La classification des éléments dépend de la FORME D'APPEL (gelée depuis la grammaire vendored)
+  @Parameter::Name n'apparaît QUE là où la grammaire a matché `identifier ~ (hash|parameters)`
+    — appels de helper AVEC ≥1 param ou hash (`{{foo x}}`), débuts de bloc (`{{#foo}}`), raw
+    blocks, decorators (`{{#*}}`) et close-tags ; une expression nue `{{foo}}` (zéro param)
+    se parse en @Parameter::Path avec un seul segment @Named, les noms pointés sont TOUJOURS des
+    @Path. Conséquence, gelée : @check_helper/`hbs/unknown-helper` ne peut pas voir un template
+    `{{misspelled}}` à zéro argument ni aucun appel à nom pointé, `{{misspelled x}}`/`{{#misspelled}}`
+    se DÉCLENCHENT ; un @Path nu à un seul segment échappe aussi à @check_root_var (garde len ≥ 2)
+    et à @check_values_path (même garde), donc `{{values}}` seul n'enregistre aucun usage et
+    les variables nues type `{{port}}` sont invisibles aux règles root et values — la règle
+    @tenant est indifférente à la longueur et VOIT bien `{{tenant}}` nu.
+  @Path::Local (données block-scoped @root/@key) et les chemins dont le premier segment n'est
+    pas @PathSeg::Named (parent `../`, formes à crochets) sautent TOUTES les règles @Parameter::Path ;
+    la garde `!first.starts_with('@')` dans @check_root_var est une ceinture-bretelles sur Local.
+  Aucune règle nulle part ne lit les arguments @hash : `{{foo v=values.x}}`,
+    `{{lookup p key="missing"}}` et `{{> p ctx=tenant.y}}` n'enregistrent et ne valident RIEN.
+  Traversée : @walk_template récursionne sur @HelperBlock .template+.inverse, @DecoratorBlock
+    .template, @PartialBlock .template — DecoratorBlock et PartialBlock vérifient SEULEMENT leur
+    nom (nom du decorator vs les tables de helpers, nom du partial vs defined_partials), jamais
+    leurs params (les sous-expressions dans les params de partial/decorator ne sont pas vérifiées) ;
+    @check_helper visite récursivement les params @Parameter::Subexpression, donc les
+    sous-expressions en position expression/helper sont BIEN vérifiées (@visit_element en
+    réentrée) ; commentaires et corps de raw-block ne contribuent à rien.
+  # Modèle de ligne
+  Les findings portent `line` = la ligne source 1-based de la PREMIÈRE ligne de l'élément, prise
+    du appairage positionnel @TemplateMapping(@line, @col).0 `elements[i] ↔ mapping[i]` par
+    portée de template (les templates de blocs imbriqués se mappent via leur propre mapping ; les
+    positions restent absolues dans la source d'origine) ; déficit de mapping → @None (le
+    compilateur n'en produit jamais aujourd'hui). `hbs/syntax` et chaque finding de finalize
+    portent @line @None sauf les quatre règles `package.yaml`, dont la ligne est le résultat du
+    localisateur texte ./mod.rs pour la clé — un non-located @None (YAML impair) garde le
+    finding, sans ligne.
   # RULE hbs/syntax
-  Trigger: @Template::compile @Err. Message verbatim: `Syntax error: {e}` (the handlebars
-    compile error Display embeds its own line/col text — not exposed as @line). Level
-    @Error via @resolve_level with a FRESH empty @HashSet (`&@HashSet::new()`, never a
-    directive set). On this lane the walker never runs, so the file records ZERO usage —
-    option/partial/image keys used ONLY inside an unparseable template still surface as
-    unused-* elsewhere (frozen cascade).
+  Déclencheur : @Template::compile en @Err. Message verbatim : `Syntax error: {e}` (l'affichage
+    Display de l'erreur de compilation handlebars embarque son propre texte ligne/col — non exposé
+    comme @line). Niveau @Error via @resolve_level avec un @HashSet vide NEUF (`&@HashSet::new()`,
+    jamais un ensemble de directives). Sur cette voie le walker ne tourne jamais, donc le
+    fichier enregistre ZÉRO usage — les touches option/partial/image utilisées UNIQUEMENT dans un
+    template infalsable ressortent quand même en unused-* ailleurs (cascade gelée).
   # RULE hbs/unknown-helper  @Error
-  Names accepted silently: @is_native_hbs_helper true (const membership — includes built-in
-    blocks `if/unless/each/with`, case helpers, `read_to_str`, `base64_encode` family, the
-    nine Vynil names — the list's content is owned by /common/src/handlebarshandler.sdd,
-    the const-vs-engine drift applies identically here, see Tasks), else name ∈
-    defined_helpers (file stems of `handlebars/helpers/*.rhai`). Rejected: any other @Name
-    in expression-with-params / block / decorator / subexpression position. Message:
-    `Helper `{helper_name}` not found`. Side effect BEFORE the gate: every non-native
-    @Name lands in used_helpers (even unknown ones). Trap: a package helper file whose stem
-    equals a native name (e.g. `handlebars/helpers/lookup.rhai`) shadows the built-in at
-    RUNTIME (register overwrite) but is invisible as usage at lint time → permanent false
-    `hbs/unused-helper` for it (Tasks `[?]`).
+  Noms acceptés en silence : @is_native_hbs_helper vrai (appartenance const — inclut les blocs
+    built-in `if/unless/each/with`, les case helpers, `read_to_str`, la famille `base64_encode`,
+    les neuf noms Vynil — le contenu de la liste est possédé par
+    /common/src/handlebarshandler.sdd, la dérive const-vs-moteur s'applique identiquement ici,
+    voir Tasks), sinon name ∈ defined_helpers (tiges des fichiers
+    `handlebars/helpers/*.rhai`). Rejeté : tout autre @Name en position expression-avec-params /
+    bloc / decorator / sous-expression. Message : `Helper `{helper_name}` not found`. Effet de
+    bord AVANT le garde : tout @Name non natif atterrit dans used_helpers (même les inconnus).
+    Piège : un fichier helper du package dont la tige égale un nom natif (p. ex.
+    `handlebars/helpers/lookup.rhai`) éclipse le built-in au RUNTIME (réécriture
+    d'enregistrement) mais reste invisible comme usage au lint-time → faux
+    `hbs/unused-helper` permanent pour lui (Tasks `[?]`).
   # RULE hbs/unknown-value  @Error
-  Trigger in @check_values_path: Relative @Path, first @Named == `values`, ≥ 2 segments,
-    second @Named = key, `self.pkg.options` @Some and `!options.contains_key(key)`.
-    Message: `Unknown value key `{key}``. Usage side effects (unconditional, fire even for
-    unknown keys and when options is @None): used_values += key; used_value_paths += the
-    dot-join of ALL @Named segments after `values` (bracket/parent segments silently drop
-    out of the recorded path). With options @None the rule is SILENT while runtime strict
-    mode would fail the render — frozen false-negative (frozen + tested
-    @values_check_skipped_when_no_options; see /agent/scripts/lib/build_context.rhai: with
-    no options, `values` resolves to the empty map at runtime).
+  Déclencheur dans @check_values_path : @Path Relative, premier @Named == `values`, ≥ 2 segments,
+    deuxième @Named = clé, `self.pkg.options` @Some et `!options.contains_key(key)`.
+    Message : `Unknown value key `{key}``. Effets de bord d'usage (inconditionnels, se produisent
+    même pour les clés inconnues et quand options est @None) : used_values += clé ;
+    used_value_paths += la jointure pointée de TOUS les segments @Named après `values` (les
+    segments bracket/parent sortent silencieusement du chemin enregistré). Avec options @None la
+    règle est SILENCIEUSE alors que le mode strict du runtime ferait échouer le rendu — faux
+    négatif gelé (gelé + testé @values_check_skipped_when_no_options ; voir
+    /agent/scripts/lib/build_context.rhai : sans options, `values` se résout en la carte vide au
+    runtime).
   # RULE hbs/unknown-partial  @Error
-  Name from @Parameter::@Name verbatim, or @Parameter::@Literal JSON string
-    (@as_str().unwrap_or_default-to-empty — a non-string literal becomes the empty name,
-    which is then marked USED and reported `Partial ``` not found`); any other Parameter
-    kind (dynamic @Path/@Subexpression) returns early — invisible, unrecorded. Usage
-    recorded before the gate. Message: `Partial `{partial_name}` not found`. Table =
-    stems of `handlebars/partials/*.hbs` ONLY — runtime ALSO registers partials from
-    `context.config_dir` and leaked `render_named` file-path names and `register_template`
-    names (References, frozen divergences): templates legitimately referencing those fire
-    false `hbs/unknown-partial` @Error (Tasks `[?]`).
-  # RULES hbs/unknown-image and hbs/unknown-resource  @Error, shared code path
-  Trigger in @check_image_resource_helper on @Name == `image_from_ctx` /
-    `resources_from_ctx` with `params.len() > 1` and `params[1]` a JSON-string @Literal:
-    the key is recorded into used_images/used_resources FIRST (unknown keys count as used,
-    on purpose — comment in code), then a finding IFF `self.pkg.images`/`self.pkg.resources`
-    is @Some and lacks the key; with the section @NONE the rule stays silent while the
-    runtime helper render-errors (image_from_ctx is unguarded —
-    /common/src/handlebarshandler.sdd) — frozen false-negative. Non-literal 2nd param
-    (variables — common!) disables BOTH the check and the usage record → false
-    `hbs/unused-image` later. Message grammar: `Unknown image key `{key}`` /
-    `Unknown resource key `{key}`` — built as `Unknown {} key `{}`` with
-    `field_name.trim_end_matches('s')` (`images` → `image`, `resources` → `resource`).
+  Nom pris sur @Parameter::@Name verbatim, ou sur @Parameter::@Literal chaîne JSON
+    (@as_str().unwrap_or_default-to-empty — un littéral non-chaîne devient le nom vide, qui est
+    alors marqué UTILISÉ et rapporté `Partial ``` not found`) ; tout autre genre de Parameter
+    (@Path/@Subexpression dynamiques) sort en avance — invisible, non enregistré. L'usage est
+    enregistré avant le garde. Message : `Partial `{partial_name}` not found`. Table =
+    tiges de `handlebars/partials/*.hbs` UNIQUEMENT — le runtime enregistre AUSSI des partials
+    depuis `context.config_dir` et les noms de fichiers `render_named` qui suintent et les noms
+    `register_template` (References, divergences gelées) : les templates qui référencent
+    légitimement ceux-là déclenchent de faux `hbs/unknown-partial` @Error (Tasks `[?]`).
+  # RULES hbs/unknown-image et hbs/unknown-resource  @Error, chemin de code partagé
+  Déclencheur dans @check_image_resource_helper sur @Name == `image_from_ctx` /
+    `resources_from_ctx` avec `params.len() > 1` et `params[1]` @Literal chaîne JSON : la clé
+    est enregistrée dans used_images/used_resources D'ABORD (les clés inconnues comptent comme
+    utilisées, exprès — commentaire dans le code), puis un finding SI ET SEULEMENT SI
+    `self.pkg.images`/`self.pkg.resources` est @Some et dépourvu de la clé ; avec la section
+    @NONE la règle reste silencieuse alors que le helper du runtime rend une erreur de rendu
+    (image_from_ctx est sans garde — /common/src/handlebarshandler.sdd) — faux négatif gelé. Un
+    2e param non-littéral (variables — courant !) désactive la vérification ET l'enregistrement
+    d'usage → faux `hbs/unused-image` plus tard. Grammaire du message :
+    `Unknown image key `{key}`` / `Unknown resource key `{key}`` — construits comme
+    `Unknown {} key `{}`` avec `field_name.trim_end_matches('s')` (`images` → `image`,
+    `resources` → `resource`).
   # RULE hbs/wrong-package-type  @Warn
-  Trigger ANY Relative @Path (any length, name position or param) whose first @Named ==
-    `tenant` while `self.pkg.metadata.usage == @VynilPackageType::System` (bare
-    `{{tenant}}` included — no segment-count gate). Message (static):
-    "Accessing `tenant` in a System package is not allowed" — the backticks around `tenant`
-    are literal characters. One-directional: Service/Tenant misuse of absent roots
-    (`tenant` in Service, `namespace` in Tenant, `cluster` anywhere) never fires.
-  # RULE hbs/context-prefix  @Error, and its suppression coupling
-  Trigger: Relative @Path, first @Named == `context` (itself NOT in @KNOWN_HBS_ROOTS) and
-    second @Named ∈ @KNOWN_HBS_ROOTS. Message:
+  Déclencheur : TOUT @Path Relative (longueur quelconque, position de nom ou param) dont le
+    premier @Named == `tenant` alors que `self.pkg.metadata.usage == @VynilPackageType::System`
+    (`{{tenant}}` nu inclus — pas de garde de nombre de segments). Message (statique) :
+    "Accessing `tenant` in a System package is not allowed" — les backticks autour de `tenant`
+    sont des caractères littéraux. Unidirectionnel : les mauvais usages Service/Tenant de racines
+    absentes (`tenant` dans Service, `namespace` dans Tenant, `cluster` ailleurs) ne se
+    déclenchent jamais.
+  # RULE hbs/context-prefix  @Error, et son couplage de suppression
+  Déclencheur : @Path Relative, premier @Named == `context` (lui-même PAS dans @KNOWN_HBS_ROOTS) et
+    deuxième @Named ∈ @KNOWN_HBS_ROOTS. Message :
     `Use `{second}` instead of `context.{second}`; the `context.` prefix is not valid in templates`.
-    The early `return` that suppresses the generic warning sits INSIDE the @Some(level)
-    arm: if config disables `hbs/context-prefix`, the same element falls through and fires
-    `hbs/unknown-root-variable` with first = `context` instead (Tasks `[ ]`).
+    Le `return` précoce qui supprime l'avertissement générique se trouve DANS la branche
+    @Some(level) : si config désactive `hbs/context-prefix`, le même élément tombe et déclenche
+    `hbs/unknown-root-variable` avec first = `context` à la place (Tasks `[ ]`).
   # RULE hbs/unknown-root-variable  @Warn
-  Trigger: Relative @Path, len ≥ 2, first @Named, not starting `@`, not in the 13-entry
-    @KNOWN_HBS_ROOTS VERBATIM ORDER: `cluster`, `controller`, `instance`, `values`,
-    `defaults`, `package_dir`, `config_dir`, `extra`, `this`, `tenant`, `system`,
-    `service`, `namespace`. Message: `Unknown root variable `{first}` in template path —
-    expected one of: {list}` — {list} = @KNOWN_HBS_ROOTS.join(", ") in that declared order.
-    No block-param scoping exists: `{{#each x as |item|}}{{item.name}}{{/each}}` is a
-    guaranteed false positive (Tasks `[?]`), as is every runtime root the shipped hook
-    scripts (`context_pre/post/system`) or `agent_image`/`template_dir` inject, while
-    `system`/`service` are believed but no shipped builder sets them (Tasks `[?]`).
-  # RULES hbs/unused-helper / hbs/unused-partial  @Warn, finalize, virtual identity
-  For each defined-but-never-used helper/partial: finding on the VIRTUAL relative paths
-    `handlebars/helpers/{helper}.rhai` / `handlebars/partials/{partial}.hbs` (string-formatted,
-    NOT touched on disk — they may name files that exist), @line @None, inline lane a
-    FRESH empty @HashSet; messages: `Helper `{helper}` defined but never used` and
-    `Partial `{partial}` defined but never used`. Iteration is @HashSet order →
-    cross-run finding ORDER is nondeterministic (presence never changes; the collector
-    prints insertion order ./mod.sdd). @resolve_level file is the virtual string, so
-    `.vynil-lint.yaml` `files:` globs CAN target `handlebars/partials/**` (config.sdd's own
-    Example relies on exactly this).
+  Déclencheur : @Path Relative, len ≥ 2, premier @Named, ne commençant pas par `@`, pas dans les
+    13 entrées @KNOWN_HBS_ROOTS DANS L'ORDRE VERBATIM : `cluster`, `controller`, `instance`,
+    `values`, `defaults`, `package_dir`, `config_dir`, `extra`, `this`, `tenant`, `system`,
+    `service`, `namespace`. Message : `Unknown root variable `{first}` in template path —
+    expected one of: {list}` — {list} = @KNOWN_HBS_ROOTS.join(", ") dans cet ordre déclaré.
+    Aucun scoping de param de bloc n'existe : `{{#each x as |item|}}{{item.name}}{{/each}}` est un
+    faux positif garanti (Tasks `[?]`), comme chaque racine runtime que les scripts hook livrés
+    (`context_pre/post/system`) ou `agent_image`/`template_dir` injectent, tandis que
+    `system`/`service` sont crus mais qu'aucun builder livré ne les pose (Tasks `[?]`).
+  # RULES hbs/unused-helper / hbs/unused-partial  @Warn, finalize, identité virtuelle
+  Pour chaque helper/partial défini mais jamais utilisé : finding sur les chemins relatifs
+    VIRTUELS `handlebars/helpers/{helper}.rhai` / `handlebars/partials/{partial}.hbs` (formatés
+    par chaîne, PAS touchés sur disque — ils peuvent nommer des fichiers qui existent), @line
+    @None, voie inline un @HashSet vide NEUF ; messages :
+    `Helper `{helper}` defined but never used` et `Partial `{partial}` defined but never used`.
+    L'itération est en ordre @HashSet → l'ORDRE des findings entre runs est non déterministe (la
+    présence ne change jamais ; le collecteur affiche l'ordre d'insertion ./mod.sdd). Le fichier
+    passé à @resolve_level est la chaîne virtuelle, donc les globs `files:` de
+    `.vynil-lint.yaml` PEUVENT cibler `handlebars/partials/**` (l'Example propre de config.sdd
+    repose exactement là-dessus).
   # RULES hbs/unused-option / hbs/unused-option-field / hbs/unused-image /
-    hbs/unused-resource  @Warn, finalize, `package.yaml` identity, live inline lane
-  Sources: `self.pkg.options` / `.images` / `.resources` key sets (@BTreeMap, stable
-    order); usage = used_values / used_value_paths / used_images / used_resources
-    (both .hbs AST paths and the four Rhai scanners feed them). @file identity is the
-    literal relative `package.yaml` (read happens at `package_dir`-joined path, the
-    FINDING path stays relative). @line comes from ./mod.rs section locators
-    (`options`: @find_option_line_numbers; images/resources: @find_section_key_line_numbers
-    with those section names — the ONLY in-crate non-options callers, Tasks cross-seam).
-    Inline lane (the ONLY LIVE directive lane in this file): re-read `package.yaml`,
-    @parse_inline_disables it, and pass the set AT THE KEY'S OWN LOCATED LINE
-    (`@HashSet::default()` when the line is @None or uncovered — missing key line =
-    directives inert for that finding); unused-option-field findings inherit the PARENT
-    option key's line/set, leaf lines are never located. Messages:
+    hbs/unused-resource  @Warn, finalize, identité `package.yaml`, voie inline vivante
+  Sources : jeux de clés `self.pkg.options` / `.images` / `.resources` (@BTreeMap, ordre
+    stable) ; usage = used_values / used_value_paths / used_images / used_resources (les chemins
+    AST .hbs et les quatre scanners Rhai les nourrissent). L'identité @file est le
+    `package.yaml` relatif littéral (la lecture a lieu au chemin joint à `package_dir`, le CHEMIN
+    du finding reste relatif). @line vient des localisateurs de section ./mod.rs (`options` :
+    @find_option_line_numbers ; images/resources : @find_section_key_line_numbers avec ces noms de
+    section — les SEULS appelants in-crate non-options, cross-seam Tasks). Voie inline (la SEULE
+    voie de directives VIVANTE de ce fichier) : relire `package.yaml`, @parse_inline_disables
+    dessus, et passer l'ensemble À LA PROPRE LIGNE LOCALISÉE DE LA CLÉ (`@HashSet::default()`
+    quand la ligne est @None ou non couverte — clé sans ligne localisée = directives inertes pour
+    ce finding) ; les findings unused-option-field héritent de la ligne/ensemble de la clé option
+    PARENT, les lignes de feuille ne sont jamais localisées. Messages :
     `Option `{key}` defined but never used`, `Option `{leaf_path}` defined but never used`,
     `Image `{key}` defined but never used`, `Resource `{key}` defined but never used`.
-    Leaf inventory (@collect_option_leaf_paths): recurse schema `properties` maps while a
-    child schema still has `properties`; emitted leaf = every child WITHOUT `properties`,
-    path `key.sub[.sub2…]` dotted; `type`, `items`, `default` and flat `default:` maps
-    contribute NOTHING — the runtime resolves object options from merged `default` maps
-    (/agent/scripts/lib/build_context.rhai `get_values`) and ./../package/lint.sdd WARNS
-    that `properties` is unsupported at runtime, yet THIS rule is the only one modeling
-    them — the three-way drift is frozen in Tasks `[?]`. Coverage (@is_value_path_covered):
-    a leaf is covered iff itself or any proper dot-prefix ancestor is in used_value_paths
-    (byte @rfind('.') truncation loop), so `{{values.database}}` covers every
-    `database.*` leaf; recorded paths keep only the @Named segments (non-@Named ones drop
-    out), so coverage runs over the dotted @Named projection of whatever the template
-    spelled (frozen).
-  # Level wiring (ALL 15 rules reach @resolve_level — every one is
-    `.vynil-lint.yaml`-reconfigurable; this is the table config.sdd reads)
-  @Error: `hbs/syntax` (inline lane `&@HashSet::new()`), then `hbs/unknown-helper`,
+    Inventaire des feuilles (@collect_option_leaf_paths) : récursion des cartes `properties` du
+    schéma tant qu'un enfant-schéma a encore des `properties` ; feuille émise = chaque enfant
+    SANS `properties`, chemin pointé `key.sub[.sub2…]` ; `type`, `items`, `default` et les cartes
+    `default:` plates ne contribuent À RIEN — le runtime résout les options-objet depuis les
+    cartes `default` fusionnées (/agent/scripts/lib/build_context.rhai `get_values`) et
+    ./../package/lint.sdd AVERTIT que `properties` n'est pas supporté au runtime, mais CETTE règle
+    est la seule à les modéliser — la dérive trilatérale est gelée dans Tasks `[?]`.
+    Couverture (@is_value_path_covered) : une feuille est couverte si elle-même ou un quelconque
+    ancêtre préfixe pointé propre est dans used_value_paths (boucle de troncature par
+    @rfind('.') sur les octets), donc `{{values.database}}` couvre chaque feuille `database.*` ;
+    les chemins enregistrés ne gardent que les segments @Named (les non-@Named en sortent), donc
+    la couverture s'exerce sur la projection pointée @Named de ce que le template avait écrit
+    (gelé).
+  # Câblage de niveau (les 15 règles atteignent TOUTES @resolve_level — chacune est
+    reconfigurable via `.vynil-lint.yaml` ; c'est la table que lit config.sdd)
+  @Error : `hbs/syntax` (voie inline `&@HashSet::new()`), puis `hbs/unknown-helper`,
     `hbs/unknown-value`, `hbs/unknown-partial`, `hbs/unknown-image`, `hbs/unknown-resource`
-    and `hbs/context-prefix` — those six share the inline lane
-    `self.inline_disables.get(&0)`, physically seven code sites since unknown-image and
-    unknown-resource run through ONE shared lookup;
-    @Warn: `hbs/unknown-root-variable` and `hbs/wrong-package-type` (also `get(&0)`),
-    `hbs/unused-helper` and `hbs/unused-partial` (`&@HashSet::new()` each), and the four
-    package.yaml rules (LIVE per-located-line lane). Frozen directive truth confirmed from
-    these call sites: @parse_inline_disables keys are 1-based, key `0` NEVER exists, so the
-    seven `get(&0)` code sites (8 rule positions) plus the three `new()` sites (syntax,
-    unused-helper, unused-partial — 10 sites / 11 rule positions total) make
-    `{{!-- vynil-lint-disable … --}}` directives INERT for 11 of 15 rules — they apply
-    ONLY to unused-option/unused-option-field/unused-image/unused-resource on their
-    package.yaml key lines; the per-.hbs @parse_inline_disables call in @check_file
-    computes the map every file but consumes it only through dead `&0` lookups.
-  # Belief model (context the checker assumes exists)
-  Roots via @KNOWN_HBS_ROOTS (order above); `values.<k>` ↔ @VynilPackageSource.options keys;
-    image/resource keys ↔ manifest @BTreeMaps; helpers ↔ native const list ∪ package helper
-    stems; partials ↔ package partial stems; `defaults`/`cluster`/`controller`/
-    `package_dir`/`config_dir`/`extra` believed as EXISTENT-ONLY (content never validated).
-    Runtime reality (References): build_context.rhai ships cluster, controller, instance,
-    values, defaults, package_dir, config_dir; type builders add `tenant` (Tenant),
-    `namespace`+`extra` (Service), `extra` (System) and `template_dir`/`agent_image`
-    (Tenant/Service), `context_pre/post/system` hooks can replace the WHOLE context map —
-    so the allowed-root allowlist is neither a subset nor superset of runtime truth.
-  # Cost and state posture
-  @new scans both handlebars dirs once; @check_file CLONES @config + both defined sets per
-    file (@LintConfig's `[?]`-flagged @Clone derive HAS this use site, Tasks cross-seam);
-    @finalize re-reads `package.yaml` up to SIX times (locator read + disabler read per
-    section) plus one manifest re-read through each locator — every read guarded, absent
-    or unreadable file degrades to empty maps (findings keep firing with @None lines and
-    inert directives, never an error). Usage sets are monotone across the whole run;
-    @finalize is `&@self` and never mutates — repeated finalize answers identically.
+    et `hbs/context-prefix` — ces six-là partagent la voie inline
+    `self.inline_disables.get(&0)`, physiquement sept sites de code puisque unknown-image et
+    unknown-resource passent par UNE SEULE lookup partagée ; @Warn :
+    `hbs/unknown-root-variable` et `hbs/wrong-package-type` (eux aussi `get(&0)`),
+    `hbs/unused-helper` et `hbs/unused-partial` (`&@HashSet::new()` chacun), et les quatre
+    règles package.yaml (voie VIVANTE par ligne localisée). Vérité directive gelée confirmée
+    depuis ces sites d'appel : les clés de @parse_inline_disables sont 1-based, la clé `0`
+    N'EXISTE JAMAIS, donc les sept sites de code `get(&0)` (8 positions de règle) plus les trois
+    sites `new()` (syntax, unused-helper, unused-partial — 10 sites / 11 positions de règle au
+    total) rendent les directives `{{!-- vynil-lint-disable … --}}` INERTES pour 11 des 15 règles
+    — elles s'appliquent UNIQUEMENT à unused-option/unused-option-field/unused-image/
+    unused-resource sur leurs lignes de clé package.yaml ; l'appel per-.hbs
+    @parse_inline_disables dans @check_file calcule la carte à chaque fichier mais ne la consomme
+    que via les lookups morts `&0`.
+  # Modèle de croyance (contexte que le checker suppose exister)
+  Racines via @KNOWN_HBS_ROOTS (ordre ci-dessus) ; `values.<k>` ↔ clés @VynilPackageSource.options
+    ; clés image/resource ↔ @BTreeMaps du manifeste ; helpers ↔ liste const native ∪ tiges de
+    helpers du package ; partials ↔ tiges de partials du package ; `defaults`/`cluster`/
+    `controller`/`package_dir`/`config_dir`/`extra` crus comme SEULEMENT-EXISTANTS (contenu jamais
+    validé). Réalité runtime (References) : build_context.rhai livre cluster, controller,
+    instance, values, defaults, package_dir, config_dir ; les builders de type ajoutent `tenant`
+    (Tenant), `namespace`+`extra` (Service), `extra` (System) et `template_dir`/`agent_image`
+    (Tenant/Service), les hooks `context_pre/post/system` peuvent remplacer la CARTE de contexte
+    ENTIÈRE — donc l'allowlist des racines autorisées n'est ni un sous-ensemble ni un
+    sur-ensemble de la vérité runtime.
+  # Coût et posture d'état
+  @new scanne les deux répertoires handlebars une fois ; @check_file CLONE @config + les deux
+    ensembles définis À CHAQUE fichier (le derive @Clone `[?]`-signalé de @LintConfig A ce site
+    d'usage, cross-seam Tasks) ; @finalize relit `package.yaml` jusqu'à SIX fois (lecture locator
+    + lecture disabler par section) plus une relecture du manifeste via chaque locator — chaque
+    lecture gardée, un fichier absent ou illisible dégrade en cartes vides (les findings
+    continuent de s'émettre avec des lignes @None et des directives inertes, jamais une erreur).
+    Les ensembles d'usage sont monotones sur tout le run ; @finalize est `&@self` et ne mute
+    jamais — des finalize répétés répondent identiquement.
 
 Handles:
-  `handlebars/helpers/` or `handlebars/partials/` absent / unreadable / non-directory —
-    empty defined tables, silent (@read_dir guarded both).
-  Non-UTF-8 filenames or stems in those dirs — skipped.
-  Compile-failed file — one `hbs/syntax` finding, zero usage recorded (Must cascade).
-  `package.yaml` unreadable during finalize — locators and disables fall to empty, the
-    unused-* findings still emit with @None line and no inline lane.
-  Option/schema without `properties` — no leaf checks for that option at all.
-  Partial name neither @Name nor string @Literal — silent skip (dynamic partials are
-    invisible to usage AND to unknown-partial).
-  String-literal partial names `{{> "p"}}` work through the @Literal arm in the .hbs AST,
-    while the `{{#>` block-partial syntax is parsed fine by the .hbs compiler but missed
-    entirely by the `.rhai` text splitter (splits on `{{>` only) — split visibility frozen.
-  @Parameter::@Literal non-string in partial name — becomes empty-string name (reported).
+  `handlebars/helpers/` ou `handlebars/partials/` absent / illisible / non-répertoire —
+    tables defined vides, silencieux (@read_dir gardés tous les deux).
+  Noms de fichiers ou tiges non-UTF-8 dans ces répertoires — ignorés.
+  Fichier dont la compilation échoue — un finding `hbs/syntax`, zéro usage enregistré (cascade
+    Must).
+  `package.yaml` illisible pendant finalize — localisateurs et désactivations retombent à vide,
+    les findings unused-* s'émettent quand même avec ligne @None et sans voie inline.
+  Option/schéma sans `properties` — aucun contrôle de feuille pour cette option du tout.
+  Nom de partial ni @Name ni @Literal chaîne — saut silencieux (les partials dynamiques sont
+    invisibles à l'usage ET à unknown-partial).
+  Les noms de partial en littéral chaîne `{{> "p"}}` fonctionnent via la branche @Literal dans
+    l'AST .hbs, tandis que la syntaxe de partial de bloc `{{#>` est bien parsée par le compilateur
+    .hbs mais totalement manquée par le découpeur texte `.rhai` (découpe sur `{{>` seulement) —
+    visibilité de découpe gelée.
+  @Parameter::@Literal non-chaîne en nom de partial — devient un nom chaîne vide (rapporté).
 
 Example:
-  The fifteen rule ids owned here (config.sdd @Error/@Warn table authority):
+  Les quinze ids de règle possédés ici (autorité de la table @Error/@Warn de config.sdd) :
     hbs/syntax, hbs/unknown-helper, hbs/unknown-value, hbs/unknown-partial,
     hbs/unknown-image, hbs/unknown-resource, hbs/wrong-package-type, hbs/context-prefix,
     hbs/unknown-root-variable, hbs/unused-helper, hbs/unused-partial, hbs/unused-option,
     hbs/unused-option-field, hbs/unused-image, hbs/unused-resource
-  Inline-lane map (frozen): LIVE only `hbs/unused-option`, `hbs/unused-option-field`,
-    `hbs/unused-image`, `hbs/unused-resource` (package.yaml key-line sets); INERT-by-wiring
-    for the other 11 (`get(&0)` ×7 code sites over 8 rule positions, `new()` ×3 sites over
-    3 more — 10 sites, 11 rules).
-  Helper names the checker treats specially as literals: `image_from_ctx` and
-    `resources_from_ctx` (2nd param = key lookup); the nine Vynil registered names and the
-    CORE list membership are /common/src/handlebarshandler.sdd-owned facts consulted via
-    @is_native_hbs_helper only.
-  @KNOWN_HBS_ROOTS verbatim join used in the unknown-root message:
+  Carte des voies inline (gelée) : VIVANTES uniquement `hbs/unused-option`, `hbs/unused-option-field`,
+    `hbs/unused-image`, `hbs/unused-resource` (ensembles des lignes de clé package.yaml) ;
+    INERTES-PAR-CÂBLAGE pour les 11 autres (`get(&0)` ×7 sites de code sur 8 positions de règle,
+    `new()` ×3 sites sur 3 de plus — 10 sites, 11 règles).
+  Les noms de helper que le checker traite spécialement comme des littéraux : `image_from_ctx` et
+    `resources_from_ctx` (2e param = lookup de clé) ; les neuf noms enregistrés Vynil et
+    l'appartenance à la liste CORE sont des faits possédés par /common/src/handlebarshandler.sdd,
+    consultés via @is_native_hbs_helper uniquement.
+  La jointure verbatim @KNOWN_HBS_ROOTS utilisée dans le message unknown-root :
     `cluster, controller, instance, values, defaults, package_dir, config_dir, extra,
     this, tenant, system, service, namespace`
 
 Tasks:
-  [ ] Cover @new's directory scanning (both dirs, extension/stem filters, hidden entries,
-      absent dirs) — every test in this file constructs the struct literally and bypasses
-      it.
-  [ ] Cover `hbs/unused-helper` — the only owned rule with ZERO tests (unused-partial has
-      its pair, unused-helper none).
-  [ ] Cover @scan_rhai_for_partials — zero direct tests, and the `{{#>` block-partial
-      miss, dynamic partial invisibility, and non-string literal partial edge have none.
-  [ ] Cover the call-shape asymmetry frozen in Must: `{{missp}}` silent vs
-      `{{missp x}}`/`{{#missp}}` firing; nested-subexpression recursion;
-      DecoratorBlock/PartialBlock param blindness; hash-argument blindness.
-  [ ] Cover the frozen silent gates: image/resource key check with section @None,
-      unknown keys still marked used, variable-key calls → unused-image false positive.
-  [ ] Cover `hbs/wrong-package-type` negatives (Tenant using `tenant`, Service), the
-      bare-`{{tenant}}` trigger, and its absence inside hashes.
-  [ ] Cover the context-prefix suppression coupling: disabling `hbs/context-prefix` via
-      config flips `{{context.tenant.x}}` to `hbs/unknown-root-variable` (untested).
-  [ ] Cover the directive wiring end-to-end in a temp package: `{{!-- … --}}` directives
-      suppressing NOTHING for the 11 inert rules, `#`-family directives on a `package.yaml`
-      option/image/resource key line suppressing the four live rules, @None-line findings
-      staying directive-inert; plus per-rule `.vynil-lint.yaml` disable/override and the
-      virtual-path and `package.yaml` glob lanes.
-  [ ] Cover finalize determinism constraints (helper/partial blocks arrive in HashSet
-      order — tests must assert presence, not order) and the syntax-failure usage cascade.
-  [ ] Decide+fix (recorded in ./config.sdd as cross-seam `[?]`, allocated HERE): the 10
-      inline-lane sites — either key the lookup at the finding's real line (11 rules gain
-      live directives — but .hbs findings' lines must then intersect the map) or drop the
-      dead @parse_inline_disables call + @NO_INLINE_DISABLES static per finding.
-  [?] Runtime-vs-lint PARTIAL table drift: `register_partial_dir(context.config_dir)` (and
-      the leaked `render_named`/`register_template` names) makes shared-partial templates
-      fire `hbs/unknown-partial` at lint but succeed at deploy — give the checker a
-      config-dir roots option (CLI already carries `--config-dir`), demote to @Warn, or
-      accept the false error.
-  [?] @KNOWN_HBS_ROOTS is a hand-frozen allowlist against a runtime the shipped
-      `context_pre/post/system` hooks can rewrite wholesale: `system`/`service` roots are
-      believed but no shipped builder sets them, `template_dir`/`agent_image` are shipped
-      but unknown here, and block parameters (`as |item|`) are guaranteed false
-      `hbs/unknown-root-variable` — decide whether the list derives from a shipped source,
-      gains block-param awareness, or the rule drops to a suggestion lane.
-  [?] Native-shadows-defined trap: a package helper named like a native (`inline`,
-      `lookup`, …) shadows at runtime (overwrite wins) but is treated as native here →
-      permanent false `hbs/unused-helper`; also @is_native_hbs_helper is const membership
-      (feature-gated core names, decorator-only `inline`) — same decision family as
-      /common/src/handlebarshandler.sdd's `[?]`s, keep them paired.
-  [?] Leaf-model tri-lateral conflict: `hbs/unused-option-field` only understands
-      `properties`-nested schemas while the runtime resolves object options from `default`
-      maps and ./../package/lint.sdd WARNS `properties` as unsupported at runtime — an
-      option following the recommended flat-`default` shape is field-invisible here.
-      Decide one authority for the object-option model.
-  [?] Rhai-side scanning fidelity: substring matching yields false usage (comments,
-      strings, `mycontext.values.x`) AND false disuse (keyed indexing, aliased access,
-      hyphenated keys cut at `-`) — accept (warn-class-only fallout) or reuse real parsing
-      for embedded-hbs in scripts; also `scan_rhai_for_resources`'s single-element prefix
-      ARRAY loop (`for prefix in &[…]`) reads as a dropped-second-prefix leftover — the
-      duplicate pair of tests @rhai_context_resources_suppresses_unused_resource_warning /
-      @rhai_context_instance_resources_suppresses_unused_resource_warning (identical
-      bodies) suggests the second prefix was planned and never landed: confirm intent
-      (`context.resources.`?) then simplify the loop and fold or repurpose the test.
-  [?] @finalize re-reads `package.yaml` up to six times per run (3 locators + 3 disabler
-      parses) — acceptable for a lint run, or hoist one read per finalize.
-  [?] Cross-seam staleness for the next review of the sibling specs (do NOT edit them
-      from here): ./config.sdd Tasks claim @LintConfig::@Clone has "no in-crate use
-      sites" — @check_file clones it per file (this line: `self.config.clone()`); ./mod.sdd
-      claims @find_section_key_line_numbers is "only ever called with `options`" — this
-      file adds the `images` and `resources` call sites (finalize), which its generalization
-      `[?]` must weight.
+  [ ] Couvrir le scan de répertoires de @new (les deux répertoires, filtres extension/tige,
+      entrées cachées, répertoires absents) — chaque test de ce fichier construit la structure
+      littéralement et court-circuite ce scan.
+  [ ] Couvrir `hbs/unused-helper` — la seule règle possédée avec ZÉRO test (unused-partial a sa
+      paire, unused-helper aucun).
+  [ ] Couvrir @scan_rhai_for_partials — zéro test direct, et le manqué du partial de bloc `{{#>`,
+      l'invisibilité des partials dynamiques et le bord du littéral non-chaîne de partial n'en ont
+      aucun.
+  [ ] Couvrir l'asymétrie de forme d'appel gelée dans Must : `{{missp}}` silencieux vs
+      `{{missp x}}`/`{{#missp}}` déclenchés ; la récursion des sous-expressions imbriquées ; la
+      cécité aux params DecoratorBlock/PartialBlock ; la cécité aux arguments hash.
+  [ ] Couvrir les gardes silencieuses gelées : contrôle des clés image/resource avec section
+      @None, clés inconnues quand même marquées utilisées, appels à clé-variable → faux positif
+      unused-image.
+  [ ] Couvrir `hbs/wrong-package-type` côté négatifs (Tenant utilisant `tenant`, Service), le
+      déclencheur `{{tenant}}` nu, et son absence dans les hashes.
+  [ ] Couvrir le couplage de suppression context-prefix : désactiver `hbs/context-prefix` via
+      config retourne `{{context.tenant.x}}` en `hbs/unknown-root-variable` (non testé).
+  [ ] Couvrir le câblage directive de bout en bout dans un package temporaire : les directives
+      `{{!-- … --}}` ne suppriment RIEN pour les 11 règles inertes, les directives en `#` sur une
+      ligne de clé option/image/resource de `package.yaml` suppriment les quatre règles vivantes,
+      les findings à ligne @None restent inertes aux directives ; plus le disable/override
+      `.vynil-lint.yaml` par règle et les voies virtual-path et glob `package.yaml`.
+  [ ] Couvrir les contraintes de déterminisme de finalize (les blocs helper/partial arrivent en
+      ordre HashSet — les tests doivent affirmer la présence, pas l'ordre) et la cascade d'usage
+      sur échec de syntaxe.
+  [ ] Décider+corriger (consigné dans ./config.sdd comme `[?]` cross-seam, alloué ICI) : les 10
+      sites de voie inline — soit indexer le lookup sur la ligne réelle du finding (11 règles
+      gagnent des directives vivantes — mais les lignes des findings .hbs devront alors intersecter
+      la carte), soit supprimer l'appel @parse_inline_disables mort + le statique
+      @NO_INLINE_DISABLES par finding.
+  [?] Dérive de table PARTIAL runtime-vs-lint : `register_partial_dir(context.config_dir)` (et
+      les noms `render_named`/`register_template` qui suintent) fait que les templates à partial
+      partagé déclenchent `hbs/unknown-partial` au lint mais réussissent au déploiement — donner
+      au checker une option de racines config-dir (la CLI porte déjà `--config-dir`), rétrograder
+      en @Warn, ou accepter la fausse erreur.
+  [?] @KNOWN_HBS_ROOTS est une allowlist gelée à la main contre un runtime que les hooks livrés
+      `context_pre/post/system` peuvent réécrire en totalité : les racines `system`/`service`
+      sont crues mais aucun builder livré ne les pose, `template_dir`/`agent_image` sont livrés
+      mais inconnus ici, et les paramètres de bloc (`as |item|`) sont des faux
+      `hbs/unknown-root-variable` garantis — décider si la liste dérive d'une source livrée, gagne
+      une conscience des params de bloc, ou si la règle retombe en voie suggestion.
+  [?] Piège native-éclipse-défini : un helper de package nommé comme un natif (`inline`,
+      `lookup`, …) éclipse au runtime (l'écrasement gagne) mais est traité comme natif ici →
+      faux `hbs/unused-helper` permanent ; de plus @is_native_hbs_helper est une appartenance
+      const (noms core sous feature-gate, `inline` réservé aux decorators) — même famille de
+      décision que les `[?]` de /common/src/handlebarshandler.sdd, les garder appariés.
+  [?] Conflit trilatéral du modèle de feuilles : `hbs/unused-option-field` ne comprend que
+      les schémas imbriqués sous `properties` alors que le runtime résout les options-objet depuis
+      les cartes `default` et que ./../package/lint.sdd AVERTIT que `properties` est non supporté
+      au runtime — une option suivant la forme plate-`default` recommandée est invisible aux
+      champs ici. Décider une seule autorité pour le modèle d'option-objet.
+  [?] Fidélité du scanning côté Rhai : la correspondance en sous-chaîne produit de faux usages
+      (commentaires, chaînes, `mycontext.values.x`) ET de fausses non-utilisations (indexation par
+      clé, accès aliasé, clés à trait d'union coupées à `-`) — accepter (retombées warn-class
+      seulement) ou réutiliser le vrai parsing pour l'hbs embarqué dans les scripts ; de plus, la
+      boucle de préfixe en TABLEAU à un seul élément (`for prefix in &[…]`) de
+      `scan_rhai_for_resources` se lit comme un reste de second-préfixe abandonné — la paire de
+      tests dupliquée @rhai_context_resources_suppresses_unused_resource_warning /
+      @rhai_context_instance_resources_suppresses_unused_resource_warning (corps identiques)
+      suggère qu'un second préfixe était prévu et n'a jamais atterri : confirmer l'intention
+      (`context.resources.` ?) puis simplifier la boucle et replier ou réaffecter le test.
+  [?] @finalize relit `package.yaml` jusqu'à six fois par run (3 localisateurs + 3 parses
+      disabler) — acceptable pour un run de lint, ou hisser une seule lecture par finalize.
+  [?] Obsolescence cross-seam pour la prochaine revue des specs sœurs (ne PAS les éditer depuis
+      ici) : les Tasks de ./config.sdd affirment que @LintConfig::@Clone n'a "no in-crate use
+      sites" — @check_file le clone à chaque fichier (cette ligne : `self.config.clone()`) ;
+      ./mod.sdd affirme que @find_section_key_line_numbers n'est "only ever called with
+      `options`" — ce fichier ajoute les sites d'appel `images` et `resources` (finalize), que sa
+      généralisation `[?]` doit pondérer.
 
 Done when:
-  Every owned rule's Scenario above carries mapped passing tests (the 33 existing ones keep
-    passing), the Tasks `[ ]` lanes are closed or explicitly carried, the `[?]` decisions
-    are recorded, and `cargo test -p agent`, `cargo clippy --all-targets -- -D warnings`
-    and `cargo +nightly fmt --check` stay green.
+  Chaque scenario ci-dessus des règles possédées porte des tests mappés passants (les 33
+    existants restent passants), les voies Tasks `[ ]` sont fermées ou explicitement reportées, les
+    décisions `[?]` sont consignées, et `cargo test -p agent`,
+    `cargo clippy --all-targets -- -D warnings` et `cargo +nightly fmt --check` restent verts.
 
 Scenario: an unparseable template reports syntax and records nothing else
-  Given source `{{#if foo}}oops` (unclosed block) checked on any path
-  When @check_file runs
-  Then the only finding is `hbs/syntax` @Error `Syntax error: {e}` with @line @None
-  And no usage is recorded for keys/partials that text used — a `hbs/unused-option` for
-    them may later come from @finalize (frozen cascade)
-  Mapped test @hbs_syntax_error_detected asserts rule+level presence only, not the message
-    text or the usage-loss leg.
+  Given la source `{{#if foo}}oops` (bloc non fermé) vérifiée sur n'importe quel chemin
+  When @check_file tourne
+  Then le seul finding est `hbs/syntax` @Error `Syntax error: {e}` avec @line @None
+  And aucun usage n'est enregistré pour les clés/partials que ce texte utilisait — un
+    `hbs/unused-option` pour eux pourra plus tard venir de @finalize (cascade gelée)
+  Le test mappé @hbs_syntax_error_detected n'affirme que la présence règle+niveau, ni le texte du
+    message ni la jambe de perte d'usage.
 
 Scenario: helper recognition depends on the call shape
-  Given `{{base64_encode val}}` (native), `{{read_to_str "/some/file"}}` (native-cored
-    misc), `{{my_custom_helper val}}` with `my_custom_helper` in defined helpers, and
-    `{{unknown_helper_xyz val}}` (neither)
-  When each is compiled and walked
-  Then only the last produces `hbs/unknown-helper` @Error `Helper `unknown_helper_xyz` not found`
-  And per the grammar freeze `{{unknown_helper_xyz}}` with no argument, and any
-    `{{a.b c}}` dotted name, produce NO helper finding at all
-  Mapped tests @known_helper_no_finding, @read_to_str_helper_no_finding,
-    @defined_custom_helper_no_error, @unknown_helper_produces_error; the no-argument silent
-    arm has none (Tasks).
+  Given `{{base64_encode val}}` (natif), `{{read_to_str "/some/file"}}` (natif-cored
+    divers), `{{my_custom_helper val}}` avec `my_custom_helper` dans les helpers définis, et
+    `{{unknown_helper_xyz val}}` (ni l'un ni l'autre)
+  When chacun est compilé et parcouru
+  Then seul le dernier produit `hbs/unknown-helper` @Error `Helper `unknown_helper_xyz` not found`
+  And selon le gel de la grammaire, `{{unknown_helper_xyz}}` sans argument, et n'importe quel nom
+    pointé `{{a.b c}}`, ne produisent AUCUN finding de helper
+  Tests mappés @known_helper_no_finding, @read_to_str_helper_no_finding,
+    @defined_custom_helper_no_error, @unknown_helper_produces_error ; la branche silencieuse
+    sans argument n'en a aucun (Tasks).
 
 Scenario: partials unknown at check time, unused at finalize
-  Given defined partial `mypartial` / `unused_partial` and sources `{{> mypartial}}`,
+  Given les partials définis `mypartial` / `unused_partial` et les sources `{{> mypartial}}`,
     `{{foo}}`, `{{> nonexistent_partial}}`
-  Then `{{> mypartial}}` marks it used → no `hbs/unused-partial` at @finalize; `{{foo}}`
-    leaves `unused_partial` reported @Warn `Partial `unused_partial` defined but never used`
-    on virtual `handlebars/partials/unused_partial.hbs` line @None; and
-    `{{> nonexistent_partial}}` fires `hbs/unknown-partial` @Error while ALSO marking the
-    bogus name used
-  And a `{{> (sub) …}}` @Subexpression-name partial hits the early return (neither usage
-    nor finding); block partials `{{#> name}}` ARE checked in .hbs via the @PartialBlock
-    arm but missed by the `.rhai` scanner (frozen, early-return path untested)
-  Mapped tests @used_partial_no_warning, @unused_partial_produces_warning,
-    @unknown_partial_produces_error; virtual-path identity itself unasserted.
+  Then `{{> mypartial}}` le marque utilisé → pas de `hbs/unused-partial` à @finalize ; `{{foo}}`
+    laisse `unused_partial` rapporté @Warn `Partial `unused_partial` defined but never used`
+    sur le chemin virtuel `handlebars/partials/unused_partial.hbs`, ligne @None ; et
+    `{{> nonexistent_partial}}` déclenche `hbs/unknown-partial` @Error TOUT EN marquant le nom
+    bidon comme utilisé
+  And un partial à nom @Subexpression `{{> (sub) …}}` tombe sur le return précoce (ni usage ni
+    finding) ; les partials de bloc `{{#> name}}` SONT vérifiés dans .hbs via la branche
+    @PartialBlock mais manqués par le scanner `.rhai` (gelé, chemin return-précoce non testé)
+  Tests mappés @used_partial_no_warning, @unused_partial_produces_warning,
+    @unknown_partial_produces_error ; l'identité de chemin virtuel elle-même n'est pas assertie.
 
 Scenario: values keys answer only when the manifest declares options
-  Given pkg.options = {port, host}: `{{values.port}}` clean, `{{values.unknown_key}}`
-    fires `hbs/unknown-value` @Error `Unknown value key `unknown_key`` AND records the key
-      as used (so `hbs/unused-option` will not double-report it)
-  But Given options @None: `{{values.anything}}` is silent (runtime would fail under
-    strict mode — frozen false-negative), `{{values}}` alone records nothing either way
-  Mapped tests @known_value_key_no_finding, @unknown_value_key_produces_error,
-    @values_check_skipped_when_no_options; the hash-position blind spot
-    (`{{foo v=values.nope}}`) has none.
+  Given pkg.options = {port, host} : `{{values.port}}` propre, `{{values.unknown_key}}`
+    déclenche `hbs/unknown-value` @Error `Unknown value key `unknown_key`` ET enregistre la clé
+      comme utilisée (donc `hbs/unused-option` ne la re-rapportera pas en double)
+  But Given options @None : `{{values.anything}}` est silencieux (le runtime échouerait en mode
+    strict — faux négatif gelé), `{{values}}` seul n'enregistre rien non plus
+  Tests mappés @known_value_key_no_finding, @unknown_value_key_produces_error,
+    @values_check_skipped_when_no_options ; l'angle mort de position hash
+    (`{{foo v=values.nope}}`) n'en a aucun.
 
 Scenario: image and resource helper keys are literal-only
-  Given pkg.images = {app}: `{{image_from_ctx this "missing"}}` fires `hbs/unknown-image`
-    @Error `Unknown image key `missing`` while still marking `missing` used;
-    `{{image_from_ctx this name}}` (variable key) checks and records nothing;
-    a package without an `images:` section gives NO finding for the same call — at runtime
-    that render would fail instead
-  The resource twin behaves identically (`{{resources_from_ctx this "missing"}}` →
+  Given pkg.images = {app} : `{{image_from_ctx this "missing"}}` déclenche `hbs/unknown-image`
+    @Error `Unknown image key `missing`` tout en marquant `missing` utilisé ;
+    `{{image_from_ctx this name}}` (clé variable) ne vérifie et n'enregistre rien ;
+    un package sans section `images:` ne donne AUCUN finding pour le même appel — au runtime ce
+    rendu échouerait à la place
+  Le jumeau resource se comporte identiquement (`{{resources_from_ctx this "missing"}}` →
     `hbs/unknown-resource` @Error `Unknown resource key `missing``).
-  Mapped tests @unknown_image_key_produces_error, @unknown_resource_key_produces_error;
-    the None-gate, used-unknown recording and variable-key skip have none.
+  Tests mappés @unknown_image_key_produces_error, @unknown_resource_key_produces_error ;
+    la garde None, l'enregistrement inconnu-comme-utilisé et le saut de clé-variable n'en ont aucun.
 
 Scenario: root variable allowlist and the context-prefix ladder
-  Given `{{ins_bug_tance.appslug}}`: fires `hbs/unknown-root-variable` @Warn listing all
-    13 roots in declared order; `{{instance.appslug}}`, `{{this.appslug}}` and the
-    single-segment `{{appslug}}` fire nothing
-  And `{{context.tenant.name}}` fires `hbs/context-prefix` @Error
+  Given `{{ins_bug_tance.appslug}}` : déclenche `hbs/unknown-root-variable` @Warn listant les
+    13 racines dans l'ordre déclaré ; `{{instance.appslug}}`, `{{this.appslug}}` et le
+    segment unique `{{appslug}}` ne déclenchent rien
+  And `{{context.tenant.name}}` déclenche `hbs/context-prefix` @Error
     `Use `tenant` instead of `context.tenant`; the `context.` prefix is not valid in
-    templates` and suppresses the generic rule; `{{context.instance.appslug}}` similarly
-    names `instance`; `{{context.something_unknown.foo}}` flips to the generic @Warn
-    (second segment not a root)
-  But When config disables `hbs/context-prefix`, `{{context.tenant.x}}` is reported as
-    `hbs/unknown-root-variable` instead — the suppression lives in the @Some(level) arm
-  Mapped tests @unknown_root_variable_produces_warning, @known_root_variable_no_warning,
+    templates` et supprime la règle générique ; `{{context.instance.appslug}}` nomme pareil
+    `instance` ; `{{context.something_unknown.foo}}` bascule vers le @Warn générique
+    (deuxième segment non racine)
+  But When config désactive `hbs/context-prefix`, `{{context.tenant.x}}` est rapporté comme
+    `hbs/unknown-root-variable` à la place — la suppression vit dans la branche @Some(level)
+  Tests mappés @unknown_root_variable_produces_warning, @known_root_variable_no_warning,
     @this_root_not_flagged, @single_segment_path_not_flagged_as_unknown_root,
-    @context_tenant_prefix_produces_error (both arms of the suppression present-tense),
-    @context_instance_prefix_produces_error, @context_unknown_field_produces_generic_warning;
-    the message root-list text, the config-disabled flip and the block-param false
-    positive have none.
+    @context_tenant_prefix_produces_error (les deux branches de la suppression au présent),
+    @context_instance_prefix_produces_error, @context_unknown_field_produces_generic_warning ;
+    le texte de liste des racines du message, le basculement config-désactivée et le faux positif
+    de param de bloc n'en ont aucun.
 
 Scenario: tenant access is flagged only under System packages
-  Given @metadata.usage = @VynilPackageType::System and `{{tenant.name}}`
+  Given @metadata.usage = @VynilPackageType::System et `{{tenant.name}}`
   Then `hbs/wrong-package-type` @Warn "Accessing `tenant` in a System package is not allowed"
-  But a Tenant package (the options/images fixtures all use @Tenant) reports nothing for
-    the same template, and hashes/decorator params are never tested
-  Mapped test @tenant_access_in_system_package_warns; negatives none.
+  But un package Tenant (les fixtures options/images utilisent toutes @Tenant) ne rapporte rien
+    pour le même template, et les params hashes/decorator ne sont jamais testés
+  Le test mappé @tenant_access_in_system_package_warns ; de négatifs, aucun.
 
 Scenario: unused options fall quiet when any source uses them
-  Given options {port, host}: `{{values.port}}` alone → @finalize yields `hbs/unused-option`
-    @Warn `Option `host` defined but never used` on `package.yaml` at the locator's line;
-    Rhai `size: context.values.host,` added via @scan_rhai_for_values flips only `host`
-    clean, `port` still reports
-  Mapped tests @unused_option_produces_warning,
-    @rhai_context_values_usage_suppresses_unused_option_warning; the locator-@None-line and
-    directive lanes have none (also Tasks coverage).
+  Given options {port, host} : `{{values.port}}` seul → @finalize donne `hbs/unused-option`
+    @Warn `Option `host` defined but never used` sur `package.yaml` à la ligne du localisateur ;
+    le Rhai `size: context.values.host,` ajouté via @scan_rhai_for_values ne rend que `host`
+    propre, `port` se rapporte encore
+  Tests mappés @unused_option_produces_warning,
+    @rhai_context_values_usage_suppresses_unused_option_warning ; la ligne @None du localisateur et
+    la voie directive n'en ont aucune (couverture Tasks aussi).
 
 Scenario: object option leaf fields and prefix coverage
-  Given object option `database` with properties {host, port}: using
-    `{{values.database.host}}` reports only `Option `database.port` defined but never used`;
-    using the whole object `{{values.database}}` covers every leaf (ancestor prefix rule);
-    Rhai `let p = context.values.database.port;` covers just `database.port`
-  And leaves exist only under `properties` maps — a flat `default:`-shaped object option
-    is never field-checked (frozen drift, Tasks).
-  Mapped tests @unused_option_field_produces_warning,
+  Given l'option-objet `database` avec properties {host, port} : utiliser
+    `{{values.database.host}}` ne rapporte que `Option `database.port` defined but never used` ;
+    utiliser l'objet entier `{{values.database}}` couvre chaque feuille (règle du préfixe ancêtre) ;
+    le Rhai `let p = context.values.database.port;` ne couvre que `database.port`
+  And les feuilles n'existent que sous les cartes `properties` — une option-objet en forme
+    `default:` plate n'est jamais vérifiée aux champs (dérive gelée, Tasks).
+  Tests mappés @unused_option_field_produces_warning,
     @whole_object_used_suppresses_field_warnings,
     @rhai_access_suppresses_option_field_warning.
 
 Scenario: unused images and resources, package-side and Rhai-side usage
-  Given images/resources {app}: never-used → @Warn `Image `app` defined but never used` /
-    `Resource `app` defined but never used` on `package.yaml`;
-    `{{image_from_ctx this "app"}}` / `{{resources_from_ctx this "app"}}` usage clears
-    them; Rhai `context.images.app` clears the image, `context.instance.resources.app`
-    clears the resource
-  Mapped tests @unused_image_produces_warning, @used_image_no_warning,
+  Given images/resources {app} : jamais utilisés → @Warn `Image `app` defined but never used` /
+    `Resource `app` defined but never used` sur `package.yaml` ;
+    les usages `{{image_from_ctx this "app"}}` / `{{resources_from_ctx this "app"}}` les effacent ;
+    le Rhai `context.images.app` efface l'image, `context.instance.resources.app`
+    efface la resource
+  Tests mappés @unused_image_produces_warning, @used_image_no_warning,
     @rhai_context_images_suppresses_unused_image_warning, @unused_resource_produces_warning,
     @used_resource_no_warning, @rhai_context_resources_suppresses_unused_resource_warning,
-    @rhai_context_instance_resources_suppresses_unused_resource_warning — the last two are
-    IDENTICAL bodies (duplicate test, Tasks).
+    @rhai_context_instance_resources_suppresses_unused_resource_warning — les deux derniers sont
+    des CORPS IDENTIQUES (test dupliqué, Tasks).
 
 Scenario: finalize order and the virtual-vs-real file identities
-  Given a package run: helper/partial findings iterate @HashSet (order can vary across
-    runs), options/images/resource blocks iterate @BTreeMap; helpers report on virtual
-    `handlebars/helpers/{h}.rhai` paths, partials on `handlebars/partials/{p}.hbs`, the
-    four yaml-family rules on the literal relative `package.yaml` — all relative, so the
-    driver @prefix_files rebases them like real files
-  And @finalize is repeatable, mutating nothing
-  No mapped test exists.
+  Given un run de package : les findings helper/partial itèrent en @HashSet (l'ordre peut varier
+    entre runs), les blocs options/images/resource itèrent en @BTreeMap ; les helpers se
+    rapportent sur les chemins virtuels `handlebars/helpers/{h}.rhai`, les partials sur
+    `handlebars/partials/{p}.hbs`, les quatre règles famille yaml sur le `package.yaml` relatif
+    littéral — tous relatifs, donc le driver @prefix_files les rebase comme de vrais fichiers
+  And @finalize est répétable, ne muant rien
+  Aucun test mappé n'existe.
 
 Scenario: inline directives live only on package.yaml key lines
-  Given an `.hbs` file ending `{{unknown x}}{{!-- vynil-lint-disable hbs/unknown-helper --}}`
-    and a `package.yaml` line `host: …  # vynil-lint-disable hbs/unused-option`
-  When the driver checks the file and finalizes
-  Then the `.hbs` directive suppresses NOTHING (the walker only ever reads map key 0,
-    which @parse_inline_disables never emits — frozen wiring); the yaml directive DOES
-    silence `hbs/unused-option` for `host` (live lane), but only if the locator resolved
-    `host`'s line — an unlocatable key's finding is directive-inert
-  And every rule stays globally reconfigurable via `disable`/`override_`/`files` since all
-    15 call @resolve_level
-  No mapped test exists (Tasks).
+  Given un fichier `.hbs` finissant par `{{unknown x}}{{!-- vynil-lint-disable hbs/unknown-helper --}}`
+    et une ligne `package.yaml` `host: …  # vynil-lint-disable hbs/unused-option`
+  When le driver vérifie le fichier puis finalise
+  Then la directive `.hbs` ne supprime RIEN (le walker ne lit jamais que la clé 0 de la carte,
+    que @parse_inline_disables n'émet jamais — câblage gelé) ; la directive yaml SILENCE
+    bien `hbs/unused-option` pour `host` (voie vivante), mais seulement si le localisateur a
+    résolu la ligne de `host` — le finding d'une clé non localisable est inerte aux directives
+  And chaque règle reste globalement reconfigurable via `disable`/`override_`/`files` puisque les
+    15 appellent @resolve_level
+  Aucun test mappé n'existe (Tasks).

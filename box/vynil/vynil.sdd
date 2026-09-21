@@ -1,21 +1,21 @@
-# Directory spec for the shipped `vynil` system package box.
+# Spec de la box livrée du paquet système `vynil`.
 
 Spec: box/vynil
 
 Platform: Vynil package/Handlebars/Rhai
 
 Purpose:
-  The Vynil self-hosting package: a `system` package that installs and configures the Vynil
-  controller, its diagnostic server, RBAC, priority classes, and certificates into a cluster,
-  and is published as an OCI image consumed through a `@JukeBox` source.
+  Le paquet d'auto-hébergement Vynil : un paquet `system` qui installe et configure le
+  contrôleur Vynil, son serveur de diagnostic, RBAC, classes de priorité, certificats dans un
+  cluster, et se publie en image OCI consommée via source `@JukeBox`.
 
 Structure:
-  ./package.yaml: Package manifest — name, type `system`, category `core`, images, resources,
-    requirements, recommendations, and options
-  ./systems/*.yaml.hbs: Rendered Kubernetes manifests (controller, service, rbac, diagnostics,
-    certificates, priority classes)
-  ./crds/crd.yaml: CRD bundle shipped by this package, generated from the Rust CRD types
-  ./tests/: Vynil package test manifests run by `agent package test`
+  ./package.yaml: Manifeste du paquet — nom, type `system`, catégorie `core`, images, ressources,
+    requirements, recommendations et options
+  ./systems/*.yaml.hbs: Manifestes Kubernetes rendus (controller, service, rbac, diagnostics,
+    certificats, priorités)
+  ./crds/crd.yaml: Lot CRD livré par ce paquet, généré depuis les types CRD Rust
+  ./tests/: Manifestes test du paquet Vynil exécutés par `agent package test`
 
 Owns:
   ./package.yaml
@@ -24,17 +24,17 @@ Owns:
   ./tests/**
 
 Must:
-  Keep the `app_version` and the three `images` tags consistent with the workspace version in
-    /Cargo.toml and the published agent, operator, and server images.
-  Declare the monitoring and cert-manager CRD recommendations, since the diagnostics depend on
-    them.
-  Generate ./crds/crd.yaml from the Rust CRD types through `cargo cmd generate_crd`, never by hand.
-  Render every manifest with the Vynil Handlebars context helpers, using `instance.appslug` for
-    resource naming.
+  Garder `app_version` et les trois tags `images` cohérents avec la version du workspace dans
+    /Cargo.toml et les images publiées agent, operator, server.
+  Déclarer les recommendations CRD de monitoring et cert-manager, les diagnostics en
+    dépendent.
+  Générer ./crds/crd.yaml depuis les types CRD Rust via `cargo cmd generate_crd`, jamais à la main.
+  Rendre chaque manifeste avec helpers de contexte Handlebars Vynil, `instance.appslug` pour
+    nommage des ressources.
 
 Must not:
-  Hand-edit ./crds/crd.yaml, or let it drift from the Rust types that generate it.
-  Grant cluster-admin to the diagnostic server beyond what tenant-scoped read access requires.
+  Éditer ./crds/crd.yaml à la main, ou laisser diverger des types Rust qui le génèrent.
+  Accorder cluster-admin au serveur de diagnostic au-delà du strict nécessaire en lecture tenant.
 
 Depends on:
   /agent/Dockerfile.sdd
@@ -42,9 +42,9 @@ Depends on:
   /server/Dockerfile.sdd
 
 Done when:
-  `agent package build` produces an installable image, `agent package test ./box/vynil` is green,
-    and the CRD bundle matches the Rust types.
+  `agent package build` produit une image installable, `agent package test ./box/vynil` est vert,
+    et le lot CRD correspond aux types Rust.
 
 Tasks:
-  [ ] #0 Confirm ./tests/ manifests cover install, upgrade, and uninstall for the core and
-    monitoring variants.
+  [ ] #0 Confirmer ./tests/ couvre install, upgrade, uninstall pour les variantes core et
+    monitoring.

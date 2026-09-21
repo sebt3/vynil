@@ -1,295 +1,327 @@
 Spec: Completion
 
 Purpose:
-  Serve the plugin's dynamic shell completion. @run speaks the Cobra `__complete` protocol:
-  it takes the words typed after the intercepted `__complete` token, classifies them into a
-  completion slot (kind, instance name, verb, verb flag, global-flag value, or none), answers
-  static slots from the ./cli.rs clap tree (subcommands, visible aliases, verbs, long flags),
-  answers the name slot live from the cluster (kube `list` behind @tokio::time::timeout,
-  built over @crate::transport::make_client), and prints tab-separated candidate lines plus a
-  fixed `:4` directive. @emit_script answers `completion <shell>` by printing the embedded,
-  cobra-derived bash/zsh loader that feeds this same protocol back to the binary.
+  Sert la complétion shell dynamique du plugin. @run parle le protocole Cobra `__complete` :
+  il prend les mots tapés après le token `__complete` intercepté, les classe dans un slot de
+  complétion (kind, nom d'instance, verbe, flag de verbe, valeur de flag global, ou aucun),
+  répond les slots statiques depuis l'arbre clap de ./cli.rs (sous-commandes, alias visibles,
+  verbes, flags longs), répond le slot nom en direct depuis le cluster (`list` kube derrière
+  @tokio::time::timeout, construit sur @crate::transport::make_client), et affiche des lignes
+  de candidats séparées par tabulation plus une directive fixe `:4`. @emit_script répond à
+  `completion <shell>` en affichant le chargeur bash/zsh embarqué, dérivé de cobra, qui
+  renvoie ce même protocole au binaire.
 
 Owns:
   ./completion.rs
 
 References:
-  ./cli.sdd — the command tree all static candidates are read from via @clap::CommandFactory:
-    visible-only subcommands/aliases are why the hidden kind plurals, `state`-era verbs and
-    auto clap surfaces never appear; that spec's `[?]` owns whether the hidden-plural-never-
-    completed asymmetry is intended — and the `__complete` token itself is outside the clap
-    grammar, intercepted as exactly argv[1] in ./main.rs before @Cli::parse.
-  ./transport.sdd — @make_client: the same kubeconfig-context client loader the read verbs
-    use, completion as its second caller; that spec's cross-reference note — completion's
-    own @tokio::time::timeout wrapper around @make_client — is exercised here.
-  ./main.rs — spec-pending dispatcher: exact-argv[1] `__complete` intercept hands the whole
-    remaining argv tail to @run and exits `Ok(())`, and the parsed `completion` verb routes
-    the @CompletionShell to @emit_script; exit codes are that file's, always `0` on arrival
-    here.
-  ../completions/bash.sh, ../completions/zsh.sh — the scripts @emit_script embeds verbatim;
-    owned by /kubectl-vynil/kubectl-vynil.sdd. Their request build-up (space-joined words,
-    extra trailing `""` on a completed last word) and trailing-`:` directive parse are the
-    shell-side counterpart this file's output format must round-trip with.
-  /kubectl-vynil/kubectl_complete-vynil — the owned-by-parent kubectl plugin shim that
-    delegates `kubectl completion vynil` to `kubectl-vynil __complete "$@"`.
-  ./actions.rs — @vynil_api_resource (spec-pending) mints the name-listing @ApiResource:
-    group `vynil.solidite.fr`, version `v1` — the CRD group, not the `admin.vynil.solidite.fr`
-    diagnostic group ./items.sdd builds.
-
+  ./cli.sdd — l'arborescence de commandes dont tous les candidats statiques sont lus via
+    @clap::CommandFactory : ne retenir que les sous-commandes/alias visibles est pourquoi les
+    pluriels de kind cachés, les verbes de l'ère `state` et les surfaces clap automatiques
+    n'apparaissent jamais ; le `[?]` de cette spec porte la décision de savoir si l'asymétrie
+    « pluriel caché jamais complété » est voulue — et le token `__complete` lui-même est hors
+    de la grammaire clap, intercepté comme exactement argv[1] dans ./main.rs avant
+    @Cli::parse.
+  ./transport.sdd — @make_client : le même chargeur de client kubeconfig-context que celui
+    des verbes de lecture, la complétion comme son second appelant ; la note de référence
+    croisée de cette spec — le propre wrapper @tokio::time::timeout de la complétion autour
+    de @make_client — est exercée ici.
+  ./main.rs — dispatcher en attente de spec : l'interception de `__complete` sur argv[1]
+    exact remet toute la queue argv restante à @run et sort `Ok(())`, et le verbe
+    `completion` parsé route le @CompletionShell vers @emit_script ; les codes de sortie
+    sont ceux de ce fichier, toujours `0` à l'arrivée ici.
+  ../completions/bash.sh, ../completions/zsh.sh — les scripts que @emit_script embarque
+    verbatim ; propriété de /kubectl-vynil/kubectl-vynil.sdd. Leur construction de requête
+    (mots joints par des espaces, `""` de plus en fin sur un dernier mot complété) et le
+    parse de la directive finale en `:` sont la contrepartie côté shell avec laquelle le
+    format de sortie de ce fichier doit faire l'aller-retour.
+  /kubectl-vynil/kubectl_complete-vynil — le shim de plugin kubectl propriété du parent qui
+    délègue `kubectl completion vynil` à `kubectl-vynil __complete "$@"`.
+  ./actions.rs — @vynil_api_resource (en attente de spec) fabrique l'@ApiResource du listing
+    de noms : group `vynil.solidite.fr`, version `v1` — le groupe CRD, pas le groupe de
+    diagnostic `admin.vynil.solidite.fr` que ./items.sdd construit.
 Must:
-  @run treats the input word list as: last word = the word being completed (@to_complete,
-    `""` when the cursor sits on a fresh word), all previous words = already typed. An empty
-    list (just `__complete`) behaves exactly like one empty word: kind slot, empty prefix.
-  Typed-word digestion: `-n`/`--namespace` followed by a word consumes that word as `ns` and
-    `--context` followed by a word consumes it as `context` — neither the flag nor its value
-    ever counts as a positional; `--namespace=v` and `--context=v` inline forms count the
-    same; a repeated flag overwrites (`ns` and `context` are last-wins). Every other
-    hyphen-leading word (unknown flags, and even the `--` terminator) is skipped without
-    consuming its successor — so a space-separated flag value does count as a positional and
-    shifts position counts (a polluted line can only reach the empty-answer slots).
-  A bare `-n`/`--context` immediately before @to_complete (flag typed, value untyped) forces
-    the @Slot::GlobalFlagValue answer regardless of what kind/verb words precede it.
-  Slot selection after digestion, on @to_complete first (probe-frozen): @to_complete leading
-    `-` selects @Slot::VerbFlag(kind, verb) — kind = positionals[0] only if it parses as a
-    kind, verb = positionals[2] and at least three positionals — else @Slot::Kind, which with
-    a `-` prefix answers the global flags instead; otherwise the positional count picks: `0`
-    kinds, `1` names (unparseable kind → @None), `2` verbs (same fallback), `>=3` none.
-  Kind parsing is @KindId::parse — `jukebox`|`box`, `vti`|`tenantinstance`|`tenantinstances`,
+  @run traite la liste de mots d'entrée ainsi : dernier mot = le mot en cours de complétion
+    (@to_complete, `""` quand le curseur est sur un mot frais), tous les mots précédents =
+    déjà tapés. Une liste vide (juste `__complete`) se comporte exactement comme un mot
+    vide : slot kind, préfixe vide.
+  Digestion des mots tapés : `-n`/`--namespace` suivi d'un mot consomme ce mot comme `ns` et
+    `--context` suivi d'un mot le consomme comme `context` — ni le flag ni sa valeur ne
+    comptent jamais comme positionnel ; les formes inline `--namespace=v` et `--context=v`
+    comptent pareil ; un flag répété écrase (`ns` et `context` sont last-wins). Tout autre
+    mot commençant par un tiret (flags inconnus, et même le terminateur `--`) est sauté sans
+    consommer son successeur — donc une valeur de flag séparée par espace compte comme
+    positionnel et décale les compteurs de position (une ligne polluée ne peut atteindre que
+    les slots à réponse vide).
+  Un `-n`/`--context` nu juste avant @to_complete (flag tapé, valeur non tapée) force la
+    réponse @Slot::GlobalFlagValue quel que soit le kind/verbe tapé avant.
+  Sélection du slot après digestion, sur @to_complete d'abord (figée par la sonde) : le `-`
+    initial de @to_complete sélectionne @Slot::VerbFlag(kind, verb) — kind = positionals[0]
+    seulement s'il se parse comme un kind, verb = positionals[2] et au moins trois
+    positionnels — sinon @Slot::Kind, qui avec un préfixe `-` répond les flags globaux à la
+    place ; sinon le compteur de positionnels choisit : `0` les kinds, `1` les noms (kind
+    inparsable → @None), `2` les verbes (même repli), `>=3` aucun.
+  Le parse de kind est @KindId::parse — `jukebox`|`box`, `vti`|`tenantinstance`|`tenantinstances`,
     `vsvc`|`serviceinstance`|`serviceinstances`, `vsi`|`systeminstance`|`systeminstances`,
-    case-sensitive, no `jukeboxes` — so a hidden plural typed verbatim does complete names
-    and verbs even though it is never offered as itself (see the ./cli.sdd `[?]`).
-  Static kind candidates, exact order: `jukebox`, `box`, `vti`, `tenantinstance`, `vsvc`,
-    `serviceinstance`, `vsi`, `systeminstance`, `completion` — clap declaration order, each
-    kind immediately followed by its visible aliases, hidden subcommands/aliases and the
-    auto clap `help`/version surfaces absent (the command is read unbuilt, so only declared
-    args and subcommands exist); each alias row repeats its kind's description. `completion`
-    completes no layer of its own: the shell words after it are unclassified (@None).
-  Static verb candidates: instance kinds answer `upgrade`, `scan`, `diagnostic`, `children`,
-    `agentlog`, `childlogs`, `operatorlog` in declaration order; `jukebox` answers `scan` —
-    hidden-filtered, name-only (the grammar has no verb aliases).
-  Static flag candidates are long-form only (`--{long}`, shorts never offered — no `-n` row,
-    no `-w` row): verb-flag answers list that verb's own declared args in field order and
-    exactly those — `upgrade`: `--watch`, `--vynil-namespace`, `--timeout`; `scan` (both):
-    `--vynil-namespace`, `--timeout`; `diagnostic`: `--items`, `--output`, `--server-url`,
-    `--token`, `--insecure`; `children`/`agentlog`/`childlogs`/`operatorlog`: `--server-url`,
-    `--token`, `--insecure`; a verb word absent from the tree answers empty. Because the
-    command tree is read unbuilt, these lists never gain the auto `--help`, nor the
-    propagated global flags. Global-flag answers are `--context` then `--namespace` (root
-    declaration order), offered for hyphen-@to_complete in every shape the VerbFlag rule
-    misses — also after an unknown or absent kind.
-  Descriptions are @one_line: clap's about/help text flattened, first line only, tabs folded
-    to spaces, trimmed, empty → no description; backticks in doc text are kept verbatim and
-    the trailing `.` loss is clap's own doc parsing, not this file's.
-  @render emits, to stdout, one line per candidate surviving the prefix filter as
-    `value[\tdescription]` (description appended only when @Some and non-empty), then the
-    final directive line `:4` — the @NO_FILE_COMP bit and the only directive ever sent, in
-    every outcome including total cluster failure; the Error bit `1`, `NoSpace`, `KeepOrder`
-    or file-extension filters never appear.
-  The prefix filter is byte-wise @str::starts_with of @to_complete — case-sensitive, applied
-    uniformly to static and live lists, never normalized, never substring/fuzzy; survivors
-    keep their source order with no sorting and no dedup (kind/alias rows can duplicate
-    text) — and an empty result still prints `:4` alone.
-  Only the name slot touches the cluster. @list_names first pins @crate::transport::make_client
-    (context) under @CLUSTER_TIMEOUT `1s` — timeout or @Err (e.g. unknown context) answers
-    the empty list immediately, no second attempt, nothing printed on stderr (the file is
-    the silent lane, unlike ./transport.rs warnings).
-  The listing namespace is the explicit `-n` value verbatim (never validated) when present,
-    otherwise @namespace_of_context: with @Some(context) @Config::from_kubeconfig for that
-    context, with @None @Config::infer, taking @default_namespace; any failure answers
-    `"default"`. That kubeconfig read is deliberately outside the 1s clocks. The namespace
-    applies to the three namespaced instance kinds only; `jukebox` lists through
-    @Api::all_with with the computed namespace discarded.
-  The name query is one `list` call — @ListParams::default().limit(500), a single page, no
-    continuation, so beyond 500 objects the list is silently truncated — under its own second
-    `1s` @CLUSTER_TIMEOUT; error or timeout answers the empty list. Names come from
-    @ResourceExt::name_any with no description, in whatever order the apiserver returned —
-    this file never sorts, dedups, or filters beyond the prefix — worst-case latency is
-    ~2×1s plus the unbudgeted namespace read.
-  @emit_script writes the embedded script bytes to stdout verbatim, no templating and no
-    clap generator: `bash` → `include_str!("../completions/bash.sh")`, `zsh` → its `zsh.sh`
-    sibling; the scripts are hand-adapted cobra V2 templates that attach completion to the
-    bare `kubectl-vynil` token (direct invocation — the `kubectl vynil <TAB>` path rides the
-    `kubectl_complete-vynil` shim instead) and re-invoke this binary through the very
-    `__complete` contract rendered here.
+    sensible à la casse, sans `jukeboxes` — donc un pluriel caché tapé verbatim complète bien
+    noms et verbes même s'il n'est jamais proposé lui-même (voir le `[?]` de ./cli.sdd).
+  Candidats kind statiques, ordre exact : `jukebox`, `box`, `vti`, `tenantinstance`, `vsvc`,
+    `serviceinstance`, `vsi`, `systeminstance`, `completion` — ordre de déclaration clap,
+    chaque kind immédiatement suivi de ses alias visibles, sous-commandes/alias cachés et
+    surfaces `help`/version automatiques de clap absents (la commande est lue non construite,
+    donc seuls les args et sous-commandes déclarés existent) ; chaque ligne d'alias répète la
+    description de son kind. `completion` ne complète aucune couche pour lui-même : les mots
+    de shell après lui sont non classés (@None).
+  Candidats verbe statiques : les kinds d'instance répondent `upgrade`, `scan`, `diagnostic`,
+    `children`, `agentlog`, `childlogs`, `operatorlog` dans l'ordre de déclaration ; `jukebox`
+    répond `scan` — filtré des cachés, noms seuls (la grammaire n'a pas d'alias de verbe).
+  Candidats flag statiques en forme longue seulement (`--{long}`, les courts jamais proposés —
+    pas de ligne `-n`, pas de ligne `-w`) : les réponses verbe-flag listent les args déclarés
+    du verbe dans l'ordre des champs, et exactement ceux-là — `upgrade` : `--watch`,
+    `--vynil-namespace`, `--timeout` ; `scan` (les deux) : `--vynil-namespace`, `--timeout` ;
+    `diagnostic` : `--items`, `--output`, `--server-url`, `--token`, `--insecure` ;
+    `children`/`agentlog`/`childlogs`/`operatorlog` : `--server-url`, `--token`, `--insecure` ;
+    un mot de verbe absent de l'arbre répond vide. Comme l'arbre de commandes est lu non
+    construit, ces listes ne gagnent jamais le `--help` automatique, ni les flags globaux
+    propagés. Les réponses global-flag sont `--context` puis
+    `--namespace` (ordre de déclaration racine), proposées pour tout hyphen-@to_complete dans
+    toutes les formes que la règle VerbFlag manque — y compris après un kind inconnu ou
+    absent.
+  Les descriptions passent par @one_line : le texte about/help de clap aplati, première ligne
+    seulement, tabulations repliées en espaces, tronqué, vide → pas de description ; les
+    backticks du texte doc sont gardés verbatim et la perte du `.` final relève du parse de
+    doc de clap, pas de ce fichier.
+  @render émet, sur stdout, une ligne par candidat survivant au filtre de préfixe sous forme
+    `value[\tdescription]` (description ajoutée seulement si @Some et non vide), puis la
+    ligne de directive finale `:4` — le bit @NO_FILE_COMP et la seule directive jamais
+    envoyée, dans tous les résultats y compris la panne cluster totale ; le bit Error `1`,
+    `NoSpace`, `KeepOrder` ou les filtres d'extension de fichier n'apparaissent jamais.
+  Le filtre de préfixe est un @str::starts_with octet par octet de @to_complete — sensible à
+    la casse, appliqué uniformément aux listes statiques et live, jamais normalisé, jamais
+    substring/fuzzy ; les survivants gardent leur ordre source, sans tri ni dédup (les
+    lignes kind/alias peuvent dupliquer du texte) — et un résultat vide affiche quand même
+    `:4` seul.
+  Seul le slot nom touche le cluster. @list_names épingle d'abord
+    @crate::transport::make_client (context) sous @CLUSTER_TIMEOUT `1s` — timeout ou @Err
+    (p. ex. context inconnu) répondent la liste vide immédiatement, sans seconde tentative,
+    rien sur stderr (le fichier est la voie silencieuse, contrairement aux warnings de
+    ./transport.rs).
+  Le namespace du listing est la valeur `-n` explicite verbatim (jamais validée) si présente,
+    sinon @namespace_of_context : avec @Some(context) @Config::from_kubeconfig pour ce
+    context, avec @None @Config::infer, en prenant @default_namespace ; tout échec répond
+    `"default"`. Cette lecture kubeconfig est délibérément hors des horloges de 1s. Le
+    namespace s'applique aux trois kinds d'instance namespacés seulement ; `jukebox` liste
+    via @Api::all_with avec le namespace calculé jeté.
+  La requête de noms est un seul appel `list` — @ListParams::default().limit(500), une seule
+    page, sans continuation, donc au-delà de 500 objets la liste est silencieusement
+    tronquée — sous son propre second @CLUSTER_TIMEOUT `1s` ; erreur ou timeout répondent la
+    liste vide. Les noms viennent de @ResourceExt::name_any sans description, dans l'ordre
+    qu'a renvoyé l'apiserver — ce fichier ne trie, déduplique ou filtre jamais au-delà du
+    préfixe — la latence pire cas fait ~2×1s plus la lecture de namespace non budgétée.
+  @emit_script écrit les octets du script embarqué sur stdout verbatim, sans templating ni
+    générateur clap : `bash` → `include_str!("../completions/bash.sh")`, `zsh` → son voisin
+    `zsh.sh` ; les scripts sont des templates cobra V2 adaptés à la main qui branchent la
+    complétion sur le token nu `kubectl-vynil` (invocation directe — le chemin `kubectl
+    vynil <TAB>` emprunte le shim `kubectl_complete-vynil` à la place) et ré-invoquent ce
+    binaire par le tout contrat `__complete` rendu ici.
 
 Must not:
-  Emit anything to stderr, exit nonzero, or return a Rust error value from @run/@emit_script:
-    every kubeconfig, timeout, transport and API failure folds into the empty candidate list
-    (with `:4` still printed), so a down cluster is observably identical to "no matches".
-  Read the words through clap: @run parses argv-shaped text by hand, so no clap error,
-    exit-`2` usage surface or global-flag ArgumentConflict can fire on the completion path.
+  Émettre quoi que ce soit sur stderr, sortir non nul, ou renvoyer une erreur Rust depuis
+    @run/@emit_script : tout échec kubeconfig, timeout, transport et API se replie sur la
+    liste de candidats vide (avec `:4` toujours affiché), donc un cluster en panne est
+    observalement identique à « aucun résultat ».
+  Lire les mots à travers clap : @run parse le texte en forme d'argv à la main, donc aucune
+    erreur clap, aucune surface d'usage en exit-`2` ni ArgumentConflict de flag global ne
+    peut se déclencher sur le chemin de complétion.
 
 Depends on:
-  @crate::cli — @Cli::command() as the single static candidate source, @CompletionShell for
-    @emit_script dispatch, and @TENANT_INSTANCE/@SERVICE_INSTANCE/@SYSTEM_INSTANCE `kind`/
-    `plural` (plus literal `JukeBox`/`jukeboxes`) feeding @KindId's API coordinates.
-  @crate::transport::make_client (./transport.sdd) and @crate::actions::vynil_api_resource
-    (./actions.rs, spec-pending) — the client builder and @ApiResource pair for the list.
+  @crate::cli — @Cli::command() comme source unique de candidats statiques, @CompletionShell
+    pour le dispatch de @emit_script, et @TENANT_INSTANCE/@SERVICE_INSTANCE/@SYSTEM_INSTANCE
+    `kind`/`plural` (plus les littéraux `JukeBox`/`jukeboxes`) alimentant les coordonnées API
+    de @KindId.
+  @crate::transport::make_client (./transport.sdd) et @crate::actions::vynil_api_resource
+    (./actions.rs, en attente de spec) — le constructeur de client et le duo @ApiResource
+    pour le listing.
   kube `3.1.0` — @Api (@namespaced_with, @all_with, @list), @DynamicObject, @ListParams,
-    @ResourceExt::name_any, @Config::infer/@from_kubeconfig — default namespace semantics
-    included.
+    @ResourceExt::name_any, @Config::infer/@from_kubeconfig — sémantique du namespace par
+    défaut incluse.
   @tokio::time::timeout, @clap::CommandFactory/@clap::builder::StyledStr, @std::fmt::Write.
 
 Exposes:
-  @run — `pub async fn(words: Vec<@String>)`; sole @__complete handler, infallible.
-  @emit_script — `pub fn(shell: crate::cli::CompletionShell)`; prints the embedded script.
+  @run — `pub async fn(words: Vec<@String>)` ; seul handler @__complete, infaillible.
+  @emit_script — `pub fn(shell: crate::cli::CompletionShell)` ; affiche le script embarqué.
   @Candidate — `pub @Debug @PartialEq @Eq struct { value: @String, description: @Option<@String> }`.
-  Private and observable only through @run/@stdout (or in-file tests): @classify →
+  Privé, observable seulement via @run/@stdout (ou les tests du fichier) : @classify →
     @Parsed{@Slot, to_complete, ns, context}, @Slot{@Slot::Kind, @Slot::Name, @Slot::Verb,
     @Slot::VerbFlag, @Slot::GlobalFlagValue, @Slot::None}, @KindId, @one_line,
     @kind_candidates, @verb_candidates, @global_flag_candidates, @verb_flag_candidates,
     @namespace_of_context, @list_names, @render, @emit.
 
 Accepts:
-  @run: the raw post-`__complete` argv tail, any words, never validated — zero words, empty
-    last word (the caller scripts always send the trailing `""` on a completed word), `-`
-    prefixes, `=` forms, unknown flags, junk kinds/verbs all accepted (classified, never
-    rejected).
-  @emit_script: @CompletionShell::Bash or @CompletionShell::Zsh (clap has already restricted
-    the value; the match is exhaustive).
+  @run : la queue argv brute après `__complete`, n'importe quels mots, jamais validée — zéro
+    mot, dernier mot vide (les scripts appelants envoient toujours le `""` final sur un mot
+    complété), préfixes `-`, formes `=`, flags inconnus, kinds/verbes parasites, tout est
+    accepté (classé, jamais rejeté).
+  @emit_script : @CompletionShell::Bash ou @CompletionShell::Zsh (clap a déjà restreint la
+    valeur ; le match est exhaustif).
 
 Returns:
-  @run: unit result; stdout = candidate lines + directive line `:4` terminated with `\n`, exit `0` via ./main.rs. Live name
-    lists carry descriptionless names, `vynil.solidite.fr/v1` objects of the pinned kind.
-  @emit_script: unit result; stdout = the whole script file bytes.
+  @run : résultat unitaire ; stdout = lignes de candidats + ligne de directive `:4` terminée
+    par `\n`, sortie `0` via ./main.rs. Les listes de noms live portent des noms sans
+    description, objets `vynil.solidite.fr/v1` du kind épinglé.
+  @emit_script : résultat unitaire ; stdout = la totalité des octets du fichier de script.
 
 Handles:
-  Unknown kind, unknown verb, ≥3 positionals, flag-value positions and namespace values —
-    all the empty-candidate answers, each still printing `:4`.
-  Floating/mid-line `--namespace=`/`--context=` and space forms, and their last-wins repeat.
-  `--context` with an unreachable/unknown context — fails at kube load, well inside the
-    1s clock, as an empty list.
-  Jukebox names as cluster-scoped listings (name slot with no namespace filter).
-  Mid-flag completion via hyphen-prefix words and bash `--flag=` splitting handled caller-
-    side: the binary only ever sees the already-stripped word.
+  Kind inconnu, verbe inconnu, ≥3 positionnels, positions de valeur de flag et valeurs de
+    namespace — toutes les réponses à candidats vides, chacune affichant quand même `:4`.
+  `--namespace=`/`--context=` flottants ou en milieu de ligne, et leurs formes espacées,
+    avec leur répétition last-wins.
+  `--context` avec un context injoignable ou inconnu — échoue au chargement kube, largement
+    dans l'horloge de 1s, sous forme de liste vide.
+  Noms jukebox en listings cluster-scoped (slot nom sans filtre de namespace).
+  Complétion en milieu de flag via les mots à préfixe tiret et le découpage bash `--flag=`
+    traité côté appelant : le binaire ne voit jamais que le mot déjà dépouillé.
 
 Tasks:
-  [x] Cover classify, static candidate membership, render format, list_names fallback and
-      script embedding — mapped in-file tests @classify_empty_completion,
-      @classify_partial_kind, @classify_kind_then_name, @classify_kind_alias_then_name,
-      @classify_kind_name_then_verb, @classify_kind_name_partial_verb,
-      @classify_verb_with_flag, @classify_global_flag_before_kind,
-      @classify_verb_with_global_flag_bare, @classify_jukebox_then_name,
-      @classify_unknown_kind, @classify_global_flag_bare, @classify_namespace_short_flag,
-      @classify_namespace_long_flag, @classify_namespace_long_flag_equals,
-      @classify_context_long_flag, @classify_context_long_flag_equals,
-      @kind_candidates_contains_vti, @kind_candidates_contains_jukebox,
-      @kind_candidates_contains_vsvc, @kind_candidates_contains_vsi,
-      @kind_candidates_excludes_hidden_complete, @verb_candidates_for_vti,
-      @verb_candidates_for_jukebox, @render_with_two_candidates_one_described,
-      @render_empty_candidates, @render_filters_by_to_complete,
-      @list_names_bad_context_returns_empty, @emit_script_bash_is_not_empty,
-      @emit_script_zsh_is_not_empty.
-  [ ] Cover candidate order — kind/alias adjacency order, instance-verb order (today only
-      membership+count on @verb_candidates_for_vti), flag-list orders and `--context`-before-
-      `--namespace`; no test asserts any order except the one-verb jukebox list.
-  [ ] Cover @global_flag_candidates and @verb_flag_candidates contents per kind — zero tests;
-      also absence of propagated globals/auto-help rows and `-n`-style shorts.
-  [ ] Cover hidden plurals absent from kind candidates (typed-accepted but never offered) —
-      @kind_candidates_excludes_hidden_complete only proves `__complete` is absent.
-  [ ] Cover @run/@emit end-to-end stdout bytes (trailing `:4`, tabs, empty-list shape) and
-      @emit_script stdout capture — tests assert the render/@include_str! text, not the
-      functions' output.
-  [ ] Cover @namespace_of_context (explicit win, context default, `"default"` fallback) and
-      the live-list happy path incl. jukebox all-namespaces — cluster-dependent, no fake-
-      apiserver harness in /kubectl-vynil/Cargo.toml `dev-dependencies` (also reported by
-      ./transport.sdd).
-  [ ] Cover the positional-pollution lane (space-separated unknown-flag value shifting slots
-      to @None) and the `--` terminator skip — untested, probe-observed.
-  [ ] Cover case-sensitive prefix miss and the ≥3-positionals @None leg — @classify tests
-      stop at `2` positionals.
-  [?] `completion` is offered as a kind candidate but its shell positional never completes
-      (`bash`/`zsh` values are dead): keep offering it, hide it, or complete the shells?
-      Decide later.
-  [?] The directive is hard-coded `:4`; a down cluster yields the same wire bytes as "no
-      matches" — Cobra's Error bit `1` is the convention this file never uses. Decide later
-      whether failures should report or stay silent UX.
-  [?] No @shellCompDirectiveKeepOrder (`32`): declaration-order and alias-adjacency output is
-      at the shells' sort mercy. Decide whether keep-order should be sent.
-  [?] A space-separated value of any non-global flag (`--server-url http://x vti <TAB>`)
-      poisons the positional count and silence-kills completion; `--terminator` included.
-      Decide whether classify should skip known-flag values or generalize.
-  [?] `limit(500)` single page truncates large namespaces silently; decide pagination vs cap
-      raise vs accepting truncation.
-  [?] Hidden plurals (typed `tenantinstances <TAB>`) do complete live names while never being
-      offered — mirror of the ./cli.sdd `[?]`; decide both sides together.
+  [x] Couvrir classify, l'appartenance des candidats statiques, le format de render, le repli
+      de list_names et l'embarquement des scripts — tests du fichier mappés
+      @classify_empty_completion, @classify_partial_kind, @classify_kind_then_name,
+      @classify_kind_alias_then_name, @classify_kind_name_then_verb,
+      @classify_kind_name_partial_verb, @classify_verb_with_flag,
+      @classify_global_flag_before_kind, @classify_verb_with_global_flag_bare,
+      @classify_jukebox_then_name, @classify_unknown_kind, @classify_global_flag_bare,
+      @classify_namespace_short_flag, @classify_namespace_long_flag,
+      @classify_namespace_long_flag_equals, @classify_context_long_flag,
+      @classify_context_long_flag_equals, @kind_candidates_contains_vti,
+      @kind_candidates_contains_jukebox, @kind_candidates_contains_vsvc,
+      @kind_candidates_contains_vsi, @kind_candidates_excludes_hidden_complete,
+      @verb_candidates_for_vti, @verb_candidates_for_jukebox,
+      @render_with_two_candidates_one_described, @render_empty_candidates,
+      @render_filters_by_to_complete, @list_names_bad_context_returns_empty,
+      @emit_script_bash_is_not_empty, @emit_script_zsh_is_not_empty.
+  [ ] Couvrir l'ordre des candidats — ordre d'adjacence kind/alias, ordre des verbes
+      d'instance (aujourd'hui seulement appartenance+comptage sur @verb_candidates_for_vti),
+      ordres des listes de flags et `--context`-avant-`--namespace` ; aucun test
+      n'assertit d'ordre sauf la liste jukebox à un verbe.
+  [ ] Couvrir les contenus de @global_flag_candidates et @verb_flag_candidates par kind —
+      zéro test ; aussi l'absence des lignes globals propagés/auto-help et des courts type
+      `-n`.
+  [ ] Couvrir les pluriels cachés absents des candidats kind (acceptés quand tapés mais
+      jamais proposés) — @kind_candidates_excludes_hidden_complete ne prouve que l'absence
+      de `__complete`.
+  [ ] Couvrir les octets stdout bout en bout de @run/@emit (`:4` final, tabulations, forme
+      de liste vide) et la capture stdout de @emit_script — les tests assertissent le texte
+      render/@include_str!, pas la sortie des fonctions.
+  [ ] Couvrir @namespace_of_context (gain explicite, défaut du context, repli `"default"`)
+      et le chemin heureux du listing live incl. jukebox tous-les-namespaces — dépend du
+      cluster, pas de harnais faux-apiserver dans les `dev-dependencies` de
+      /kubectl-vynil/Cargo.toml (aussi rapporté par ./transport.sdd).
+  [ ] Couvrir la voie de pollution positionnelle (valeur de flag inconnu séparée par espace
+      qui décale les slots vers @None) et le saut du terminateur `--` — non testé, observé
+      par sonde.
+  [ ] Couvrir l'échec de préfixe sensible à la casse et la branche ≥3 positionnels @None —
+      les tests @classify s'arrêtent à `2` positionnels.
+  [?] `completion` est proposé comme candidat kind mais sa position de shell ne complète
+      jamais (les valeurs `bash`/`zsh` sont mortes) : continuer de l'offrir, le cacher, ou
+      compléter les shells ? Décider plus tard.
+  [?] La directive est codée en dur `:4` ; un cluster en panne donne les mêmes octets sur le
+      fil que « aucun résultat » — le bit Error `1` de Cobra est la convention que ce fichier
+      n'utilise jamais. Décider plus tard si les échecs doivent remonter ou rester discrets
+      côté UX.
+  [?] Pas de @shellCompDirectiveKeepOrder (`32`) : l'ordre de déclaration et l'adjacence
+      des alias sont à la merci du tri des shells. Décider s'il faut envoyer keep-order.
+  [?] Une valeur de n'importe quel flag non global séparée par espace (`--server-url http://x
+      vti <TAB>`) empoisonne le comptage positionnel et tue la complétion en silence ;
+      `--terminator` compris. Décider si classify doit sauter les valeurs de flags connus ou
+      généraliser.
+  [?] `limit(500)` en page unique tronque silencieusement les gros namespaces ; décider entre
+      pagination, remontée du plafond et acceptation de la troncature.
+  [?] Les pluriels cachés (taper `tenantinstances <TAB>`) complètent bien les noms live sans
+      jamais être proposés — miroir du `[?]` de ./cli.sdd ; décider les deux côtés ensemble.
 
 Done when:
-  Every Scenario maps to passing tests (the `[ ]` Tasks or successors), each `[?]` is a
-    recorded decision, and `cargo test -p kubectl-vynil`, clippy and fmt stay green.
+  Chaque Scenario correspond à des tests passants (les Tasks `[ ]` ou leurs successeurs),
+    chaque `[?]` est une décision enregistrée, et `cargo test -p kubectl-vynil`, clippy et
+    fmt restent au vert.
 
 Scenario: a fresh word completes the kind roster
-  Given `__complete` with @to_complete `""` (and the no-words form), and the partial `v`
-  When classifying and rendering
-  Then the answer is the nine visible rows in frozen order with alias rows adjacent, plus
-    `:4`, and the hidden plurals and `help` never appear
-  Maps to @classify_empty_completion and @classify_partial_kind plus the four
-    @kind_candidates_contains_* tests; order, alias adjacency and hidden-plural absence have
-    no mapped test.
+  Given `__complete` avec @to_complete `""` (et la forme sans mots), et le partiel `v`
+  When classifier et rendre
+  Then la réponse est les neuf lignes visibles dans l'ordre figé avec les lignes d'alias
+    adjacentes, plus `:4`, et les pluriels cachés et `help` n'apparaissent jamais
+  Correspond à @classify_empty_completion et @classify_partial_kind plus les quatre tests
+    @kind_candidates_contains_* ; l'ordre, l'adjacence d'alias et l'absence des pluriels
+    cachés n'ont pas de test mappé.
 
 Scenario: kind then name completes live instance names
-  Given `vti <TAB>`, the alias spellings, `box <TAB>` (cluster-scoped), and `-n prod` before
-    the kind
-  When the name slot runs
-  then classification yields @Slot::Name(@KindId::Vti/@KindId::Jukebox) with `ns` extracted,
-    and live output is the name list unsorted and descriptionless
-  Maps to @classify_kind_then_name, @classify_kind_alias_then_name,
-    @classify_jukebox_then_name, @classify_namespace_short_flag and
-    @list_names_bad_context_returns_empty (unknown context → empty); the reachable-cluster
-    happy path has no mapped test.
+  Given `vti <TAB>`, les orthographes d'alias, `box <TAB>` (cluster-scoped), et `-n prod`
+    avant le kind
+  When le slot nom tourne
+  then la classification donne @Slot::Name(@KindId::Vti/@KindId::Jukebox) avec `ns` extrait,
+    et la sortie live est la liste de noms non triée et sans description
+  Correspond à @classify_kind_then_name, @classify_kind_alias_then_name,
+    @classify_jukebox_then_name, @classify_namespace_short_flag et
+    @list_names_bad_context_returns_empty (context inconnu → vide) ; le chemin heureux
+    cluster joignable n'a pas de test mappé.
 
 Scenario: kind and name then verb completes the verb roster
-  Given `vti x <TAB>` with partial `up`, and `box x <TAB>`
-  Then the slots are @Slot::Verb(@KindId::Vti) and the answers are the seven instance verbs
-    / the single `scan`
-  Maps to @classify_kind_name_then_verb, @classify_kind_name_partial_verb,
-    @verb_candidates_for_vti (membership+count) and @verb_candidates_for_jukebox (exact
-    order); @Slot::None after a third positional (`vti x upgrade <TAB>`) has no mapped test.
+  Given `vti x <TAB>` avec le partiel `up`, et `box x <TAB>`
+  Then les slots sont @Slot::Verb(@KindId::Vti) et les réponses sont les sept verbes
+    d'instance / le seul `scan`
+  Correspond à @classify_kind_name_then_verb, @classify_kind_name_partial_verb,
+    @verb_candidates_for_vti (appartenance+comptage) et @verb_candidates_for_jukebox (ordre
+    exact) ; @Slot::None après un troisième positionnel (`vti x upgrade <TAB>`) n'a pas de
+    test mappé.
 
 Scenario: hyphen words complete flags per position
-  Given `vti x upgrade --<TAB>`, `vti x nope --<TAB>`, and a bare `--` at the kind slot
-  Then the answers are the upgrade verb's own three longs, the empty list for the unknown
-    verb, and the two global longs for every other hyphen shape — never `-w`-style shorts
-  Maps to @classify_verb_with_flag only; the flag candidate lists themselves are unmapped.
+  Given `vti x upgrade --<TAB>`, `vti x nope --<TAB>`, et un `--` nu au slot kind
+  Then les réponses sont les trois longs du verbe upgrade, la liste vide pour le verbe
+    inconnu, et les deux longs globaux pour toute autre forme à tiret — jamais les courts
+    type `-w`
+  Correspond à @classify_verb_with_flag uniquement ; les listes de candidats flag
+    elles-mêmes ne sont pas mappées.
 
 Scenario: a bare global flag silences its value position
-  Given `-n <TAB>` anywhere (root or after `vti x upgrade`)
-  Then the slot is @Slot::GlobalFlagValue and the answer is `:4` alone — namespace names are
-    never fetched, `ns` stays @None on the bare form
-  Maps to @classify_global_flag_bare and @classify_verb_with_global_flag_bare.
+  Given `-n <TAB>` n'importe où (racine ou après `vti x upgrade`)
+  Then le slot est @Slot::GlobalFlagValue et la réponse est `:4` seul — les noms de
+    namespace ne sont jamais récupérés, `ns` reste @None sur la forme nue
+  Correspond à @classify_global_flag_bare et @classify_verb_with_global_flag_bare.
 
 Scenario: namespace and context extraction across the line
-  Given `-n ns`, `--namespace ns`, `--namespace=ns`, `--context ctx`, `--context=ctx` in
-    front of or inside the kind words
-  Then `ns`/`context` are extracted and the slot ignores them
-  Maps to @classify_global_flag_before_kind, @classify_namespace_short_flag,
+  Given `-n ns`, `--namespace ns`, `--namespace=ns`, `--context ctx`, `--context=ctx` devant
+    ou dans les mots de kind
+  Then `ns`/`context` sont extraits et le slot les ignore
+  Correspond à @classify_global_flag_before_kind, @classify_namespace_short_flag,
     @classify_namespace_long_flag, @classify_namespace_long_flag_equals,
-    @classify_context_long_flag and @classify_context_long_flag_equals.
+    @classify_context_long_flag et @classify_context_long_flag_equals.
 
 Scenario: rendered wire shape
-  Given a described and an undescribed candidate, and the prefixes `""` vs `up`
-  Then lines are `upgrade\tForce-reinstall`, `scan`, `:4` (empty description ⇒ no tab), a
-    prefix keeps only `upgrade`-matching rows, the empty set yields exactly the `:4` line
-  Maps to @render_with_two_candidates_one_described, @render_empty_candidates and
-    @render_filters_by_to_complete; case sensitivity has no mapped test.
+  Given un candidat décrit et un candidat non décrit, et les préfixes `""` vs `up`
+  Then les lignes sont `upgrade\tForce-reinstall`, `scan`, `:4` (description vide ⇒ pas de
+    tab), un préfixe ne garde que les lignes correspondant à `upgrade`, l'ensemble vide
+    donne exactement la ligne `:4`
+  Correspond à @render_with_two_candidates_one_described, @render_empty_candidates et
+    @render_filters_by_to_complete ; la sensibilité à la casse n'a pas de test mappé.
 
 Scenario: dead positions answer the directive alone
-  Given the unknown-kind words `nope <TAB>`
-  Then classification is @Slot::None and stdout is `:4`
-  Maps to @classify_unknown_kind; the `completion <TAB>` and polluted-flag dead ends do not.
+  Given les mots de kind inconnu `nope <TAB>`
+  Then la classification est @Slot::None et stdout est `:4`
+  Correspond à @classify_unknown_kind ; les culs-de-sac `completion <TAB>` et flags pollués
+    ne sont pas mappés.
 
 Scenario: the shell loaders ship embedded
-  Given the bash and zsh embeds
-  Then each non-empty text references the `__complete` contract
-  Maps to @emit_script_bash_is_not_empty and @emit_script_zsh_is_not_empty — note those
-    tests re-read the `include_str!` files rather than capturing @emit_script stdout.
+  Given les embarquements bash et zsh
+  Then chaque texte non vide référence le contrat `__complete`
+  Correspond à @emit_script_bash_is_not_empty et @emit_script_zsh_is_not_empty — noter que
+    ces tests relisent les fichiers `include_str!` plutôt que de capturer stdout de
+    @emit_script.
 
 Example:
-  observed kind render, first row head: `jukebox\tOperate on a` — the about tail keeps the
-    doc-comment backticks verbatim (clap flattened), alias rows repeat it, last row is
-    `completion` then the `:4` line
-  observed live render: `__complete vti ''` over a reachable cluster → `gitea`, `grafana`,
-    `rennes`, `seb`, `:4` — names, no descriptions, no sorting input from this file
-  failure byte shape: unknown context or timeout → exactly the `:4` line, stderr silent,
-    exit `0`
-  directive constant source: @NO_FILE_COMP `4` written by @render as `:` + directive + `\n`
+  Rendu kind observé, début de la première ligne : `jukebox\tOperate on a` — la fin de
+    about garde les backticks du doc-comment verbatim (clap a aplati), les lignes d'alias le
+    répètent, la dernière ligne est `completion` puis la ligne `:4`
+  Rendu live observé : `__complete vti ''` sur un cluster joignable → `gitea`, `grafana`,
+    `rennes`, `seb`, `:4` — des noms, sans descriptions, sans tri venu de ce fichier
+  Forme d'octets de l'échec : context inconnu ou timeout → exactement la ligne `:4`, stderr
+    silencieux, sortie `0`
+  Source de la constante de directive : @NO_FILE_COMP `4` écrit par @render comme `:` + directive + `\n`

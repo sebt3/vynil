@@ -1,304 +1,309 @@
 Spec: LibInstallFromDir
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Render, qualify, order and apply a packaged directory of Kubernetes manifests — the single
-    shared install/template engine behind every service, tenant and system lane script: read one
-    directory of `.yaml`/`.yaml.hbs` files, render Handlebars with the whole script context,
-    split multi-document YAML, keep only `kind`+`metadata`-bearing maps, apply with a fixed
-    kind-priority order (first/middle/last buckets), guard cluster-scoped kinds, and emit the
-    applied inventory importers persist into `instance.status` and later diff with @remove.
+  Rend, qualifie, ordonne et applique un répertoire empaqueté de manifests Kubernetes — l'unique
+    moteur partagé install/template derrière tous les scripts des lanes service, tenant et système :
+    lire un répertoire de fichiers `.yaml`/`.yaml.hbs`, rendre Handlebars avec tout le contexte du
+    script, découper le YAML multi-documents, ne garder que les cartes portant `kind`+`metadata`,
+    appliquer selon un ordre de priorité de kinds figé (buckets first/middle/last), poser des guards
+    sur les kinds cluster-scoped, et émettre l'inventaire appliqué que les importers persisteront
+    dans `instance.status` et qu'ils diffèreront ensuite avec @remove.
 
 Exposes:
-  All ten module-level @fn are importable surface (Rhai fns carry no visibility); lane scripts
-    bind the module as `dir`, the regression tests as `install`.
-  @get_first() — fresh 12-kind first-bucket array literal on every call: `Tenant`, `Namespace`,
-    `ServiceAccount`, `ClusterRole`, `ClusterRoleBinding`, `Role`, `RoleBinding`, `Secret`,
-    `ConfigMap`, `PersistentVolume`, `PersistentVolumeClaim`, `NetworkPolicy`.
-  @get_last() — same, the 14-kind last-bucket array: `Pod`, `Job`, `CronJob`, `DaemonSet`,
+  Les dix @fn de niveau module sont une surface importable (les fns Rhai n'ont aucune visibilité) ;
+    les scripts de lane lient le module sous `dir`, les tests de régression sous `install`.
+  @get_first() — tableau littéral frais de 12 kinds du premier bucket à chaque appel : `Tenant`,
+    `Namespace`, `ServiceAccount`, `ClusterRole`, `ClusterRoleBinding`, `Role`, `RoleBinding`,
+    `Secret`, `ConfigMap`, `PersistentVolume`, `PersistentVolumeClaim`, `NetworkPolicy`.
+  @get_last() — idem, le tableau du dernier bucket à 14 kinds : `Pod`, `Job`, `CronJob`, `DaemonSet`,
     `Deployment`, `ReplicaSet`, `StatefulSet`, `Service`, `Ingress`, `APIService`,
     `MutatingWebhookConfiguration`, `ValidatingAdmissionPolicy`,
-    `ValidatingAdmissionPolicyBinding`, `ValidatingWebhookConfiguration`. The lists are disjoint;
-    any other kind is the implicit middle bucket. /agent/src/template specs name this file as
-    the owner of both lists.
-  @get_objects(@context, @dir) — shared read/render/qualify lane behind @install,
-    @install_allowed and @template; returns qualified manifest maps only.
-  @install(@instance, @context, @dir, @allow_cluster, @force_ns) — install lane: ordered
-    @install_obj pass over @get_objects output; returns the applied-entry list.
-  @install_obj(@obj, @allow_cluster, @namespace, @force_ns) — single-object lane: namespace
-    resolution, cluster guard, bare apply; returns a 0- or 1-entry applied list. Reachable
-    directly from lanes that built @obj elsewhere (@init_from, @schedule_backup inputs).
-  @install_allowed(@instance, @context, @dir, @allowed) — tenant twin of @install: identical
-    three-bucket ordering, @install_allowed_obj instead of @install_obj.
-  @install_allowed_obj(@obj, @allowed, @namespace) — tenant single-object lane; cluster-scoped
-    kinds are never applied here.
-  @remove(@applied, @previous, @default_ns) — stale-deletion lane for the category diff;
-    returns nothing; callers pass the freshly-built applied list and the previous `status` list.
-  @validate_add_item(@item) — gate importers apply to one map or each array element returned by
-    a package `install_<category>_add` hook before pushing it onto the applied list.
-  @template(@instance, @context, @dir) — output lane: same buckets, ordering and rendering as
-    @install, only @print-ing documents; never contacts the cluster.
+    `ValidatingAdmissionPolicyBinding`, `ValidatingWebhookConfiguration`. Les listes sont disjointes ;
+    tout autre kind est le middle bucket implicite. Les specs /agent/src/template nomment ce fichier
+    comme le propriétaire des deux listes.
+  @get_objects(@context, @dir) — lane commune de lecture/rendu/qualification derrière @install,
+    @install_allowed et @template ; ne retourne que des cartes de manifests qualifiés.
+  @install(@instance, @context, @dir, @allow_cluster, @force_ns) — lane d'installation : parcours
+    ordonné par @install_obj sur la sortie de @get_objects ; retourne la liste des entrées appliquées.
+  @install_obj(@obj, @allow_cluster, @namespace, @force_ns) — lane mono-objet : résolution du
+    namespace, guard cluster, apply nu ; retourne une liste appliquée de 0 ou 1 entrée. Atteignable
+    directement depuis les lanes qui ont construit @obj ailleurs (entrées de @init_from, @schedule_backup).
+  @install_allowed(@instance, @context, @dir, @allowed) — jumeau tenant de @install : ordonnancement
+    identique à trois buckets, @install_allowed_obj au lieu de @install_obj.
+  @install_allowed_obj(@obj, @allowed, @namespace) — lane tenant mono-objet ; les kinds cluster-scoped
+    n'y sont jamais appliqués.
+  @remove(@applied, @previous, @default_ns) — lane de suppression des périmés pour le diff de
+    catégorie ; ne retourne rien ; les appelants passent la liste appliquée fraîchement construite et
+    la liste `status` précédente.
+  @validate_add_item(@item) — gate que les importers appliquent à une carte ou à chaque élément de
+    tableau renvoyé par un hook `install_<category>_add` de package avant de le pousser sur la liste
+    appliquée.
+  @template(@instance, @context, @dir) — lane de sortie : mêmes buckets, ordonnancement et rendu que
+    @install, ne fait que @print-er les documents ; ne contacte jamais le cluster.
 
 Accepts:
-  @dir — path to a flat directory walked one level deep via @read_dir (no recursion). The
-    "directory of manifests" vocabulary is importer-supplied, not owned here: shipped lanes pass
-    `${context.package_dir}/<category>` with category in the convention set befores, vitals,
-    scalables, others, posts (service/tenant lanes) and systems (system lane); there is no
-    crds category through this file. Kind-based routing is bucket ORDERING only — no category
-    decision is taken from a kind.
-  @context — read for `config_dir` and `package_dir` only, and handed whole to Handlebars as
-    `.hbs` render data; the key contract is owned by the Rust install/template lanes, not here
-    (cross-ref ./gen_package.rhai and its pending spec, Tasks).
-  @instance — read for `.metadata.namespace` only (fallback namespace for everything installed).
-  @allow_cluster — @bool; whether cluster-scoped kinds may be applied (@install/@install_obj).
-  @force_ns — @bool; when set, `metadata.namespace` is forced to the @instance namespace for
-    every applied namespaced object (@install/@install_obj lanes).
-  @allowed — array of namespace strings (tenant lanes pass `context.tenant.namespaces`) allowed
-    to survive from an object's own `.metadata.namespace` (@install_allowed/@install_allowed_obj).
-  @previous — entries recorded by a prior install run in `instance.status.<category>`; @remove
-    deletes the ones @applied no longer contains.
-  @default_ns — namespace for @previous entries lacking a `namespace` key.
-  @obj — manifest map as qualified by @get_objects: `kind` and map `metadata` guaranteed,
-    `apiVersion` and `metadata.name` NOT validated here.
-  @item — candidate entry for @validate_add_item.
+  @dir — chemin d'un répertoire plat parcouru sur un niveau via @read_dir (pas de récursion). Le
+    vocabulaire "directory of manifests" vient des importers, n'est pas porté ici : les lanes livrées
+    passent `${context.package_dir}/<category>` avec category dans le set conventionnel befores,
+    vitals, scalables, others, posts (lanes service/tenant) et systems (lane système) ; il n'y a pas
+    de catégorie crds via ce fichier. Le routage par kind est un ORDONNANCEMENT de buckets uniquement —
+    aucune décision de catégorie n'est prise depuis un kind.
+  @context — lu pour `config_dir` et `package_dir` uniquement, et passé intégralement à Handlebars
+    comme données de rendu `.hbs` ; le contrat des clés est porté par les lanes Rust install/template,
+    pas ici (cf. ./gen_package.rhai et sa spec en attente, Tasks).
+  @instance — lu pour `.metadata.namespace` uniquement (namespace de repli pour tout ce qui est installé).
+  @allow_cluster — @bool ; si les kinds cluster-scoped peuvent être appliqués (@install/@install_obj).
+  @force_ns — @bool ; quand posée, `metadata.namespace` est forcée au namespace de @instance pour
+    tout objet namespaced appliqué (lanes @install/@install_obj).
+  @allowed — tableau de chaînes de namespaces (les lanes tenant passent `context.tenant.namespaces`)
+    autorisé à survivre depuis le `.metadata.namespace` propre de l'objet (@install_allowed/@install_allowed_obj).
+  @previous — entrées enregistrées par une run d'installation précédente dans `instance.status.<category>` ;
+    @remove supprime celles que @applied ne contient plus.
+  @default_ns — namespace des entrées @previous dépourvues de clé `namespace`.
+  @obj — carte de manifest telle que qualifiée par @get_objects : `kind` et carte `metadata` garantis,
+    `apiVersion` et `metadata.name` NON validés ici.
+  @item — entrée candidate pour @validate_add_item.
 
 Returns:
-  @install/@install_allowed — applied entries as one array in apply order; @install_obj and
-    @install_allowed_obj return the same entry shapes with length 0 or 1.
-  Applied entry shape — namespaced applies: @#{api_version, apiVersion, kind, name, namespace};
-    cluster applies allowed through @install_obj: the same map minus the `namespace` key. Both
-    spellings of the API-version key are stored for every namespaced apply too; @remove reads
-    them in `api_version` then `apiVersion` order (Tasks).
-  Skipped-cluster and not-deleted objects add no entry — the list is what was applied, not what
-    was attempted.
-  @get_objects — array of qualified manifest maps in source-file iteration order.
-  @get_first/@get_last — the frozen kind-list arrays @String, re-evaluated per call.
-  @validate_add_item — @bool: true only for a map whose keys() are exactly `["kind", "name"]` or
-    `["kind", "name", "namespace"]` (the locked rhai @Map is BTreeMap-backed, so those are the
-    only iteration orders) with every value a @String.
-  @remove/@template — no value; @template output leaves through the registered @print stream:
-    a line `---` before EVERY document (including the first) followed by the @yaml_encode text.
+  @install/@install_allowed — les entrées appliquées dans un seul tableau en ordre d'application ;
+    @install_obj et @install_allowed_obj retournent les mêmes formes d'entrée de longueur 0 ou 1.
+  Forme d'une entrée appliquée — applies namespaced : @#{api_version, apiVersion, kind, name, namespace};
+    applies cluster autorisés via @install_obj : la même carte sans la clé `namespace`. Les deux
+    orthographes de la clé de version d'API sont stockées pour chaque apply namespaced aussi ; @remove
+    les lit dans l'ordre `api_version` puis `apiVersion` (Tasks).
+  Les objets skipped-cluster et non supprimés n'ajoutent aucune entrée — la liste est ce qui a été
+    appliqué, pas ce qui a été tenté.
+  @get_objects — tableau de cartes de manifests qualifiées dans l'ordre d'itération des fichiers sources.
+  @get_first/@get_last — les tableaux figés de kinds @String, réévalués à chaque appel.
+  @validate_add_item — @bool : true seulement pour une carte dont les keys() sont exactement `["kind", "name"]`
+    ou `["kind", "name", "namespace"]` (le @Map rhai verrouillé est à fond BTreeMap, donc ce sont les
+    seuls ordres d'itération) avec chaque valeur en @String.
+  @remove/@template — pas de valeur ; la sortie de @template sort par le flux @print enregistré :
+    une ligne `---` avant CHAQUE document (premier inclus) suivie du texte @yaml_encode.
 
 Raises:
-  Unknown kind — @install_obj/@install_allowed_obj: `kind: <obj.kind> is unknown from the
-    apiServer.` — verbatim `throw` (trailing period included) after `log_debug(@yaml_encode(@obj))`,
-    when `@api.exist()`@bool is false, i.e. core discovery never resolved the kind.
-  Parse lane — @get_objects: any @file_read, @yaml_decode_multi or `.hbs` render failure is
-    logged as `While parsing <file> :` via `log_error` and re-thrown with `throw;` — the engine's
-    own error text travels; only the file context is added.
-  @register_partial_dir/@register_helper_dir errors propagate out of @get_objects uncaught
-    (unreadable existing dir or broken template inside it; missing directories are a core-side
-    no-op, not an error).
-  Missing keys — @get_objects guarantees only `kind`+`metadata`: an object without `apiVersion`
-    reaches `@k8s_resource((), @obj.kind, ns)` and one without `.metadata.name` reaches the
-    name-shaped engine methods with `()`; both surface as rhai no-matching-method errors, not
-    guards of this file.
-  @remove — `@o.delete()`/`@api.get_obj(@old.name)` failures are tolerated or warned (Handles);
-    the per-deletion @wait_deleted `300` s wait sits outside any catch: one timeout or engine
-    error aborts the whole wait loop — objects already deleted earlier in the loop were waited,
-    the rest never are, and the error propagates to the calling lane.
+  Kind inconnu — @install_obj/@install_allowed_obj : `kind: <obj.kind> is unknown from the
+    apiServer.` — `throw` verbatim (point final compris) après `log_debug(@yaml_encode(@obj))`, quand
+    `@api.exist()`@bool vaut false, c.-à-d. que la discovery core n'a jamais résolu le kind.
+  Lane de parsing — @get_objects : toute défaillance de @file_read, @yaml_decode_multi ou de rendu
+    `.hbs` est loggée comme `While parsing <file> :` via `log_error` et relancée avec `throw;` — c'est
+    le texte d'erreur propre à l'engine qui voyage ; seul le contexte du fichier est ajouté.
+  Les erreurs de @register_partial_dir/@register_helper_dir se propagent hors de @get_objects sans
+    catch (répertoire existant illisible ou gabarit cassé dedans ; les répertoires manquants sont un
+    no-op côté core, pas une erreur).
+  Clés manquantes — @get_objects ne garantit que `kind`+`metadata` : un objet sans `apiVersion`
+    atteint `@k8s_resource((), @obj.kind, ns)` et un objet sans `.metadata.name` atteint les méthodes
+    d'engine à forme-name avec `()` ; les deux remontent en erreurs rhai no-matching-method, pas en
+    guards de ce fichier.
+  @remove — les défaillances de `@o.delete()`/`@api.get_obj(@old.name)` sont tolérées ou warnées
+    (Handles) ; l'@wait_deleted `300` s par suppression effective est hors de tout catch : un seul
+    timeout ou une seule erreur d'engine avorte toute la boucle d'attente — les objets déjà supprimés
+    plus tôt dans la boucle ont été attendus, les autres jamais, et l'erreur se propage à la lane appelante.
 
 Handles:
-  Documents that are not maps, lack `kind`, lack `metadata`, or carry non-map `metadata` —
-    `log_warn` `No kind for an object in file <file>` + `log_debug(@yaml_encode(doc))`, dropped;
-    the warn text names only the missing-kind case even when `kind` is present and `metadata` is
-    what failed (Tasks).
-  Files whose name ends in none of `.yaml`, `.yml`, `.yaml.hbs`, `.yml.hbs` (case-sensitive
-    suffix test) — zero objects, zero logs. Directory entries inside @dir ride the same
-    suffix test: skipped, unless their names end in a manifest suffix, where @file_read's IO
-    failure takes the parse-throw lane.
-  Multi-document YAML files split on `---` via @yaml_decode_multi and each document is qualified
-    individually — empty separator documents reach the drop warn.
-  Empty @dir or a directory of only non-manifest files — @get_object returns `[]`, every lane is
-    a clean no-op returning empty lists.
-  Cluster-scoped applies — @install_obj needs @allow_cluster; @install_allowed_obj never applies
-    them. Both `log_warn` `Ignoring <kind> <name> as it is a clusterwide resource type.` with no
-    applied entry, and a cluster apply's info log carries no namespace (`Applying <kind> <name>`)
-    where namespaced ones read `Applying <kind> <ns>/<name>`.
-  @previous entries with neither `api_version` nor `apiVersion` — fall back to the two-arg
-    `@k8s_resource(@old.kind, ns)` namespaced constructor; when even the kind no longer resolves,
-    @remove skips the deletion silently (no log at all).
-  @remove NotFound tolerance — a string error containing `NotFound` from get/delete is swallowed;
-    other string errors are `log_warn`-ed as-is, non-string errors as @json_encode text.
-  Missing or empty `config_dir`/`package_dir` and absent `handlebars/partials`/`handlebars/helpers`
-    trees — core-side no-ops for the registration calls; the tests rely on this with both keys `""`.
+  Les documents qui ne sont pas des cartes, n'ont pas de `kind`, n'ont pas de `metadata`, ou portent
+    un `metadata` non-cartes — `log_warn` `No kind for an object in file <file>` + `log_debug(@yaml_encode(doc))`,
+    jetés ; le texte du warn ne nomme que le cas kind-manquant même quand `kind` est présent et que
+    c'est `metadata` qui a échoué (Tasks).
+  Les fichiers dont le nom ne finit par aucun de `.yaml`, `.yml`, `.yaml.hbs`, `.yml.hbs` (test de
+    suffixe case-sensitive) — zéro objet, zéro log. Les entrées de répertoire dans @dir suivent le même
+    test de suffixe : ignorées, sauf si leur nom finit par un suffixe de manifest, où la défaillance IO
+    de @file_read prend la lane parse-throw.
+  Les fichiers YAML multi-documents découpés sur `---` via @yaml_decode_multi et chaque document est
+    qualifié individuellement — les documents séparateurs vides atteignent le warn de rejet.
+  @dir vide ou un répertoire de seuls fichiers non-manifestes — @get_object retourne `[]`, chaque lane
+    est un no-op propre retournant des tableaux vides.
+  Applies cluster-scoped — @install_obj exige @allow_cluster ; @install_allowed_obj ne les applique jamais. Tous deux `log_warn` `Ignoring <kind> <name> as it is a clusterwide resource type.` sans
+    entrée appliquée, et le log info d'un apply cluster ne porte pas de namespace (`Applying <kind> <name>`)
+    là où les namespaced lisent `Applying <kind> <ns>/<name>`.
+  Entrées @previous sans ni `api_version` ni `apiVersion` — repli sur le constructeur namespaced
+    `@k8s_resource(@old.kind, ns)` à deux arguments ; quand même le kind ne résout plus, @remove ignore
+    la suppression silencieusement (aucun log du tout).
+  Tolérance NotFound de @remove — une erreur-chaîne contenant `NotFound` venue de get/delete est
+    avalée ; les autres erreurs-chaînes sont passées telles quelles à `log_warn`, les non-chaînes en
+    texte @json_encode.
+  `config_dir`/`package_dir` manquants ou vides et arborescences `handlebars/partials`/`handlebars/helpers`
+    absentes — no-op côté core pour les appels d'enregistrement ; les tests s'appuient là-dessus avec
+    les deux clés à `""`.
 
 Must:
-  Be side-effect free at `import`: the body is ten fn declarations and nothing else.
-  Freeze the bucket order shared by @install, @install_allowed and @template: every @get_first
-    kind in list order (each kind's objects in @get_objects order), then unclassified kinds in
-    @get_objects order untouched, then every @get_last kind in list order — applied per @instance
-    namespace default. No lexicographic sort at any stage.
-  Keep the apply posture bare: exactly one `@api.apply(@obj.metadata.name, @obj)` per applied
-    object and NO kind-specific readiness wait — no @wait_available/@wait_done from the
-    `k8sworkload` registrar for Deployment/StatefulSet/Job here; readiness is deliberately the
-    calling lane's separate `wait` library pass. The only wait in this file is @remove's
-    @wait_deleted `300` s per actual delete.
-  Keep the @obj mutation posture: @install_obj rewrites `obj.metadata.namespace = ns` when
-    @force_ns AND the resolved scope is not cluster; @install_allowed_obj rewrites it on every
-    namespaced apply; neither ever writes it on cluster-scoped objects.
-  Resolve namespace exactly — @install_obj: @force_ns ? @namespace : object namespace when set
-    (`!= ()`), else @namespace; @install_allowed_obj: object namespace when set AND `in @allowed`,
-    else @namespace silently; @remove: `@old.namespace` when set else @default_ns. Cluster scope
-    is detected from the resolved resource's `scope` == `"cluster"`, never from the kind name.
-  Build a fresh @new_hbs engine per @get_objects call, register partials from @context
-    `config_dir` and `package_dir`/handlebars/partials and helpers from
-    `package_dir`/handlebars/helpers, then render each `.hbs` file with @render_named using the
-    file path (from @read_dir) as the template name, the raw file text as the template and the
-    WHOLE @context as data.
-  Pass `@obj.apiVersion` through un-inspected to the three-arg @k8s_resource (core splits the
-    group on `/`), and never call @update_k8s_crd_cache from this file — `@api.exist()` answers
-    the caller-refreshed core discovery cache (the service/system install lanes refresh it before
-    importing here).
-  Match @remove staleness on the kind+name+namespace tuple ONLY (apiVersion ignored), delete via
-    `@api.get_obj(name)`-then-@delete, and collect the K8sObject handles for the wait loop,
-    logging `Waiting for <d.original_kind> <d.metadata.name> to be deleted` — the K8sObject
-    registered getter @original_kind, not the status-entry `kind` key.
-  Validate add items exactly per Returns — anything else (extra keys like `api_version`,
-    non-string values, arrays' non-map elements) is filtered out by the importers, not coerced.
+  Être sans effet de bord à l'`import` : le corps est dix déclarations fn et rien d'autre.
+  Figer l'ordre de buckets partagé par @install, @install_allowed et @template : chaque kind de
+    @get_first dans l'ordre de liste (les objets de chaque kind dans l'ordre de @get_objects), puis les
+    kinds non classés dans l'ordre de @get_objects sans y toucher, puis chaque kind de @get_last dans
+    l'ordre de liste — appliqué au namespace par défaut de @instance. Aucun tri lexicographique à
+    aucune étape.
+  Garder la posture d'apply nue : exactement un `@api.apply(@obj.metadata.name, @obj)` par objet
+    appliqué et AUCUN wait de préparation propre à un kind — pas de @wait_available/@wait_done du
+    registrar `k8sworkload` pour Deployment/StatefulSet/Job ici ; la préparation est délibérément une
+    passe distincte de la wait library dans la lane appelante. La seule attente de ce fichier est
+    l'@wait_deleted `300` s par delete effectif de @remove.
+  Garder la posture de mutation de @obj : @install_obj réécrit `obj.metadata.namespace = ns` quand
+    @force_ns ET la portée résolue n'est pas cluster ; @install_allowed_obj le réécrit sur chaque apply
+    namespaced ; aucun des deux ne l'écrit jamais sur un objet cluster-scoped.
+  Résoudre le namespace exactement — @install_obj : @force_ns ? @namespace : namespace de l'objet quand
+    posé (`!= ()`), sinon @namespace ; @install_allowed_obj : namespace de l'objet quand posé ET
+    `in @allowed`, sinon @namespace silencieusement ; @remove : `@old.namespace` quand posé sinon
+    @default_ns. La portée cluster se détecte depuis le `scope` == `"cluster"` de la resource résolue,
+    jamais depuis le nom du kind.
+  Construire un engine @new_hbs frais à chaque appel de @get_objects, enregistrer les partials depuis
+    `config_dir` et `package_dir`/handlebars/partials de @context et les helpers depuis
+    `package_dir`/handlebars/helpers, puis rendre chaque fichier `.hbs` avec @render_named en utilisant
+    le chemin du fichier (venu de @read_dir) comme nom de gabarit, le texte brut du fichier comme
+    gabarit et le @context ENTIER comme data.
+  Passer `@obj.apiVersion` sans inspection au @k8s_resource à trois arguments (core découpe le group
+    sur `/`), et ne jamais appeler @update_k8s_crd_cache depuis ce fichier — `@api.exist()` répond depuis
+    le cache de discovery core rafraîchi par l'appelant (les lanes d'installation service/system le
+    rafraîchissent avant d'importer ici).
+  Matcher la stalreté @remove sur le tuple kind+name+namespace UNIQUEMENT (apiVersion ignoré), supprimer
+    via `@api.get_obj(name)`-puis-@delete, et collecter les handles K8sObject pour la boucle d'attente,
+    en loggant `Waiting for <d.original_kind> <d.metadata.name> to be deleted` — le getter enregistré
+    @original_kind du K8sObject, pas la clé `kind` de l'entrée de statut.
+  Valider les add items exactement selon Returns — tout le reste (clés en plus comme `api_version`,
+    valeurs non-chaînes, éléments non-cartes des tableaux) est filtré par les importers, pas coercé.
 
 Depends on:
-  vynil-core 0.7.7 engine API — @k8s_resource/@exist/@scope/@apply/@get_obj and the K8sObject
-    @delete/@wait_deleted/@original_kind half of the core `k8sgeneric` registrar; @read_dir and
-    @file_read from the core `fs` helper set; @yaml_decode_multi/@yaml_encode from the `yaml`
-    registrar; @log_debug/@log_info/@log_warn/@log_error and @json_encode from the core-common
-    helpers; @print/@type_of as rhai builtins. The `k8sraw`, `k8sworkload`, `http` and `image`
-    surfaces exist on the same engines but this file never names them.
-  ./../../../common/src/rhaihandler.sdd — which engine constructor exposes those names at
-    run time, and @Script::new_mock for the k8s-mock stand-ins used by the only mapped tests.
-  ./../../../common/src/handlebarshandler.sdd — @handlebars_rhai_register owning @new_hbs,
-    @register_partial_dir, @register_helper_dir and @render_named (with common's built-in
-    helpers) that @get_objects consumes.
-  ./gen_package.rhai — the package generator emitting the category manifests, `.yaml.hbs`
-    included, that @get_objects consumes; its pending /agent/scripts/lib/gen_package.sdd is the
-    companion owner of the `package_dir` layout consumed here (Tasks).
+  L'API moteur de vynil-core 0.7.7 — @k8s_resource/@exist/@scope/@apply/@get_obj et la moitié K8sObject
+    @delete/@wait_deleted/@original_kind du registrar core `k8sgeneric` ; @read_dir et @file_read du jeu
+    de helpers core `fs` ; @yaml_decode_multi/@yaml_encode du registrar `yaml` ;
+    @log_debug/@log_info/@log_warn/@log_error et @json_encode des helpers core-common ; @print/@type_of
+    comme builtins rhai. Les surfaces `k8sraw`, `k8sworkload`, `http` et `image` existent sur les mêmes
+    engines mais ce fichier ne les nomme jamais.
+  ./../../../common/src/rhaihandler.sdd — quel constructeur d'engine expose ces noms au moment du run,
+    et @Script::new_mock pour les stand-ins k8s-mock utilisés par les seuls tests mappés.
+  ./../../../common/src/handlebarshandler.sdd — @handlebars_rhai_register qui possède @new_hbs,
+    @register_partial_dir, @register_helper_dir et @render_named (avec les helpers intégrés de common)
+    que @get_objects consomme.
+  ./gen_package.rhai — le générateur de packages émettant les manifests de catégorie, `.yaml.hbs`
+    inclus, que @get_objects consomme ; son pendant en attente /agent/scripts/lib/gen_package.sdd est le
+    corrière du layout `package_dir` consommé ici (Tasks).
   ./../service/install_befores.rhai, ./../service/install_{vitals,scalables,others,posts}.rhai,
-    ./../system/install_systems.rhai — call @install, @validate_add_item, @remove (the service
-    vitals lane instead warns `Not deleting vitals ...` and carries stale entries forward).
-  ./../tenant/install_befores.rhai, ./../tenant/install_{others,posts,scalables}.rhai and
-    ./../tenant/install_vitals.rhai — call @install_allowed + @validate_add_item; @remove only
-    in the first three.
-  ./../service/template_*.rhai and ./../tenant/template_*.rhai (five each) plus
-    ./../system/template_systems.rhai — the @template emission lanes.
+    ./../system/install_systems.rhai — appellent @install, @validate_add_item, @remove (la lane vitals du
+    service warnne plutôt `Not deleting vitals ...` et reporte les entrées périmées).
+  ./../tenant/install_befores.rhai, ./../tenant/install_{others,posts,scalables}.rhai et
+    ./../tenant/install_vitals.rhai — appellent @install_allowed + @validate_add_item ; @remove seulement
+    dans les trois premiers.
+  ./../service/template_*.rhai et ./../tenant/template_*.rhai (cinq de chaque) plus
+    ./../system/template_systems.rhai — les lanes d'émission @template.
   ./../service/init_from.rhai, ./../tenant/init_from.rhai, ./../service/schedule_backup.rhai —
-    feed freshly built objects straight into @install_obj (`true`/`false` posture).
-  ./../tenant/schedule_backup.rhai and ./../tenant/delete_vitals.rhai — feed objects into
-    @install_allowed_obj with `context.tenant.namespaces`.
-  ./../service/delete_backup.rhai and ./../tenant/delete_backup.rhai — `import` this module and
-    call none of it (dead import; Tasks).
-  /agent/tests/rhai_lib.rs — the only mapped tests, all @install-shaped (Scenarios below).
+    nourrissent des objets fraîchement construits directement dans @install_obj (posture `true`/`false`).
+  ./../tenant/schedule_backup.rhai et ./../tenant/delete_vitals.rhai — nourrissent des objets dans
+    @install_allowed_obj avec `context.tenant.namespaces`.
+  ./../service/delete_backup.rhai et ./../tenant/delete_backup.rhai — `import`-ent ce module et n'en
+    appellent rien (import mort ; Tasks).
+  /agent/tests/rhai_lib.rs — les seuls tests mappés, tous en forme @install (Scenarios ci-dessous).
 
 References:
-  /agent/src/template/{service,tenant,system}.sdd — the offline template lanes whose Must text
-    delegates the first/middle/last lists, `---`-prefixed printing and fresh-per-call Handlebars
-    posture to this file; @agent/src/linting/hbs_checker.sdd — the linter entry validating the
-    same partial/helper registration directories.
-  ./wait.rhai — the post-apply readiness lane importers pair with this module (spec pending);
-    this file stays apply-then-return.
+  /agent/src/template/{service,tenant,system}.sdd — les lanes template hors-ligne dont le texte Must
+    délègue à ce fichier les listes first/middle/last, l'impression préfixée `---` et la posture
+    Handlebars fraîche-à-chaque-appel ; @agent/src/linting/hbs_checker.sdd — l'entrée du linter validant
+    les mêmes répertoires d'enregistrement de partials/helpers.
+  ./wait.rhai — la lane de préparation post-apply que les importers appairent avec ce module (spec en
+    attente) ; ce fichier en reste apply-then-return.
 
 Scenario: category directory applies in bucket order
-  Given a directory holding `configmap.yaml` and `deployment.yaml` on the mock k8s
-  When @install(instance, context, dir, true, false) runs
-  Then both are applied, applied has length 2, and `ConfigMap` precedes `Deployment` —
-    first bucket before last bucket
-  And the same holds for a `Job` fixture applied after the `ConfigMap` fixture (index 0 vs 1)
-  Maps to tests @install_from_dir_applies_multiple_yamls, @install_from_dir_respects_ordering,
+  Given un répertoire contenant `configmap.yaml` et `deployment.yaml` sur le mock k8s
+  When @install(instance, context, dir, true, false) s'exécute
+  Then les deux sont appliqués, applied a une longueur de 2 et `ConfigMap` précède `Deployment` —
+    premier bucket avant dernier bucket
+  And idem pour un fixture `Job` appliqué après le fixture `ConfigMap` (index 0 vs 1)
+  Mappé sur les tests @install_from_dir_applies_multiple_yamls, @install_from_dir_respects_ordering,
     @install_from_dir_applies_job_in_last_phase, @install_from_dir_job_applied_after_configmap
 
 Scenario: empty directory is a clean no-op
-  Given an existing but empty fixture directory
-  When @install runs
-  Then the applied list and the mock created recorder are both empty, no error
-  Maps to test @install_from_dir_empty_directory_no_objects
+  Given un répertoire fixture existant mais vide
+  When @install s'exécute
+  Then la liste appliquée et le recorder created du mock sont tous deux vides, aucune erreur
+  Mappé sur le test @install_from_dir_empty_directory_no_objects
 
 Scenario: force_ns rewrites namespaces
-  Given objects carrying their own `.metadata.namespace` and @force_ns `true`
-  When @install runs with @instance namespace `forced-ns`
-  Then every created object's `.metadata.namespace` is `forced-ns` and the applied entries carry
+  Given des objets portant leur propre `.metadata.namespace` et @force_ns `true`
+  When @install s'exécute avec le namespace de @instance `forced-ns`
+  Then le `.metadata.namespace` de chaque objet créé est `forced-ns` et les entrées appliquées portent
     `namespace` `forced-ns`
-  Maps to tests @install_from_dir_respects_namespace_parameter and
+  Mappé sur les tests @install_from_dir_respects_namespace_parameter et
     @install_from_dir_job_applied_to_instance_namespace
 
 Scenario: cluster kind without permission is warned away
-  Given a `ClusterRole` object and @allow_cluster `false`
-  When @install_obj runs
-  Then nothing is applied, @log_warn answers `Ignoring ClusterRole <name> as it is a clusterwide
-    resource type.` and the returned list is empty
-  And with @allow_cluster `true` the object applies with a `namespace`-less applied entry
-  No mapped test exists.
+  Given un objet `ClusterRole` et @allow_cluster `false`
+  When @install_obj s'exécute
+  Then rien n'est appliqué, @log_warn répond `Ignoring ClusterRole <name> as it is a clusterwide
+    resource type.` et la liste retournée est vide
+  And avec @allow_cluster `true` l'objet est appliqué avec une entrée appliquée sans `namespace`
+  Aucun test mappé n'existe.
 
 Scenario: unknown kind aborts the category
-  Given an object whose `apiVersion`/`kind` pair is absent from cluster discovery
-  When @install_obj or @install_allowed_obj reaches it
-  Then the object YAML is `log_debug`-ed and `kind: <kind> is unknown from the apiServer.` is
-    thrown, propagating out of @install/@install_allowed into the caller's `try`
-  No mapped test exists.
+  Given un objet dont la paire `apiVersion`/`kind` est absente de la discovery du cluster
+  When @install_obj ou @install_allowed_obj l'atteint
+  Then le YAML de l'objet est passé en `log_debug` et `kind: <kind> is unknown from the apiServer.` est
+    throwé, se propageant hors de @install/@install_allowed vers le `try` de l'appelant
+  Aucun test mappé n'existe.
 
 Scenario: tenant remaps out-of-allowed namespaces
-  Given an object with `.metadata.namespace` `other-ns` not in @allowed
-  When @install_allowed_obj runs
-  Then it applies in @namespace with `metadata.namespace` rewritten — and an object whose
-    namespace IS in @allowed keeps its own
-  No mapped test exists.
+  Given un objet avec `.metadata.namespace` `other-ns` qui n'est pas dans @allowed
+  When @install_allowed_obj s'exécute
+  Then il est appliqué dans @namespace avec `metadata.namespace` réécrit — et un objet dont le
+    namespace EST dans @allowed garde le sien
+  Aucun test mappé n'existe.
 
 Scenario: unqualified documents are warned and dropped
-  Given a YAML file holding a scalar document or a map without `metadata`
-  When @get_objects runs
-  Then `No kind for an object in file <file>` is warned, the document is debug-dumped as YAML,
-    and only qualified maps are returned
-  No mapped test exists.
+  Given un fichier YAML tenant un document scalaire ou une carte sans `metadata`
+  When @get_objects s'exécute
+  Then `No kind for an object in file <file>` est warné, le document est dumpé en YAML en debug,
+    et seules des cartes qualifiées sont retournées
+  Aucun test mappé n'existe.
 
 Scenario: remove prunes only stale previous entries
-  Given @applied holding `#{kind, name, namespace}` entries and @previous holding one shared and
-    one extra entry
-  When @remove(applied, previous, default_ns) runs
-  Then exactly the unmatched entry is get-deleted, `Waiting for <original_kind> <name> to be
-    deleted` is logged and @wait_deleted(300) awaited; a NotFound-flavoured delete error is
-    swallowed while other errors only warn
-  No mapped test exists.
+  Given @applied tenant des entrées `#{kind, name, namespace}` et @previous tenant une entrée partagée
+    et une entrée en plus
+  When @remove(applied, previous, default_ns) s'exécute
+  Then exactement l'entrée non appariée est get-supprimée, `Waiting for <original_kind> <name> to be
+    deleted` est loggué et @wait_deleted(300) attendu ; une erreur de suppression de teneur NotFound
+    est avalée alors que les autres erreurs warnnent seulement
+  Aucun test mappé n'existe.
 
 Scenario: add-item gate accepts exactly the two key shapes
-  Given `#{kind, name}`, `#{kind, name, namespace}` (all-string values) versus the same maps
-    plus any extra key or any non-string value
-  When @validate_add_item runs on each
-  Then only the first two answer `true`
-  No mapped test exists.
+  Given `#{kind, name}`, `#{kind, name, namespace}` (toutes les valeurs en chaînes) versus les mêmes
+    cartes plus une clé en plus ou une valeur non-chaîne
+  When @validate_add_item s'exécute sur chacune
+  Then seules les deux premières répondent `true`
+  Aucun test mappé n'existe.
 
 Scenario: template prints the ordered stream only
-  Given the basic category directory
-  When @template runs
-  Then stdout reads `---`, encoded ConfigMap, `---`, encoded Deployment, with no cluster contact
-    and no unit payload returned
-  No mapped test exists.
+  Given le répertoire de catégorie de base
+  When @template s'exécute
+  Then stdout lit `---`, ConfigMap encodé, `---`, Deployment encodé, sans contact avec le cluster
+    et sans payload unitaire retourné
+  Aucun test mappé n'existe.
 
 Tasks:
-  [ ] Add mock-k8s tests for the untested surface, one per Scenario above: @install_obj
-    cluster/allow lanes, unknown-kind throw text, @get_objects direct (.hbs rendering,
-    non-manifest and directory entries, warn lane), @install_allowed/@install_allowed_obj
-    remap, @remove deletion/NotFound/300-s-wait, @validate_add_item, @template output.
-  [ ] Cross-ref the `config_dir`/`package_dir` key contract (Rust lanes +
-    ./gen_package.rhai) once /agent/scripts/lib/gen_package.sdd exists; this spec must not
-    restate it.
-  [ ] Reconcile the dead `import "install_from_dir"` in ./../service/delete_backup.rhai and
-    ./../tenant/delete_backup.rhai — no call site exists; drop or document there.
-  [?] Decide whether the drop-warning text should distinguish a missing `kind` from a
-    missing/non-map `metadata` — today both report `No kind for an object in file <file>`.
-  [?] Decide the dual `api_version`/`apiVersion` spelling on applied entries — @remove reads
-    the snake one first; which consumer needs the camel one (status serialization?) is not
-    observable from this file.
-  [?] Decide whether @install/@install_allowed should call @update_k8s_crd_cache after applying
-    a `CustomResourceDefinition` — today a custom kind sitting in the same directory as its CRD
-    passes or fails `@api.exist()` purely on @read_dir iteration order and a caller-side
-    refresh, since this file never refreshes.
-  [?] Decide the @install_allowed_obj posture for a disallowed namespace — silently re-templating
-    into the instance namespace can move a resource against author intent; skip/error is the
-    alternative.
-  [?] Decide @remove's partial-wait posture — a @wait_deleted timeout abandons waiting the
-    already-deleted rest of the list while still returning control by error, and skip-when-
-    kind-unresolved is fully silent.
+  [ ] Ajouter des tests mock-k8s pour la surface non testée, un par Scenario ci-dessus : lanes
+    cluster/allow de @install_obj, texte du throw kind-inconnu, @get_objects direct (rendu .hbs, entrées
+    non-manifestes et de répertoire, lane warn), remap @install_allowed/@install_allowed_obj,
+    suppression/NotFound/attente-300-s de @remove, @validate_add_item, sortie @template.
+  [ ] Croiser le contrat de clés `config_dir`/`package_dir` (lanes Rust + ./gen_package.rhai) une fois
+    /agent/scripts/lib/gen_package.sdd existante ; cette spec ne doit pas le re-stater.
+  [ ] Réconcilier le `import "install_from_dir"` mort dans ./../service/delete_backup.rhai et
+    ./../tenant/delete_backup.rhai — aucun site d'appel n'existe ; retirer ou documenter là-bas.
+  [?] Décider si le texte du warn de rejet doit distinguer un `kind` manquant d'un `metadata`
+    manquant/non-cartes — aujourd'hui les deux rapportent `No kind for an object in file <file>`.
+  [?] Décider la double orthographe `api_version`/`apiVersion` sur les entrées appliquées — @remove lit
+    la snake en premier ; quel consommateur a besoin de la camel (sérialisation de statut ?) n'est pas
+    observable depuis ce fichier.
+  [?] Décider si @install/@install_allowed devrait appeler @update_k8s_crd_cache après avoir appliqué un
+    `CustomResourceDefinition` — aujourd'hui un kind custom logé dans le même répertoire que son CRD
+    passe ou échoue `@api.exist()` purement selon l'ordre d'itération de @read_dir et un rafraîchissement
+    côté appelant, ce fichier ne rafraîchissant jamais.
+  [?] Décider la posture de @install_allowed_obj pour un namespace non autorisé — re-gabarer
+    silencieusement vers le namespace de l'instance peut déplacer une ressource contre l'intention de
+    l'auteur ; sauter/lever est l'alternative.
+  [?] Décider la posture d'attente partielle de @remove — un timeout de @wait_deleted abandonne
+    l'attente du reste déjà supprimé de la liste tout en rendant la main par une erreur, et le
+    skip-quand-kind-non-résolu est parfaitement silencieux.
 
 Done when:
-  Every Scenario carries a passing mapped test or an explicit carried Task, the Tasks decisions
-    are recorded, and the list/print contracts cited by /agent/src/template/{service,tenant,system}.sdd
-    still hold byte-formats unchanged.
+  Chaque Scenario porte un test mappé passant ou une Task reportée explicite, les décisions des Tasks
+    sont consignées, et les contrats de liste/print cités par /agent/src/template/{service,tenant,system}.sdd
+    tiennent toujours, byte-formats inchangés.

@@ -1,142 +1,152 @@
 Spec: LibCopyDir
 
-Platform: Rhai script library (vynil-core 0.7.7 engine)
+Platform: bibliothèque de scripts Rhai (moteur vynil-core 0.7.7)
 
 Purpose:
-  Project a source directory tree into a destination — shallow or recursive, either filtered by
-    file-name suffix (@dir_exts) or wholesale (@dir_all) — so the package build lane can stage a
-    subset of a package source tree into its temp build dir before the OCI push.
+  Projeter une arborescence de répertoires source dans une destination — peu profonde ou récursive,
+    soit filtrée par suffixe de nom de fichier (@dir_exts) soit en totalité (@dir_all) — pour que la
+    lane de build de package puisse placer une sous-partie de l'arborescence source du package dans
+    son répertoire de build temporaire avant le push OCI.
 
 Exposes:
-  @dir_exts(src, dst, exts, recursiv) / @dir_exts(src, dst, exts) — copies files whose entry path
-    ends with any suffix in @exts; the 3-arg form delegates to the 4-arg one with @recursiv set
-    to `false`.
-  @dir_all(src, dst, recursiv) / @dir_all(src, dst) — same walk with NO suffix filter; the 2-arg
-    form delegates with @recursiv set to `false`.
-  Reached by importers as `copy::dir_exts(...)` / `copy::dir_all(...)` through the
-    `import "copy_dir" as copy` convention used in ./../packages/build.rhai. Importing the
-    module runs no code: the file is four @fn definitions and nothing else — zero top-level
-    statements, zero imports, zero @throw.
+  @dir_exts(src, dst, exts, recursiv) / @dir_exts(src, dst, exts) — copie les fichiers dont le chemin
+    d'entrée finit par un des suffixes de @exts ; la forme à 3 args délègue à celle à 4 args avec
+    @recursiv posé à `false`.
+  @dir_all(src, dst, recursiv) / @dir_all(src, dst) — même parcours SANS filtre de suffixe ; la forme
+    à 2 args délègue avec @recursiv posé à `false`.
+  Atteint par les importeurs via `copy::dir_exts(...)` / `copy::dir_all(...)` grâce à la convention
+    `import "copy_dir" as copy` utilisée dans ./../packages/build.rhai. Importer le module n'exécute
+    aucun code : le fichier est quatre définitions @fn et rien d'autre — zéro instruction de premier
+    niveau, zéro import, zéro @throw.
 
 Accepts:
-  @src — @String directory path to scan; it must exist and be readable, the script guards
-    nothing and @read_dir raises otherwise.
-  @dst — @String destination directory, created up-front by @create_dir on every call AND every
-    recursion step, even when nothing is ever copied into it.
-  @exts (@dir_exts only) — @Array of @String suffixes; the test is @entry.ends_with(@ext) on the
-    FULL path yielded by @read_dir, not on the basename (see Tasks). A non-string element fails
-    @String.ends_with as a rhai call error; an empty @exts matches no file.
-  @recursiv — @bool; `false` (the default overload value) descends into no subdirectory.
+  @src — chemin de répertoire @String à scanner ; il doit exister et être lisible, le script ne pose
+    aucun garde-fou et @read_dir lève sinon.
+  @dst — répertoire destination @String, créé d'emblée par @create_dir à chaque appel ET chaque étape
+    de récursion, même si rien n'y est jamais copié.
+  @exts (@dir_exts seulement) — @Array de suffixes @String ; le test est @entry.ends_with(@ext) sur
+    le chemin COMPLET produit par @read_dir, pas sur le basename (voir Tasks). Un élément non-string
+    échoue @String.ends_with comme erreur d'appel rhai ; un @exts vide ne fait correspondre aucun
+    fichier.
+  @recursiv — @bool ; `false` (la valeur de surcharge par défaut) ne descend dans aucun
+    sous-répertoire.
 
 Returns:
-  `()` — every arity ends on the for-loop with no return: success is observable only in the
-    destination tree, never in the @rhai result value.
-
+  `()` — chaque arité se termine sur la boucle for sans return : le succès n'est observable que dans
+    l'arborescence de destination, jamais dans la valeur de résultat @rhai.
 Raises:
-  Nothing of its own: zero literal @throw, zero try/catch, zero map and array indexing. Every
-    failure is an engine-fs error surfacing as a rhai error from the primitives:
-      - @read_dir on a missing, unreadable, or file-not-directory @src, and per-entry errors
-        raised mid-iteration.
-      - @create_dir failing on @dst (permissions, or @dst existing as a file).
-      - @file_copy failing: source vanished between @is_file and the copy (TOCTOU), or @dst
-        file unwritable.
+  Rien qui lui soit propre : zéro @throw littéral, zéro try/catch, zéro indexation de carte ni de
+    tableau. Chaque échec est une erreur moteur-fs remontant comme une erreur rhai depuis les
+    primitives :
+      - @read_dir sur un @src manquant, illisible, ou fichier-qui-n'est-pas-un-répertoire, et les
+        erreurs par entrée levées en cours d'itération.
+      - @create_dir en échec sur @dst (permissions, ou @dst existant comme fichier).
+      - @file_copy en échec : la source a disparu entre @is_file et la copie (TOCTOU), ou le fichier
+        @dst non inscriptible.
 
 Handles:
-  Non-matching files — @dir_exts skips them silently; @dir_all copies them; hidden dot-files get
-    no special case and behave like any other name.
-  Subdirectories with @recursiv `false` — not scanned and not created in @dst at all.
-  Subdirectories with @recursiv `true` — always recursed, even ones holding no matching file, so
-    their mirror directory still gets created in @dst.
-  Entries that are neither file nor dir (broken symlinks, sockets, fifos) — the @is_file / @is_dir
-    test-pair answers `false` for both, and the entry is dropped with no signal.
-  Non-UTF-8 entry names — @read_dir yields them as the empty string, @is_file and @is_dir answer
-    `false` on it, and the entry is silently skipped (engine behavior owned by vynil-core fs and
-    documented through ./../../../common/src/rhaihandler.sdd).
+  Fichiers non correspondants — @dir_exts les ignore silencieusement ; @dir_all les copie ; les
+    dot-files cachés n'ont aucun cas particulier et se comportent comme n'importe quel autre nom.
+  Sous-répertoires avec @recursiv `false` — pas scannés et pas créés dans @dst du tout.
+  Sous-répertoires avec @recursiv `true` — toujours parcourus en récursion, même ceux ne tenant aucun
+    fichier correspondant, si bien que leur répertoire miroir est quand même créé dans @dst.
+  Entrées qui ne sont ni fichier ni répertoire (symlinks cassés, sockets, fifos) — la paire de tests
+    @is_file / @is_dir répond `false` pour les deux, et l'entrée est écartée sans signal.
+  Noms d'entrée non-UTF-8 — @read_dir les produit comme chaîne vide, @is_file et @is_dir répondent
+    `false` dessus, et l'entrée est silencieusement ignorée (comportement du moteur porté par le fs de
+    vynil-core et documenté via ./../../../common/src/rhaihandler.sdd).
 
 Must:
-  Run @create_dir(@dst) before iterating @src, at every call and every recursion level, so an
-    empty or fully non-matching source still produces an empty mirror directory downstream.
-  Test @is_file before @is_dir, making each entry take exactly one of three legs: copy, recurse
-    (dir AND @recursiv), or ignore.
-  Build destinations as @dst + `"/"` + @basename(@entry) and rebuild recursion sources the same
-    way (`src + "/" + base`), so relative/trailing-slash inputs still land on the same files on
-    the POSIX target; @exts and @recursiv are forwarded unchanged through the self-call.
-  Copy only via @file_copy — @std::fs::copy on the Linux target, whose confirmed posture is: an
-    existing destination file is silently overwritten, the source's permission bits propagate,
-    timestamps and ownership do NOT, and a symlinked source is dereferenced into a regular file.
-  Bound recursion depth only by the engine, not by any script counter: run-away recursion (e.g.
-    a directory-symlink cycle under @recursiv) stops only at the engine's `512` call-level cap.
+  Exécuter @create_dir(@dst) avant d'itérer @src, à chaque appel et chaque niveau de récursion, si
+    bien qu'une source vide ou entièrement non correspondante produit quand même un répertoire
+    miroir vide en aval.
+  Tester @is_file avant @is_dir, chaque entrée prenant exactement une des trois branches : copie,
+    récursion (répertoire ET @recursiv), ou ignorée.
+  Construire les destinations comme @dst + `"/"` + @basename(@entry) et reconstruire les sources de
+    récursion de la même façon (`src + "/" + base`), si bien que les entrées relatives/barre de
+    finition atterrissent sur les mêmes fichiers sur la cible POSIX ; @exts et @recursiv sont
+    transmis sans modification via l'auto-appel.
+  Copier uniquement via @file_copy — @std::fs::copy sur la cible Linux, dont la posture confirmée
+    est : un fichier destination existant est silencieusement écrasé, les bits de permission de la
+    source se propagent, les horodatages et la propriété NE se propagent PAS, et une source
+    symlinkée est déréférencée en fichier régulier.
+  Borner la profondeur de récursion seulement par le moteur, pas par un compteur de script : une
+    récursion effrénée (p. ex. un cycle de symlink-répertoire sous @recursiv) ne s'arrête qu'au
+    plafond de `512` niveaux d'appel du moteur.
 
 Depends on:
-  vynil-core 0.7.7 engine API — @create_dir, @read_dir, @basename, @is_file, @is_dir, @file_copy
-    (the `fs`-feature registrar, script surface assembled behind
-    ./../../../common/src/rhaihandler.sdd); file_read, file_write and the shell_* names are NOT
-    used by this file.
-  Rhai built-ins for logic only: @Array.some with a one-arg predicate, @String.ends_with, and
-    `+` string concatenation.
-  ./../packages/build.rhai — the importer whose `import "copy_dir"` call sites freeze the
-    contract in use: the `.hbs`/`.yaml`/`.yml`/`.rhai`/`.tf` filtered projections and the
-    recursive @dir_all of the package `files` directory.
+  API du moteur vynil-core 0.7.7 — @create_dir, @read_dir, @basename, @is_file, @is_dir, @file_copy
+    (le registrar de la feature `fs`, surface de script assemblée derrière
+    ./../../../common/src/rhaihandler.sdd) ; file_read, file_write et les noms shell_* ne sont PAS
+    utilisés par ce fichier.
+  Built-ins Rhai pour la logique seule : @Array.some avec un prédicat à un arg, @String.ends_with, et
+    la concaténation de chaînes `+`.
+  ./../packages/build.rhai — l'importeur dont les sites d'appel `import "copy_dir"` gèlent le
+    contrat en usage : les projections filtrées `.hbs`/`.yaml`/`.yml`/`.rhai`/`.tf` et le
+    @dir_all récursif du répertoire `files` du package.
 
 Scenario: dir_exts copies matching files and skips the rest
-  Given a @src holding `a.yaml`, `b.json` and `c.txt` directly in it
-  When @dir_exts runs with `exts = [".yaml", ".json"]` and no @recursiv argument
-  Then `a.yaml` and `b.json` exist in @dst and `c.txt` does not
-  Maps to test @dir_exts_copies_matching_files
+  Given un @src tenant `a.yaml`, `b.json` et `c.txt` directement dedans
+  When @dir_exts s'exécute avec `exts = [".yaml", ".json"]` et sans argument @recursiv
+  Then `a.yaml` et `b.json` existent dans @dst et `c.txt` non
+  Mappé sur le test @dir_exts_copies_matching_files
 
 Scenario: dir_exts descends when recursive
-  Given a @src holding `top.yaml` plus `sub/nested.yaml`
-  When @dir_exts runs with `exts = [".yaml"]` and @recursiv `true`
-  Then @dst holds `top.yaml` and `sub/nested.yaml`, with `sub` created by the recursion
-  Maps to test @dir_exts_recurses_into_subdirs_when_recursive
+  Given un @src tenant `top.yaml` plus `sub/nested.yaml`
+  When @dir_exts s'exécute avec `exts = [".yaml"]` et @recursiv `true`
+  Then @dst tient `top.yaml` et `sub/nested.yaml`, avec `sub` créé par la récursion
+  Mappé sur le test @dir_exts_recurses_into_subdirs_when_recursive
 
 Scenario: dir_exts stops at the first level by default
-  Given the same tree
-  When @dir_exts runs with @recursiv omitted (3-arg form)
-  Then @dst holds `top.yaml` but not `sub/nested.yaml`, and `sub` is never created in @dst
-  Maps to test @dir_exts_does_not_recurse_by_default
+  Given la même arborescence
+  When @dir_exts s'exécute sans @recursiv (forme à 3 args)
+  Then @dst tient `top.yaml` mais pas `sub/nested.yaml`, et `sub` n'est jamais créé dans @dst
+  Mappé sur le test @dir_exts_does_not_recurse_by_default
 
 Scenario: dir_all copies every file
-  Given a @src holding `a.yaml` and `b.sh`
-  When @dir_all runs with the 2-arg form
-  Then both files exist in @dst — the suffix filter is absent by construction
-  Maps to test @dir_all_copies_all_files
+  Given un @src tenant `a.yaml` et `b.sh`
+  When @dir_all s'exécute avec la forme à 2 args
+  Then les deux fichiers existent dans @dst — le filtre de suffixe est absent par construction
+  Mappé sur le test @dir_all_copies_all_files
 
 Scenario: dir_all descends when recursive
-  Given a @src holding `root.yaml` plus `sub/deep.yaml`
-  When @dir_all runs with @recursiv `true`
-  Then @dst holds `root.yaml` and `sub/deep.yaml`
-  Maps to test @dir_all_recurses_into_subdirs_when_recursive
+  Given un @src tenant `root.yaml` plus `sub/deep.yaml`
+  When @dir_all s'exécute avec @recursiv `true`
+  Then @dst tient `root.yaml` et `sub/deep.yaml`
+  Mappé sur le test @dir_all_recurses_into_subdirs_when_recursive
 
 Scenario: dir_all stops at the first level by default
-  Given the same tree
-  When @dir_all runs with the 2-arg form
-  Then @dst holds `root.yaml` but not `sub/deep.yaml`
-  Maps to test @dir_all_does_not_recurse_by_default
+  Given la même arborescence
+  When @dir_all s'exécute avec la forme à 2 args
+  Then @dst tient `root.yaml` mais pas `sub/deep.yaml`
+  Mappé sur le test @dir_all_does_not_recurse_by_default
 
 Example:
-  build-lane shapes as called from ./../packages/build.rhai:
-    `copy::dir_exts(item, args.temp + "/scripts", [".rhai", ".sh"], true)` — recursive, filtered
-    `copy::dir_all(item, args.temp + "/files", true)` — recursive, everything
+  formes de la lane build telles qu'appelées depuis ./../packages/build.rhai :
+    `copy::dir_exts(item, args.temp + "/scripts", [".rhai", ".sh"], true)` — récursif, filtré
+    `copy::dir_all(item, args.temp + "/files", true)` — récursif, tout
 
 Done when:
-  The six mapped tests stay green against their scenarios, the open suffix/overwrite/symlink
-    postures below are settled into `Must` entries, and `specdd lint` is green on this file.
+  Les six tests mappés restent verts contre leurs scenarios, les postures ouvertes suffixe/
+    écrasement/symlink ci-dessous sont réglées en entrées `Must`, et `specdd lint` est vert sur ce
+    fichier.
 
 Tasks:
-  [ ] Keep the map to /agent/tests/rhai_copy_dir.rs current: all six direct tests
+  [ ] Garder à jour la carte vers /agent/tests/rhai_copy_dir.rs : les six tests directs
       @dir_exts_copies_matching_files, @dir_exts_recurses_into_subdirs_when_recursive,
       @dir_exts_does_not_recurse_by_default, @dir_all_copies_all_files,
-      @dir_all_recurses_into_subdirs_when_recursive and @dir_all_does_not_recurse_by_default
-      exercise this module through `import "copy_dir" as cd` on a mock engine whose fs is real.
-  [ ] Cover by fixture tree what no test exercises today: hidden dot-files, directory and file
-      symlinks, mode propagation, silent overwrite of an existing destination, and the
-      create-before-scan empty mirror.
-  [?] The suffix test is @ends_with on the FULL entry path, not @basename: an @exts element
-      containing `"/"` could match across a directory boundary, and non-UTF-8 names arrive as the
-      empty string and vanish silently. Decide later whether filtering must move to the basename.
-  [?] Destination collision is a silent overwrite inherited from @std::fs::copy. Decide later
-      whether the build lane needs any guard or the overwrite is the contract for rebuilds.
-  [?] Directory-symlink cycles under @recursiv are bounded only by the engine's call-level cap
-      (and ever-growing `dst/base` paths). Decide later whether the library must detect visited
-      directories or the engine bound suffices.
+      @dir_all_recurses_into_subdirs_when_recursive et @dir_all_does_not_recurse_by_default
+      exercent ce module via `import "copy_dir" as cd` sur un moteur mock dont le fs est réel.
+  [ ] Couvrir par arborescence de fixture ce qu'aucun test n'exerce aujourd'hui : dot-files cachés,
+      symlinks de répertoire et de fichier, propagation des modes, écrasement silencieux d'une
+      destination existante, et le miroir vide créé avant le scan.
+  [?] Le test de suffixe est un @ends_with sur le chemin COMPLET de l'entrée, pas sur @basename : un
+      élément @exts contenant `"/"` pourrait correspondre au-delà d'une frontière de répertoire, et
+      les noms non-UTF-8 arrivent comme la chaîne vide et disparaissent en silence. Décider plus tard
+      si le filtrage doit passer au basename.
+  [?] La collision de destination est un écrasement silencieux hérité de @std::fs::copy. Décider
+      plus tard si la lane de build a besoin d'un garde ou si l'écrasement est le contrat des
+      rebuilds.
+  [?] Les cycles de symlink-répertoire sous @recursiv sont bornés seulement par le plafond de niveaux
+      d'appel du moteur (et des chemins `dst/base` sans cesse croissants). Décider plus tard si la
+      bibliothèque doit détecter les répertoires visités ou si la borne du moteur suffit.

@@ -1,205 +1,205 @@
 Spec: SystemInstallCmd
 
 Purpose:
-  Back the `agent system install` sub-command: resolve one @SystemInstance by namespace
-    and name, publish it as the process-wide owner context and as the Rhai variable
-    `instance`, inject the parsed CLI flags as the Rhai variable `args`, then hand the
-    whole install work to the Rhai modules `context` and `install`. This file runs no
-    install stage itself: no jukebox resolve, no download, no template render, no
-    `status` write — it only prepares the engine and hands off.
+  Prend en charge la sous-commande `agent system install` : résoudre un @SystemInstance par namespace
+    et nom, le publier comme contexte propriétaire du processus et comme variable Rhai
+    `instance`, injecter les flags CLI parsés comme variable Rhai `args`, puis confier
+    tout le travail d'installation aux modules Rhai `context` et `install`. Ce fichier n'exécute
+    lui-même aucune étape d'installation : pas de résolution jukebox, pas de téléchargement, pas de
+    rendu de template, pas d'écriture de `status` — il prépare le moteur et transmet.
 
 Exposes:
-  @Parameters — clap @Args struct, also deriving @Debug, @Serialize and @Deserialize;
-    mounted by @system::Commands::Install in ./mod.rs; all eight fields private to this
-    module, reached only by the derive code and by this file.
-  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()>; the sole
-    caller is @system::run (install dispatch arm).
+  @Parameters — struct clap @Args, dérivant aussi @Debug, @Serialize et @Deserialize ;
+    montée par @system::Commands::Install dans ./mod.rs ; les huit champs sont privés de ce
+    module, atteints uniquement par le code des derives et par ce fichier.
+  @run — @pub async fn @run(@args: @&@Parameters) -> @common::Result<@()> ; l'unique
+    appelant est @system::run (branche de dispatch install).
 
 Accepts:
-  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, value name `NAMESPACE`,
-    @String, required (no `default_value`).
-  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, value name `INSTANCE`,
-    @String, required.
+  @Parameters.namespace — `-n` / `--namespace`, env `NAMESPACE`, nom de valeur `NAMESPACE`,
+    @String, requis (pas de `default_value`).
+  @Parameters.instance — `-i` / `--instance`, env `INSTANCE`, nom de valeur `INSTANCE`,
+    @String, requis.
   @Parameters.vynil_namespace — `-v` / `--vynil-namespace`, env `VYNIL_NAMESPACE`,
-    value name `VYNIL_NAMESPACE`, @String, required; never read in this file beyond
-    serialization into `args`.
-  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, value name
-    `PACKAGE_DIRECTORY`, @std::path::PathBuf, clap default `/tmp/package`.
-  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, value name
-    `SCRIPT_DIRECTORY`, @std::path::PathBuf, clap default `./agent/scripts`.
-  @Parameters.tag — long-only `--tag`, env `TAG`, value name `TAG`, @String, required;
-    forwarded verbatim in `args`, never parsed or validated as a version here.
-  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, value name
-    `CONFIG_DIR`, @std::path::PathBuf, clap default `.`.
-  @Parameters.controller_values — long-only `--controller-values`, env
-    `CONTROLLER_VALUES`, value name `CONTROLLER_VALUES`, @String, clap default the
-    two-character string `{}`.
-  Implicit runtime precondition: a live tokio multi-thread runtime (from @main's
-    @tokio::main), because @context::set_system crosses state with
-    @tokio::task::block_in_place; @context::init_k8s already ran in @system::run before
-    this file is entered and is inert either way.
+    nom de valeur `VYNIL_NAMESPACE`, @String, requis ; jamais lu dans ce fichier au-delà
+    de sa sérialisation dans `args`.
+  @Parameters.package_dir — `-p` / `--package-dir`, env `PACKAGE_DIRECTORY`, nom de valeur
+    `PACKAGE_DIRECTORY`, @std::path::PathBuf, défaut clap `/tmp/package`.
+  @Parameters.script_dir — `-s` / `--script-dir`, env `SCRIPT_DIRECTORY`, nom de valeur
+    `SCRIPT_DIRECTORY`, @std::path::PathBuf, défaut clap `./agent/scripts`.
+  @Parameters.tag — `--tag` (long seul), env `TAG`, nom de valeur `TAG`, @String, requis ;
+    transféré tel quel dans `args`, jamais parsé ni validé comme version ici.
+  @Parameters.config_dir — `-c` / `--config-dir`, env `CONFIG_DIR`, nom de valeur
+    `CONFIG_DIR`, @std::path::PathBuf, défaut clap `.`.
+  @Parameters.controller_values — `--controller-values` (long seul), env
+    `CONTROLLER_VALUES`, nom de valeur `CONTROLLER_VALUES`, @String, défaut clap : la
+    chaîne de deux caractères `{}`.
+  Prérequis runtime implicite : un runtime tokio multi-thread actif (celui de @main via
+    @tokio::main), car @context::set_system fait passer l'état au travers de
+    @tokio::task::block_in_place ; @context::init_k8s a déjà tourné dans @system::run avant
+    d'entrer dans ce fichier et reste inerte dans les deux cas.
 
 Returns:
-  @Ok(@()) once the fixed eval snippet completes without a Rhai error — the @Dynamic
-    value the snippet returns is discarded, never inspected.
+  @Ok(@()) une fois le snippet eval fixe terminé sans erreur Rhai — la valeur @Dynamic
+    renvoyée par le snippet est jetée, jamais inspectée.
 
 Raises:
-  @common::Error::KubeError from @SystemInstance::get when the API server rejects the
-    lookup (missing `SystemInstance`, wrong namespace, Forbidden) — the first fallible
-    step; nothing was published to context or scripts when it fails.
-  @common::Error::SerializationError from the explicit @map_err when
-    @serde_json::to_value(@Parameters) fails on the derives.
-  @common::Error::Core (wrapping @vynil_core::Error::RhaiError, Display
-    `Rhai script error: <rhai text>`) from the `?` on @Script::eval — a parse error in
-    the fixed snippet or any parse error / thrown error inside the imported `context`
-    or `install` modules.
-  The context-owned @panic! `cannot create the Kubernetes client: {e}` surfaces through
-    @SystemInstance::get when no kubeconfig or in-cluster configuration resolves.
-  Panics from @context::set_system on a current-thread runtime or no runtime at all
-    (contract in /common/src/context.sdd), not catchable by the parent `?` lane.
+  @common::Error::KubeError depuis @SystemInstance::get quand le serveur API rejette la
+    recherche (`SystemInstance` manquant, mauvais namespace, Forbidden) — la première étape
+    faillible ; rien n'a été publié dans le contexte ou les scripts quand elle échoue.
+  @common::Error::SerializationError depuis le @map_err explicite quand
+    @serde_json::to_value(@Parameters) échoue sur les derives.
+  @common::Error::Core (enveloppant @vynil_core::Error::RhaiError, Display
+    `Rhai script error: <rhai text>`) depuis le `?` sur @Script::eval — une erreur de parse dans
+    le snippet fixe ou toute erreur de parse / erreur levée dans les modules importés `context`
+    ou `install`.
+  Le @panic! propriété du contexte `cannot create the Kubernetes client: {e}` remonte via
+    @SystemInstance::get quand ni kubeconfig ni configuration in-cluster ne se résout.
+  Panics de @context::set_system sur un runtime current-thread ou sans aucun runtime
+    (contrat dans /common/src/context.sdd), non rattrapables par la voie `?` parente.
 
 Handles:
-  @Err lane owned by the caller — @system::run logs `Installing a package failed with:
-    {e}` through @tracing::error and calls @process::exit(1); this file logs nothing and
-    never exits, so a failed install leaves no status marker written by this lane.
-  Failed lookup or failed eval after `@set_system` already ran — the process context
-    keeps the @VynilContext::@SystemInstance variant for the remaining process lifetime
-    (which ends in the exit(1)).
-  Already-installed instance — no branch on `status` here: a rerun refetches the CR and
-    replays both Rhai modules; any idempotence is script-side.
-  Absent resolver directories — the four search paths are never existence-checked at
-    construction; the failure only lands later as the @common::Error::Core import error
-    if no search dir holds `context.rhai` / `install.rhai`.
-  Flags with no local reader (`vynil_namespace`, `tag`, `controller_values`) — their
-    only observable use is the `args` JSON the scripts consume.
+  Voie @Err propriété de l'appelant — @system::run journalise `Installing a package failed with:
+    {e}` via @tracing::error et appelle @process::exit(1) ; ce fichier ne journalise rien et
+    ne sort jamais, si bien qu'une installation échouée ne laisse aucun marqueur de statut écrit par cette voie.
+  Recherche ou eval échoués alors que `@set_system` a déjà tourné — le contexte du
+    processus garde la variante @VynilContext::@SystemInstance pour le reste de sa vie
+    (qui se termine par le exit(1)).
+  Instance déjà installée — pas de branchement sur `status` ici : une relance récupère
+    à nouveau le CR et rejoue les deux modules Rhai ; toute idempotence est côté script.
+  Répertoires de résolution absents — les quatre chemins de recherche ne sont jamais
+    vérifiés à la construction ; l'échec ne tombe que plus tard comme erreur d'import @common::Error::Core
+    si aucun répertoire de recherche ne contient `context.rhai` / `install.rhai`.
+  Flags sans lecteur local (`vynil_namespace`, `tag`, `controller_values`) — leur
+    seul usage observable est le JSON `args` que consomment les scripts.
 
 Must:
-  Execute these steps in this order, with nothing between them: build the interpreter,
-    fetch the CR, publish context, inject `instance`, serialize and inject `args`,
-    evaluate the snippet, return @Ok.
-  Build the interpreter with @Script::new on exactly four resolver directories in this
-    order: `{package_dir}/scripts`, `{config_dir}` (the directory itself), `{script_dir}/system`,
-    `{script_dir}/lib` — plain string interpolation of @std::path::Display, so a
-    path argument ending in `/` doubles the separator; earlier entries win an `import`.
-  @Script::new brings the full registration set — including @system_rhai_register, so
-    the scripts hold `get_system_instance`, `set_status_ready` and the whole
-    @SystemInstance bridge — plus http, s3, the other three instance kinds, the jukebox
-    and the k8s registrars.
-  Fetch the CR with @SystemInstance::get taking clones of @Parameters.namespace and
-    @Parameters.instance — one named-object read, never a list, watch or create.
-  Publish the fetched CR twice from two clones: @context::set_system stores it as the
-    process owner context, and @rhai::Scope::set_value on @Script::ctx binds the script
-    variable named `instance`.
-  Serialize @Parameters with @serde_json::to_value and inject it through
-    @Script::set_dynamic as the script variable named `args`; the JSON object carries
-    the declared snake_case keys `namespace`, `instance`, `vynil_namespace`,
+  Exécuter ces étapes dans cet ordre, sans rien entre elles : construire l'interpréteur,
+    récupérer le CR, publier le contexte, injecter `instance`, sérialiser et injecter `args`,
+    évaluer le snippet, retourner @Ok.
+  Construire l'interpréteur avec @Script::new sur exactement quatre répertoires de résolution
+    dans cet ordre : `{package_dir}/scripts`, `{config_dir}` (le répertoire lui-même), `{script_dir}/system`,
+    `{script_dir}/lib` — simple interpolation de chaîne de @std::path::Display, si bien qu'un
+    argument de chemin finissant par `/` double le séparateur ; les entrées avant gagnent un `import`.
+  @Script::new apporte le jeu d'enregistrement complet — y compris @system_rhai_register, si bien
+    que les scripts tiennent `get_system_instance`, `set_status_ready` et tout le
+    pont @SystemInstance — plus http, s3, les trois autres kinds d'instance, le jukebox
+    et les registrars k8s.
+  Récupérer le CR avec @SystemInstance::get prenant des clones de @Parameters.namespace et
+    @Parameters.instance — une seule lecture d'objet nommé, jamais de list, watch ou create.
+  Publier deux fois le CR récupéré depuis deux clones : @context::set_system le stocke comme
+    contexte owner du processus, et @rhai::Scope::set_value sur @Script::ctx lie la variable de script
+    nommée `instance`.
+  Sérialiser @Parameters avec @serde_json::to_value et l'injecter via
+    @Script::set_dynamic comme variable de script nommée `args` ; l'objet JSON porte
+    les clés snake_case déclarées `namespace`, `instance`, `vynil_namespace`,
     `package_dir`, `script_dir`, `tag`, `config_dir`, `controller_values` —
-    `controller_values` as a JSON string (its default renders `"{}"`, still a string,
-    not an object) and the @PathBufs as path text.
-  Evaluate the fixed four-statement snippet, nothing configurable in it:
+    `controller_values` comme chaîne JSON (son défaut rend `"{}"`, toujours une chaîne,
+    pas un objet) et les @PathBufs comme texte de chemin.
+  Évaluer le snippet fixe de quatre instructions, rien de configurable dedans :
     `import("context") as ctx; let context = ctx::run(instance, args);
-    import("install") as install; install::run(instance, context);` — `context` script
-    first, its returned map becoming the `install::run` second argument; `install` runs
-    second and last; the snippet's @Dynamic result is discarded by `let _ =` while a
-    failed evaluation still propagates through `?`.
-  Perform no cluster mutation of its own: every `status` or event write happens inside
-    the Rhai modules through the registered @SystemInstance bridge (the success close is
-    `set_status_ready` called from the `install` module); this file only reads the CR.
-  Emit no log and no stdout/stderr.
+    import("install") as install; install::run(instance, context);` — le script `context`
+    d'abord, la carte retournée devenant le second argument de `install::run` ; `install` s'exécute
+    second et dernier ; le résultat @Dynamic du snippet est jeté par `let _ =` tandis qu'une
+    évaluation échouée se propage quand même via `?`.
+  Ne rien muter dans le cluster par soi-même : toute écriture de `status` ou d'événement a lieu dans
+    les modules Rhai via le pont @SystemInstance enregistré (la clôture de succès est
+    `set_status_ready` appelé depuis le module `install`) ; ce fichier ne lit que le CR.
+  N'émettre aucun log ni stdout/stderr.
 
 Must not:
-  Resolve the package through @JukeBox, pull an OCI artifact, or create or unpack
-    anything under @Parameters.package_dir — package content must already be on disk
-    when this subcommand starts; the stage scripts consume `{package_dir}/crds|tofu|systems`.
-  Interpret `tag` or `controller_values`, or gate on their contents.
+  Résoudre le package via @JukeBox, tirer un artifact OCI, ni créer ou dépaqueter
+    quoi que ce soit sous @Parameters.package_dir — le contenu du package doit déjà être sur disque
+    quand cette sous-commande démarre ; les scripts d'étape consomment `{package_dir}/crds|tofu|systems`.
+  Interpréter `tag` ou `controller_values`, ni gating sur leur contenu.
 
 Depends on:
-  /common/src/rhaihandler.sdd — @Script::new resolver semantics and registration set,
-    @Script::eval error lane, @Script::set_dynamic, @Script::ctx.
-  /common/src/instancesystem.sdd — @SystemInstance and the @SystemInstance::get lookup
-    this file awaits, and the registered bridges the scripts use for status writes.
-  /common/src/context.sdd — @set_system store semantics and runtime preconditions.
-  /common/src/lib.sdd — @common::Error variants and @common::Result.
-  @clap @Args, @serde, @serde_json — flag parsing (flags, envs, defaults above) and the
-    derives behind the `args` JSON.
-  /agent/scripts/system/context.rhai and /agent/scripts/system/install.rhai — runtime
-    handoff targets the snippet imports under the default `--script-dir`; owned instead
-    by /agent/agent.sdd and unspecified here.
-  ./mod.rs — the only caller: @context::init_k8s call, then this arm's
-    `unwrap_or_else` error lane (tracing text and @process::exit(1)).
+  /common/src/rhaihandler.sdd — sémantique de résolution et jeu d'enregistrement de @Script::new,
+    voie d'erreur de @Script::eval, @Script::set_dynamic, @Script::ctx.
+  /common/src/instancesystem.sdd — @SystemInstance et la recherche @SystemInstance::get
+    que ce fichier attend, et les ponts enregistrés que les scripts utilisent pour les écritures de statut.
+  /common/src/context.sdd — sémantique de stockage de @set_system et prérequis runtime.
+  /common/src/lib.sdd — variantes @common::Error et @common::Result.
+  @clap @Args, @serde, @serde_json — parsing des flags (flags, envs, défauts au-dessus) et les
+    derives derrière le JSON `args`.
+  /agent/scripts/system/context.rhai et /agent/scripts/system/install.rhai — cibles
+    du relais runtime que le snippet importe sous le `--script-dir` par défaut ; possédées à la place
+    par /agent/agent.sdd et non spécifiées ici.
+  ./mod.rs — le seul appelant : appel @context::init_k8s, puis la voie
+    d'erreur `unwrap_or_else` de cette branche (texte tracing et @process::exit(1)).
 
 Tasks:
-  [ ] Cover all five Scenarios with tests; no test invokes this @run —
-      /agent/tests/rhai_lifecycle.rs exercises the Rhai modules directly, bypassing
-      this Rust lane.
-  [?] Shared-shape drift with near-siblings: /agent/src/service/install.rs and
-      /agent/src/tenant/install.rs are byte-near-copies of the flow but their
-      @Parameters carry `-t`/`--template-dir` and `--agent-image`, which this system
-      variant lacks; apart from the kind segment (`{script_dir}/system`, @set_system,
-      @SystemInstance) the copies otherwise diverge nowhere. Decide whether the three
-      flags are one shared shape or the system kind genuinely needs no template dir
-      and agent image.
-  [?] `vynil_namespace`, `tag` and `controller_values` are typed and (for
-      `vynil_namespace`, `tag`) required, yet this file never reads them — their
-      contract lives only in the script-side `args` JSON. Confirm the requiredness
-      belongs to the Rhai contract or relax the flags.
-  [?] `controller_values` reaches scripts as a JSON string even when it holds `{}`,
-      so every consumer must decode it. Decide whether this file should pre-parse it
-      into an object.
-  [?] The eval @Dynamic is discarded (`let _ =`): confirm no `install::run` return
-      value may ever gate success.
-  [?] No already-installed or generation gate in the Rust lane, and
-      @SystemInstance::set_status_ready itself has no idempotence gate per
-      /common/src/instancesystem.sdd — reruns fully replay the script flow. Confirm
-      idempotence is entirely a script-side contract.
-  [?] @Deserialize on @Parameters has no deserialization site in the workspace (the
-      Rust lane only serializes it toward scripts). Decide whether the derive stays.
+  [ ] Couvrir les cinq Scenarios par des tests ; aucun test n'invoque ce @run —
+      /agent/tests/rhai_lifecycle.rs exerce les modules Rhai directement, en contournant
+      cette voie Rust.
+  [?] Dérive de forme partagée avec les quasi-jumeaux : /agent/src/service/install.rs et
+      /agent/src/tenant/install.rs sont des quasi-copies du flux au byte près mais leurs
+      @Parameters portent `-t`/`--template-dir` et `--agent-image`, dont cette variante
+      system est dépourvue ; hormis le segment de kind (`{script_dir}/system`, @set_system,
+      @SystemInstance) les copies ne divergent nulle part ailleurs. Décider si les trois
+      flags forment une forme partagée ou si le kind system n'a réellement besoin ni de
+      template dir ni d'agent image.
+  [?] `vynil_namespace`, `tag` et `controller_values` sont typés et (pour
+      `vynil_namespace`, `tag`) requis, mais jamais lus par ce fichier — leur contrat
+      ne vit que dans le JSON `args` côté script. Confirmer que le caractère requis
+      relève du contrat Rhai ou relâcher les flags.
+  [?] `controller_values` parvient aux scripts comme chaîne JSON même quand elle porte `{}`,
+      donc tout consommateur doit la décoder. Décider si ce fichier devrait la pré-parsée
+      en objet.
+  [?] L'@Dynamic d'eval est jeté (`let _ =`) : confirmer qu'aucune valeur de retour
+      de `install::run` ne pourra jamais conditionner le succès.
+  [?] Pas de gating déjà-installé ni génération dans la voie Rust, et
+      @SystemInstance::set_status_ready n'a lui-même aucun gating d'idempotence selon
+      /common/src/instancesystem.sdd — les relances rejouent tout le flux script. Confirmer
+      que l'idempotence est entièrement un contrat côté script.
+  [?] @Deserialize sur @Parameters n'a aucun site de désérialisation dans le workspace (la
+      voie Rust ne fait que le sérialiser vers les scripts). Décider si le derive reste.
 
 Done when:
-  The five Scenarios hold under tests pinning resolver-path order, the `args` JSON key
-    set with `controller_values` as a string, and the error-to-exit(1) lane.
+  Les cinq Scenarios tiennent sous des tests épinglant l'ordre des chemins de résolution, le jeu
+    de clés du JSON `args` avec `controller_values` comme chaîne, et la voie erreur-vers-exit(1).
 
 Scenario: full run hands off in order
-  Given all required flags supplied (by flag or env), an existing namespaced
-    @SystemInstance named by @Parameters.instance, and `context.rhai` plus
-    `install.rhai` resolvable under `{script_dir}/system`
-  When @run is awaited
-  Then @Script::new received the four search dirs `[package]/scripts`, `[config]`,
-    `[script]/system`, `[script]/lib` in that order
-  And before the eval, the process owner context is the system variant (via
-    @set_system) and `instance` and `args` are bound, `args` carrying the eight
-    snake_case keys with `controller_values` as a JSON string
-  Then the `context` module's `run` executes before the `install` module's `run`,
-    receiving (`instance`, `args`), and the installed `context` value is what
-    `install::run` receives
-  And @run returns @Ok(()) whatever the discarded @Dynamic was
+  Given tous les flags requis fournis (par flag ou env), un @SystemInstance namespaced
+    existant nommé par @Parameters.instance, et `context.rhai` plus
+    `install.rhai` résolvables sous `{script_dir}/system`
+  When @run est attendu
+  Then @Script::new a reçu les quatre répertoires de recherche `[package]/scripts`, `[config]`,
+    `[script]/system`, `[script]/lib` dans cet ordre
+  And avant l'eval, le contexte owner du processus est la variante system (via
+    @set_system) et `instance` et `args` sont liés, `args` portant les huit
+    clés snake_case avec `controller_values` comme chaîne JSON
+  Then le `run` du module `context` s'exécute avant le `run` du module `install`,
+    recevant (`instance`, `args`), et la valeur `context` installée est ce que
+    `install::run` reçoit
+  And @run retourne @Ok(()) quel que soit le @Dynamic jeté
 
 Scenario: missing CR fails before any handoff
-  Given no @SystemInstance exists at that namespace/name — or its read is Forbidden
-  When @run is awaited
-  Then the @SystemInstance::get `?` returns @Err(@common::Error::KubeError)
-  And @set_system never ran (context stays @VynilContext::None), `instance`/`args` were
-    never injected and the snippet never evaluated
-  And @system::run logs `Installing a package failed with: K8s error: ...` at
-    @tracing::error level and exits the process 1
+  Given aucun @SystemInstance n'existe à ce namespace/name — ou sa lecture est Forbidden
+  When @run est attendu
+  Then le `?` de @SystemInstance::get retourne @Err(@common::Error::KubeError)
+  And @set_system n'a jamais tourné (le contexte reste @VynilContext::None), `instance`/`args`
+    n'ont jamais été injectés et le snippet n'a jamais été évalué
+  And @system::run journalise `Installing a package failed with: K8s error: ...` au
+    niveau @tracing::error et quitte le processus avec 1
 
 Scenario: missing required flag never reaches Rust logic
-  Given `--namespace` omitted and `NAMESPACE` unset in the environment
-  When the binary parses @Parameters
-  Then clap exits with its usage error before @run starts — no interpreter, no cluster
-    read, and the exit-1 install lane is never entered
+  Given `--namespace` omis et `NAMESPACE` non défini dans l'environnement
+  When le binaire parse @Parameters
+  Then clap sort avec son erreur d'usage avant que @run démarre — pas d'interpréteur, pas
+    de lecture cluster, et la voie exit-1 d'installation n'est jamais entrée
 
 Scenario: import failure after the CR is already published
-  Given a valid @SystemInstance but neither `context.rhai` nor `install.rhai` present in
-    any of the four resolver directories
-  When @run evaluates the snippet
-  Then @Script::eval returns @Err(@common::Error::Core Display-prefixed
+  Given un @SystemInstance valide mais ni `context.rhai` ni `install.rhai` présents dans
+    aucun des quatre répertoires de résolution
+  When @run évalue le snippet
+  Then @Script::eval retourne @Err(@common::Error::Core au Display préfixé
     `Rhai script error:`)
-  And the process context still holds the system variant when the exit(1) lane fires
+  And le contexte du processus tient toujours la variante system quand la voie exit(1) se déclenche
 
 Scenario: rerun over an installed instance
-  Given a @SystemInstance whose `status.conditions` already carry `Ready`/`True` and
-    `Installed`/`True` from a previous run
-  When @run is invoked again with the same flags
-  Then the CR is refetched and both modules replay from the top — this file skips
-    nothing based on `status`
+  Given un @SystemInstance dont `status.conditions` portent déjà `Ready`/`True` et
+    `Installed`/`True` d'une exécution précédente
+  When @run est invoqué de nouveau avec les mêmes flags
+  Then le CR est récupéré à nouveau et les deux modules se rejouent depuis le début — ce
+    fichier ne saute rien selon `status`

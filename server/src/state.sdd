@@ -1,167 +1,167 @@
 Spec: state
 
 Purpose:
-  Own the diagnostic server's one shared request state — a single @kube::Client plus one copy
-    of the resolved @Config — built once at startup through @AppState::new and @Clone-d as
-    cheap handles to the axum router and every @axum::extract::State, with a client-build
-    failure as the only error the entry point can see before serving.
+  Posséder l'unique état de requête partagé du serveur de diagnostic — un seul @kube::Client plus une
+    copie du @Config résolu — construit une fois au démarrage via @AppState::new puis clonés (@Clone)
+    en poignées économiques vers le routeur axum et chaque @axum::extract::State, l'échec de
+    construction du client étant la seule erreur que le point d'entrée peut voir avant de servir.
 
 Owns:
   ./state.rs
 
 References:
-  ./config.sdd — the embedded @Config value type and the log-window defaults it carries.
-  ./error.sdd — the @DiagError lane and @internal_error builder @AppState::new reports into.
-  /common/src/context.sdd, /server/src/error.sdd — approved calibration references.
+  ./config.sdd — le type de valeur @Config embarqué et les valeurs par défaut de fenêtre de logs qu'il porte.
+  ./error.sdd — la voie @DiagError et le constructeur @internal_error dans lesquels @AppState::new rapporte ses erreurs.
+  /common/src/context.sdd, /server/src/error.sdd — références de calibration approuvées.
 
 Must:
-  The state is exactly the two fields — @kube::Client and embedded @Config — and this file
-    owns no cache, informer, TTL or timer state, and no background task; no tokio or
-    @std::thread spawn exists here, and the only mutable shared resource is whatever sits
-    behind the client handle.
-  @AppState::new is the file's only @kube::Client construction and delegates every step of
-    endpoint and credential discovery to @kube::Config::infer inside @Client::try_default —
-    kubeconfig first (`KUBECONFIG`, `~/.kube/config`), in-cluster service-account files plus
-    `KUBERNETES_SERVICE_HOST`/`KUBERNETES_SERVICE_PORT` as fallback, the same locked-build
-    behavior documented for that call in /common/src/context.sdd; this file parses no
-    kubeconfig, applies no in-cluster override, and opens no API round trip — @new succeeding
-    never proves the API server is reachable.
-  @Clone is the plain field-wise derive: @config deep-copies all ten resolved values with no
-    sharing or interior mutability, and the client copy is kube `3.1.0`'s cheap
-    buffer-backed @Clone of @kube::Client — every handle issued to the router by
-    `@create_router(state)` and to each request by @axum::extract::State drives the one
-    client built at startup; no clone rebuilds, warms or closes a client, and clone never
-    fails.
-  The file installs no rustls provider: the inherited "pin `ring` before the Kubernetes
-    client is built" rule from /server/server.sdd is honored one level up in ./main.rs,
-    which calls @rustls::crypto::ring::default_provider().install_default() before the
-    first @AppState::new call.
-  The hand-written @Debug exists because the locked kube build gives @kube::Client a @Clone
-    derive but no @Debug, so a derive on @AppState is impossible; it renders exactly the
-    literal struct name `AppState` plus the two fields in declaration order, with the client
-    masked as the `&'static str` `"kube::Client"` — client internals (endpoint, credentials,
-    driver state) are structurally unreachable through this output, while the embedded
-    @Config renders through its own ten-field full @Debug per ./config.sdd.
+  L'état est exactement les deux champs — @kube::Client et @Config embarqué — et ce fichier ne
+    possède aucun cache, informer, état de TTL ou de temporiseur, ni aucune tâche de fond ; aucun
+    spawn tokio ou @std::thread n'existe ici, et la seule ressource partagée mutable est ce qui
+    se trouve derrière la poignée du client.
+  @AppState::new est l'unique construction de @kube::Client du fichier et délègue chaque étape de la
+    découverte du endpoint et des credentials à @kube::Config::infer dans @Client::try_default —
+    kubeconfig d'abord (`KUBECONFIG`, `~/.kube/config`), fichiers de service-account in-cluster plus
+    `KUBERNETES_SERVICE_HOST`/`KUBERNETES_SERVICE_PORT` en repli, le même comportement de build verrouillé
+    documenté pour cet appel dans /common/src/context.sdd ; ce fichier n'analyse aucun kubeconfig,
+    n'applique aucune substitution in-cluster, et n'ouvre aucun aller-retour d'API — la réussite de
+    @new ne prouve jamais que l'API server est joignable.
+  @Clone est le derive ordinaire champ par champ : @config copie en profondeur les dix valeurs
+    résolues sans partage ni mutabilité interne, et la copie du client est le cheap
+    @Clone à buffer partagé de @kube::Client dans kube `3.1.0` — toute poignée remise au routeur par
+    `@create_router(state)` et à chaque requête par @axum::extract::State pilote l'unique
+    client construit au démarrage ; aucun clone ne reconstruit, ne réchauffe ni ne ferme un
+    client, et cloner ne peut échouer.
+  Le fichier n'installe aucun provider rustls : la règle héritée « épingler `ring` avant que le client
+    Kubernetes soit construit » de /server/server.sdd est honorée un niveau plus haut dans ./main.rs,
+    qui appelle @rustls::crypto::ring::default_provider().install_default() avant le
+    premier appel à @AppState::new.
+  Le @Debug écrit à la main existe parce que le build kube verrouillé donne à @kube::Client un derive
+    @Clone mais pas de @Debug, si bien qu'un derive sur @AppState est impossible ; il rend exactement
+    le nom littéral de struct `AppState` plus les deux champs dans l'ordre de déclaration, avec le
+    client masqué par le `&'static str` `"kube::Client"` — les entrailles du client (endpoint, credentials,
+    état du driver) sont structurellement inaccessibles via cette sortie, tandis que le
+    @Config embarqué se rend via son propre @Debug complet à dix champs selon ./config.sdd.
 
 Depends on:
-  @kube::Client — kube `3.1.0` locked in `/Cargo.lock` (workspace features `runtime`,
-    `client`, `derive` in /Cargo.toml) imported as `Client`; only @Client::try_default and
-    that build's @Clone derive of @kube::Client (its Buffer-backed handle) are used, and no
-    @Debug impl for the type exists in that build — the fact forcing the manual impl.
-  @crate::config::Config via ./config.rs (./config.sdd) — the by-value field and its
+  @kube::Client — kube `3.1.0` verrouillé dans `/Cargo.lock` (features du workspace `runtime`,
+    `client`, `derive` dans /Cargo.toml) importé sous le nom `Client` ; seuls @Client::try_default et
+    le derive @Clone de @kube::Client par ce build (sa poignée à buffer partagé) sont utilisés, et aucune
+    impl de @Debug pour ce type n'existe dans ce build — le fait qui force l'impl manuelle.
+  @crate::config::Config via ./config.rs (./config.sdd) — le champ par valeur et son
     @Clone/@Debug.
-  @crate::error via ./error.rs (./error.sdd) — @DiagError as the error type and
-    @crate::error::internal_error as the one builder called here.
+  @crate::error via ./error.rs (./error.sdd) — @DiagError comme type d'erreur et
+    @crate::error::internal_error comme seul builder appelé ici.
 
 Exposes:
-  @AppState — `pub struct` whose only derive is @Clone; re-exported at the crate root by
-    `pub use state::AppState` in ./lib.rs (the re-export is owned there). Both fields are
-    `pub`, giving no type-level invariant:
-    @AppState.client — @kube::Client, the Kubernetes client shared by every request.
-    @AppState.config — @Config, a full copy of the resolved configuration; the log-window
-      defaults `5` (@u64 hours, `log_since_hours`) and `2097152` (bytes, `log_cap_bytes`)
-      from ./config.sdd travel inside every state copy and are applied only downstream —
-      ./server.rs handlers pass them to ./collect/logs.rs — never by this file.
-  @Debug for @AppState — hand-written impl, shape pinned in Example.
-  @AppState::new — the crate's only construction path: `@pub async fn` taking `&@Config` and
-    returning @Result<@Self, @DiagError>; its doc comment names @DiagError::InternalError as
-    the sole failure.
+  @AppState — `pub struct` dont le seul derive est @Clone ; réexporté à la racine du crate par
+    `pub use state::AppState` dans ./lib.rs (la réexportation y est possédée). Les deux champs sont
+    `pub`, sans aucune invariant au niveau du type :
+    @AppState.client — @kube::Client, le client Kubernetes partagé par chaque requête.
+    @AppState.config — @Config, une copie complète de la configuration résolue ; les valeurs par
+      défaut de fenêtre de logs `5` (@u64 heures, `log_since_hours`) et `2097152` (octets, `log_cap_bytes`)
+      de ./config.sdd voyagent dans chaque copie de l'état et ne sont appliquées qu'en aval —
+      les handlers de ./server.rs les passent à ./collect/logs.rs — jamais par ce fichier.
+  @Debug pour @AppState — impl écrite à la main, forme épinglée dans Example.
+  @AppState::new — l'unique chemin de construction du crate : `@pub async fn` prenant `&@Config` et
+    renvoyant @Result<@Self, @DiagError> ; son commentaire doc nomme @DiagError::InternalError comme
+    la seule erreur possible.
 
 Accepts:
-  @AppState::new takes one `&@Config` borrow, read once and cloned into the state — no
-    reference is held and the caller may keep and pass on its own copy; it accepts no
-    kube-connection parameter of any kind: endpoint, credentials and namespace arrive only
-    from the process environment at call time through @Client::try_default.
-  @Clone accepts the state by @self, infallibly, with no precondition.
-  The `pub` fields accept struct-literal construction with any client-and-config pair by any
-    in-crate code, bypassing @AppState::new entirely; no such bypass exists today — ./main.rs
-    after @Config::parse and the provider pin is the single construction call site.
+  @AppState::new prend un seul emprunt `&@Config`, lu une fois puis cloné dans l'état —
+    aucune référence n'est conservée et l'appelant peut garder et transmettre sa propre copie ; il
+    n'accepte aucun paramètre de connexion kube de quelque sorte : endpoint, credentials et
+    namespace n'arrivent que de l'environnement du processus au moment de l'appel via @Client::try_default.
+  @Clone accepte l'état par @self, infailliblement, sans precondition.
+  Les champs `pub` acceptent une construction par littéral de struct avec n'importe quel couple
+    client-config par tout code du crate, contournant @AppState::new entièrement ; aucun tel contournement
+    n'existe aujourd'hui — ./main.rs après @Config::parse et l'épinglage du provider est l'unique site de construction.
 
 Returns:
-  @Ok of one @AppState on success: the client @Client::try_default built (unprobed against
-    the cluster) and a field-equal copy of the input @Config.
-  A @Clone yields a state whose @config @Debug-renders equal to the source's and whose client
-    is another handle of the same built @kube::Client.
-  @Debug yields `AppState { client: "kube::Client", config: Config { … } }` — the client entry
-    is always that literal string, the config entry is the embedded @Config's full ten-field
-    render, as pinned in Example.
+  @Ok d'un seul @AppState en succès : le client construit par @Client::try_default (non sondé
+    contre le cluster) et une copie champ à champ égale du @Config d'entrée.
+  Un @Clone produit un état dont le @config se rend via @Debug à l'égal de celui de la source et dont le
+    client est une autre poignée du même @kube::Client construit.
+  @Debug rend `AppState { client: "kube::Client", config: Config { … } }` — l'entrée client
+    est toujours cette chaîne littérale, l'entrée config est le rendu complet à dix champs
+    du @Config embarqué, comme épinglé dans Example.
 
 Raises:
-  @AppState::new has one failure shape: any @kube::Error from @Client::try_default maps
-    through @internal_error to @DiagError::InternalError carrying payload
+  @AppState::new a une seule forme d'échec : tout @kube::Error de @Client::try_default passe
+    par @internal_error vers @DiagError::InternalError portant le payload
     `Failed to create kube client: {e}` — @Display `DIAG-500: Internal server error - Failed to create kube client: …`,
-    @DiagError::code `DIAG-500` — with no retry, fallback client, or offline default and no
-    other variant raised here; the production trigger is an environment with neither
-    resolvable kubeconfig nor in-cluster variables, whose combined inference-failure @Display
-    kube interpolates into the payload.
-  The @Debug impl, the @Clone derive and field access are total — this file contains no
-    unwrap, expect or panic path of its own; upstream ordering mistakes (a client built
-    before the provider pin, inside rustls) propagate uncaught.
+    @DiagError::code `DIAG-500` — sans retry, client de repli ni défaut hors ligne, et sans
+    autre variant levée ici ; le déclencheur en production est un environnement sans
+    kubeconfig résolvable ni variables in-cluster, dont le @Display combiné de l'échec
+    d'inférence que kube interpole dans le payload.
+  L'impl @Debug, le derive @Clone et l'accès aux champs sont totaux — ce fichier ne contient
+    aucun chemin unwrap, expect ou panic qui lui soit propre ; les erreurs d'ordre en amont (un client construit
+    avant l'épinglage du provider, dans rustls) se propagent sans être captées.
 
 Handles:
-  The file's single branch — @Client::try_default @Ok or @Err; the @Err @DiagError
-    propagates by @Result to ./main.rs, whose exit-1 startup abort belongs to that file.
-  A member the type system cannot debug — the client — is masked with a static string
-    instead of skipped or shown.
+  La seule branche du fichier — @Client::try_default @Ok ou @Err ; le @Err @DiagError
+    se propage par @Result vers ./main.rs, dont l'abandon de démarrage en exit-1 appartient à ce fichier.
+  Un membre que le système de types ne peut pas debugger — le client — est masqué par une chaîne
+    statique au lieu d'être omis ou affiché.
 
 Tasks:
-  [ ] Cover the failure shape: @AppState::new with no resolvable kubeconfig and no in-cluster
-      environment returns @Err whose @Display begins `DIAG-500: Internal server error - Failed to create kube client:`
-      and whose @DiagError::code is `DIAG-500`; no test touches @AppState today.
-  [ ] Cover the @Debug rendering verbatim, literal-masked `client` entry included.
-  [ ] Cover @Clone: the copy's @config @Debug-renders equal to the source; client sharing is
-      not directly assertable (no @PartialEq, @Debug masked), so pin only the observable half.
-  [?] `client` and `config` are `pub`, so in-crate code may struct-literal an @AppState with
-      any client and skip @AppState::new's error lane and single-construction path; all
-      construction goes through @new from ./main.rs today. Decide later whether the fields go
-      private behind accessors.
-  [?] @AppState::new clones the `&@Config` while ./main.rs also hands its own owned copy to
-      @run_server — two live copies with divergent drift risk; handlers read `state.config`
-      while server startup reads the parameter copy. Decide later whether @Config should
-      live solely in @AppState.
-  [?] The hand-written @Debug has no call site in the crate — nothing renders @AppState
-      through `{:?}` and axum requires no @Debug; it exists to keep the type debuggable since
-      @kube::Client lacks one. Decide later whether the mask is contract or convenience.
-  [?] @new validates no cluster reachability, so a wrong endpoint or stale credential shows
-      up only as `500` on each first request (the kube lane of ./error.sdd) while startup
-      reports success. Decide later whether a startup probe belongs here or with the caller.
+  [ ] Couvrir la forme d'échec : @AppState::new sans kubeconfig résolvable et sans environnement
+      in-cluster renvoie un @Err dont le @Display commence par `DIAG-500: Internal server error - Failed to create kube client:`
+      et dont le @DiagError::code est `DIAG-500` ; aucun test ne touche @AppState aujourd'hui.
+  [ ] Couvrir le rendu @Debug verbatim, entrée `client` masquée en littéral incluse.
+  [ ] Couvrir @Clone : le @config de la copie se rend via @Debug à l'égal de celui de la source ; le partage
+      du client n'est pas directement assertable (pas de @PartialEq, @Debug masqué), donc n'épingler que la moitié observable.
+  [?] `client` et `config` sont `pub`, donc du code du crate peut construire un @AppState par
+      littéral avec n'importe quel client et sauter la voie d'erreur de @AppState::new et son chemin de
+      construction unique ; toute la construction passe par @new depuis ./main.rs aujourd'hui. Décider plus
+      tard si les champs passent privés derrière des accessors.
+  [?] @AppState::new clone le `&@Config` tandis que ./main.rs remet aussi sa propre copie possédée à
+      @run_server — deux copies vivantes au risque de dérive divergente ; les handlers lisent `state.config`
+      alors que le démarrage du serveur lit la copie du paramètre. Décider plus tard si @Config devrait
+      vivre uniquement dans @AppState.
+  [?] Le @Debug écrit à la main n'a aucun site d'appel dans le crate — rien ne rend @AppState
+      via `{:?}` et axum n'exige aucun @Debug ; il existe pour garder le type debuggable puisque
+      @kube::Client n'en a pas. Décider plus tard si le masque est un contrat ou une commodité.
+  [?] @new ne valide aucune joignabilité du cluster, si bien qu'un endpoint erroné ou un credential périmé
+      n'apparaît qu'en `500` sur chaque première requête (la voie kube de ./error.sdd) alors que le
+      démarrage rapporte un succès. Décider plus tard si une sonde de démarrage relève d'ici ou de l'appelant.
 
 Done when:
-  Every Scenario below maps to a green test in `server`, the `[?]` decisions above are
-    recorded, and `cargo test -p server` is green.
+  Chaque Scenario ci-dessous correspond à un test vert dans `server`, les décisions `[?]` ci-dessus sont
+    consignées, et `cargo test -p server` est vert.
 
 Scenario: Startup builds the one state
-  Given @Config parsed and the `ring` provider installed in ./main.rs
-  When @AppState::new runs with a kube-resolvable environment
-  Then it returns @Ok of a single @AppState — the @Client::try_default client and a copy of
-    that @Config — which is then cloned into the router and each request's
-    @axum::extract::State
-  No mapped test exists.
+  Given un @Config parsé et le provider `ring` installé dans ./main.rs
+  When @AppState::new s'exécute avec un environnement résolvable par kube
+  Then il renvoie @Ok d'un unique @AppState — le client de @Client::try_default et une copie
+    de ce @Config — qui est ensuite cloné vers le routeur et le
+    @axum::extract::State de chaque requête
+  Aucun test mappé n'existe.
 
 Scenario: No cluster identity fails startup through DIAG-500
-  Given an environment with neither resolvable kubeconfig nor in-cluster variables
-  When @AppState::new runs
-  Then it returns @Err with @Display `DIAG-500: Internal server error - Failed to create kube client: …`
-    and @DiagError::code `DIAG-500`, and no @AppState is ever produced
-  And the log-and-exit `1` reaction there belongs to ./main.rs
-  No mapped test exists.
+  Given un environnement sans kubeconfig résolvable ni variables in-cluster
+  When @AppState::new s'exécute
+  Then il renvoie un @Err avec @Display `DIAG-500: Internal server error - Failed to create kube client: …`
+    et @DiagError::code `DIAG-500`, et aucun @AppState n'est jamais produit
+  And la réaction de log-et-exit `1` là-bas appartient à ./main.rs
+  Aucun test mappé n'existe.
 
 Scenario: Debug masks the client and prints the config
-  Given a state over a fully defaulted @Config
-  When `{:?}` renders the @AppState
-  Then the `client` field shows the literal `kube::Client` and the `config` field shows the
-    ten-field @Config render from the ./config.sdd Example
-  No mapped test exists.
+  Given un état sur un @Config entièrement par défaut
+  When `{:?}` rend @AppState
+  Then le champ `client` affiche le littéral `kube::Client` et le champ `config` affiche le
+    rendu @Config à dix champs de l'Example de ./config.sdd
+  Aucun test mappé n'existe.
 
 Scenario: Clones share the client and copy the config
-  Given one @AppState handle
-  When @Clone runs repeatedly, as router registration and extractors do
-  Then every copy's @config @Debug-renders equal to the source's
-  And all copies drive the same built @kube::Client — nothing is rebuilt, warmed or closed by
-    cloning
-  No mapped test exists.
+  Given une poignée @AppState
+  When @Clone s'exécute à répétition, comme le font l'enregistrement du routeur et les extractors
+  Then le @config de chaque copie se rend via @Debug à l'égal de celui de la source
+  And toutes les copies pilotent le même @kube::Client construit — rien n'est reconstruit,
+    réchauffé ni fermé par le clonage
+  Aucun test mappé n'existe.
 
 Example:
-  @Debug of a fully defaulted state: `AppState { client: "kube::Client", config: Config { bind: "0.0.0.0:8443", insecure_no_tls: false, tls_cert: None, tls_key: None, requestheader_ca: None, trust_request_header: false, vynil_namespace: "vynil-system", log_since_hours: 5, log_cap_bytes: 2097152, enable_packages: true } }`
-  @new failure @Display shape for an unresolvable environment:
+  @Debug d'un état entièrement par défaut : `AppState { client: "kube::Client", config: Config { bind: "0.0.0.0:8443", insecure_no_tls: false, tls_cert: None, tls_key: None, requestheader_ca: None, trust_request_header: false, vynil_namespace: "vynil-system", log_since_hours: 5, log_cap_bytes: 2097152, enable_packages: true } }`
+  Forme du @Display d'un échec de @new pour un environnement non résolvable :
     `DIAG-500: Internal server error - Failed to create kube client: <kube inference-failure @Display>`

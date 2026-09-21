@@ -3,71 +3,71 @@ Spec: ServiceMod
 Platform: Rust
 
 Purpose:
-  Sub-command dispatcher for `agent service …`: owns the private `backup`, `delete`,
-    `install`, `restore` modules (and the commented-out `reconfigure`), exposes one clap
-    group and one async entry that initializes the Kubernetes client before dispatch.
+  Dispatcher de sous-commandes pour `agent service …` : possède les modules privés
+    `backup`, `delete`, `install`, `restore` (et `reconfigure` mis en commentaire),
+    expose un groupe clap et un point d’entrée asynchrone qui initialise le client Kubernetes avant la distribution.
 
 Owns:
   ./mod.rs
 
 Exposes:
-  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
-    ./../main.rs (the `Service` dispatch arm; spec pending ./../main.sdd).
-  @Commands — clap `Subcommand`, `Debug`, exactly four live variants:
+  @Parameters — clap `Parser`, `Debug` ; champ unique @command: @Commands. Consommé par
+    ./../main.rs (la branche `Service` de distribution ; spec en attente ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, exactement quatre variantes actives :
     @Install(install::Parameters), @Delete(delete::Parameters),
     @Backup(backup::Parameters), @Restore(restore::Parameters).
-  @run — async, takes `&Parameters`, returns `()`.
+  @run — asynchrone, prend `&Parameters`, retourne `()`.
 
 Accepts:
-  A parsed @Commands tree; all flag contracts live in the leaf specs.
+  Un arbre @Commands analysé ; tous les contrats de flags vivent dans les specs feuilles.
 
 Returns:
-  `()` — @Ok lanes fall off the end; every @Err lane ends in @std::process::exit.
+  `()` — les voies @Ok tombent en fin de fonction ; chaque voie @Err se termine par @std::process::exit.
 
 Handles:
-  Leaf @Err per arm, each a @tracing::error! Display-only line then a frozen exit
-    code: Install `Installing a package failed with: {e:}` → 1;
+  Le @Err de chaque branche de feuille, chaque fois une ligne @tracing::error! en affichage seul
+    puis un code de sortie figé : Install `Installing a package failed with: {e:}` → 1 ;
     Delete `Deleting a package failed with: {e:}` → 3;
     Backup `Backup of a package failed with: {e:}` → 4;
     Restore `Restore of a package failed with: {e:}` → 5.
-  Panics inside leaves — unwind to main's runtime untouched.
+  Les panics dans les feuilles — unwind jusqu’au runtime de main sans modification.
 
 Must:
-  Keep `mod backup; mod delete; mod install; mod restore;` private and
-    `//mod reconfigure;` commented out so ./reconfigure.rs stays out of the build
-    graph (see ./reconfigure.sdd).
-  Keep the commented-out @Reconfigure variant and its exit-6 arm commented in lockstep
-    with that mod declaration — uncommenting one without the other does not build.
-  Call @common::context::init_k8s() once before the match on every invocation.
-  Await @install::run and @delete::run but call @backup::run and @restore::run
-    synchronously (their leaves are non-async per ./backup.sdd, ./restore.sdd).
-  Carry the frozen code quirk: @Backup and @Restore documents are plain `//` comments,
-    not `///` doc comments, so clap lists them without help text.
+  Conserver `mod backup; mod delete; mod install; mod restore;` privé et
+    `//mod reconfigure;` en commentaire afin que ./reconfigure.rs reste hors du graphe
+    de compilation (voir ./reconfigure.sdd).
+  Conserver la variante @Reconfigure en commentaire et sa branche exit-6 en commentaire, de pas
+    avec cette déclaration mod — décommenter l’un sans l’autre ne compile pas.
+  Appeler @common::context::init_k8s() une fois avant le match à chaque invocation.
+  Await @install::run et @delete::run mais appeler @backup::run et @restore::run
+    de façon synchrone (leurs feuilles sont non-async selon ./backup.sdd, ./restore.sdd).
+  Conserver la bizarrerie de code figée : les documents @Backup et @Restore sont de simples commentaires `//`,
+    pas des commentaires de doc `///`, si bien que clap les liste sans texte d’aide.
 
 Depends on:
-  ./install.sdd, ./delete.sdd, ./backup.sdd, ./restore.sdd, ./reconfigure.sdd (dead
-    sibling) — leaf contracts.
+  ./install.sdd, ./delete.sdd, ./backup.sdd, ./restore.sdd, ./reconfigure.sdd (frère
+    mort) — contrats des feuilles.
   ../common/src/context.sdd — @init_k8s.
-  ./../main.rs — caller (`service::run(args).await`); spec pending ./../main.sdd.
+  ./../main.rs — appelant (`service::run(args).await`) ; spec en attente ./../main.sdd.
 
 Tasks:
-  [ ] Decide later whether the commented-out Reconfigure lane (exit 6) is resurrected
-      or ./reconfigure.rs is deleted.
-  [ ] Decide whether Backup/Restore variants should get real `///` help strings.
-  [ ] Decide the 1/3/4/5 exit-code ladder's fate as an operator contract.
-  [ ] Cover this dispatcher with tests; no `#[cfg(test)]` module exists here.
+  [ ] Décider plus tard si la voie Reconfigure en commentaire (exit 6) est ressuscitée
+      ou si ./reconfigure.rs est supprimé.
+  [ ] Décider si les variantes Backup/Restore doivent recevoir de vraies chaînes d’aide `///`.
+  [ ] Décider du sort de l’échelle de codes de sortie 1/3/4/5 en tant que contrat opérateur.
+  [ ] Couvrir ce dispatcher par des tests ; aucun module `#[cfg(test)]` n’existe ici.
 
 Done when:
-  Dispatch, init ordering, per-arm exit codes, and the reconfigure freeze hold under
-    tests.
+  La distribution, l’ordonnancement de init, les codes de sortie par branche et le gel de
+    reconfigure tiennent sous les tests.
 
 Scenario: backup error exits 4 without awaiting
-  Given `ServiceMod` @Commands::Backup whose synchronous leaf returns @Err
-  When @run reaches the Backup arm
-  Then the frozen backup log line is emitted and @process::exit(4) is reached
+  Given `ServiceMod` @Commands::Backup dont la feuille synchrone retourne @Err
+  When @run atteint la branche Backup
+  Then la ligne de journal figée de backup est émise et @process::exit(4) est atteint
 
 Scenario: restore of a gone instance
-  Given @Commands::Restore whose leaf fetches a missing instance CR (lane frozen in
+  Given @Commands::Restore dont la feuille récupère un CR instance manquant (voie figée dans
     ./restore.sdd)
-  When the leaf returns @Err
-  Then exit 5 follows the frozen restore log line
+  When la feuille retourne @Err
+  Then exit 5 suit la ligne de journal figée de restore

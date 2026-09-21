@@ -1,395 +1,416 @@
-# File spec for ./scan.rhai — the one shipped scan script both box lanes run as entry
-# payload (cluster side /agent/src/boxes/scan.sdd, offline side /agent/src/boxes/file_scan.sdd).
-# Script semantics only; lane assembly and engine construction belong to those Rust specs.
-# Calibrated on ./../lib/scan_harbor.sdd and ./../lib/secret_dockerconfigjson.sdd style.
+# Spec fichier de ./scan.rhai — le script scan livré que les deux lanes box exécutent comme
+# payload d'entrée (côté cluster /agent/src/boxes/scan.sdd, côté offline /agent/src/boxes/file_scan.sdd).
+# Sémantique du script uniquement ; l'assemblage des lanes et la construction du moteur appartiennent à ces specs Rust.
+# Calibré sur le style de ./../lib/scan_harbor.sdd et ./../lib/secret_dockerconfigjson.sdd.
 
 Spec: BoxesScan
 
-Platform: Rhai script (vynil-core 0.7.7 engine / locked rhai)
+Platform: script Rhai (moteur vynil-core 0.7.7 / rhai verrouillé)
 
 Purpose:
-  Own the whole box-scan inventory both `agent box` lanes merely launch: read the mounted
-    `box` spec and the `args` scope map, dispatch on the source kind (http cache, s3 cache,
-    Harbor, GitLab, evaluated snippet, plain image list, in that probe order), fetch tags or
-    cache bundles, drop non-security and off-maturity versions, walk a newest-first waypoint
-    chain of installable versions, and hand the surviving @VynilPackage maps back through the
-    box's `set_status_updated`/`set_status_packages_merge` mutators — or record
-    `set_status_failed` and rethrow. Which sink (CR status vs cache dir) the mutators hit is
-    decided by the lane's box type (@JukeBox vs @FileJukeBox), never here.
-  The file is a bare entry script — no `main`, no wrapper fn, nothing exported; its complete
-    structure is: three `import` lines, five @fn definitions (@maturity_filter,
+  Porter tout l'inventaire du box-scan que les deux lanes `agent box` ne font que lancer : lire
+    le spec `box` monté et la carte de scope `args`, dispatcher sur le kind de source (cache
+    http, cache s3, Harbor, GitLab, snippet évalué, simple liste d'images, dans cet ordre de
+    sondage), récupérer les tags ou les bundles de cache, écarter les versions non-security et
+    hors maturité, parcourir une chaîne de waypoints de versions installables de la plus récente
+    à la plus ancienne, et rendre les cartes @VynilPackage survivantes via les mutators
+    `set_status_updated`/`set_status_packages_merge` du box — ou enregistrer
+    `set_status_failed` et relancer. Le choix du sink (status de CR vs dossier cache) frappé par
+    les mutators est décidé par le type de box de la lane (@JukeBox vs @FileJukeBox), jamais ici.
+  Le fichier est un simple script d'entrée — pas de `main`, pas de fn wrapper, rien d'exporté ;
+    sa structure complète est : trois lignes `import`, cinq définitions @fn (@maturity_filter,
     @security_filter, @scan_image_with_maturity, @union_packages,
-    @compute_waypoints_from_packages), the top-level `scan_filter`/`file_scan`/`spec`/
-    `use_auth` bindings, then one @try wrapping the entire scan and write-back with the
-    single @catch described under Raises.
+    @compute_waypoints_from_packages), les bindings top-level `scan_filter`/`file_scan`/`spec`/
+    `use_auth`, puis un @try enveloppant tout le scan et le write-back avec l'unique @catch
+    décrit sous Raises.
 
 Must:
-  Source dispatch is this exact probe chain on `spec.source.keys()`: `"http"` → cache-http
-    lane, else `"s3"` → cache-s3 lane, else `"harbor"` → @harbor::list_repository, else
-    `"gitlab"` → @gitlab::list_repository, else `"script"` → the Rhai `eval` language keyword
-    over `spec.source.script`, else the bare `spec.source.list` value. A source-less or
-    null-source box errors before any lane (`.keys()` probe on `()`); a source map with no
-    known key falls into the `list` leg and errors at `.map` on `()`. Both errors are raised
-    inside the @try, so they arrive as a recorded failed status plus rethrow, never a silent
-    success.
-  Every credential/cache key is read ONLY through `"k" in args.keys()` probes with `""`
-    defaults: `http_auth_type`, `http_credential`, `s3_access_key`, `s3_secret_key`. There is
-    no bare-global read of the same names anywhere in the file, so the scope globals the
-    cluster Rust lane binds are never consulted — see Tasks for the fix-side decision; this
-    spec freezes the consequence: on both real lanes those four keys are absent from every
-    `args`, so every http/s3 source scans anonymous (@http_get_yaml treats an unknown
-    auth `""` as a silent unauthenticated GET, @s3_get_yaml skips the key pair when
-    `access_key` is empty), and a same key present as JSON null would hand @() to a
-    @String-only signature and crash the lane as function-not-found.
-  The http lane trims exactly one trailing `/` from `spec.source.http.url`, fetches
-    `${base}/index.yaml` via @http_get_yaml(url, auth_type, credential), iterates
-    `index.packages` in document order, and for each surviving entry GETs
-    `${base}/${entry.file}` whose whole document is a flat ARRAY of package maps fed to
-    @compute_waypoints_from_packages with `spec.maturity`. The s3 lane is the identical loop
-    over @s3_get_yaml(bucket, region, prefix, endpoint, access_key, secret_key, key) with
-    literal key `index.yaml` then `entry.file`; `prefix`/`endpoint` `()`-default to `""` via
-    the `??` coalescing operator, `bucket`/`region` are read raw (a null crashes as
-    function-not-found), and prefix-to-key joining is the core helper's contract, not here.
-  Both cache lanes pre-filter index entries against `args.filter` split on `/`: category must
-    equal part 0; when a second part exists, the entry `name` must equal it. Surviving
-    entries' bundles then run the waypoint builder; the final write-back hands the same
-    filter text to `set_status_packages_merge`, which carries the store-side pruning
-    semantics owned by /common/src/jukebox.sdd.
-  The registry lanes build an image table from the source: Harbor/GitLab list fns receive
-    `(@spec, args.namespace)` and return `registry/…` reference strings; the script-source
-    lane replaces the table with the value of a Rhai `eval(...)` snippet — an interpreter
-    built-in evaluated in a fresh scope seeing none of `box`/`args`/`spec`, whose last
-    expression IS the image list; plain `list` sources arrive as the same "image string"
-    convention. Each image string splits on the first `/`: segment 0 becomes `registry`, the
-    remainder (possibly empty when the string has no slash) becomes `repository`.
-  Registry partial scans never consult the source list: with a filter set, the image table
-    is rebuilt from `box.status.packages` — the read itself is guarded
-    @try/@catch-to-`[]`, then entries match `metadata.category` (mandatory) and
-    `metadata.name` (when the filter carries a name), project to `#{registry, repository}`,
-    and are deduped by the exact key `${registry}/${repository}`. When that deduped table is
-    empty, @log_warn the verbatim `partial scan: filter '<filter>' matched no known package — run
-    a full scan first` and scan the empty table; the result flows to
-    `set_status_packages_merge`, so a filter miss is a recorded (empty-addition) partial scan.
-  Per-image pull credentials pick exactly one leg: `use_auth == false` (no `pull_secret`
-    key, empty string, or `()`) → `#{user: "", pass: ""}`; else `args.file_scan == true` →
-    @get_auth_from_file(`spec.pull_secret` used as a docker-config JSON file PATH,
-    `image.registry`), the file-lane-only silent-empty-fallback decoder; else
-    @secret::get_auth_from(`spec.pull_secret`, `args.namespace`, `image.registry`) reading the
-    dockerconfigjson @Secret in-cluster. The @use_auth guard carries the `!= ()` leg that the
-    two lib modules' own `!= ""` guards lack (the null-`pull_secret` trap of
-    ./../lib/scan_harbor.sdd / ./../lib/scan_gitlab.sdd), so a wire-null secret here simply
-    scans anonymous. The scan of each image logs @log_info `Scanning ${registry}/${repository}`,
-    then @new_registry(host, user, pass) and `list_tags(repository)` enumerate every tag
-    starting anonymously-or-authenticated from the table — no registry call at all happens
-    on the http/s3 cache lanes.
-  Filter semantics shared by both waypoint builders: @maturity_filter passes every tag under
-    `"alpha"`, drops tags containing the substring `alpha` under `"beta"`, and treats every
-    other maturity value — including `()`/null from an unset @JukeBoxSpec::maturity — as
-    stable, dropping substrings `alpha` and `beta` (substring test anywhere in the tag).
-    @security_filter drops the empty string and every tag not starting with `v` or an ASCII
-    digit WITHOUT a log line (the cosign/trivy class), and for a `v`/digit start requires a
-    @semver_from parse, logging @log_warn `skipping non-semver tag <v>` on parse failure —
-    the parse error is swallowed, the tag is not kept.
-  @scan_image_with_maturity walks a strict descending waypoint chain: tags
-    filter→@semver_from→sort newest-first→re-render via @to_string; per candidate it calls
-    `get_manifest(repository, tag)` and reads `.annotations`. A candidate is accepted only
-    while all of these hold in order: annotations carry BOTH
-    `fr.solidite.vynil.metadata` and `fr.solidite.vynil.requirements`; it is skipped without
-    acceptance (chain continues) when some requirement's `vynil_version` is
-    @security_filter-valid and `@semver_from`-greater than @vynil_version() (the running
-    compiled version) — that branch also emits the @print text `Ignoring ${image.repository}
-    as it requiere a too new version, ${iter_tags}, ${current}, ${tags.len}` (typo and
-    already-advanced `iter_tags` interpolation included, see Tasks) — or when a
-    `last_min_version` is active and some requirement's `minimum_previous_version`
-    @semver_from-equals-or-exceeds it. Otherwise it is accepted: with a valid
-    `minimum_previous_version` present, `last_min_version` becomes the first such value and
-    the walk continues strictly downward; without one, `last_min_version` resets and the
-    walk STOPS — the accepted candidate is the chain's installable base.
-  A registry candidate whose annotations lack the `metadata`+`requirements` pair is NOT
-    appended and the walk STOPS at it (no continue-to-older-tag branch exists); likewise an
-    accepted candidate whose decoded `requirements` is not a non-empty array is appended and
-    the walk STOPs. Accepted candidate maps are freshly built as `registry` / `image` /
-    `tag` (the re-rendered tag text) plus `metadata` and `requirements` @json_decode-ed from
-    the annotations — a decode failure throws and fails the whole scan — plus optional keys
-    `options` / `recommandations` / `value_script` added only when the matching annotation
-    key exists (the first two @json_decode-ed, `value_script` kept as the raw string). The
-    requirement probes (`i.vynil_version != ()`, `i.minimum_previous_version != ()`) rely on
-    missing keys answering `()` across the externally tagged @VynilPackageRequirement wire
-    variants; `find` takes the first variant with a @security_filter-valid text.
-  @compute_waypoints_from_packages applies the identical chain rules to cache-package maps
-    already carrying `tag`/`requirements` in @VynilPackage wire shape (filter→semver sort
-    descending with the packaged map kept as pair-carrier), accepting whole input maps
-    verbatim (all their keys travel), terminating on the first package with a
-    non-array/empty `requirements`, and never touching a registry or re-shaping entries.
-  The file-scan differences are exactly: @file_scan branch pulls credentials from
-    `get_auth_from_file` instead of the k8s Secret, and instead of one maturity scan it runs
-    @scan_image_with_maturity three times over the same `list_tags` answer with `"stable"`,
-    `"beta"`, `"alpha"` and @union_packages the three chains — concatenation in that order,
-    dedup by `pkg.tag` alone, first occurrence wins (so the stable chain takes precedence,
-    beta adds its prereleases, alpha the alpha-tags) — while `spec.maturity` from
-    @FileJukeBox::get_spec is the hardcoded `"alpha"` anyway (cache lanes therefore never
-    maturity-filter on this path). On the file-scan engine (no k8s registrations) the
-    pull-secret legs and Harbor/GitLab listings fail as function-not-found the moment their
-    names are reached; only anonymous Harbor list, cache, and list sources complete there.
-  Write-back is exactly one call, result bound to a throwaway local: filter set →
-    `box.set_status_packages_merge(scan_filter, found)`; filter unset →
-    `box.set_status_updated(found)`. Both names exist on @JukeBox and
-    @FileJukeBox; found entries must satisfy the mandatory @VynilPackage keys or the
-    mutator's serde round-trip rejects the whole write before it lands. The script itself
-    performs zero filesystem and zero Kubernetes writes.
-  Failure posture is fixed: the @catch string-types the caught value (crate/bridge errors
-    arrive flattened as strings; throw texts from the lib modules are strings;
-    structural engine errors are not), @log_warn the text (raw for strings, @json_encode
-    for anything else) and call `box.set_status_failed(<same text>)`, then rethrow with the
-    bare `throw;`. Reaching the rethrow requires the failed-mutator call to return —
-    true on the cluster lane (patch + preserved-cache + Warning event per
-    /common/src/jukebox.sdd), never on the file lane where @FileJukeBox::rhai_set_status_failed
-    always @Errs: there the throw from inside the catch escapes first and the run-file error
-    carries `SCAN-FILE-001: Scan failed: {reason}` — the original error text survives only
-    in the @log_warn line. The same masking happens cluster-side whenever the mutator bridge
-    itself fails.
-  Failures OUTSIDE the @try never touch a box: the three `import` resolutions
-    (`scan_harbor`, `scan_gitlab`, `secret_dockerconfigjson` — every source variant needs all
-    three module files under the resolver dirs), any @Script::run_file parse error, a broken
-    `box.spec` getter or an absent `args` at the top-level probes — those reach Rust as the
-    plain `Rhai script error:` / `Missing script` texts with `status.conditions` untouched.
+  La dispatch de source est exactement cette chaîne de sondage sur `spec.source.keys()` :
+    `"http"` → lane cache-http, sinon `"s3"` → lane cache-s3, sinon `"harbor"` →
+    @harbor::list_repository, sinon `"gitlab"` → @gitlab::list_repository, sinon `"script"` →
+    le mot-clé de langage Rhai `eval` sur `spec.source.script`, sinon la valeur brute
+    `spec.source.list`. Un box sans source ou à source nulle lève une erreur avant toute lane
+    (sondage `.keys()` sur `()`) ; une carte de source sans clé connue tombe dans la branche
+    `list` et erreur sur `.map` sur `()`. Les deux erreurs sont levées dans le @try, donc elles
+    arrivent comme un failed-status enregistré plus relance, jamais comme un succès silencieux.
+  Chaque clé de credential/cache est lue UNIQUEMENT via des sondages `"k" in args.keys()` avec
+    défauts `""` : `http_auth_type`, `http_credential`, `s3_access_key`, `s3_secret_key`. Aucune
+    lecture en globale nue de ces mêmes noms nulle part dans le fichier, si bien que les globales
+    de scope que la lane Rust cluster bind ne sont jamais consultées — voir Tasks pour la
+    décision du côté correctif ; cette spec gèle la conséquence : sur les deux lanes réelles ces
+    quatre clés sont absentes de tout `args`, donc toute source http/s3 scanne en anonyme
+    (@http_get_yaml traite un auth inconnu `""` comme un GET non authentifié silencieux,
+    @s3_get_yaml ignore la paire de clés quand `access_key` est vide), et une même clé présente
+    en JSON null passerait @() à une signature @String-only et crasherait la lane en
+    function-not-found.
+  La lane http retire exactement un `/` final de `spec.source.http.url`, récupère
+    `${base}/index.yaml` via @http_get_yaml(url, auth_type, credential), itère `index.packages`
+    dans l'ordre du document, et pour chaque entrée survivante fait un GET de
+    `${base}/${entry.file}` dont le document entier est un TABLEAU plat de cartes de package
+    transmis à @compute_waypoints_from_packages avec `spec.maturity`. La lane s3 est la boucle
+    identique sur @s3_get_yaml(bucket, region, prefix, endpoint, access_key, secret_key, key)
+    avec la clé littérale `index.yaml` puis `entry.file` ; `prefix`/`endpoint` prennent le défaut
+    de `()` vers `""` via l'opérateur de coalescence `??`, `bucket`/`region` sont lus bruts (un
+    null crashe en function-not-found), et la jointure prefix-vers-clé est le contrat du helper
+    core, pas d'ici.
+  Les deux lanes cache pré-filtrent les entrées d'index contre `args.filter` coupé sur `/` :
+    category doit égaler la partie 0 ; quand une seconde partie existe, le `name` de l'entrée
+    doit lui égaler. Les bundles des entrées survivantes passent ensuite le constructeur de
+    waypoints ; le write-back final remet le même texte de filtre à
+    `set_status_packages_merge`, qui porte la sémantique d'élagage côté store, possédée par
+    /common/src/jukebox.sdd.
+  Les lanes registry construisent une table d'images à partir de la source : les fns de listing
+    Harbor/GitLab reçoivent `(@spec, args.namespace)` et retournent des références-chaîne
+    `registry/…` ; la branche script-source remplace la table par la valeur d'un snippet Rhai
+    `eval(...)` — un built-in de l'interpréteur évalué dans un scope frais qui ne voit rien de
+    `box`/`args`/`spec`, dont l'expression finale EST la liste d'images ; les sources `list`
+    simples arrivent dans la même convention « image string ». Chaque image string se coupe sur
+    le premier `/` : le segment 0 devient `registry`, le reste (éventuellement vide quand la
+    chaîne n'a pas de slash) devient `repository`.
+  Les scans partiels de registry ne consultent jamais la liste de source : avec un filtre posé,
+    la table d'images est reconstruite depuis `box.status.packages` — la lecture elle-même est
+    gardée @try/@catch-vers-`[]`, puis les entrées matchent `metadata.category` (obligatoire) et
+    `metadata.name` (quand le filtre porte un nom), se projettent en `#{registry, repository}`,
+    et sont dédupliquées sur la clé exacte `${registry}/${repository}`. Quand cette table
+    dédupliquée est vide, @log_warn le texte verbatim `partial scan: filter '<filter>' matched no known package — run
+    a full scan first` et scanner la table vide ; le résultat coule vers
+    `set_status_packages_merge`, donc un filtre sans match est un scan partiel enregistré (à
+    ajout vide).
+  Les credentials de pull par image choisissent exactement une branche : `use_auth == false`
+    (pas de clé `pull_secret`, chaîne vide, ou `()`) → `#{user: "", pass: ""}` ; sinon
+    `args.file_scan == true` → @get_auth_from_file(`spec.pull_secret` utilisé comme PATH de
+    fichier docker-config JSON, `image.registry`), le décodeur à repli-silencieux-sur-vide propre
+    à la lane fichier ; sinon @secret::get_auth_from(`spec.pull_secret`, `args.namespace`,
+    `image.registry`) qui lit le @Secret dockerconfigjson en cluster. Le guard @use_auth porte la
+    branche `!= ()` qui manque aux guards `!= ""` des deux modules lib (le piège du
+    `pull_secret` nul de ./../lib/scan_harbor.sdd / ./../lib/scan_gitlab.sdd), si bien qu'un
+    secret null sur le wire scanne ici simplement en anonyme. Le scan de chaque image loggue
+    @log_info `Scanning ${registry}/${repository}`, puis @new_registry(host, user, pass) et
+    `list_tags(repository)` énumèrent chaque tag en partant anonyme-ou-authentifié depuis la
+    table — aucun appel registry ne se produit sur les lanes cache http/s3.
+  Sémantique de filtre commune aux deux constructeurs de waypoints : @maturity_filter laisse
+    passer tout tag sous `"alpha"`, écarte les tags contenant la sous-chaîne `alpha` sous
+    `"beta"`, et traite toute autre valeur de maturité — y compris `()`/null d'un
+    @JukeBoxSpec::maturity non posé — comme stable, en écartant les sous-chaînes `alpha` et
+    `beta` (test de sous-chaîne n'importe où dans le tag). @security_filter écarte la chaîne vide
+    et tout tag ne commençant pas par `v` ou un chiffre ASCII SANS ligne de log (la classe
+    cosign/trivy), et pour un début `v`/chiffre exige un parse @semver_from, loggant @log_warn
+    `skipping non-semver tag <v>` sur échec du parse — l'erreur de parse est avalée, le tag
+    n'est pas conservé.
+  @scan_image_with_maturity parcourt une chaîne de waypoints strictement descendante : les tags
+    passent filtre→@semver_from→tri du plus récent au plus ancien→re-rendu via @to_string ; pour
+    chaque candidat il appelle `get_manifest(repository, tag)` et lit `.annotations`. Un candidat
+    est accepté seulement tant que tout ceci tient dans l'ordre : les annotations portent À LA
+    FOIS `fr.solidite.vynil.metadata` et `fr.solidite.vynil.requirements` ; il est sauté sans
+    acceptation (la chaîne continue) quand le `vynil_version` d'une requirement est
+    @security_filter-valide et @semver_from-supérieur à @vynil_version() (la version compilée
+    courante) — cette branche émet aussi le texte @print `Ignoring ${image.repository} as it requiere a too new version, ${iter_tags}, ${current}, ${tags.len}` (faute d'orthographe et
+    interpolation d'un `iter_tags` déjà avancé incluses, voir Tasks) — ou quand un
+    `last_min_version` est actif et que le `minimum_previous_version` d'une requirement
+    @semver_from-égal-ou-supérieur. Sinon il est accepté : avec un `minimum_previous_version`
+    valide présent, `last_min_version` devient la première telle valeur et la marche continue
+    strictement vers le bas ; sans lui, `last_min_version` se réinitialise et la marche
+    S'ARRÊTE — le candidat accepté est la base installable de la chaîne.
+  Un candidat registry dont les annotations n'ont pas la paire `metadata`+`requirements` N'EST
+    PAS ajouté et la marche S'ARRÊTE sur lui (aucune branche de continuation-vers-un-tag-plus-
+    ancien n'existe) ; de même un candidat accepté dont les `requirements` décodées ne sont pas
+    un tableau non-vide est ajouté et la marche S'ARRÊTE. Les cartes de candidat acceptées sont
+    fraîchement construites avec `registry` / `image` / `tag` (le texte de tag re-rendu) plus
+    `metadata` et `requirements` @json_decode-ed depuis les annotations — un échec de décodage
+    lève et fait échouer tout le scan — plus les clés optionnelles `options` / `recommandations`
+    / `value_script` ajoutées seulement quand la clé d'annotation correspondante existe (les deux
+    premières @json_decode-ed, `value_script` gardée comme chaîne brute). Les sondages de
+    requirements (`i.vynil_version != ()`, `i.minimum_previous_version != ()`) reposent sur le
+    fait que les clés manquantes répondent `()` à travers les variantes wire externement taguées
+    de @VynilPackageRequirement ; `find` prend la première variante avec un texte
+    @security_filter-valide.
+  @compute_waypoints_from_packages applique les règles de chaîne identiques aux cartes de package
+    de cache portant déjà `tag`/`requirements` en forme wire @VynilPackage (filtre→tri semver
+    descendant, la carte d'entrée emballée tenue comme porteuse de paire), acceptant les cartes
+    d'entrée entières verbatim (toutes leurs clés voyagent), terminant sur le premier package à
+    `requirements` non-tableau/vide, et ne touchant jamais une registry ni re-façonnant les
+    entrées.
+  Les différences du file-scan sont exactement : la branche @file_scan tire les credentials de
+    `get_auth_from_file` au lieu du Secret k8s, et au lieu d'un seul scan de maturité elle lance
+    @scan_image_with_maturity trois fois sur la même réponse `list_tags` avec `"stable"`,
+    `"beta"`, `"alpha"` et @union_packages les trois chaînes — concaténation dans cet ordre,
+    dédup sur `pkg.tag` seul, première occurrence gagne (donc la chaîne stable a la priorité,
+    beta ajoute ses préreleases, alpha les alpha-tags) — alors que `spec.maturity` de
+    @FileJukeBox::get_spec est de toute façon le `"alpha"` codé en dur (les lanes cache ne
+    filtrent donc jamais sur la maturité sur cette voie). Sur le moteur file-scan (aucune
+    registration k8s) les branches pull-secret et les listings Harbor/GitLab échouent en
+    function-not-found dès que leurs noms sont atteints ; seuls le listing Harbor anonyme, le
+    cache et les sources list y aboutissent.
+  Le write-back est exactement un appel, résultat bindé à une locale jetable : filtre posé →
+    `box.set_status_packages_merge(scan_filter, found)` ; filtre non posé →
+    `box.set_status_updated(found)`. Les deux noms existent sur @JukeBox et @FileJukeBox ; les
+    entrées trouvées doivent satisfaire les clés @VynilPackage obligatoires sinon le round-trip
+    serde du mutator rejette toute l'écriture avant qu'elle n'atterrisse. Le script lui-même
+    n'effectue aucune écriture sur le système de fichiers ni aucune écriture Kubernetes.
+  La posture d'échec est figée : le @catch convertit la valeur attrapée en chaîne (les erreurs
+    crate/bridge arrivent aplaties en chaînes ; les textes levés des modules lib sont des
+    chaînes ; les erreurs structurelles du moteur non), @log_warn le texte (brut pour les
+    chaînes, @json_encode pour tout le reste) et appelle `box.set_status_failed(<same text>)`,
+    puis relance avec le `throw;` nu. Atteindre la relance exige que l'appel du mutator failed
+    retourne — vrai sur la lane cluster (patch + cache préservé + event Warning selon
+    /common/src/jukebox.sdd), jamais sur la lane fichier où
+    @FileJukeBox::rhai_set_status_failed retourne toujours un @Err : là le throw depuis
+    l'intérieur du catch s'échappe d'abord et l'erreur du run-file porte `SCAN-FILE-001: Scan failed: {reason}` — le texte d'erreur original ne survit que dans la ligne @log_warn. Le même
+    masquage se produit côté cluster dès que le bridge du mutator échoue lui-même.
+  Les échecs HORS du @try ne touchent jamais un box : la résolution des trois `import`
+    (`scan_harbor`, `scan_gitlab`, `secret_dockerconfigjson` — chaque variante de source a besoin
+    des trois fichiers de module sous les dossiers du resolver), toute erreur de parse
+    @Script::run_file, un getter `box.spec` cassé ou un `args` absent aux sondages top-level —
+    ceux-là parviennent à Rust comme les textes bruts `Rhai script error:` / `Missing script`
+    avec `status.conditions` intacts.
 
 Must not:
-  Fall back to scanning the full image list when a partial-scan filter matches no stored
-    package — the matched-empty branch warns and writes through the merge mutator instead
-    (the former fallback behavior this guard removed is pinned by the
-    @partial_filter_no_match_does_not_full_scan test).
-  Compose or normalize package maps on the cache lanes: cache bundles arrive verbatim from
-    their YAML documents; only the registry lanes mint maps, from manifest annotations.
+  Retomber sur le scan de la liste d'images complète quand un filtre de scan partiel ne matche
+    aucun package stocké — la branche matched-empty loggue un warn et écrit via le mutator de
+    merge à la place (l'ancien comportement de fallback que cette garde a retiré est épinglé par
+    le test @partial_filter_no_match_does_not_full_scan).
+  Composer ou normaliser des cartes de package sur les lanes cache : les bundles de cache
+    arrivent verbatim de leurs documents YAML ; seules les lanes registry forgent des cartes,
+    depuis les annotations de manifeste.
 
 Depends on:
-  vynil-core 0.7.7 engine surface consumed as script globals/members (nothing here
-    registers anything): @new_registry(host, user, pass) plus the `Registry` members
-    `list_tags(repository)` and `get_manifest(repository, tag).annotations` (real clients on
-    @Script::new / @Script::new_file_scan, the `OciRegistryMock` substitutions under
-    @Script::new_mock), @get_auth_from_file (always the real docker-config file reader,
-    per /common/src/rhaihandler.sdd), @http_get_yaml and @s3_get_yaml (real-only — s3 is
-    absent from mock engines entirely), @semver_from + the `Semver` ordering, @json_decode /
-    @json_encode, @log_info / @log_warn, @print and the Rhai `eval` language keyword (an
-    interpreter built-in, not a registrar name — verified live), the @rhai @Map/@Array
-    builtins in use (`keys`, `contains`, `contains_key`, `some`, `find`, `shift`, `sort`,
-    `map`, `filter`, `reduce`, `split`, `sub_string`, `ends_with`, `.len`, `type_of`, `??`),
-    and the @package_rhai_register global @vynil_version() returning the compiled crate
-    version.
-  ./../lib/scan_harbor.rhai (./../lib/scan_harbor.sdd) — imported as `harbor`; only the
-    harbor source lane calls it; its two throw texts pass through this file's catch untouched.
-  ./../lib/scan_gitlab.rhai (./../lib/scan_gitlab.sdd) — imported as `gitlab`; same
-    pass-through for its three throw texts.
-  ./../lib/secret_dockerconfigjson.rhai (./../lib/secret_dockerconfigjson.sdd) — imported as
-    `secret`; the cluster-lane credential decoder and its engine-raise modes.
-  @JukeBox bridge (@jukebox_rhai_register, /common/src/jukebox.sdd) — the `spec`/`status`
-    getters and the three `box.set_status_*` mutators on the cluster lane, including the
-    Dynamic→@Vec<@VynilPackage> accept boundary and the condition/event semantics.
-  @FileJukeBox (@file_jukebox_rhai_register, /common/src/jukebox_file.sdd) — the same four
-    member names on the file lane; cache-write targets and the `SCAN-FILE-001` failure leg.
-  /agent/src/boxes/scan.sdd and /agent/src/boxes/file_scan.sdd — the two launching lanes:
-    they define which `args` keys and box type exist, and consume only the @Err leg.
+  La surface moteur vynil-core 0.7.7 consommée comme globales/membres de script (rien ici
+    n'enregistre quoi que ce soit) : @new_registry(host, user, pass) plus les membres `Registry`
+    `list_tags(repository)` et `get_manifest(repository, tag).annotations` (vrais clients sur
+    @Script::new / @Script::new_file_scan, les substitutions `OciRegistryMock` sous
+    @Script::new_mock), @get_auth_from_file (toujours le vrai reader de fichier docker-config,
+    selon /common/src/rhaihandler.sdd), @http_get_yaml et @s3_get_yaml (réels uniquement — s3 est
+    totalement absent des moteurs mock), @semver_from + l'ordering `Semver`, @json_decode /
+    @json_encode, @log_info / @log_warn, @print et le mot-clé de langage Rhai `eval` (un
+    built-in de l'interpréteur, pas un nom de registrar — vérifié en live), les builtins @rhai
+    @Map/@Array en usage (`keys`, `contains`, `contains_key`, `some`, `find`, `shift`, `sort`,
+    `map`, `filter`, `reduce`, `split`, `sub_string`, `ends_with`, `.len`, `type_of`, `??`), et
+    la globale @vynil_version() de @package_rhai_register retournant la version compilée de la
+    crate.
+  ./../lib/scan_harbor.rhai (./../lib/scan_harbor.sdd) — importé comme `harbor` ; seule la lane
+    de source harbor l'appelle ; ses deux textes levés traversent le catch de ce fichier intacts.
+  ./../lib/scan_gitlab.rhai (./../lib/scan_gitlab.sdd) — importé comme `gitlab` ; même
+    pass-through pour ses trois textes levés.
+  ./../lib/secret_dockerconfigjson.rhai (./../lib/secret_dockerconfigjson.sdd) — importé comme
+    `secret` ; le décodeur de credentials de la lane cluster et ses modes d'engine-raise.
+  Le bridge @JukeBox (@jukebox_rhai_register, /common/src/jukebox.sdd) — les getters `spec`/
+    `status` et les trois mutators `box.set_status_*` sur la lane cluster, y compris la boundary
+    d'acceptation Dynamic→@Vec<@VynilPackage> et la sémantique condition/event.
+  @FileJukeBox (@file_jukebox_rhai_register, /common/src/jukebox_file.sdd) — les quatre mêmes
+    noms de membre sur la lane fichier ; les cibles d'écriture du cache et la branche d'échec
+    `SCAN-FILE-001`.
+  /agent/src/boxes/scan.sdd et /agent/src/boxes/file_scan.sdd — les deux lanes lançantes : elles
+    définissent quelles clés `args` et quel type de box existent, et ne consomment que la
+    branche @Err.
 
 Exposes:
-  No export surface (entry script). Observable outputs, all of them: the
+  Pas de surface d'export (script d'entrée). Sorties observables, toutes : l'écriture en store
     `box.set_status_updated(found)` / `box.set_status_packages_merge(scan_filter, found)`
-    store write (@JukeBox CR `status.packages` + conditions + Scan events, or @FileJukeBox
-    `index.yaml` + `{category}_{name}.yaml` bundles — no `statuses.json` exists anywhere on
-    the file path, freezing that cross-check), the
-    `box.set_status_failed(reason)` failure write (cluster-only in effect), @log_info /
-    @log_warn tracing lines, the one @print diagnostic line, and the rethrown error that
-    both lanes surface as `Rhai script error:`.
+    (status.packages du CR @JukeBox + conditions + events Scan, ou `index.yaml` + bundles
+    `{category}_{name}.yaml` de @FileJukeBox — aucun `statuses.json` n'existe nulle part sur le
+    chemin fichier, gel de ce cross-check), l'écriture d'échec `box.set_status_failed(reason)`
+    (effectivement cluster-only), les lignes de trace @log_info / @log_warn, l'unique ligne de
+    diagnostic @print, et l'erreur relancée que les deux lanes surfacent en `Rhai script error:`.
 
 Accepts:
-  Scope var `box` — a @JukeBox (cluster lane) or @FileJukeBox (file lane); the script reads
-    only `box.spec` (once), `box.status.packages` (OCI filter leg, guarded) and calls the
-    three mutator members.
-  Scope var `args` with probed keys: `filter` — string `<category>` or `<category>/<name>`,
-    present-null or absent both mean full scan (`()`); `file_scan` — strict `== true`
-    enables the file branch; `namespace` — string handed to the harbor/gitlab/secret reads
-    (`""` on the file lane); the four credential keys listed under Must (never delivered by
-    either lane today). `args.jukebox`, `args.script_dir`, `args.cache_dir` are never read.
-  `spec.source` — exactly one @JukeBoxDef tag: `http` {url, secret? ignored here}, `s3`
-    {bucket, region, prefix?, endpoint?, secret? ignored here}, `harbor` {registry,
-    project}, `gitlab` {url, registry, project}, `script` (snippet text), `list` (array of
-    `registry/repo` strings). `spec.maturity` — any string; only `alpha`/`beta` are special.
-    `spec.pull_secret` — @Secret name on the cluster lane, docker-config FILE PATH on the
-    file lane.
-  Cache documents — `packages` entries reading `category`, `name`, `file`; bundle arrays of
-    @VynilPackage-shaped maps (registry/image/tag/metadata/requirements, option keys
-    travelling if present).
-  Manifest annotation keys `fr.solidite.vynil.metadata`, `.requirements` (both mandatory for
-    a candidate), `.options`, `.recommandations`, `.value_script`.
+  Var de scope `box` — un @JukeBox (lane cluster) ou un @FileJukeBox (lane fichier) ; le script
+    ne lit que `box.spec` (une fois), `box.status.packages` (branche de filtre OCI, gardée) et
+    appelle les trois membres mutators.
+  Var de scope `args` avec clés sondées : `filter` — chaîne `<category>` ou `<category>/<name>`,
+    présente-nulle ou absente signifient toutes deux le scan complet (`()`) ; `file_scan` — le
+    strict `== true` active la branche fichier ; `namespace` — chaîne passée aux lectures
+    harbor/gitlab/secret (`""` sur la lane fichier) ; les quatre clés de credential listées sous
+    Must (jamais livrées par les deux lanes aujourd'hui). `args.jukebox`, `args.script_dir`,
+    `args.cache_dir` ne sont jamais lus.
+  `spec.source` — exactement un tag @JukeBoxDef : `http` {url, secret? ignoré ici}, `s3`
+    {bucket, region, prefix?, endpoint?, secret? ignoré ici}, `harbor` {registry, project},
+    `gitlab` {url, registry, project}, `script` (texte du snippet), `list` (tableau de chaînes
+    `registry/repo`). `spec.maturity` — n'importe quelle chaîne ; seuls `alpha`/`beta` sont
+    spéciaux. `spec.pull_secret` — nom de @Secret sur la lane cluster, PATH de FICHIER
+    docker-config sur la lane fichier.
+  Documents de cache — entrées `packages` lisant `category`, `name`, `file` ; tableaux de
+    bundles en cartes de forme @VynilPackage (registry/image/tag/metadata/requirements, clés
+    optionnelles voyageant si présentes).
+  Clés d'annotation de manifeste `fr.solidite.vynil.metadata`, `.requirements` (toutes deux
+    obligatoires pour un candidat), `.options`, `.recommandations`, `.value_script`.
 
 Returns:
-  The script's last value is the @try block's — unit — which both Rust lanes discard
-    (`let _ =`), so nothing but side effects exits this file; exit status is decided by the
-    lanes from the @Ok/@Err of @Script::run_file.
+  La dernière valeur du script est celle du bloc @try — l'unité — que les deux lanes Rust
+    jettent (`let _ =`), si bien que rien à part les effets de bord ne sort de ce fichier ; le
+    statut de sortie est décidé par les lanes depuis l'@Ok/@Err de @Script::run_file.
 
 Raises:
-  Exactly one explicit throw site in this file: the bare `throw;` rethrow at the end of the
-    @catch. Every other error is inherited verbatim: lib-module throw texts (`harbor`:
-    `Cannot get anonymous authentication from harbor`, `Unable to list from ${registry}/${project}`;
-    `gitlab`: the three texts of ./../lib/scan_gitlab.sdd), registry pull errors from
-    `list_tags`/`get_manifest`, @http_get_yaml/@s3_get_yaml failure texts, @json_decode
-    serialization texts, `get_auth_from_file` Stdio/text errors on an unreadable config file,
-    @secret::get_auth_from engine raises, and mutator rejection texts (bad @VynilPackage
-    shape, cluster patch failures, the file-lane `SCAN-FILE-001`).
-  A non-string caught value is @json_encode-d before both the log and the failed-status; if
-    @json_encode itself fails on an exotic payload the catch dies without recording a status
-    (see Tasks).
-  Function-not-found crashes stand in for missing-argument shapes: null credential keys or a
-    missing @JukeBoxDef::S3 `bucket`/`region` hand @() to @String signatures and land as a
-    recorded failed-status + rethrow, never a fallback to anonymous.
-  All of it reaches Rust as @common @Error::Core displaying `Rhai script error: <text>` per
-    /common/src/rhaihandler.sdd; only the outside-@try sites above travel without a status.
+  Exactement un site de throw explicite dans ce fichier : le `throw;` nu de relance à la fin du
+    @catch. Toute autre erreur est héritée verbatim : textes levés des modules lib (`harbor` :
+    `Cannot get anonymous authentication from harbor`, `Unable to list from ${registry}/${project}` ;
+    `gitlab` : les trois textes de ./../lib/scan_gitlab.sdd), erreurs de pull registry depuis
+    `list_tags`/`get_manifest`, textes d'échec de @http_get_yaml/@s3_get_yaml, textes de
+    sérialisation de @json_decode, erreurs Stdio/texte de `get_auth_from_file` sur un fichier de
+    config illisible, engine raises de @secret::get_auth_from, et textes de rejet du mutator
+    (mauvaise forme @VynilPackage, échecs de patch cluster, `SCAN-FILE-001` de la lane fichier).
+  Une valeur attrapée non-chaîne est @json_encode-d avant le log et le failed-status ; si
+    @json_encode lui-même échoue sur une payload exotique, le catch meurt sans enregistrer de
+    status (voir Tasks).
+  Les crashes function-not-found tiennent lieu des formes d'argument manquantes : les clés de
+    credential nulles ou un `bucket`/`region` manquant de @JukeBoxDef::S3 passent @() à des
+    signatures @String et atterrissent en failed-status enregistré + relance, jamais un repli
+    vers l'anonyme.
+  Tout cela parvient à Rust comme @common @Error::Core affichant `Rhai script error: <text>`
+    selon /common/src/rhaihandler.sdd ; seuls les sites hors-@try ci-dessus voyagent sans status.
 
 Handles:
-  Unset vs unset-null `filter` — the `!= ()` probe folds both into the full-scan leg
-    (pinned as copied logic by the @scan_branch_merge_when_filter_set /
-    @scan_branch_full_when_no_filter snippet tests).
-  `box.status` absent or unreadable (null @JukeBox status, cold or corrupt file cache) —
-    the guard yields `[]` status packages, so the OCI filter leg proceeds to its
-    matched-empty warn path instead of crashing.
-  Unknown maturity values / unset maturity — behave as stable (the filter's `else` arm).
-  Tags outside the tag convention (`sha256-….sig`, `trivy--…`, `latest`) — silently dropped
-    by the first-char gate before any semver warning.
-  A key-less source (`{}` file spec, source-less JukeBox) — the very first `.keys()` probe
-    errors; a recorded failure + exit-1 upstream, not a success with zero packages.
+  `filter` non posé vs posé-nul — le sondage `!= ()` replie les deux sur la branche de scan
+    complet (épinglé comme logique copiée par les tests de snippet
+    @scan_branch_merge_when_filter_set / @scan_branch_full_when_no_filter).
+  `box.status` absent ou illisible (status @JukeBox nul, cache fichier froid ou corrompu) — le
+    guard produit `[]` de status packages, si bien que la branche de filtre OCI poursuit vers
+    son chemin warn matched-empty au lieu de crasher.
+  Valeurs de maturité inconnues / maturité non posée — se comportent comme stable (la branche
+    `else` du filtre).
+  Tags hors de la convention de tag (`sha256-….sig`, `trivy--…`, `latest`) — silencieusement
+    écartés par la gate du premier caractère avant tout warning semver.
+  Une source sans clé (`{}` file spec, JukeBox sans source) — le tout premier sondage `.keys()`
+    lève une erreur ; un échec enregistré + exit-1 en amont, pas un succès à zéro package.
 
 Scenario: Full list scan without filter writes the updated status
-  Given a mock cluster box with `source.list` of one image, maturity `stable`, and a stubbed
-    OCI registry, `args.filter` present-null
-  When ./scan.rhai runs
-  Then the no-filter leg scans the image table from the source list and the run completes
-    @Ok with `set_status_updated` recorded on the mock box
-  Maps to test @scan_rhai_without_filter_runs_without_error
+  Given un box cluster mock avec `source.list` d'une image, maturité `stable`, et un registry OCI
+    stubbé, `args.filter` présent-nul
+  When ./scan.rhai s'exécute
+  Then la branche sans filtre scanne la table d'images depuis la liste de source et le run
+    s'achève @Ok avec `set_status_updated` enregistré sur le box mock
+  Test associé : @scan_rhai_without_filter_runs_without_error
 
 Scenario: Filter set partial-scans from stored packages and merges
-  Given the same box plus stored status packages, `args.filter` `db/pg`
-  When ./scan.rhai runs
-  Then the image table comes from `box.status.packages` deduped by registry/repository and
-    the run completes @Ok through `set_status_packages_merge`
-  Maps to test @scan_rhai_with_filter_runs_without_error
-  But the four predicate/branch checks in @scan_filter_selects_only_matching_image,
+  Given le même box plus des status packages stockés, `args.filter` `db/pg`
+  When ./scan.rhai s'exécute
+  Then la table d'images vient de `box.status.packages` dédupliquée par registry/repository et
+    le run s'achève @Ok via `set_status_packages_merge`
+  Test associé : @scan_rhai_with_filter_runs_without_error
+  But les quatre vérifications de prédicat/branche de
+    @scan_filter_selects_only_matching_image,
     @scan_filter_category_selects_all_matching_images, @scan_branch_merge_when_filter_set,
-    @scan_branch_full_when_no_filter execute copied snippets, not this file — a real
-    extraction-change would keep them green (see Tasks)
+    @scan_branch_full_when_no_filter exécutent des snippets copiés, pas ce fichier — un vrai
+    changement d'extraction les laisserait verts (voir Tasks)
 
 Scenario: Filter matching no stored package stays partial
-  Given a stored `db/pg` package and filter `monitoring/alertmanager`
-  When ./scan.rhai runs with any registry call wired to @throw
-  Then the run still completes @Ok: the matched-empty branch warns and merges an empty list
-    without touching a registry
-  Maps to test @partial_filter_no_match_does_not_full_scan
+  Given un package `db/pg` stocké et le filtre `monitoring/alertmanager`
+  When ./scan.rhai s'exécute avec tout appel registry câblé sur @throw
+  Then le run s'achève quand même @Ok : la branche matched-empty loggue un warn et merge une
+    liste vide sans toucher une registry
+  Test associé : @partial_filter_no_match_does_not_full_scan
 
 Scenario: Non-security cosmetic tags drop silently
-  Given an http source whose bundle tags include a `.sig` and a `trivy--` entry beside
-    `1.2.3`, and a `log_error` shim wired to @throw via @script.add_code
-  When ./scan.rhai runs
-  Then the run is @Ok and the cosmetic tags are dropped with no error-level log
-  Maps to test @security_filter_cosign_and_trivy_tags_no_error_log
+  Given une source http dont les tags de bundle incluent une entrée `.sig` et une `trivy--` à
+    côté de `1.2.3`, et un shim `log_error` câblé sur @throw via @script.add_code
+  When ./scan.rhai s'exécute
+  Then le run est @Ok et les tags cosmétiques sont écartés sans log de niveau error
+  Test associé : @security_filter_cosign_and_trivy_tags_no_error_log
 
 Scenario: Cache-http lane indexes then waypoint-builds
-  Given a wiremock index with one entry and a bundle holding one package with
-    `requirements: []`, maturity `stable`, no filter
-  When ./scan.rhai runs through @http_get_yaml against the mock server
-  Then exactly one package carrying tag `1.0.0` lands in `box.status.packages` and the run
-    is @Ok
-  Maps to test @scan_http_source_finds_package
+  Given un index wiremock avec une entrée et un bundle tenant un package avec
+    `requirements: []`, maturité `stable`, pas de filtre
+  When ./scan.rhai s'exécute via @http_get_yaml contre le mock server
+  Then exactement un package portant le tag `1.0.0` atterrit dans `box.status.packages` et le
+    run est @Ok
+  Test associé : @scan_http_source_finds_package
 
 Scenario: Cache-http lane filter skips other categories
-  Given an index with a `db` and a `monitoring` entry whose bundle is deliberately NOT
-    mocked, filter `db`
-  When ./scan.rhai runs
-  Then the `monitoring` entry is never fetched, exactly 1 package results, and the merge
-    branch completes @Ok
-  Maps to test @scan_http_source_filter_skips_other_categories
+  Given un index avec une entrée `db` et une `monitoring` dont le bundle n'est délibérément PAS
+    mocké, filtre `db`
+  When ./scan.rhai s'exécute
+  Then l'entrée `monitoring` n'est jamais récupérée, exactement 1 package en résulte, et la
+    branche merge s'achève @Ok
+  Test associé : @scan_http_source_filter_skips_other_categories
 
 Scenario: File-scan lane persists to the cache directory
-  Given a @FileJukeBox over a temp @cache_dir with `source.list`, all five file-lane `args`
-  When ./scan.rhai runs on the file-scan engine (oci mock + http mock + file JukeBox)
-  Then the run is @Ok, the triple-maturity @union_packages leg completes, and `index.yaml`
-    exists in the cache — scanned items land only in `index.yaml` + bundle files, never in a
-    CR status and never in any `statuses.json`
-  Maps to tests @file_scan_runs_without_error, @file_scan_creates_index_yaml
+  Given un @FileJukeBox sur un @cache_dir temporaire avec `source.list`, les cinq `args` de lane
+    fichier
+  When ./scan.rhai s'exécute sur le moteur file-scan (oci mock + http mock + JukeBox fichier)
+  Then le run est @Ok, la branche triple-maturité @union_packages aboutit, et `index.yaml`
+    existe dans le cache — les objets scannés n'atterrissent que dans `index.yaml` + fichiers de
+    bundle, jamais dans un status de CR et jamais dans un `statuses.json`
+  Tests associés : @file_scan_runs_without_error, @file_scan_creates_index_yaml
 
 Scenario: GitLab source runs the full lane including failures
-  Given a `gitlab`-sourced mock box and wiremock registry pages behind a docker-config pull
-    Secret
-  When ./scan.rhai runs end to end
-  Then a happy listing lands every `location` reference through the registry split, and each
-    listing failure (no pull secret, 404/403/401, pagination) surfaces as this file's
-    record-then-rethrow with the module's text
-  Maps to tests @scan_gitlab_lists_repositories_via_direct_path, @scan_gitlab_no_pull_secret_fails,
+  Given un box mock sourcé `gitlab` et des pages de registry wiremock derrière un Secret de pull
+    docker-config
+  When ./scan.rhai s'exécute de bout en bout
+  Then un listing nominal fait atterrir chaque référence `location` via le split de registry, et
+    chaque échec de listing (pas de pull secret, 404/403/401, pagination) remonte en
+    record-then-rethrow de ce fichier avec le texte du module
+  Tests associés : @scan_gitlab_lists_repositories_via_direct_path, @scan_gitlab_no_pull_secret_fails,
     @scan_gitlab_project_not_found_fails, @scan_gitlab_registry_api_forbidden_fails,
     @scan_gitlab_registry_api_unauthorized_fails, @scan_gitlab_pagination_fetches_all_pages
-  (semantics owned by ./../lib/scan_gitlab.sdd; mapped here because the harness runs this file)
+  (sémantique possédée par ./../lib/scan_gitlab.sdd ; mappé ici car le harnais exécute ce fichier)
 
 Scenario: Waypoint chain walk accepts down to the installable base
-  Given descending tags `3.0.0` (min previous `1.0.0`, `vynil_version` unset), `2.5.0`
-    (annotated, min previous `2.2.0` ≥ last_min → skipped), `2.0.0` (min previous `0.9.0` <
-    `1.0.0` → accepted, new floor), `1.5.0` (annotations lack the metadata pair → stops the
-    walk), and no `2.x` candidate requiring a vynil newer than @vynil_version()
-  Then the chain finds exactly [`3.0.0`, `2.0.0`], `2.5.0` is skipped silently, `1.5.0` is
-    never appended and nothing older than it is fetched
-  No mapped test exists.
+  Given des tags descendants `3.0.0` (min previous `1.0.0`, `vynil_version` non posé), `2.5.0`
+    (annoté, min previous `2.2.0` ≥ last_min → sauté), `2.0.0` (min previous `0.9.0` <
+    `1.0.0` → accepté, nouveau plancher), `1.5.0` (annotations sans la paire metadata → arrête
+    la marche), et aucun candidat `2.x` exigeant un vynil plus récent que @vynil_version()
+  Then la chaîne trouve exactement [`3.0.0`, `2.0.0`], `2.5.0` est sauté silencieusement, `1.5.0`
+    n'est jamais ajouté et rien de plus ancien que lui n'est récupéré
+  Aucun test associé n'existe.
 
 Scenario: Failure records then rethrows on the cluster lane
-  Given a scan whose registry call throws mid-scan on a @JukeBox-backed engine
-  Then @log_warn logs the reason text, `box.set_status_failed(reason)` stores the
-    `Updated`/`False` (+`Ready`/`False` when none survives) condition without dropping the
-    package cache, and the same reason reaches Rust as `Rhai script error:`
-  No mapped test exists.
+  Given un scan dont l'appel registry lève en plein scan sur un moteur à base de @JukeBox
+  Then @log_warn loggue le texte de raison, `box.set_status_failed(reason)` stocke la condition
+    `Updated`/`False` (+`Ready`/`False` quand aucune ne survit) sans jeter le cache de packages,
+    et la même raison parvient à Rust en `Rhai script error:`
+  Aucun test associé n'existe.
 
 Scenario: File-lane failure masks the cause
-  Given any mid-scan throw on the @FileJukeBox lane
-  Then the run_file error text is `SCAN-FILE-001: Scan failed: <reason>` (the always-Err
-    failed-setter throws from inside the catch and pre-empts the rethrow) and the cache stays
-    exactly as before the failed scan
-  No mapped test exists.
+  Given tout levé en plein scan sur la lane @FileJukeBox
+  Then le texte d'erreur du run_file est `SCAN-FILE-001: Scan failed: <reason>` (le
+    failed-setter toujours-Err lève depuis l'intérieur du catch et prend la relance de vitesse)
+    et le cache reste exactement celui d'avant le scan raté
+  Aucun test associé n'existe.
 
 Scenario: Cache sources scan unauthenticated through the args probes
-  Given any http- or s3-sourced box on either real lane (`args` carrying no credential keys)
-  Then @http_get_yaml receives auth type and credential `""` (silent anonymous) and
-    @s3_get_yaml receives empty keys (unsigned client) — the Rust-side credential globals
-    never participate
-  No mapped test exists.
+  Given tout box sourcé http ou s3 sur l'une des deux lanes réelles (`args` ne portant aucune
+    clé de credential)
+  Then @http_get_yaml reçoit un type d'auth et un credential `""` (anonyme silencieux) et
+    @s3_get_yaml reçoit des clés vides (client non signé) — les globales de credential côté Rust
+    ne participent jamais
+  Aucun test associé n'existe.
 
 Tasks:
-  [ ] Map every Scenario above to test names (TTD naming) across ./../../tests/rhai_scan.rs,
-      ./../../tests/rhai_scan_file.rs, ./../../tests/rhai_scan_gitlab.rs,
-      ./../../tests/rhai_scan_http.rs — today 14 test fns touch this script (10 run it, 4
-      run copied snippets), and the four snippet tests must be rewritten to run the file.
-  [ ] Add the unmapped coverage: the waypoint-chain Scenario (too-new skip, min-previous
-      skip, both stop-legs, un-annotated stop), cluster record-then-rethrow, file-lane
-      `SCAN-FILE-001` masking, the anonymous-credential probe, and the s3 lane (no s3
-      registration exists on any test engine today).
-  [?] Credential binding mismatch — VERDICT frozen here: ./scan.rhai reads the four
-      credential keys exclusively from `args.keys()` and defines no bare-global reads, while
-      /agent/src/boxes/scan.sdd binds them as scope globals the file never references and
-      serializes an `args` that can never carry those keys — the fetched credentials are dead
-      on arrival and both lanes scan cache sources anonymously. Decide the fix side (Rust
-      merges into `args` vs the script reads the bare globals) and whether present-as-null
-      keys get an `!= ()` leg so they degrade to anonymous instead of crashing.
-  [?] Confirm the chain-stop legs are intended: a first un-annotated tag aborts enumeration
-      of all older tags (a mirror/republished catalog with one foreign tag at the top hides
-      the whole chain), and the first base version accepted without a minimum also stops the
-      walk — decide whether a skip-and-continue leg belongs here.
-  [?] The too-new @print diagnostic interpolates the already-advanced `iter_tags` next to
-      `current` and carries the `requiere` typo; it goes to stdout where every other scan
-      message goes to @log_info/@log_warn — decide the message, channel and text.
-  [?] @union_packages dedups by `tag` alone — safe only because each call spans one image;
-      decide whether to key on `registry`+`image`+`tag` before any reuse beyond the
-      per-image triple-maturity union.
-  [?] The `script` source lane gets a fresh-scope @eval (no `box`/`args`/`spec`, no helpers
-      from this file) — confirm the snippet-is-self-contained contract and how an evaluated
-      snippet is meant to enumerate registries at all.
-  [?] @json_encode(e) of a structural (non-string) engine error inside the catch may fail on
-      the boxed payload, escaping with no failed-status recorded — verify the engine behavior
-      live and decide a safe serialization posture.
+  [ ] Mapper chaque Scenario ci-dessus à des noms de test (nommage TTD) dans
+      ./../../tests/rhai_scan.rs, ./../../tests/rhai_scan_file.rs,
+      ./../../tests/rhai_scan_gitlab.rs, ./../../tests/rhai_scan_http.rs — aujourd'hui 14 fns de
+      test touchent ce script (10 l'exécutent, 4 exécutent des snippets copiés), et les quatre
+      tests de snippet doivent être réécrits pour exécuter le fichier.
+  [ ] Ajouter la couverture non mappée : le Scenario de waypoint-chain (skip too-new, skip
+      min-previous, les deux branches de stop, stop sans annotation), le record-then-rethrow
+      cluster, le masquage `SCAN-FILE-001` de lane fichier, le sondage de credential anonyme, et
+      la lane s3 (aucune registration s3 n'existe sur un moteur de test aujourd'hui).
+  [?] Désaccord de binding des credentials — VERDICT gelé ici : ./scan.rhai lit les quatre clés
+      de credential exclusivement depuis `args.keys()` et ne définit aucune lecture en globale
+      nue, tandis que /agent/src/boxes/scan.sdd les bind comme globales de scope que le fichier
+      ne référence jamais et sérialise un `args` qui ne peut jamais porter ces clés — les
+      credentials récupérés sont morts à l'arrivée et les deux lanes scannent les sources de
+      cache en anonyme. Trancher le côté correctif (Rust fusionne dans `args` vs le script lit
+      les globales nues) et décider si les clés présentes-en-null gagnent une branche `!= ()`
+      pour dégrader vers l'anonyme au lieu de crasher.
+  [?] Confirmer que les branches de chain-stop sont voulues : un premier tag sans annotation
+      interrompt l'énumération de tous les tags plus anciens (un miroir/catalogue republié avec
+      un tag étranger en tête masque toute la chaîne), et la première version de base acceptée
+      sans minimum arrête aussi la marche — décider si une branche skip-and-continue a sa place
+      ici.
+  [?] Le diagnostic @print too-new interpole le `iter_tags` déjà avancé à côté de `current` et
+      porte la faute `requiere` ; il part sur stdout là où tout autre message de scan va à
+      @log_info/@log_warn — décider le message, le canal et le texte.
+  [?] @union_packages déduplique sur `tag` seul — sûr seulement parce que chaque appel porte sur
+      une seule image ; décider s'il faut cléer sur `registry`+`image`+`tag` avant tout réemploi
+      au-delà de l'union triple-maturité par image.
+  [?] La lane de source `script` reçoit un @eval en scope frais (pas de `box`/`args`/`spec`, pas
+      de helpers de ce fichier) — confirmer le contrat du snippet auto-suffisant et comment un
+      snippet évalué est censé énumérer des registries quoi qu'il en soit.
+  [?] Le @json_encode(e) d'une erreur moteur structurelle (non-chaîne) dans le catch peut échouer
+      sur la payload boxed et s'échapper sans failed-status enregistré — vérifier le comportement
+      du moteur en live et décider une posture de sérialisation sûre.
 
 Done when:
-  Every Scenario has a mapped passing test (or a carried Task exemption), the
-    credential-binding decision is implemented on one side and mirrored here, the chain-stop
-    and diagnostic decisions are recorded, and the test/clippy/fmt/specdd harness stays green.
+  Chaque Scenario a un test associé qui passe (ou une exemption portée par une Task), la
+    décision de credential-binding est implémentée d'un côté et miroitée ici, les décisions
+    chain-stop et diagnostic sont consignées, et le harnais test/clippy/fmt/specdd reste vert.

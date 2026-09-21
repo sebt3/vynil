@@ -46,9 +46,9 @@ Done when:
     templates posent.
 
 Scenario: désactivation du backup laisse le RoleBinding
-  Etant donné une instance tenant installée avec un CronJob de backup posé par les
+  Given  une instance tenant installée avec un CronJob de backup posé par les
     templates (`{appslug}-backup` singulier sur RBAC et SA)
-  Quand la lane install sans schedule appelle `SuppressionBackupTenant`
-  Alors le CronJob, le RoleBinding pluriel et le ConfigMap disparaissent (le RoleBinding
+  When la lane install sans schedule appelle `SuppressionBackupTenant`
+  Then le CronJob, le RoleBinding pluriel et le ConfigMap disparaissent (le RoleBinding
     pluriel visait un nom jamais posé : NotFound avalé en silence)
-  Et le RoleBinding et le ServiceAccount singuliers survivent à chaque cycle
+  And le RoleBinding et le ServiceAccount singuliers survivent à chaque cycle
