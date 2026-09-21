@@ -1,246 +1,246 @@
 Spec: clusterinfo
 
 Purpose:
-  Assemble the cluster-wide `clusterinfo` diagnostic payload: one fan-out of Kubernetes reads that
-    collects the node roster, the cluster product distribution, the API server version, the running
-    `vynil` version, the storage classes and the ingress classes into a @ClusterInfo — the complete
-    "what cluster is this and what runs in it" answer per request. Everything is read live on every
-    call — no cache, no auth check, no scrubbing inside this file.
+  Assemble la charge utile diagnostique `clusterinfo` à l'échelle du cluster : un fan-out de lectures
+    Kubernetes qui collecte la liste des nœuds, la distribution produit du cluster, la version de
+    l'API server, la version de `vynil` en cours d'exécution, les storage classes et les ingress classes
+    dans un @ClusterInfo — la réponse complète « quel cluster est-ce et quoi y tourne », en direct à
+    chaque requête — sans cache, sans contrôle d'authentification, sans anonymisation ici.
 
 References:
-  ../dto.sdd — @ClusterInfo, @NodeInfo and @StorageClassInfo are the assembled output shapes; their
-    wire keys and `null` rendering decide how each collected fact reaches the client.
-  ../error.sdd — @DiagError::KubeError is the only failure lane any leg of this file can raise.
-  ../state.sdd — the borrowed @kube::Client and the @Config.vynil_namespace string arrive from
-    @AppState at /server/src/server.rs; this file builds no client and owns no namespace.
-  ../anonymize.sdd — named to pin the boundary: unlike ./state.rs, ./vynilconfig.rs and ./logs.rs,
-    this collector applies no scrub pass and returns no @ScrubStats; it depends on that file not at
-    all (see Tasks).
+  ../dto.sdd — @ClusterInfo, @NodeInfo et @StorageClassInfo sont les formes de sortie assemblées ;
+    leurs clés wire et leur rendu `null` décident comment chaque fait collecté atteint le client.
+  ../error.sdd — @DiagError::KubeError est la seule voie d'échec que toute étape de ce fichier peut lever.
+  ../state.sdd — le @kube::Client emprunté et la chaîne @Config.vynil_namespace arrivent de
+    @AppState dans /server/src/server.rs ; ce fichier ne construit aucun client, ne possède aucun namespace.
+  ../anonymize.sdd — nommé pour épingler la frontière : contrairement à ./state.rs, ./vynilconfig.rs
+    et ./logs.rs, ce collecteur n'applique aucun passage d'anonymisation et ne renvoie aucun
+    @ScrubStats ; il ne dépend pas du tout de ce fichier (voir Tasks).
 
 Depends on:
-  @kube `3.1.0` (/Cargo.lock) — the borrowed @kube::Client, @kube::Api via @Api::all and
-    @Api::namespaced, @ListParams::default() on all four LIST verbs, plus the client-level fetches
-    @Client::apiserver_version and @Client::list_api_groups.
-  @k8s_openapi `0.27.1` (/Cargo.lock) — @Node, @StorageClass, @IngressClass and @Deployment (the
-    last imported inside @get_vynil_version's body); only their metadata, status and spec fields are
-    read, never mutated.
-  @tracing `0.1` (/server/Cargo.toml) — the file's log lane; @get_vynil_version's `warn!` call is
-    its single logging point.
+  @kube `3.1.0` (/Cargo.lock) — le @kube::Client emprunté, @kube::Api via @Api::all et
+    @Api::namespaced, @ListParams::default() sur les quatre verbes LIST, plus les appels côté client
+    @Client::apiserver_version et @Client::list_api_groups.
+  @k8s_openapi `0.27.1` (/Cargo.lock) — @Node, @StorageClass, @IngressClass et @Deployment (ce
+    dernier importé dans le corps de @get_vynil_version) ; seuls leurs champs metadata, status et spec
+    sont lus, jamais modifiés.
+  @tracing `0.1` (/server/Cargo.toml) — la voie de log du fichier ; l'appel `warn!` de
+    @get_vynil_version en est le seul point de log.
 
 Exposes:
-  @get_cluster_info — the file's only `pub` item, reachable as
-    @crate::collect::clusterinfo::get_cluster_info through `pub mod clusterinfo;` in ./mod.rs and
-    `pub mod collect;` in /server/src/lib.rs; its lone call site is the /server/src/server.rs
-    handler for item `clusterinfo`, which serves the @Ok payload through @axum::Json at `200`.
+  @get_cluster_info — seul élément `pub` du fichier, atteignable comme
+    @crate::collect::clusterinfo::get_cluster_info via `pub mod clusterinfo;` dans ./mod.rs et
+    `pub mod collect;` dans /server/src/lib.rs ; son unique site d'appel est le handler
+    /server/src/server.rs pour l'item `clusterinfo`, qui sert la charge utile @Ok via @axum::Json en `200`.
     Signature: `pub async fn get_cluster_info(client: &@kube::Client, vynil_namespace: &@str) -> @Result<@ClusterInfo, @DiagError>`
-    Helpers, all private and observable only through that entry point: @get_nodes, @extract_roles,
-    @detect_distribution, @get_apiserver_version, @get_vynil_version, @get_storage_classes and
+    Helpers, tous privés et observables seulement via ce point d'entrée : @get_nodes, @extract_roles,
+    @detect_distribution, @get_apiserver_version, @get_vynil_version, @get_storage_classes et
     @get_ingress_classes.
-  The six collected facts carried on @ClusterInfo, in assembly order:
-    @ClusterInfo.nodes — @Vec<@NodeInfo> from the cluster-scoped @Node LIST, per node: @name, @roles
-      (pushed order `control-plane`, `worker`, `infra`, default `node`), @instance_type, @arch, @os,
+  Les six faits collectés portés par @ClusterInfo, dans l'ordre d'assemblage :
+    @ClusterInfo.nodes — @Vec<@NodeInfo> issu du LIST @Node au scope cluster, par nœud : @name, @roles
+      (ordre d'ajout `control-plane`, `worker`, `infra`, défaut `node`), @instance_type, @arch, @os,
       @kubelet_version.
-    @ClusterInfo.distribution — exactly one of the literals `GKE`, `EKS`, `AKS`, `OpenShift`,
-      `Unknown`, from node labels first and @Client::list_api_groups second.
-    @ClusterInfo.kubernetes_version — @Client::apiserver_version's `git_version`, verbatim.
-    @ClusterInfo.vynil_version — @Option<@String>: the image tag segment of the first label-matched
-      @Deployment in @vynil_namespace, or @None.
-    @ClusterInfo.storage_classes — @Vec<@StorageClassInfo> from the cluster-scoped @StorageClass
-      LIST: @name, @provisioner, @is_default.
-    @ClusterInfo.ingress_classes — @Vec<@String> of @IngressClass names, cluster-scoped LIST,
-      nameless items dropped.
+    @ClusterInfo.distribution — exactement un des littéraux `GKE`, `EKS`, `AKS`, `OpenShift`,
+      `Unknown`, d'abord via les labels des nœuds puis @Client::list_api_groups.
+    @ClusterInfo.kubernetes_version — le `git_version` de @Client::apiserver_version, verbatim.
+    @ClusterInfo.vynil_version — @Option<@String> : le segment tag de l'image du premier @Deployment
+      correspondant au label dans @vynil_namespace, ou @None.
+    @ClusterInfo.storage_classes — @Vec<@StorageClassInfo> issu du LIST @StorageClass au scope
+      cluster : @name, @provisioner, @is_default.
+    @ClusterInfo.ingress_classes — @Vec<@String> de noms d'@IngressClass, LIST au scope cluster,
+      items sans nom écartés.
 
 Accepts:
-  @client — a borrowed @kube::Client, cloned per leg into @Api handles only; no client is built, no
-    credentials are read, and the caller's permission set (notably cluster-wide LIST rights) is
-    exactly this file's visibility.
-  @vynil_namespace — a `&@str` consulted once, as the @Api::namespaced target of the @Deployment
-    LIST inside @get_vynil_version; never validated, never seen by any other leg.
-  Nothing else: no selectors, field filters, limits, page knobs or per-item options — every LIST is
-    @ListParams::default() over the whole collection.
+  @client — un @kube::Client emprunté, cloné par étape en poignées @Api uniquement ; aucun client
+    n'est construit, aucun identifiant n'est lu, et le jeu de permissions de l'appelant (notamment les
+    droits LIST à l'échelle du cluster) est exactement la visibilité de ce fichier.
+  @vynil_namespace — un `&@str` consulté une fois, comme cible @Api::namespaced du LIST
+    @Deployment dans @get_vynil_version ; jamais validé, jamais vu par aucune autre étape.
+  Rien d'autre : pas de sélecteur, filtre de champ, limite, réglage de pagination ni option par
+    item — chaque LIST est un @ListParams::default() sur toute la collection.
 
 Returns:
-  @Ok of one @ClusterInfo with the six fields above, list order preserved as the API returned it —
-    nothing here sorts, dedups, trims, case-folds or validates, and every label-derived value is the
-    label's verbatim @String clone.
-  @Err of @DiagError::KubeError carrying the failed leg's original @kube::Error unchanged —
-    `DIAG-500`/`500` on the wire per /server/src/error.sdd — from the first hard-failing leg, with
-    all later legs never attempted.
+  @Ok d'un @ClusterInfo avec les six champs ci-dessus, ordre des listes préservé tel que l'API
+    l'a renvoyé — ici rien n'est trié, dédupliqué, tronqué, plié en casse ou validé, et chaque valeur
+    dérivée d'un label est le clone @String verbatim du label.
+  @Err de @DiagError::KubeError portant l'@kube::Error d'origine de l'étape en échec, inchangé —
+    `DIAG-500`/`500` sur le wire selon /server/src/error.sdd — dès la première étape en échec dur,
+    les étapes suivantes n'étant jamais tentées.
 
 Raises:
-  @DiagError::KubeError is the sole raisable variant, from five hard legs: the @Node LIST in
-    @get_nodes, the second @Node LIST in @detect_distribution, @Client::apiserver_version, the
-    @StorageClass LIST and the @IngressClass LIST — each mapped explicitly to @DiagError::KubeError
-    via @map_err and `?`, with no retry, fallback or extra annotation.
-  @DiagError::SerializationError never raises — the file serializes nothing, although the
-    @get_cluster_info doc string claims failures "by serialization of the collected resources" (see
+  @DiagError::KubeError est la seule variante leverable, depuis cinq étapes dures : le LIST @Node
+    dans @get_nodes, le second LIST @Node de @detect_distribution, @Client::apiserver_version, le LIST
+    @StorageClass et le LIST @IngressClass — chacun mappé explicitement vers @DiagError::KubeError via
+    @map_err et `?`, sans retry, fallback ni annotation supplémentaire.
+  @DiagError::SerializationError ne lève jamais — le fichier ne sérialise rien, bien que la doc
+    string de @get_cluster_info annonce des échecs "by serialization of the collected resources" (voir
     Tasks).
-  No panic path: absent names degrade through @unwrap_or_default and @filter_map; the file contains
-    no @unwrap, @expect or explicit @panic.
+  Pas de chemin de panic : les noms absents dégradent via @unwrap_or_default et @filter_map ; le
+    fichier ne contient aucun @unwrap, @expect ni @panic explicite.
 
 Handles:
-  Two soft legs degrade instead of failing: any @kube::Error from the @Deployment LIST is logged as
-    the @tracing warn `Failed to get vynil version: ` plus the error @Display and answered
-    @Ok(@None) — @get_vynil_version's @Err lane is unreachable; a @Client::list_api_groups failure
-    is matched away silently and read as "not OpenShift".
-  Absent names: @Node and @StorageClass @name become the empty string `""` entries, while a
-    nameless @IngressClass is dropped from @ClusterInfo.ingress_classes entirely.
-  Role extraction ignores values on `node-role.kubernetes.io/control-plane`,
-    `node-role.kubernetes.io/master`, `node-role.kubernetes.io/worker` and
-    `node-role.kubernetes.io/infra` (role labels are conventionally empty), but requires the value
-    `master` on the legacy `kubernetes.io/role`; other values there contribute nothing, so plain
-    workers land on the no-roles default `["node"]`. The legacy `master` case never duplicates a
-    `control-plane` already earned from the node-role labels.
-  Label value fallbacks, first hit wins verbatim: @instance_type tries `node.kubernetes.io/instance-type`,
-    then `k8s.amazonaws.com/instance-type`, then `cloud.google.com/machine-type`; @arch and @os
-    prefer `kubernetes.io/arch` / `kubernetes.io/os` and fall back to their `beta.kubernetes.io/`
-    siblings; @kubelet_version exists only under @Node's @status @node_info, so a status-less node
-    yields @None.
-  Distribution scan order: for each @Node in list order, key presence only is tested —
-    `cloud.google.com/machine-type` → `GKE`, `eks.amazonaws.com/nodegroup` → `EKS`,
-    `kubernetes.azure.com/agentpool` → `AKS` — first matching node returns immediately; only when no
-    node matches, any API group name ending `openshift.io` → `OpenShift`; else `Unknown`.
-  Nodeless cluster: `nodes` is `[]`, cloud literals are unreachable, and `distribution` is decided
-    by the API-group check alone.
-  No authentication or authorization happens here — the /server/src/server.rs caller has already
-    identified and admitted the request before this collector touches the cluster.
-  The payload leaves unscrubbed: node names, label-derived facts and image references are emitted
-    exactly as read, with no @ScrubStats and no `X-Diag-Redactions` path (see Tasks).
+  Deux étapes douces dégradent au lieu d'échouer : tout @kube::Error du LIST @Deployment est loggé
+    comme le warn @tracing `Failed to get vynil version: ` plus l'@Display de l'erreur et répondu
+    @Ok(@None) — la voie @Err de @get_vynil_version est inatteignable ; un échec de
+    @Client::list_api_groups est avalé en silence et lu comme « pas OpenShift ».
+  Noms absents : les @name de @Node et @StorageClass deviennent des chaînes vides `""`, tandis qu'un
+    @IngressClass sans nom est carrément écarté de @ClusterInfo.ingress_classes.
+  L'extraction des rôles ignore les valeurs portées par `node-role.kubernetes.io/control-plane`,
+    `node-role.kubernetes.io/master`, `node-role.kubernetes.io/worker` et
+    `node-role.kubernetes.io/infra` (les labels de rôle sont conventionnellement vides), mais exige
+    la valeur `master` sur le legacy `kubernetes.io/role` ; les autres valeurs n'y apportent rien, donc
+    les workers simples retomvent sur le défaut sans rôle `["node"]`. Le cas legacy `master` ne
+    duplique jamais un `control-plane` déjà obtenu via les labels node-role.
+  Repli de valeurs de labels, premier trouvé gagne verbatim : @instance_type tente
+    `node.kubernetes.io/instance-type`, puis `k8s.amazonaws.com/instance-type`, puis
+    `cloud.google.com/machine-type` ; @arch et @os préfèrent `kubernetes.io/arch` /
+    `kubernetes.io/os` et se replient sur leurs siblings `beta.kubernetes.io/` ; @kubelet_version
+    n'existe que sous @status @node_info de @Node, d'où @None pour un nœud sans status.
+  Ordre du scan de distribution : pour chaque @Node dans l'ordre de la liste, seule la présence de
+    clé est testée — `cloud.google.com/machine-type` → `GKE`, `eks.amazonaws.com/nodegroup` → `EKS`,
+    `kubernetes.azure.com/agentpool` → `AKS` — premier nœud correspondant, retour immédiat ; quand
+    aucun nœud ne correspond, tout groupe finissant par `openshift.io` → `OpenShift`, sinon `Unknown`.
+  Cluster sans nœud : `nodes` vaut `[]`, les littéraux cloud sont inatteignables, et `distribution`
+    est tranchée par le seul contrôle des groupes d'API.
+  Aucune authentification ni autorisation n'a lieu ici — l'appelant de /server/src/server.rs a déjà
+    identifié et admis la requête avant que ce collecteur ne touche le cluster.
+  La charge utile part non anonymisée : noms de nœuds, faits issus des labels et références d'image
+    sont émis exactement tels que lus, sans @ScrubStats ni chemin `X-Diag-Redactions` (voir Tasks).
 
 Must:
-  A successful @get_cluster_info runs six legs in fixed sequential order — @Node LIST, second @Node
-    LIST, @Client::apiserver_version, namespaced @Deployment LIST, @StorageClass LIST, @IngressClass
-    LIST — awaiting each before starting the next, so the first hard failure aborts before
-    subsequent legs are ever issued.
-  The @Node resource is LISTed twice per successful call with identical @ListParams::default()
-    arguments and no result sharing between @get_nodes and @detect_distribution.
-  The four cluster resources (@Node, @StorageClass, @IngressClass cluster-wide via @Api::all) are
-    read cluster-wide; only the @Deployment lookup is namespaced to @vynil_namespace via
-    @Api::namespaced.
-  @get_vynil_version inspects deployments only for the label check `app.kubernetes.io/name` equal to
-    the value `vynil`; the first label-matched @Deployment in list order is the only inspected
-    candidate — its first container's @image, taken second `:`-separated field verbatim as the
-    version, then the loop breaks even when that candidate yields @None, so later labeled
-    candidates are never examined.
-  @ClusterInfo.kubernetes_version is the `git_version` text untouched — no `v` prefix handling,
-    parsing or validation; an empty `git_version` ships as `""`.
-  @StorageClassInfo.is_default is true exactly when the annotation
-    `storageclass.kubernetes.io/is-default-class` equals the string `true`; absent or any other
-    value is false, and @provisioner passes through raw.
-  The file performs no secret collection or masking of any kind — no call into ../anonymize.rs
-    exists (contrast the scrub lanes named in ../anonymize.sdd).
+  Un @get_cluster_info réussi exécute six étapes dans un ordre séquentiel fixe — LIST @Node, second
+    LIST @Node, @Client::apiserver_version, LIST @Deployment namespacé, LIST @StorageClass, LIST
+    @IngressClass — chacune attendue avant de démarrer la suivante, si bien que le premier échec dur
+    interrompt avant que les étapes suivantes soient jamais émises.
+  La ressource @Node est LISTée deux fois par appel réussi avec des arguments
+    @ListParams::default() identiques, sans partage de résultat entre @get_nodes et @detect_distribution.
+  Les quatre ressources cluster (@Node, @StorageClass, @IngressClass au scope cluster via @Api::all)
+    sont lues au scope cluster ; seule la recherche de @Deployment est namespacée à @vynil_namespace
+    via @Api::namespaced.
+  @get_vynil_version n'inspecte les deployments que pour le contrôle du label
+    `app.kubernetes.io/name` égal à la valeur `vynil` ; le premier @Deployment correspondant au label
+    dans l'ordre de la liste est le seul candidat inspecté — l'@image de son premier conteneur, dont on
+    prend verbatim le second champ séparé par `:` comme version, puis la boucle break même quand ce
+    candidat donne @None, donc les candidats labellisés suivants ne sont jamais examinés.
+  @ClusterInfo.kubernetes_version est le texte `git_version` intact — aucune gestion de préfixe `v`,
+    parsing ni validation ; un `git_version` vide part comme `""`.
+  @StorageClassInfo.is_default est vrai exactement quand l'annotation
+    `storageclass.kubernetes.io/is-default-class` égale la chaîne `true` ; absente ou toute autre
+    valeur donne false, et @provisioner passe en brut.
+  Le fichier ne collecte et ne masque aucun secret — aucun appel vers ../anonymize.rs n'existe
+    (faire contraste avec les voies d'anonymisation nommées dans ../anonymize.sdd).
 
 Tasks:
-  [ ] Cover @extract_roles: control-plane via either node-role label with an empty value, the
-      `["worker","infra"]` push order, the legacy `kubernetes.io/role: master` alias never
-      duplicating control-plane, and `kubernetes.io/role: node` yielding only the default `["node"]`.
-  [ ] Cover @get_nodes facts: the @instance_type three-key priority chain, `beta.kubernetes.io/arch`
-      and `beta.kubernetes.io/os` fallbacks, @None @kubelet_version for status-less nodes, and the
-      empty-string @name for a nameless @Node.
-  [ ] Cover @detect_distribution: first-cloud-labeled-node-wins across `GKE`/`EKS`/`AKS`, the
-      `openshift.io` suffix match on any group, `Unknown` for clean clusters and for a
-      @Client::list_api_groups @Err, and that no cloud literal survives an empty @Node list.
-  [ ] Cover the version legs: `git_version` passthrough, @vynil_version for every image shape pinned
-      in the second-colon-field scenario — plain tag, registry-port, digest and the first-match
-      `break` with a later tagged candidate skipped — the @Deployment-LIST @Err degradation to @None
-      plus its warn line, and a hard-leg @kube::Error aborting later legs as @DiagError::KubeError.
-  [ ] Cover list assembly: @StorageClassInfo.is_default only on literal `true`, the dropped nameless
-      @IngressClass, the retained nameless @StorageClass entry, and API list-order preservation in
-      every vector.
-  [?] @Node is LISTed twice per call with identical parameters while @ClusterInfo discards the
-      first result for the distribution pass, and all six round trips are awaited serially — one
-      request costs up to six trips. Decide later whether the node list is reused and the six legs
-      run concurrently.
-  [?] @vynil_version reads the tag as the second `:`-separated field of the image: an untagged
-      `registry:5000/vynil` reports `5000/vynil` and a digest-pinned `vynil@sha256:abcd` reports the
-      digest `abcd` as the "version". Decide later whether proper image-tag parsing lands here.
-  [?] @vynil_version takes the first label-matched @Deployment, reads only its first container, and
-      then `break`s even when that candidate yields @None — a shared `app.kubernetes.io/name: vynil`
-      label on another workload outranks the controller and no fallback scan exists. Decide later
-      whether the lookup becomes a label-selector field query with candidate merge.
-  [?] Soft-lane leniency is inconsistent: the @Deployment LIST failure logs a warn while the
-      @Client::list_api_groups failure is swallowed with no log, so an RBAC-broken cluster answers
-      `OpenShift`-absent identically to vanilla upstream; @get_vynil_version keeps a @Result
-      signature it can never error through. Decide later whether the API-group failure is logged and
-      whether the signature collapses.
-  [?] @get_cluster_info's doc string promises propagated "serialization of the collected resources"
-      failures the body never produces (nothing serializes here) and stays silent on both soft legs;
-      the same doc block also opens with its `# Errors` section before the summary line. Decide
-      later how the prose is corrected.
-  [?] Nothing is scrubbed and no @ScrubStats travels with the answer, while /server/server.sdd
-      carries the unqualified "Anonymize secrets in returned payloads" rule — node names,
-      label-derived values and image references ship verbatim to any authenticated caller of this
-      generic-tier item. Decide later whether clusterinfo belongs at the ../anonymize.sdd boundary.
-  [?] Detection and reporting label sets disagree: distribution keys are
-      `cloud.google.com/machine-type`, `eks.amazonaws.com/nodegroup` and
-      `kubernetes.azure.com/agentpool`, but @instance_type has no Azure key — an AKS node reports
-      @instance_type @None under @distribution `AKS`. Decide later whether one shared cloud-label
-      table serves both scans.
+  [ ] Couvrir @extract_roles : control-plane via l'un ou l'autre label node-role avec valeur vide,
+      l'ordre d'ajout `["worker","infra"]`, l'alias legacy `kubernetes.io/role: master` ne dupliquant
+      jamais control-plane, et `kubernetes.io/role: node` ne donnant que le défaut `["node"]`.
+  [ ] Couvrir les faits de @get_nodes : la chaîne de priorité à trois clés de @instance_type,
+      les replis `beta.kubernetes.io/arch` et `beta.kubernetes.io/os`, @kubelet_version @None pour
+      les nœuds sans status, et le @name chaîne vide pour un @Node sans nom.
+  [ ] Couvrir @detect_distribution : premier nœud labellisé cloud gagnant sur `GKE`/`EKS`/`AKS`, la
+      correspondance du suffixe `openshift.io` sur tout groupe, `Unknown` pour les clusters sains et
+      pour un @Err de @Client::list_api_groups, et aucun littéral cloud sur une liste @Node vide.
+  [ ] Couvrir les étapes de version : `git_version` passe-plat, @vynil_version pour toute forme
+      d'image du scénario second champ après : — tag simple, port de registre, digest, et le `break` de
+      premier match sautant un candidat taggé plus loin — la dégradation @Err du LIST @Deployment
+      en @None plus sa ligne warn, et un @kube::Error dur abortant la suite en @DiagError::KubeError.
+  [ ] Couvrir l'assemblage des listes : @StorageClassInfo.is_default seulement sur le littéral
+      `true`, l'@IngressClass sans nom écarté, l'entrée @StorageClass sans nom conservée, et la
+      préservation de l'ordre de liste de l'API dans chaque vecteur.
+  [?] @Node est LISTé deux fois par appel avec des paramètres identiques alors que @ClusterInfo
+      jette le premier résultat pour la passe distribution, et les six allers-retours sont attendus
+      en série — une requête coûte jusqu'à six allers. Décider plus tard si la liste des nœuds est
+      réutilisée et si les six étapes tournent en concurrence.
+  [?] @vynil_version lit le tag comme second champ `:`-séparé de l'image : un `registry:5000/vynil`
+      non taggé rapporte `5000/vynil` et un `vynil@sha256:abcd` épinglé en digest rapporte le digest
+      `abcd` comme « version ». Décider plus tard si un vrai parsing de tag d'image s'installe ici.
+  [?] @vynil_version prend le premier @Deployment correspondant au label, ne lit que son premier
+      conteneur, puis `break` même si ce candidat donne @None — un label partagé
+      `app.kubernetes.io/name: vynil` sur une autre workload coiffe le controller et aucun scan de
+      repli n'existe. Décider plus tard : field query de label-selector avec fusion de candidats ?
+  [?] La clémence des voies douces est incohérente : l'échec du LIST @Deployment log un warn alors
+      que l'échec de @Client::list_api_groups est avalé sans log, si bien qu'un cluster au RBAC cassé
+      répond `OpenShift` absent exactement comme un upstream vanilla ; @get_vynil_version garde une
+      signature @Result par laquelle elle ne peut jamais encoder. Décider plus tard si l'échec des
+      groupes d'API est loggé et si la signature s'effondre.
+  [?] La doc string de @get_cluster_info promet des échecs propagés "by serialization of the
+      collected resources" que le corps ne produit jamais (rien ne sérialise ici) et se tait sur les
+      deux étapes douces ; le même bloc de doc s'ouvre aussi sur sa section `# Errors` avant la
+      ligne de résumé. Décider plus tard comment corriger la prose.
+  [?] Rien n'est anonymisé, aucun @ScrubStats n'accompagne la réponse, alors que /server/server.sdd
+      porte la règle sans qualificatif "Anonymize secrets in returned payloads" —
+      noms de nœuds, valeurs de labels et références d'image partent verbatim à tout appelant authentifié
+      de cet item de tier générique. Décider plus tard si clusterinfo relève de la frontière ../anonymize.sdd.
+  [?] Les jeux de labels de détection et de rapport divergent : les clés de distribution sont
+      `cloud.google.com/machine-type`, `eks.amazonaws.com/nodegroup` et
+      `kubernetes.azure.com/agentpool`, mais @instance_type n'a pas de clé Azure — un nœud AKS
+      rapporte @instance_type @None sous @distribution `AKS`. Décider plus tard si une table de
+      labels cloud partagée sert les deux scans.
 
 Done when:
-  Every Scenario below maps to a green test in `server`, the `[?]` decisions above are recorded, and
-    `cargo test -p server` with clippy and fmt stays green.
+  Chaque Scenario ci-dessous correspond à un test vert dans `server`, les décisions `[?]` ci-dessus
+    sont consignées, et `cargo test -p server` avec clippy et fmt reste vert.
 
 Scenario: Roles are label presence not value
-  Given a node carrying only `node-role.kubernetes.io/control-plane: ""`, one carrying both
-    `node-role.kubernetes.io/worker` and `node-role.kubernetes.io/infra`, and one carrying only
+  Given un nœud portant uniquement `node-role.kubernetes.io/control-plane: ""`, un portant à la fois
+    `node-role.kubernetes.io/worker` et `node-role.kubernetes.io/infra`, et un portant uniquement
     `kubernetes.io/role: node`
-  When @extract_roles runs over them during the nodes leg
-  Then their @roles are `["control-plane"]`, `["worker","infra"]` in that push order, and the
-    default `["node"]`
-  And a fourth node with only `kubernetes.io/role: master` yields `["control-plane"]`, while one
-    with both that label and `node-role.kubernetes.io/control-plane` keeps `control-plane` once
-  No mapped test exists.
+  When @extract_roles les parcourt durant l'étape des nœuds
+  Then leurs @roles sont `["control-plane"]`, `["worker","infra"]` dans cet ordre d'ajout, et le
+    défaut `["node"]`
+  And un quatrième nœud avec uniquement `kubernetes.io/role: master` donne `["control-plane"]`,
+    tandis que ce label plus `node-role.kubernetes.io/control-plane` garde `control-plane` unique
+  Aucun test mappé n'existe.
 
 Scenario: Fallback labels keep facts optional
-  Given a nameless @Node whose labels hold only `k8s.amazonaws.com/instance-type: m5.large` and
-    `beta.kubernetes.io/arch: amd64`, with @Node @status absent entirely
-  When its @NodeInfo is built
-  Then @name is `""`, @instance_type is `m5.large`, @arch is `amd64`, and @os plus @kubelet_version
-    are @None serialized as explicit `null` per ../dto.sdd
-  No mapped test exists.
+  Given un @Node sans nom dont les labels ne portent que `k8s.amazonaws.com/instance-type: m5.large`
+    et `beta.kubernetes.io/arch: amd64`, avec @Node @status entièrement absent
+  When son @NodeInfo est construit
+  Then @name vaut `""`, @instance_type vaut `m5.large`, @arch vaut `amd64`, et @os ainsi que
+    @kubelet_version valent @None sérialisés en `null` explicite selon ../dto.sdd
+  Aucun test mappé n'existe.
 
 Scenario: First cloud-labeled node decides distribution
-  Given a @Node list whose first item carries `cloud.google.com/machine-type` and whose second
-    carries `eks.amazonaws.com/nodegroup`
-  When @detect_distribution scans
-  Then @ClusterInfo.distribution is `GKE` — the EKS-labeled node is never consulted
-  But with the cloud labels only on the second node as `kubernetes.azure.com/agentpool`, the result
-    is `AKS`
-  No mapped test exists.
+  Given une liste @Node dont le premier item porte `cloud.google.com/machine-type` et dont le second
+    porte `eks.amazonaws.com/nodegroup`
+  When @detect_distribution scanne
+  Then @ClusterInfo.distribution est `GKE` — le nœud labellisé EKS n'est jamais consulté
+  But avec les labels cloud uniquement sur le second nœud comme `kubernetes.azure.com/agentpool`, le
+    résultat est `AKS`
+  Aucun test mappé n'existe.
 
 Scenario: OpenShift only after cloud misses
-  Given a cluster whose every node has no cloud label
-  When @Client::list_api_groups returns a group named `route.openshift.io`
-  Then @ClusterInfo.distribution is `OpenShift` — a suffix test on the group name, not an exact-group
-    lookup
-  And when that call fails with a @kube::Error, the answer is `Unknown` with nothing logged,
-    indistinguishable from a genuinely vanilla cluster
-  No mapped test exists.
+  Given un cluster dont chaque nœud n'a aucun label cloud
+  When @Client::list_api_groups renvoie un groupe nommé `route.openshift.io`
+  Then @ClusterInfo.distribution est `OpenShift` — un test de suffixe sur le nom du groupe, pas une
+    recherche de groupe exact
+  And quand cet appel échoue avec un @kube::Error, la réponse est `Unknown` sans rien de loggé,
+    indistinguable d'un cluster réellement vanilla
+  Aucun test mappé n'existe.
 
 Scenario: Vynil version reads the second colon field
-  Given a label-matched @Deployment whose first container image is `ghcr.io/vynil/controller:1.2.3`
-  When @vynil_version extracts
-  Then @ClusterInfo.vynil_version is @Some `1.2.3` verbatim
-  And today's split reports @Some `5000/vynil` for the untagged `registry:5000/vynil` and @Some
-    `abcd` for the digest-pinned `vynil@sha256:abcd`
-  And when the first label-matched deployment yields no tag, the result is @None even though a
-    later deployment with the same label carries `vynil:0.9`
-  No mapped test exists.
+  Given un @Deployment correspondant au label dont la première image de conteneur est `ghcr.io/vynil/controller:1.2.3`
+  When @vynil_version extrait
+  Then @ClusterInfo.vynil_version est @Some `1.2.3` verbatim
+  And le split d'aujourd'hui rapporte @Some `5000/vynil` pour le `registry:5000/vynil` non taggé et
+    @Some `abcd` pour le `vynil@sha256:abcd` épinglé en digest
+  And quand le premier deployment correspondant au label ne donne pas de tag, le résultat est @None
+    bien qu'un deployment ultérieur avec le même label porte `vynil:0.9`
+  Aucun test mappé n'existe.
 
 Scenario: Soft legs degrade the payload and hard legs abort
-  Given the @Deployment LIST in @vynil_namespace is refused by RBAC while every other leg reads
-    cleanly
-  When @get_cluster_info runs
-  Then it answers @Ok with @ClusterInfo.vynil_version @None and the warn line `Failed to get vynil
-    version: …`, and one nameless @IngressClass is missing from @ClusterInfo.ingress_classes while a
-    nameless @StorageClass still appears with @name `""`
-  But when the @StorageClass LIST fails instead, `?` propagates @DiagError::KubeError as
-    `DIAG-500`/`500` and no @IngressClass request is ever issued
-  No mapped test exists.
+  Given le LIST @Deployment dans @vynil_namespace refusé par le RBAC alors que toutes les autres
+    étapes lisent proprement
+  When @get_cluster_info s'exécute
+  Then il répond @Ok avec @ClusterInfo.vynil_version @None et la ligne warn `Failed to get vynil
+    version: …`, et un @IngressClass sans nom manque à @ClusterInfo.ingress_classes alors qu'un
+    @StorageClass sans nom apparaît quand même avec @name `""`
+  But quand c'est le LIST @StorageClass qui échoue, `?` propage @DiagError::KubeError en
+    `DIAG-500`/`500` et aucune requête @IngressClass n'est jamais émise
+  Aucun test mappé n'existe.
 
 Example:
-  @ClusterInfo body for a one-node EKS cluster:
+  @ClusterInfo pour un cluster EKS à un nœud :
     `{"nodes":[{"name":"ip-10-0-1-2","roles":["node"],"instance_type":"m5.xlarge","arch":"amd64","os":"linux","kubelet_version":"v1.29.9"}],"distribution":"EKS","kubernetes_version":"v1.29.9","vynil_version":"0.3.1","storage_classes":[{"name":"gp3","provisioner":"ebs.csi.aws.com","is_default":true}],"ingress_classes":["alb"]}`
-  Soft-leg log body: `Failed to get vynil version: ` + the failed @kube::Error @Display — the file's
-    only emitted log line.
+  Corps du log d'étape douce : `Failed to get vynil version: ` + l'@Display du @kube::Error en échec
+    — la seule ligne de log émise par le fichier.
