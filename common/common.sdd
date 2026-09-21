@@ -1,50 +1,50 @@
-# Directory spec for the `common` crate. Coarse boundary only; each domain module
-# (jukebox, package model, engines) is specified by its own same-basename spec.
+# Spec dossier du crate `common`. Frontière grossière seulement ; chaque module de domaine
+# (jukebox, modèle de paquet, moteurs) est spécifié par son propre spec de même basename.
 
 Spec: common
 
 Platform: Rust
 
 Purpose:
-  Shared library crate carrying every Vynil-specific type used by the agent, operator, and
-  server. It wraps the external `vynil-core` toolbox into the Vynil layer: the four CRD
-  models, the package model, the context-aware Handlebars helpers, the Vynil Rhai bindings,
-  the order-preserving YAML helpers, and the status-condition macros.
+  Crate librairie partagée portant tous les types spécifiques à Vynil utilisés par l'agent,
+  l'opérateur et le serveur. Il emballe la toolbox externe `vynil-core` dans la couche Vynil :
+  les quatre modèles CRD, le modèle de paquet, les helpers Handlebars conscients du contexte,
+  les bindings Rhai de Vynil, les helpers YAML préservant l'ordre, et les macros condition de statut.
 
 Structure:
-  ./src/lib.rs: Crate root — `@Error` (33 variants), `@Result`, `@RhaiRes`, `@rhai_err`,
-    shared wire types, re-exports
-  ./src/context.rs: `@VynilContext` process context, async client and owner-label helpers
-  ./src/jukebox.rs: CRD-backed `@JukeBox` model, source variants, status setters
-  ./src/jukebox_file.rs: file-scan JukeBox variant (no cluster connection)
-  ./src/vynilpackage.rs: `@VynilPackage` model, requirements, version/cluster checks
-  ./src/instanceservice.rs: `@ServiceInstance` model, service-name TTL index, Rhai bridge
-  ./src/instancesystem.rs: `@SystemInstance` model and Rhai bridge
-  ./src/instancetenant.rs: `@TenantInstance` model, tenant identity helpers, Rhai bridge
-  ./src/instance_macros.rs: six `#[macro_export]` status-condition and instance codegen macros
-  ./src/handlebarshandler.rs: Vynil Handlebars layer and nine contextual helpers
-  ./src/rhaihandler.rs: `@Script` engine constructors (core, real, file-scan, mock)
-  ./src/yamlhandler.rs: order-preserving `@YamlDoc` helpers and serde_yaml re-exports
-  ./src/tools.rs: base64+gzip text codec for tfstate/rhaistate payloads
-  ./src/ttl_cache.rs: `@TtlCache` async single-slot TTL cache
-  ./src/k8smock.rs: in-memory Kubernetes/OCI Rhai mocks (product-compiled, ungated)
+  ./src/lib.rs: Racine du crate — `@Error` (33 variantes), `@Result`, `@RhaiRes`, `@rhai_err`,
+    types d'échange partagés, re-exports
+  ./src/context.rs: contexte de processus `@VynilContext`, client asynchrone et helpers d'owner-label
+  ./src/jukebox.rs: modèle `@JukeBox` adossé au CRD, variantes de source, setters de statut
+  ./src/jukebox_file.rs: variante JukeBox de scan de fichiers (pas de connexion au cluster)
+  ./src/vynilpackage.rs: modèle `@VynilPackage`, requirements, checks de version/cluster
+  ./src/instanceservice.rs: modèle `@ServiceInstance`, index TTL du nom de service, pont Rhai
+  ./src/instancesystem.rs: modèle `@SystemInstance` et pont Rhai
+  ./src/instancetenant.rs: modèle `@TenantInstance`, helpers d'identité de tenant, pont Rhai
+  ./src/instance_macros.rs: six macros `#[macro_export]` de condition de statut et de codegen d'instance
+  ./src/handlebarshandler.rs: couche Vynil Handlebars et neuf helpers contextuels
+  ./src/rhaihandler.rs: constructeurs de moteur `@Script` (core, réel, scan de fichiers, mock)
+  ./src/yamlhandler.rs: helpers `@YamlDoc` préservant l'ordre et re-exports serde_yaml
+  ./src/tools.rs: codec de texte base64+gzip pour les payloads tfstate/rhaistate
+  ./src/ttl_cache.rs: cache TTL asynchrone `@TtlCache` à un seul slot
+  ./src/k8smock.rs: mocks Rhai Kubernetes/OCI en mémoire (compilés dans le produit, non gateés)
 
 Owns:
   ./src/lib.rs
   ./Cargo.toml
 
 Must:
-  Expose only types and helpers genuinely shared across two or more consuming crates.
-  Keep the Rust-level ordered-YAML surface (`@YamlDoc`) confined to `./src/yamlhandler.rs`;
-    the `vynil-core` JSON paths (`@yaml_str_to_json` and friends) order their objects by
-    document insertion, not alphabetically — `handlebars` unifies the `preserve_order`
-    `serde_json` feature across the workspace graph, so no path in this crate sorts keys.
-  Re-export the generic `vynil-core` engines behind Vynil newtypes so consumers do not select
-    the engine layer themselves.
+  N'exposer que les types et helpers réellement partagés entre deux crates consommateurs ou plus.
+  Garder la surface YAML ordonnée au niveau Rust (`@YamlDoc`) confinée à `./src/yamlhandler.rs` ;
+    les chemins JSON de `vynil-core` (`@yaml_str_to_json` et consorts) ordonnent leurs objets par
+    insertion dans le document, pas alphabétiquement — `handlebars` unifie la feature `preserve_order`
+    de `serde_json` sur tout le graphe du workspace, donc aucun chemin de ce crate ne trie les clés.
+  Ré-exporter les moteurs génériques de `vynil-core` derrière des newtypes Vynil pour que les
+    consommateurs ne sélectionnent pas la couche moteur eux-mêmes.
 
 Must not:
-  Depend on `agent`, `operator`, or `server`.
-  Duplicate generic engine helpers already provided by `vynil-core`.
+  Dépendre de `agent`, `operator`, ou `server`.
+  Dupliquer des helpers de moteur génériques déjà fournis par `vynil-core`.
 
 Depends on:
   `vynil-core`
@@ -55,16 +55,16 @@ References:
   ./src/vynilpackage.sdd, ./src/instanceservice.sdd, ./src/instancesystem.sdd
   ./src/instancetenant.sdd, ./src/instance_macros.sdd, ./src/handlebarshandler.sdd
   ./src/rhaihandler.sdd, ./src/yamlhandler.sdd, ./src/tools.sdd, ./src/ttl_cache.sdd
-  ./src/k8smock.sdd — the file-level contracts; this directory spec stays coarse and defers
-    all file behavior to them.
+  ./src/k8smock.sdd — les contrats au niveau fichier ; ce spec dossier reste grossier et délègue
+    à ceux-ci tout le comportement des fichiers.
 
 Done when:
-  Each domain module above has a reviewed same-basename spec and `cargo test -p common` is green.
+  Chaque module de domaine ci-dessus a un spec de même basename revu et `cargo test -p common` est vert.
 
 Tasks:
-  [x] #0 Spec `./src/vynilpackage.rs` (package model, requirements, checks).
-  [x] #1 Spec the four instance-model modules and `./src/instance_macros.rs`.
-  [x] #2 Spec `./src/jukebox.rs` and `./src/jukebox_file.rs`.
-  [x] #3 Spec the Handlebars, Rhai, and YAML handler modules.
-  [x] #4 Spec `./src/lib.rs`, `./src/context.rs`, `./src/tools.rs`, `./src/ttl_cache.rs`,
+  [x] #0 Spécifier `./src/vynilpackage.rs` (modèle de paquet, requirements, checks).
+  [x] #1 Spécifier les quatre modules de modèles d'instance et `./src/instance_macros.rs`.
+  [x] #2 Spécifier `./src/jukebox.rs` et `./src/jukebox_file.rs`.
+  [x] #3 Spécifier les modules de handlers Handlebars, Rhai, et YAML.
+  [x] #4 Spécifier `./src/lib.rs`, `./src/context.rs`, `./src/tools.rs`, `./src/ttl_cache.rs`,
       `./src/k8smock.rs`.

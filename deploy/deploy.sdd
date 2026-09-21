@@ -1,16 +1,16 @@
-# Directory spec for the cluster deployment manifests.
+# Spécification de répertoire pour les manifestes de déploiement du cluster.
 
 Spec: deploy
 
 Purpose:
-  The raw Kubernetes manifests used to install Vynil into a cluster: the CRD bundle and the
-  bootstrap overlay that creates the operator's namespace, RBAC, and initial `@JukeBox`.
+  Les manifestes Kubernetes bruts utilisés pour installer Vynil dans un cluster : le bundle de CRD
+  et l'overlay de bootstrap qui crée le namespace de l'opérateur, le RBAC, et l'`@JukeBox` initial.
 
 Structure:
-  ./kustomization.yaml: Root Kustomization composing the CRD and bootstrap overlays
-  ./crd/crd.yaml: CRD bundle copied from the shipped box during generation
-  ./crd/kustomization.yaml: CRD overlay
-  ./bootstrap/bootstrap.sdd: Namespace, service account, RBAC, and starter JukeBox
+  ./kustomization.yaml: Kustomization racine composant les overlays CRD et bootstrap
+  ./crd/crd.yaml: Bundle de CRD copié depuis la box livrée lors de la génération
+  ./crd/kustomization.yaml: Overlay CRD
+  ./bootstrap/bootstrap.sdd: Namespace, service account, RBAC et JukeBox de démarrage
 
 Owns:
   ./kustomization.yaml
@@ -18,18 +18,18 @@ Owns:
   ./crd/kustomization.yaml
 
 Must:
-  Keep ./crd/crd.yaml identical to the generated box CRD bundle that /Cargo.toml's `cargo cmd
-    generate_crd` just produced.
-  Compose deployment only from `./crd/` and `./bootstrap/`.
+  Garder ./crd/crd.yaml identique au bundle de CRD de la box générée que `cargo cmd
+    generate_crd` de /Cargo.toml vient de produire.
+  Composer le déploiement uniquement à partir de `./crd/` et `./bootstrap/`.
 
 Must not:
-  Define reconciliation behaviour that lives in the operator; deployment describes what is applied,
-    never how instances converge.
+  Définir le comportement de réconciliation qui vit dans l'opérateur ; le déploiement décrit ce qui
+    est appliqué, jamais comment les instances convergent.
 
 References:
   ./bootstrap/bootstrap.sdd
   /box/vynil/vynil.sdd
 
 Done when:
-  `kustomize build ./deploy` renders only the CRDs and the bootstrap resources and applies cleanly
-    on an empty cluster.
+  `kustomize build ./deploy` ne rend que les CRD et les ressources de bootstrap et s'applique
+    proprement sur un cluster vide.

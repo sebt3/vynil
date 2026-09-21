@@ -1,35 +1,35 @@
-# Root contract for the Vynil project. Project-wide agent operating rules live in
-# .specdd/bootstrap.project.md (not a spec). Directory children own their own detail.
+# Contrat racine du projet Vynil. Les règles globales des agents vivent dans
+# .specdd/bootstrap.project.md (pas une spec). Les sous-répertoires gèrent leur détail.
 
 Spec: Vynil
 
 Platform: Rust/Kubernetes
 
 Purpose:
-  Vynil is a package manager for Kubernetes, in the spirit of dpkg/rpm for the cluster.
-  A controller reconciles declarative package installations against declared package
-  sources, and drives an in-cluster agent that deploys, updates, backs up, and uninstalls
-  applications. Packages are OCI images of Handlebars templates and Rhai scripts.
+  Vynil est un gestionnaire de paquets Kubernetes, dans l'esprit de dpkg/rpm pour le cluster.
+  Contrôleur réconcilie installations de paquets déclaratives et sources déclarées, et pilote
+  un agent in-cluster qui déploie, met à jour, sauvegarde et désinstalle les applications. Les
+  paquets sont des images OCI de templates Handlebars et scripts Rhai.
 
 Structure:
-  ./Cargo.toml: Workspace manifest, shared [workspace.lints], cargo-commander aliases
-  ./Cargo.lock: Locked dependency graph
-  ./rustfmt.toml: Rust formatting configuration
-  ./Makefile: Developer entrypoints aliasing cargo cmd
-  ./README.md: User-facing overview
-  ./mkdocs.yml: Documentation site configuration
-  ./llms.txt: AI-readable project index
-  ./src/lib.rs: Root `vynil` crate stub (vestigial, not a shipped artifact)
-  ./common/common.sdd: Shared typed library crate built on `vynil-core`
-  ./agent/agent.sdd: Agent binary and CLI crate
-  ./operator/operator.sdd: Reconciling controller crate
-  ./server/server.sdd: Diagnostic API server crate
-  ./kubectl-vynil/kubectl-vynil.sdd: kubectl plugin crate
-  ./box/box.sdd: Shipped `vynil` system package box
-  ./deploy/deploy.sdd: CRD and cluster bootstrap manifests
-  /.github/workflows/workflows.sdd: Continuous integration pipelines
-  ./docs/docs.sdd: User and design documentation
-  ./linting.sdd: Static-analysis and formatting harness
+  ./Cargo.toml: Manifeste workspace, [workspace.lints] partagés, alias cargo-commander
+  ./Cargo.lock: Graphe de dépendances verrouillé
+  ./rustfmt.toml: Config formatage Rust
+  ./Makefile: Entrées développeur aliasant cargo cmd
+  ./README.md: Vue d'ensemble utilisateur
+  ./mkdocs.yml: Config site documentation
+  ./llms.txt: Index projet lisible IA
+  ./src/lib.rs: Stub crate racine `vynil` (vestigial, non livré)
+  ./common/common.sdd: Crate lib typée partagé sur `vynil-core`
+  ./agent/agent.sdd: Crate binaire et CLI agent
+  ./operator/operator.sdd: Crate contrôleur réconciliateur
+  ./server/server.sdd: Crate serveur API diagnostic
+  ./kubectl-vynil/kubectl-vynil.sdd: Crate plugin kubectl
+  ./box/box.sdd: Box livrée paquet système `vynil`
+  ./deploy/deploy.sdd: Manifestes CRD et bootstrap cluster
+  /.github/workflows/workflows.sdd: Pipelines intégration continue
+  ./docs/docs.sdd: Documentation utilisateur et conception
+  ./linting.sdd: Harnais analyse et formatage
 
 Owns:
   ./Cargo.toml
@@ -49,31 +49,31 @@ References:
   ./linting.sdd
 
 Depends on:
-  `vynil-core` from crates.io, the reusable Rhai/Handlebars/OCI toolbox
+  `vynil-core` depuis crates.io, boîte à outils réutilisable Rhai/Handlebars/OCI
 
 Must:
-  Keep the four custom resources `@JukeBox`, `@SystemInstance`, `@ServiceInstance`, and
-    `@TenantInstance` in the `vynil.solidite.fr/v1` group as the public API surface.
-  Give every product error a stable, unique identifier in its message.
-  Keep each crate's build definition, image, CI job, and shipped box consistent with the
-    workspace version in `./Cargo.toml`.
-  Preserve the dependency direction: `common` depends on `vynil-core`; `agent`, `operator`,
-    and `server` depend on `common`; crates never depend back on a binary crate.
+  Garder quatre ressources personnalisées `@JukeBox`, `@SystemInstance`, `@ServiceInstance`, et
+    `@TenantInstance` dans le groupe `vynil.solidite.fr/v1` comme surface d'API publique.
+  Toute erreur produit reçoit un identifiant stable, unique dans son message.
+  Garder définition de build, image, job CI et box livrée de chaque crate cohérents
+    avec version workspace dans `./Cargo.toml`.
+  Préserver le sens des dépendances : `common` dépend de `vynil-core` ; `agent`,
+    `operator` et `server` dépendent de `common` ; jamais de dépendance vers un crate binaire.
 
 Must not:
-  Reintroduce the retired `docs/conception/` plus `.tasks/` planning workflow or read it as
-    authority.
-  Introduce a new workspace crate without a directory-level spec naming its owner.
+  Réintroduire workflow retiré `docs/conception/` plus `.tasks/` ou le lire comme
+    autorité.
+  Introduire un crate workspace sans spec de niveau répertoire nommant son owner.
 
 Done when:
-  Every shipped source file has a same-basename spec, and `cargo test`, `cargo clippy
-    --all-targets -- -D warnings`, `cargo +nightly fmt --check`, and `specdd lint` are green.
+  Chaque fichier source livré a une spec même basename, et `cargo test`, `cargo clippy
+    --all-targets -- -D warnings`, `cargo +nightly fmt --check`, et `specdd lint` sont verts.
 
 Tasks:
-  [x] #0 Install SpecDD and commit the bootstrap and this root spec.
-  [x] #1 Stand up the shared static-analysis harness (Cargo.toml lints and per-crate attrs).
-  [x] #2 Commit directory-level specs for every crate and shipped artifact.
-  [ ] #3 Purge `unwrap()` and `expect()` from product code crate by crate, per each file spec.
-  [ ] #4 Draft and review a same-basename spec for every source file, delegated per crate.
-  [ ] #5 Remove `.tasks/` and `docs/conception/` remnants and their `.gitignore` entries.
-  [ ] #6 Decide the fate of the root `vynil` crate stub in `./src/lib.rs`.
+  [x] #0 Installer SpecDD et commiter le bootstrap et cette spec racine.
+  [x] #1 Installer le harnais d'analyse statique partagé (lints Cargo.toml, attrs par crate).
+  [x] #2 Commiter les specs répertoire pour chaque crate et artefact.
+  [ ] #3 Purger `unwrap()` et `expect()` du code produit, crate par crate, par spec fichier.
+  [ ] #4 Rédiger et relire spec même basename pour chaque fichier source, déléguée par crate.
+  [ ] #5 Supprimer les restes `.tasks/`, `docs/conception/` et leurs entrées `.gitignore`.
+  [ ] #6 Décider du sort du crate racine `vynil` dans `./src/lib.rs`.

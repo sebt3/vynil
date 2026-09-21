@@ -3,67 +3,67 @@ Spec: TenantMod
 Platform: Rust
 
 Purpose:
-  Sub-command dispatcher for `agent tenant …`: owns the private `backup`, `delete`,
-    `install`, `restore` modules (and the commented-out `reconfigure`), exposes one clap
-    group and one async entry initializing the Kubernetes client before dispatch. The
-    file is byte-identical to ./../service/mod.rs (diff-verified; frozen in
-    ./../service/mod.sdd) — type differences live only in the leaves.
+  Dispatcher de sous-commandes pour `agent tenant …` : possède les modules privés
+    `backup`, `delete`, `install`, `restore` (et `reconfigure` en commentaire), expose un groupe
+    clap et un point d’entrée asynchrone initialisant le client Kubernetes avant la distribution. Le
+    fichier est identique octet à octet à ./../service/mod.rs (vérifié par diff ; figé dans
+    ./../service/mod.sdd) — les différences de types vivent uniquement dans les feuilles.
 
 Owns:
   ./mod.rs
 
 Exposes:
-  @Parameters — clap `Parser`, `Debug`; single field @command: @Commands. Consumed by
-    ./../main.rs (`Tenant` dispatch arm; spec pending ./../main.sdd).
-  @Commands — clap `Subcommand`, `Debug`, four live variants:
+  @Parameters — clap `Parser`, `Debug` ; champ unique @command: @Commands. Consommé par
+    ./../main.rs (branche de distribution `Tenant` ; spec en attente ./../main.sdd).
+  @Commands — clap `Subcommand`, `Debug`, quatre variantes actives :
     @Install(install::Parameters), @Delete(delete::Parameters),
     @Backup(backup::Parameters), @Restore(restore::Parameters).
-  @run — async, takes `&Parameters`, returns `()`.
+  @run — asynchrone, prend `&Parameters`, retourne `()`.
 
 Accepts:
-  A parsed @Commands tree; every flag contract lives in the leaf specs.
+  Un arbre @Commands analysé ; chaque contrat de flag vit dans les specs feuilles.
 
 Returns:
-  `()` — success falls off the end, each @Err lane ends in @std::process::exit.
+  `()` — la réussite tombe en fin de fonction, chaque voie @Err se termine par @std::process::exit.
 
 Handles:
-  Leaf @Err per arm: Install `Installing a package failed with: {e:}` → exit 1;
-    Delete `Deleting a package failed with: {e:}` → exit 3;
-    Backup `Backup of a package failed with: {e:}` → exit 4;
+  Le @Err de feuille par branche : Install `Installing a package failed with: {e:}` → exit 1 ;
+    Delete `Deleting a package failed with: {e:}` → exit 3 ;
+    Backup `Backup of a package failed with: {e:}` → exit 4 ;
     Restore `Restore of a package failed with: {e:}` → exit 5.
-  Panics inside leaves — unwound to main's runtime.
+  Les panics dans les feuilles — unwindés jusqu’au runtime de main.
 
 Must:
-  Keep `mod backup; mod delete; mod install; mod restore;` private and
-    `//mod reconfigure;` commented (./reconfigure.sdd is out of the build graph).
-  Keep the commented @Reconfigure variant and exit-6 arm commented in lockstep.
-  Call @common::context::init_k8s() once before the match.
-  Await @install::run/@delete::run; call @backup::run/@restore::run synchronously.
-  Carry the same `//`-comment help quirk on @Backup/@Restore as the service twin.
+  Conserver `mod backup; mod delete; mod install; mod restore;` privé et
+    `//mod reconfigure;` en commentaire (./reconfigure.sdd est hors du graphe de compilation).
+  Conserver la variante @Reconfigure en commentaire et la branche exit-6 en commentaire, de pas.
+  Appeler @common::context::init_k8s() une fois avant le match.
+  Attendre @install::run/@delete::run ; appeler @backup::run/@restore::run de façon synchrone.
+  Conserver le même quirk d’aide en commentaires `//` sur @Backup/@Restore que son jumeau service.
 
 Depends on:
-  ./install.sdd, ./delete.sdd, ./backup.sdd, ./restore.sdd, ./reconfigure.sdd (dead
-    sibling) — tenant leaf contracts.
-  ./../service/mod.sdd — the byte-identical twin; keep both in lockstep on any change.
+  ./install.sdd, ./delete.sdd, ./backup.sdd, ./restore.sdd, ./reconfigure.sdd (frère
+    mort) — contrats des feuilles tenant.
+  ./../service/mod.sdd — le jumeau identique octet à octet ; garder les deux de pas à chaque changement.
   ../common/src/context.sdd — @init_k8s.
-  ./../main.rs — caller; spec pending ./../main.sdd.
+  ./../main.rs — appelant ; spec en attente ./../main.sdd.
 
 Tasks:
-  [ ] Decide later whether the byte-identical service/tenant dispatcher pair should be
-      one generic module or stay hand-copied.
-  [ ] Decide the fate of the commented Reconfigure lane (shared with service).
-  [ ] Cover this dispatcher with tests; none exist.
+  [ ] Décider plus tard si la paire de dispatchers service/tenant identique octet à octet doit
+      devenir un module générique ou rester copiée à la main.
+  [ ] Décider du sort de la voie Reconfigure en commentaire (partagée avec service).
+  [ ] Couvrir ce dispatcher par des tests ; aucun n’existe.
 
 Done when:
-  Dispatch, init ordering, exit ladder, and the twin-frozen identity hold under tests.
+  La distribution, l’ordonnancement de init, l’échelle de sorties et l’identité de jumeau figée tiennent sous les tests.
 
 Scenario: tenant delete failure exits 3
-  Given `TenantMod` @Commands::Delete whose leaf returns @Err
-  When @run reaches the Delete arm
-  Then the frozen delete log line prints and @process::exit(3) is reached
+  Given `TenantMod` @Commands::Delete dont la feuille retourne @Err
+  When @run atteint la branche Delete
+  Then la ligne de journal figée de delete s’affiche et @process::exit(3) est atteint
 
 Scenario: install runs after cluster init
-  Given @Commands::Install with valid leaf flags
-  When @run is awaited
-  Then @common::context::init_k8s precedes @install::run (./install.sdd) and @Ok ends
-    @run with no exit call
+  Given @Commands::Install avec des flags de feuille valides
+  When @run est attendu
+  Then @common::context::init_k8s précède @install::run (./install.sdd) et @Ok termine
+    @run sans appel à exit

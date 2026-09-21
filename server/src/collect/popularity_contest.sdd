@@ -142,7 +142,7 @@ Tasks:
   [?] Exactement un @list non paginé par kind et un @ListMeta::continue_ jamais consulté — une
       réponse tronquée par le serveur sous-compterait silencieusement un très gros cluster. Décider
       plus tard si la pagination a sa place ici.
-  [!] Les boucles @clone chaque métadonnée et spec entiers avant d'arracher trois champs @String,
+  [?] Les boucles @clone chaque métadonnée et spec entiers avant d'arracher trois champs @String,
       puis jettent les copies — par objet listé des deux kinds, par requête, les maps annotations et
       options copiées pour rien ; ./packages.rs déplace les champs hors d'un itérateur possédé. Coût
       pur, aucun changement de comportement constaté.

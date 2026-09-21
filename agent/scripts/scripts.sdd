@@ -88,9 +88,9 @@ Done when:
     externes sont unifiées, et `specdd lint ./` reste 0 erreur 0 avertissement.
 
 Scenario: recensement mécanique de la couverture
-  Etant donné @ScriptsAgent et l'arborescence ./
-  Quand on itère sur chaque @.rhai et qu'on exige soit un @.sdd même-basename, soit une
+  Given  @ScriptsAgent et l'arborescence ./
+  When on itère sur chaque @.rhai et qu'on exige soit un @.sdd même-basename, soit une
     mention nominale dans l'Owns ou le corps d'un @.sdd du même répertoire ou d'une spec
     familiale listée en References
-  Alors aucun des 120 fichiers ne ressort orphelin
-  Et ce résultat est reproduisible par une simple boucle shell, sans lecture subjective
+  Then aucun des 120 fichiers ne ressort orphelin
+  And ce résultat est reproduisible par une simple boucle shell, sans lecture subjective
