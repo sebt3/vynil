@@ -1,173 +1,173 @@
-# File spec for ./file_scan.rs — the offline twin of ./scan.rs. Delta versus the cluster
-# scan lane is frozen only where visible from this file; the sibling is not specified here.
+# Spec fichier de ./file_scan.rs — le jumeau hors-ligne de ./scan.rs. Le delta vis-à-vis de la
+# voie de scan cluster n'est figé que là où il est visible depuis ce fichier ; le jumeau n'est pas spécifié ici.
 
 Spec: FileScan
 
 Purpose:
-  Provide the cluster-less `agent box file-scan` lane: parse a plain-YAML @FileScanSpec from
-    disk, mount a @FileJukeBox over it and @cache_dir as the script-side `box`, expose an `args`
-    map to the shipped `boxes/scan.rhai` script, and let that script persist the scanned package
-    cache — build, script-dir and filter wiring only; the file itself contacts no API server and
-    writes no status of its own beyond the cache directory.
+  Fournir la voie `agent box file-scan` sans cluster : analyser un @FileScanSpec YAML simple
+    depuis le disque, monter un @FileJukeBox dessus ainsi que @cache_dir comme `box` côté script,
+    exposer une map `args` au script livré `boxes/scan.rhai`, et laisser ce script persister le
+    cache des paquets scannés — uniquement le montage build, script-dir et filter ; le fichier
+    lui-même ne contacte aucun API server et n'écrit aucun statut propre au-delà du répertoire cache.
 
 References:
-  ./mod.rs — the `boxes` dispatcher (spec pending): declares the private @file_scan module,
-    awaits @file_scan::run, and owns the whole exit lane.
-  /common/src/jukebox_file.sdd — @FileScanSpec is the spec-file shape and @FileJukeBox (via
-    @FileJukeBox::new) is the box object; its spec owns every cache artifact the run leaves.
-  /common/src/rhaihandler.sdd — @Script::new_file_scan engine assembly, the converted
-    @Script::run_file channel, and the unconverted Deref'd core @ctx and @set_dynamic used here.
-  /agent/scripts/boxes/scan.rhai — the script this run executes; its key probes explain the
-    frozen `args` shape, its semantics are not this spec's.
-  ./scan.rs — cluster-scan twin, read-comparison only; ./scan.sdd pending, no authority here.
+  ./mod.rs — le dispatcher `boxes` (spec en attente) : déclare le module privé @file_scan,
+    attend @file_scan::run, et possède toute la voie de sortie.
+  /common/src/jukebox_file.sdd — @FileScanSpec est la forme du fichier de spec et @FileJukeBox (via
+    @FileJukeBox::new) est l'objet box ; sa spec possède tout artefact de cache laissé par le run.
+  /common/src/rhaihandler.sdd — l'assemblage du moteur @Script::new_file_scan, le canal converti
+    @Script::run_file, et le @ctx core et @set_dynamic Deref non convertis utilisés ici.
+  /agent/scripts/boxes/scan.rhai — le script exécuté par ce run ; ses sondes de clés expliquent la
+    forme figée de `args`, sa sémantique n'est pas celle de cette spec.
+  ./scan.rs — jumeau cluster-scan, comparaison en lecture seule ; ./scan.sdd en attente, aucune autorité ici.
 
 Must:
-  The execution order is frozen: build the engine first, read and parse the spec file second,
-    create the cache directory third, then construct and bind the box/args, then run the script —
-    so a missing spec or a malformed YAML exits before @cache_dir is ever created, and the engine
-    construction performs no IO at all.
-  The spec file is read with @tokio::fs::read_to_string and decoded with @serde_yaml::from_str
-    straight into @FileScanSpec — there is no loader method, no existence pre-check, and no
-    validation beyond serde: @FileScanSpec carries no required field, so even `{}` parses to both
-    fields @None and the run continues.
-  The engine is @Script::new_file_scan over exactly two resolver dirs, `<script_dir>/boxes` then
-    `<script_dir>/lib` (joined by @Display, lossy), in that order; the file-scan surface it
-    installs carries real http/s3 and the @FileJukeBox registrations only, so cluster-side script
-    names fail as function-not-found on this lane.
-  Two script globals are live before the run: `box` holds the owned @FileJukeBox
-    (@FileJukeBox::new(spec, @cache_dir.clone()), infallible) pushed through the Deref'd
-    @rhai::Scope @set_value, and `args` is pushed through the unconverted core @set_dynamic as an
-    @serde_json::json! map freezing exactly the keys `file_scan` (always `true`), `cache_dir` and
-    `script_dir` (both @to_string_lossy text), `filter`, and `namespace` (always `""`).
-  An unset `filter` still ships the key: @Option serializes to JSON null, so `args.filter` is
-    present-but-null, never a missing key — the scan script relies on this to distinguish the
-    full-scan leg.
-  The run target is the literal `<script_dir>/boxes/scan.rhai` @PathBuf; the script's last value
-    is discarded (`let _ =`), only the @Err leg of @Script::run_file propagates.
-  This file writes nothing to disk itself except the @tokio::fs::create_dir_all of @cache_dir
-    (existing dirs are the silent no-op leg): `index.yaml`, per-package bundles and scan status
-    exist only if the script calls the @FileJukeBox setters, and no statuses.json or CRD status
-    is defined anywhere on this path.
-  @run is @async and awaited by the dispatcher; both IO calls are @tokio::fs so a live tokio
-    runtime is required, and no @kube::Client is ever constructed by this file.
+  L'ordre d'exécution est figé : construire le moteur d'abord, lire et analyser le fichier de spec
+    ensuite, créer le répertoire de cache en troisième, puis construire et lier box/args, puis lancer
+    le script — ainsi un spec manquant ou un YAML malformé sort avant que @cache_dir soit créé, et la
+    construction du moteur ne fait aucune IO du tout.
+  Le fichier de spec est lu avec @tokio::fs::read_to_string et décodé avec @serde_yaml::from_str
+    directement dans @FileScanSpec — il n'y a pas de méthode loader, pas de pré-vérification
+    d'existence, et pas de validation au-delà de serde : @FileScanSpec n'a aucun champ requis, donc
+    même `{}` s'analyse en deux champs @None et le run continue.
+  Le moteur est @Script::new_file_scan sur exactement deux répertoires de résolution, `<script_dir>/boxes`
+    puis `<script_dir>/lib` (joints par @Display, lossy), dans cet ordre ; la surface file-scan qu'il
+    installe porte le vrai http/s3 et uniquement les enregistrements @FileJukeBox, donc les noms de
+    script côté cluster échouent en function-not-found sur cette voie.
+  Deux globales de script sont vivantes avant le run : `box` contient le @FileJukeBox possédé
+    (@FileJukeBox::new(spec, @cache_dir.clone()), infaillible) poussé via le @rhai::Scope
+    @set_value du Deref, et `args` est poussé via le @set_dynamic core non converti comme une map
+    @serde_json::json! figeant exactement les clés `file_scan` (toujours `true`), `cache_dir` et
+    `script_dir` (tous deux en texte @to_string_lossy), `filter`, et `namespace` (toujours `""`).
+  Un `filter` non défini livre quand même la clé : @Option se sérialise en JSON null, donc
+    `args.filter` est présent-mais-null, jamais une clé absente — le script de scan compte
+    là-dessus pour distinguer la branche full-scan.
+  La cible du run est le @PathBuf littéral `<script_dir>/boxes/scan.rhai` ; la dernière valeur du
+    script est jetée (`let _ =`), seule la branche @Err de @Script::run_file se propage.
+  Ce fichier n'écrit rien sur disque lui-même hormis le @tokio::fs::create_dir_all de @cache_dir
+    (les répertoires existants sont la branche no-op silencieuse) : `index.yaml`, les bundles par
+    paquet et le statut de scan n'existent que si le script appelle les setters @FileJukeBox, et
+    aucun statuses.json ni statut CRD n'est défini nulle part sur ce chemin.
+  @run est @async et attendu par le dispatcher ; les deux appels IO sont du @tokio::fs donc une
+    runtime tokio active est requise, et aucun @kube::Client n'est jamais construit par ce fichier.
 
 Must not:
-  Call @common::context::set_box or any other context/kube surface (unlike the cluster scan
-    twin): the reconcile context stays @VynilContext::None, the script gets namespace `""` from
-    `args`, and the only status sink is the cache directory.
+  Appeler @common::context::set_box ou toute autre surface context/kube (contrairement au jumeau
+    scan cluster) : le contexte de reconcile reste @VynilContext::None, le script reçoit namespace
+    `""` depuis `args`, et le seul destinataire de statut est le répertoire de cache.
 
 Depends on:
   @common::rhaihandler::Script (/common/src/rhaihandler.sdd) — @Script::new_file_scan,
-    @Script::run_file, and the public @ctx and @set_dynamic Deref targets.
-  @common::jukebox_file::{@FileJukeBox, @FileScanSpec} (/common/src/jukebox_file.sdd) — input
-    payload and mounted box.
-  @common::{@Error, @Result} (/common/src/lib.rs) — @Error::Stdio and @Error::YamlError are the
-    only variants this file produces; @Error::Core arrives from @Script::run_file.
-  @tokio::fs, @serde_yaml, @serde_json — IO and the two decode/json! lanes.
-  @clap::Args — the flag model of @Parameters.
-  /agent/scripts/boxes/scan.rhai — external runtime payload, not compiled in; it must exist under
-    @script_dir at run time.
-  ./mod.rs — caller and exit-lane owner (spec pending), which invokes
-    @common::context::init_k8s (a documented no-op) before dispatch.
+    @Script::run_file, et les cibles Deref publiques @ctx et @set_dynamic.
+  @common::jukebox_file::{@FileJukeBox, @FileScanSpec} (/common/src/jukebox_file.sdd) — payload
+    d'entrée et box montée.
+  @common::{@Error, @Result} (/common/src/lib.rs) — @Error::Stdio et @Error::YamlError sont les
+    seules variantes produites par ce fichier ; @Error::Core arrive de @Script::run_file.
+  @tokio::fs, @serde_yaml, @serde_json — l'IO et les deux voies decode/json!.
+  @clap::Args — le modèle de flags de @Parameters.
+  /agent/scripts/boxes/scan.rhai — payload runtime externe, non compilé ; il doit exister sous
+    @script_dir au moment du run.
+  ./mod.rs — appelant et propriétaire de la voie de sortie (spec en attente), qui invoque
+    @common::context::init_k8s (un no-op documenté) avant le dispatch.
 
 Exposes:
-  @Parameters — @clap::Args + @Debug + @Serialize + @Deserialize struct, pub only to the
-    @boxes module (the @file_scan module itself is private to ./mod.rs), flagging exactly:
-    `-S`/`--spec` → @PathBuf `spec`, required, no env, no default; `-c`/`--cache-dir` → @PathBuf
-    `cache_dir`, required, no env, no default; `-s`/`--script-dir` → @PathBuf `script_dir`, env
-    `SCRIPT_DIRECTORY`, default `./agent/scripts`; `-f`/`--filter` → @Option<@String> `filter`,
-    env `SCAN_PACKAGE`, @None when unset. No `value_name` overrides on any flag.
-  @file_scan::run — @pub @async fn taking a borrowed @Parameters and returning
-    @common::Result<()>, awaiting one run of the whole flow above; the only success output is
-    @Ok(()), never a value.
+  @Parameters — struct @clap::Args + @Debug + @Serialize + @Deserialize, pub seulement au module
+    @boxes (le module @file_scan lui-même est privé dans ./mod.rs), déclarant exactement :
+    `-S`/`--spec` → @PathBuf `spec`, requis, sans env, sans défaut ; `-c`/`--cache-dir` → @PathBuf
+    `cache_dir`, requis, sans env, sans défaut ; `-s`/`--script-dir` → @PathBuf `script_dir`, env
+    `SCRIPT_DIRECTORY`, défaut `./agent/scripts` ; `-f`/`--filter` → @Option<@String> `filter`,
+    env `SCAN_PACKAGE`, @None sinon. Aucun override de `value_name` sur aucun flag.
+  @file_scan::run — @pub @async fn prenant un @Parameters emprunté et retournant
+    @common::Result<()>, attendant un run de tout le flux ci-dessus ; la seule sortie de succès est
+    @Ok(()), jamais une valeur.
 
 Accepts:
-  A @Parameters reference by whatever route clap produced it (flags, env, and default legs); a
-    readable, valid-UTF-8 YAML spec file; a @cache_dir path @create_dir_all can materialize; a
-    @script_dir whose layout actually holds `boxes/scan.rhai` plus the `boxes`/`lib` module dirs.
+  Une référence @Parameters quelle que soit la route dont clap l'a produite (flags, env, branches
+    par défaut) ; un fichier de spec YAML lisible et UTF-8 valide ; un chemin @cache_dir que @create_dir_all
+    peut matérialiser ; un @script_dir dont la structure contient `boxes/scan.rhai` et les dirs `boxes`/`lib`.
 
 Returns:
-  @Ok(()) whenever the script completes — independent of how many packages the cache holds, which
-    is entirely the script's outcome; the discarded @rhai::Dynamic last value carries nowhere.
+  @Ok(()) dès que le script se termine — indépendamment du nombre de paquets que le cache
+    contient, ce qui est entièrement le résultat du script ; la dernière valeur @rhai::Dynamic jetée ne transmet rien.
 
 Raises:
-  @Error::Stdio (display `Stdio error {0}`) when the spec file is missing, unreadable or
-    non-UTF-8, or when @create_dir_all fails on @cache_dir.
-  @Error::YamlError (display `YamlError: {0}`, the @serde_yaml text verbatim) when the spec body
-    is not valid YAML.
-  @Error::Core from @Script::run_file: `Missing script <script_dir>/boxes/scan.rhai` when the
-    script is absent, and `Rhai script error: ...` for every parse or run failure — including a
-    scan the script itself rethrows after failing the box.
-  The @Stdio and @YamlError texts here carry no stable unique identifier, unlike `SCAN-FILE-001`
-    downstream (see Tasks).
+  @Error::Stdio (display `Stdio error {0}`) quand le fichier de spec est manquant, illisible ou
+    non-UTF-8, ou quand @create_dir_all échoue sur @cache_dir.
+  @Error::YamlError (display `YamlError: {0}`, le texte @serde_yaml verbatim) quand le corps du
+    spec n'est pas un YAML valide.
+  @Error::Core de @Script::run_file : `Missing script <script_dir>/boxes/scan.rhai` quand le
+    script est absent, et `Rhai script error: ...` pour toute erreur d'analyse ou d'exécution —
+    y compris un scan que le script re-propage après l'échec de la box.
+  Les textes @Stdio et @YamlError d'ici n'ont pas d'identifiant unique stable, contrairement à
+    `SCAN-FILE-001` en aval (voir Tasks).
 
 Handles:
-  Unset `--filter` / unset `SCAN_PACKAGE` — `args.filter` present as null, script takes its
-    full-scan leg.
-  Missing cache directory — created before the box is bound; a present one passes untouched.
-  Env-fed defaults — `SCRIPT_DIRECTORY` steers the resolver dirs and the script path jointly,
-    since all three paths derive from one @script_dir value; `SCAN_PACKAGE` supplies `filter`.
-  Key-less or empty spec YAML — binds a box whose two spec fields are both @None and still runs the
-    script; whether the run then succeeds or errors is decided inside the script, not here.
-  Any @Err — the caller's lane: @boxes::run logs `File scan failed with: {e:}` via @tracing and
-    calls @std::process::exit(1); @Ok(()) returns and the process exits 0; this file never exits
-    itself.
+  `--filter` non défini / `SCAN_PACKAGE` non défini — `args.filter` présent comme null, le script
+    prend sa branche full-scan.
+  Répertoire de cache manquant — créé avant que la box soit liée ; un existant passe sans modification.
+  Défauts nourris par l'env — `SCRIPT_DIRECTORY` pilote ensemble les dirs de résolution et le chemin
+    du script, car les trois chemins dérivent d'une seule valeur @script_dir ; `SCAN_PACKAGE` fournit `filter`.
+  Spec YAML sans clé ou vide — lie une box dont les deux champs de spec sont tous deux @None et
+    exécute quand même le script ; le succès ou l'erreur du run se décide dans le script, pas ici.
+  Tout @Err — la voie de l'appelant : @boxes::run loggue `File scan failed with: {e:}` via @tracing et
+    appelle @std::process::exit(1) ; @Ok(()) revient et le processus sort en 0 ; ce fichier ne sort
+    jamais de lui-même.
 
 Tasks:
-  [ ] Cover spec-file missing: @Err @Error::Stdio and @cache_dir still absent afterwards.
-  [ ] Cover malformed YAML spec: @Err text starts `YamlError:`, @cache_dir still absent.
-  [ ] Cover `{}` spec: @Ok path reaches the script with `box.spec` source/pull_secret unit — test
-    needs a stub script_dir, proving no kube client is required end-to-end.
-  [ ] Cover `args` shape against a stub script: five frozen keys, `file_scan` true,
-    `namespace` `""`, and filter @None arriving as present-but-null.
-  [ ] Cover absent `<script_dir>/boxes/scan.rhai`: @Err @Error::Core displaying
+  [ ] Couvrir spec-file manquant : @Err @Error::Stdio et @cache_dir encore absent ensuite.
+  [ ] Couvrir spec YAML malformé : le texte @Err commence par `YamlError:`, @cache_dir encore absent.
+  [ ] Couvrir la spec `{}` : le chemin @Ok atteint le script avec `box.spec` source/pull_secret vides — le
+    test exige un script_dir stub, prouvant qu'aucun client kube n'est requis de bout en bout.
+  [ ] Couvrir la forme de `args` contre un script stub : cinq clés figées, `file_scan` true,
+    `namespace` `""`, et filter @None arrivant comme présent-mais-null.
+  [ ] Couvrir `<script_dir>/boxes/scan.rhai` absent : @Err @Error::Core affichant
     `Missing script …`.
-  [ ] Cover cache-dir creation: nested nonexistent @cache_dir exists after a successful stub run.
-  [?] The @Serialize and @Deserialize derives on @Parameters are unused here — the args map is a
-    hand-written @serde_json::json! with a different key set — decide whether the derives are
-    dropped or @Parameters reuses them as the scan twin does with @serde_json::to_value.
-  [?] `--spec` and `--cache-dir` refuse env/default while `--script-dir` and `--filter` accept
-    env — decide whether the offline lane (made for Jobs-without-flags contexts) should be
-    env-completable for all four flags.
-  [?] The @Stdio and @YamlError texts from this file carry no stable unique id against the project
-    error-tagging rule; decide whether file-scan errors get tagged like `SCAN-FILE-001`.
-  [?] @init_k8s runs unconditionally in ./mod.rs before dispatch although this lane is built to
-    need no cluster state; it is a no-op today, so decide whether the offline lane should be
-    excluded when @init_k8s ever grows real behavior.
+  [ ] Couvrir la création du cache-dir : un @cache_dir imbriqué inexistant existe après un run stub réussi.
+  [?] Les derives @Serialize et @Deserialize sur @Parameters sont inutilisées ici — la map args est un
+    @serde_json::json! écrit à la main avec un autre jeu de clés — décider si les derives sont
+    supprimés ou si @Parameters les réutilise comme le jumeau scan avec @serde_json::to_value.
+  [?] `--spec` et `--cache-dir` refusent env/défaut alors que `--script-dir` et `--filter` acceptent
+    l'env — décider si la voie hors-ligne (faite pour les contextes Jobs-sans-flags) devrait être
+    complétable par env pour les quatre flags.
+  [?] Les textes @Stdio et @YamlError de ce fichier n'ont pas d'id unique stable au regard de la règle
+    projet d'étiquetage d'erreurs ; décider si les erreurs file-scan sont étiquetées comme `SCAN-FILE-001`.
+  [?] @init_k8s s'exécute inconditionnellement dans ./mod.rs avant le dispatch bien que cette voie soit
+    construite pour n'exiger aucun état cluster ; c'est un no-op aujourd'hui, donc décider si la voie
+    hors-ligne devrait être exclue quand @init_k8s gagnera un vrai comportement.
 
 Done when:
-  Every Scenario has a mapped passing test or a recorded Task exemption, the coverage Tasks are
-    green, and `cargo test -p agent` with `cargo clippy --all-targets -- -D warnings` stay green.
+  Chaque Scenario a un test passé mappé ou une exemption de Task enregistrée, les Tasks de
+    couverture sont vertes, et `cargo test -p agent` avec `cargo clippy --all-targets -- -D warnings` restent verts.
 
 Scenario: Missing spec file fails before touching the cache
-  Given a @Parameters pointing @spec at a nonexistent path and @cache_dir at a fresh subdir
-  When @run executes
-  Then it returns @Err @Error::Stdio and the @cache_dir tree was never created
-  No mapped test exists.
+  Given un @Parameters pointant @spec vers un chemin inexistant et @cache_dir vers un sous-répertoire neuf
+  When @run s'exécute
+  Then il retourne @Err @Error::Stdio et l'arborescence @cache_dir n'a jamais été créée
+  Aucun test mappé n'existe.
 
 Scenario: Malformed spec YAML is a yaml error not a script error
-  Given a spec file containing invalid YAML
-  When @run executes
-  Then it returns @Err whose display starts `YamlError: ` and the script is never started
-  No mapped test exists.
+  Given un fichier de spec contenant un YAML invalide
+  When @run s'exécute
+  Then il retourne @Err dont le display commence par `YamlError: ` et le script n'est jamais lancé
+  Aucun test mappé n'existe.
 
 Scenario: Empty spec still mounts an empty file box
-  Given a spec file containing `{}`
-  When @run executes
-  Then the @FileJukeBox is bound with both fields @None and the run outcome is decided by the
-    script alone
-  No mapped test exists.
+  Given un fichier de spec contenant `{}`
+  When @run s'exécute
+  Then le @FileJukeBox est lié avec ses deux champs @None et le résultat du run est décidé par le
+    script seul
+  Aucun test mappé n'existe.
 
 Scenario: Args map shape is frozen for the script
-  Given any successful stub-script run with `--filter` unset
-  When the script reads `args`
-  Then `file_scan` is `true`, `namespace` is `""`, `cache_dir`/`script_dir` are the lossy path
-    texts, and `filter` exists with a null value — never an absent key
-  No mapped test exists.
+  Given n'importe quel run réussi de script stub avec `--filter` non défini
+  When le script lit `args`
+  Then `file_scan` est `true`, `namespace` est `""`, `cache_dir`/`script_dir` sont les textes lossy
+    des chemins, et `filter` existe avec une valeur null — jamais une clé absente
+  Aucun test mappé n'existe.
 
 Scenario: Missing scan script is a core missing-script error at exit 1
-  Given a @script_dir without `boxes/scan.rhai`
-  When the dispatcher awaits @run
-  Then @Err @Error::Core displays `Missing script <script_dir>/boxes/scan.rhai`, the dispatcher
-    logs it and exits 1; success would exit 0
-  No mapped test exists.
+  Given un @script_dir sans `boxes/scan.rhai`
+  When le dispatcher attend @run
+  Then @Err @Error::Core affiche `Missing script <script_dir>/boxes/scan.rhai`, le dispatcher
+    le loggue et sort en 1 ; un succès sortirait en 0
+  Aucun test mappé n'existe.
