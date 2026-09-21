@@ -3,25 +3,25 @@ Spec: AgentMain
 Platform: Rust
 
 Purpose:
-  The `agent` bin entry point: installs the rustls crypto provider, registers the common
-    crate's K8s accessors into `vynil_core`, initializes env logging, then dispatches the
-    nine clap sub-commands to their module owners. All operational behavior lives in the
-    sub-command specs; this file owns only startup ordering and the top dispatch table.
+  Point d'entrée du binaire `agent` : installe le fournisseur crypto rustls, enregistre les
+    accesseurs K8s du crate common dans `vynil_core`, initialise la journalisation d'environnement,
+    puis dispatche les neuf sous-commandes clap vers leurs modules. Tout le comportement opérationnel
+    vit dans les specs des sous-commandes ; ce fichier ne possède que l'ordre de démarrage et la table de dispatch de haut niveau.
 
 Owns:
   ./main.rs
 
 Exposes:
-  Nothing importable: this is the bin target `agent` ([[bin]] name = `agent`,
-    path = src/main.rs, doc = false). The only externally visible surface is process
-    argv handling and exit codes. The ten private modules (boxes, crdgen, linting,
-    package, run, service, system, template, tenant, version) are declared here;
-    `linting` is NOT a sub-command — it is the lint model/checkers library consumed by
+  Rien d'importable : c'est la cible bin `agent` ([[bin]] name = `agent`,
+    path = src/main.rs, doc = false). La seule surface visible de l'extérieur est le
+    traitement des argv du processus et les codes de sortie. Les dix modules privés (boxes, crdgen,
+    linting, package, run, service, system, template, tenant, version) sont déclarés ici ;
+    `linting` n'est PAS une sous-commande — c'est la bibliothèque de modèles/vérificateurs lint consommée par
     ./package/lint.sdd.
-  @Parameters — clap `Parser`, `Debug`; single @command: @Commands field; command
-    attributes `author, version, about, long_about = None` and
-    `propagate_version = true` (every leaf renders the crate version).
-  @Commands — clap `Subcommand`, `Debug`, nine variants, `///` doc help verbatim:
+  @Parameters — clap `Parser`, `Debug` ; un seul @command : champ @Commands ; attributs de
+    commande `author, version, about, long_about = None` et
+    `propagate_version = true` (chaque feuille affiche la version du crate).
+  @Commands — clap `Subcommand`, `Debug`, neuf variantes, aide doc `///` verbatim :
     @Run(run::Parameters) `Run given git repo as a jukebox source`,
     @Crdgen(crdgen::Parameters) `generate CRDs`,
     @Package(package::Parameters) `package sub-command`,
@@ -31,84 +31,84 @@ Exposes:
     @Template(template::Parameters) `Template sub-command`,
     @Box(boxes::Parameters) `box sub-command`,
     @Version(version::Parameters) `Version sub-command`.
-  @main — async entry via bare @tokio::@main.
+  @main — entrée asynchrone via un @tokio::@main nu.
 
 Accepts:
-  argv via clap; `--version`/`-V` renders the propagated crate version through clap,
-    bypassing @Version entirely.
+  argv via clap ; `--version`/`-V` affiche la version propagée du crate via clap,
+    en court-circuitant @Version entièrement.
 
 Returns:
-  `()` — @main NEVER returns a @Result and never mints an exit code itself: success is
-    the implicit 0; every failure exit is minted downstream by a sub-command dispatcher
-    (@process::exit with the codes frozen in ./system/mod.sdd 1/3, ./service/mod.sdd
+  `()` — @main ne retourne JAMAIS de @Result et ne frappe jamais lui-même de code de sortie : le succès
+    est le 0 implicite ; chaque sortie en échec est frappée en aval par un dispatcheur de sous-commande
+    (@process::exit avec les codes gelés dans ./system/mod.sdd 1/3, ./service/mod.sdd
     1/3/4/5, ./tenant/mod.sdd 1/3/4/5, ./boxes/mod.sdd 1/1, ./package/mod.sdd 1/1/2/3/4/4,
-    ./run.sdd via error 1, ./crdgen.sdd via error 2, ./template/mod.sdd 1/1/3) or by a
-    panic (shell exit 101, last panic line on stderr).
+    ./run.sdd via l'erreur 1, ./crdgen.sdd via l'erreur 2, ./template/mod.sdd 1/1/3) ou par un
+    panic (exit 101 du shell, dernière ligne de panic sur stderr).
 
 Raises:
-  None by design — no @Result, no @unwrap/@expect (product lane, crate lints deny them).
-  clap parse failure exits 2 before any startup line runs? No: startup ORDER places
-    provider/context/logging BEFORE @Parameters::parse (frozen below), so a parse error
-    still pays provider install + wiring + logger init first (all silent).
+  Aucun par conception — pas de @Result, pas de @unwrap/@expect (voie produit, les lints du crate les interdisent).
+  Un échec de parse clap sort 2 avant que toute ligne de démarrage ne s'exécute ? Non : l'ORDRE de
+    démarrage place le provider/contexte/logging AVANT @Parameters::parse (figé ci-dessous), donc une
+    erreur de parse paie encore d'abord install du provider + câblage + init du logger (tout silencieux).
 
 Handles:
-  Second crypto-provider install (rustls already had a default): @install_default's
-    @Err swallowed by @ok() — deliberate idempotence against the rustls 0.23.41 no-auto-
-    detection regression (code comment is the authority for that WHY).
-  Sub-command failure — Display-only @tracing::error! + exit inside each dispatcher;
-    @main observes only `()`.
+  Seconde installation du fournisseur crypto (rustls avait déjà un fournisseur par défaut) : l'@Err
+    de @install_default avalé par @ok() — idempotence délibérée contre la régression no-auto-
+    detection de rustls 0.23.41 (le commentaire de code fait autorité pour ce POURQUOI).
+  Échec de sous-commande — @tracing::error! Display seul + exit dans chaque dispatcheur ;
+    @main n'observe que `()`.
 
 Must:
-  Run startup in this EXACT order: (1)
-    @rustls::crypto::ring::default_provider().install_default().ok(); (2)
-    @common::context::wire_core_k8s() — pure registration of the five context hooks into
-    @vynil_core (./../common/src/context.sdd), NO cluster I/O, safe without a kubeconfig;
-    (3) @env_logger::init_from_env with @filter_or `LOG_LEVEL` default `info` and
-    @write_style_or `LOG_STYLE` default `auto`; (4) @Parameters::parse; (5) dispatch.
-  Use the bare @tokio::@main which — FACT: workspace tokio carries `macros` +
-    `rt-multi-thread` — expands to a MULTI-thread runtime with default worker count;
-    `block_in_place` bridges used by common/core are legal on it (they park one worker).
-  Dispatch synchronously for @Version (@run returns ()), @Run (@unwrap_or_else → exit 1,
+  Exécuter le démarrage dans cet ordre EXACT : (1)
+    @rustls::crypto::ring::default_provider().install_default().ok() ; (2)
+    @common::context::wire_core_k8s() — pur enregistrement des cinq hooks de contexte dans
+    @vynil_core (./../common/src/context.sdd), AUCUN I/O cluster, sans risque sans kubeconfig ;
+    (3) @env_logger::init_from_env avec @filter_or `LOG_LEVEL` par défaut `info` et
+    @write_style_or `LOG_STYLE` par défaut `auto` ; (4) @Parameters::parse ; (5) dispatch.
+  Utiliser le @tokio::@main nu qui — FAIT : le tokio du workspace porte `macros` +
+    `rt-multi-thread` — se développe en runtime MULTI-thread avec le nombre de workers par défaut ;
+    les ponts `block_in_place` utilisés par common/core y sont légaux (ils garent un worker).
+  Dispatcher de façon synchrone pour @Version (@run retourne ()), @Run (@unwrap_or_else → exit 1,
     `Run failed with: {e:}`), @Crdgen (`CRD generation failed with: {e:}` → exit 2),
-    @Template and @Package (their run fns are sync and own their exit lanes); await
+    @Template et @Package (leurs fn run sont sync et possèdent leurs voies de sortie) ; attendre
     @System/@Service/@Tenant/@Box.
-  Never log or exit at this level beyond what dispatch arms do inline.
+  Ne jamais journaliser ni sortir à ce niveau au-delà de ce que les bras de dispatch font en ligne.
 
 Depends on:
   ./run.sdd, ./crdgen.sdd, ./package/mod.sdd, ./system/mod.sdd, ./service/mod.sdd,
-    ./tenant/mod.sdd, ./template/mod.sdd, ./boxes/mod.sdd, ./version.sdd — all nine
-    arms; ./../common/src/context.sdd — wire_core_k8s semantics; ./../common/src/lib.sdd
-    for the shared VERSION constant surfaced by `--version` and VersionCmd alike.
+    ./tenant/mod.sdd, ./template/mod.sdd, ./boxes/mod.sdd, ./version.sdd — les neuf
+    bras ; ./../common/src/context.sdd — sémantique de wire_core_k8s ; ./../common/src/lib.sdd
+    pour la constante VERSION partagée exposée par `--version` comme par VersionCmd.
 
 Tasks:
-  [ ] Decide later whether the @Run doc `Run given git repo as a jukebox source` is
-      historical: @run.sdd executes ONE Rhai script given by -f, no git repo and no
-      jukebox. Fix help or restore the promised behavior.
-  [ ] Decide whether startup (provider/wiring/logger) should move after
-      @Parameters::parse so `agent --help`/`--version`/`version` don't initialize the
-      logging machinery; frozen as-is until then.
-  [ ] Decide the crate-level lint attributes pair (deny unwrap/expect, warn
-      arithmetic/indexing under not(test)) — identical shape across binaries; is it
-      pinned by /linting.sdd as a workspace contract (cross-check pending ./../main.sdd
-      siblings)?
-  [ ] Cover @main with a process-level test harness (trycmd/assert_cmd style): zero
-      tests exist for startup ordering, the nine-arm dispatch table, and the exit-code
-      matrix above; none of the current unit tests exercise main.rs.
+  [ ] Décider plus tard si la doc @Run `Run given git repo as a jukebox source` est
+      historique : @run.sdd exécute UN SEUL script Rhai donné par -f, sans dépôt git et sans
+      jukebox. Corriger l'aide ou rétablir le comportement promis.
+  [ ] Décider si le démarrage (provider/câblage/logger) doit passer après
+      @Parameters::parse pour que `agent --help`/`--version`/`version` n'initialisent pas
+      la machinerie de journalisation ; gelé en l'état jusque-là.
+  [ ] Décider de la paire d'attributs lint au niveau crate (deny unwrap/expect, warn
+      arithmetic/indexing sous not(test)) — forme identique sur tous les binaires ; est-elle
+      épinglée par /linting.sdd comme contrat du workspace (vérification croisée en attente ./../main.sdd
+      homologues) ?
+  [ ] Couvrir @main avec un harnais de test au niveau processus (style trycmd/assert_cmd) : zéro
+      test n'existe pour l'ordre de démarrage, la table de dispatch à neuf bras et la matrice
+      des codes de sortie ci-dessus ; aucun des tests unitaires actuels n'exerce main.rs.
 
 Done when:
-  A process-level harness pins startup order, both silent-startup lanes (no kubeconfig
-    needed for version/crdgen/help), and the full exit-code matrix.
+  Un harnais au niveau processus épingle l'ordre de démarrage, les deux voies de démarrage silencieux (kubeconfig
+    inutile pour version/crdgen/help), et la matrice complète des codes de sortie.
 
 Scenario: version path never touches the cluster lane
-  Given `AgentMain` invoked as `… version` (or with `--version`)
-  When @main runs
-  Then provider install, five-hook wiring, and logger init still execute first (frozen
-    order) but issue no cluster I/O (./../common/src/context.sdd: registration only),
-    and @version::run prints the shared VERSION constant
-  And the process exits 0
+  Given `AgentMain` invoqué en `… version` (ou avec `--version`)
+  When @main s'exécute
+  Then l'installation du provider, le câblage des cinq hooks et l'init du logger s'exécutent toujours d'abord (ordre
+    gelé) mais n'émettent aucun I/O cluster (./../common/src/context.sdd : enregistrement seul),
+    et @version::run affiche la constante VERSION partagée
+  And le processus sort avec 0
 
 Scenario: dispatch exit codes are minted downstream only
-  Given any failing sub-command
-  When control leaves a dispatcher's @unwrap_or_else arm
-  Then @process::exit carries that dispatcher's frozen code (no code is minted in
-    @main) and @tracing::error emitted its Display-only line first
+  Given toute sous-commande en échec
+  When le contrôle quitte un bras @unwrap_or_else d'un dispatcheur
+  Then @process::exit porte le code gelé de ce dispatcheur (aucun code n'est frappé dans
+    @main) et @tracing::error a émis d'abord sa ligne Display seul

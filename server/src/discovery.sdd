@@ -1,141 +1,141 @@
 Spec: discovery
 
 Purpose:
-  Serve the discovery document of the diagnostic API's aggregated group: answer
-    @discovery_handler with the fixed @APIResourceList JSON for @API_GROUP/@API_VERSION so
-    the front-proxy sees the `admin.vynil.solidite.fr/v1` group, hand out the two group
-    constants, and define the `group`/`version`/`resources` and `name`/`namespaced`/`kind`
-    wire shapes.
+  Servir le document de découverte du groupe agrégé de l'API de diagnostic : que
+    @discovery_handler réponde avec le JSON @APIResourceList fixe pour @API_GROUP/@API_VERSION afin
+    que le front-proxy voie le groupe `admin.vynil.solidite.fr/v1`, exposer les deux constantes de
+    groupe, et définir les formes filaires `group`/`version`/`resources` et `name`/`namespaced`/`kind`
+    correspondantes.
 
 Owns:
   ./discovery.rs
 
 References:
-  ./server.rs — mounts @discovery_handler as the sole handler of the group base path
-    `/apis/admin.vynil.solidite.fr/v1` inside @create_router and defines its own duplicate
-    constants; the mount path is this endpoint's observable contract but lives there, not
-    in this file.
-  /box/vynil/systems/diag_service.yaml.hbs — the aggregated @APIService
-    `v1.admin.vynil.solidite.fr` (group `admin.vynil.solidite.fr`, version `v1`) that makes
-    requests for the group base path reach this handler through the kube apiserver.
+  ./server.rs — monte @discovery_handler comme seul handler du chemin de base du groupe
+    `/apis/admin.vynil.solidite.fr/v1` dans @create_router et définit ses propres constantes
+    dupliquées ; le chemin de montage est le contrat observable de ce point d'entrée mais il
+    vit là-bas, pas dans ce fichier.
+  /box/vynil/systems/diag_service.yaml.hbs — l'@APIService agrégé
+    `v1.admin.vynil.solidite.fr` (groupe `admin.vynil.solidite.fr`, version `v1`) qui fait
+    parvenir les requêtes vers le chemin de base du groupe jusqu'à ce handler via l'apiserver kube.
 
 Must:
-  @discovery_handler is unconditional and input-free: the whole file imports only
-    @axum::Json and @serde, it reads no extractors, state, headers, arguments, environment
-    or Kubernetes object, and the response is identical on every call and independent of
-    who calls — the instance route authenticates first, the discovery route has no such
-    step.
-  The @axum::Json body always serializes to exactly the fixed document
-    `{"group":"admin.vynil.solidite.fr","version":"v1","resources":[]}`:
-    `group` and `version` interpolate @API_GROUP and @API_VERSION via @to_string and are
-    the file's only value sources beyond the literal empty `vec![]`, and serde applies its
-    default no-rename field naming.
-  Serving that @axum::Json through the @create_router mount yields `200` with content type
-    `application/json`; @discovery_handler is a parameterless `pub async fn` with the bare
-    @axum::Json return type, so it never reaches @crate::DiagError, a status code it does
-    not itself define, or a @panic!.
-  @APIResourceList and @APIResource are `pub` with every field private and no constructor
-    or accessor: outside this module the types exist only through their derived
-    @Serialize/@Deserialize (that is how input arrives) plus @std::fmt::Debug and @Clone.
-  The wire shape comes from the derives with no serde attribute anywhere: an @APIResource
-    is the keys `name` (@String), `namespaced` (@bool) and `kind` (@String), and an
-    @APIResourceList is the keys `group` (@String), `version` (@String) and `resources`
+  @discovery_handler est inconditionnel et sans entrée : tout le fichier n'importe que
+    @axum::Json et @serde, il ne lit aucun extractor, état, en-tête, argument, environnement
+    ou objet Kubernetes, et la réponse est identique à chaque appel et indépendante de
+    qui appelle — la route d'instance authentifie d'abord, la route de découverte n'a pas
+    cette étape.
+  Le corps @axum::Json se sérialise toujours exactement dans le document fixe
+    `{"group":"admin.vynil.solidite.fr","version":"v1","resources":[]}` :
+    `group` et `version` interpolent @API_GROUP et @API_VERSION via @to_string et sont les
+    seules sources de valeur du fichier hormis le `vec![]` vide littéral, et serde applique
+    son nommage de champ par défaut sans renommage.
+  Servir ce @axum::Json via le montage @create_router produit `200` avec le type de contenu
+    `application/json` ; @discovery_handler est un `pub async fn` sans paramètre avec le type
+    de retour @axum::Json nu, il n'atteint donc jamais @crate::DiagError, un code de statut
+    qu'il ne définit pas lui-même, ni un @panic!.
+  @APIResourceList et @APIResource sont `pub` avec chaque champ privé et sans constructeur
+    ni accesseur : hors de ce module, les types n'existent que via leurs derives
+    @Serialize/@Deserialize (c'est ainsi que l'entrée arrive) plus @std::fmt::Debug et @Clone.
+  La forme filaire vient des derives sans aucun attribut serde nulle part : un @APIResource
+    est les clés `name` (@String), `namespaced` (@bool) et `kind` (@String), et un
+    @APIResourceList est les clés `group` (@String), `version` (@String) et `resources`
     (@Vec<@APIResource>).
-  `resources` is only ever the empty list in reachable execution: @discovery_handler always
-    builds the literal empty `vec![]`, @APIResource is constructed nowhere in the
-    workspace, and no cache, refresh interval, retry, timeout or expiration exists here.
+  `resources` n'est jamais que la liste vide dans l'exécution atteignable : @discovery_handler
+    construit toujours le `vec![]` vide littéral, @APIResource n'est construit nulle part dans le
+    workspace, et aucun cache, intervalle de rafraîchissement, retry, timeout ou expiration n'existe ici.
 
 Depends on:
-  axum `0.8.9` locked in `/Cargo.lock` (`0.8` in `/server/Cargo.toml`) — @axum::Json is the
-    only runtime collaborator, supplying the response envelope and its content type.
-  serde `1.0.228` locked in `/Cargo.lock` with feature `derive` (`/server/Cargo.toml`) —
-    the derives define every field's JSON name and the deserialization half of the public
-    surface; nothing reads the JSON by hand.
+  axum `0.8.9` verrouillé dans `/Cargo.lock` (`0.8` dans `/server/Cargo.toml`) — @axum::Json est le
+    seul collaborateur d'exécution, fournissant l'enveloppe de réponse et son type de contenu.
+  serde `1.0.228` verrouillé dans `/Cargo.lock` avec la feature `derive` (`/server/Cargo.toml`) —
+    les derives définissent le nom JSON de chaque champ et la moitié désérialisation de la
+    surface publique ; rien ne lit le JSON à la main.
 
 Exposes:
-  @API_GROUP — @pub const @API_GROUP: &@str = `admin.vynil.solidite.fr`, the aggregated
-    group the server is registered under.
-  @API_VERSION — @pub const @API_VERSION: &@str = `v1`, the group version advertised.
-  @APIResource — `pub struct` deriving @Serialize, @Deserialize, @std::fmt::Debug and
-    @Clone; private fields `name`: @String, `namespaced`: @bool, `kind`: @String.
-  @APIResourceList — `pub struct` deriving @Serialize, @Deserialize, @std::fmt::Debug and
-    @Clone; private fields `group`: @String, `version`: @String, `resources`:
+  @API_GROUP — @pub const @API_GROUP: &@str = `admin.vynil.solidite.fr`, le groupe agrégé
+    sous lequel le serveur est enregistré.
+  @API_VERSION — @pub const @API_VERSION: &@str = `v1`, la version de groupe annoncée.
+  @APIResource — `pub struct` derivant @Serialize, @Deserialize, @std::fmt::Debug et
+    @Clone ; champs privés `name` : @String, `namespaced` : @bool, `kind` : @String.
+  @APIResourceList — `pub struct` derivant @Serialize, @Deserialize, @std::fmt::Debug et
+    @Clone ; champs privés `group` : @String, `version` : @String, `resources` :
     @Vec<@APIResource>.
-  @discovery_handler — `pub async fn @discovery_handler() -> @axum::Json<@APIResourceList>`;
-    an infallible static document, mounted GET-only by `./server.rs`.
+  @discovery_handler — `pub async fn @discovery_handler() -> @axum::Json<@APIResourceList>` ;
+    un document statique infaillible, monté en GET uniquement par `./server.rs`.
 
 Accepts:
-  Nothing on the request side: @discovery_handler matches `GET` on the group base path with
-    no extractor, so no body, query, path parameter, header, credential or @crate::AppState
-    value changes the response.
-  Any JSON document keyed `group`, `version` and `resources`, each resource keyed `name`,
-    `namespaced` and `kind`, deserializes into @APIResourceList/@APIResource; the derives
-    validate nothing further and no code in this file validates a shape.
+  Rien côté requête : @discovery_handler match `GET` sur le chemin de base du groupe sans
+    aucun extractor, donc aucun body, query, paramètre de chemin, en-tête, identifiant ni valeur
+    @crate::AppState ne change la réponse.
+  Tout document JSON à clés `group`, `version` et `resources`, chaque ressource à clés `name`,
+    `namespaced` et `kind`, se désérialise dans @APIResourceList/@APIResource ; les derives
+    ne valident rien de plus et aucun code de ce fichier ne valide une forme.
 
 Returns:
-  The fixed document of Must, always.
+  Le document fixe de Must, toujours.
 
 Raises:
-  No runtime failure channel: the return type is a bare @axum::Json, so @discovery_handler
-    cannot yield @crate::DiagError or any other error value, and its body — two string
-    interpolations and an empty `vec![]` — has no failure or panic path.
+  Aucun canal d'échec d'exécution : le type de retour est un @axum::Json nu, donc @discovery_handler
+    ne peut produire ni @crate::DiagError ni aucune autre valeur d'erreur, et son corps — deux
+    interpolations de chaînes et un `vec![]` vide — n'a aucun chemin d'échec ni de panic.
 
 Tasks:
-  [ ] Cover the exact document: @discovery_handler() awaited directly, or a router `GET` of
-      the group base path, returns `200` with the JSON body pinned key for key.
-  [ ] Cover deserialization of a populated list — with one or more name/namespaced/kind
-      entries — to pin the wire shape that no producer in the workspace can emit today;
-      include the derived @std::fmt::Debug and @Clone behaviour.
-  [ ] Cover that the discovery route answers independently of authentication on the
-      instance router, freezing today's behaviour before any authz decision is taken.
-  [?] @APIResource and the `resources` list of @APIResourceList are never populated, and
-      @APIResource is never constructed in the workspace (private fields block external
-      construction), so the endpoint advertises zero resources even though the parent spec
-      names this module "Package and instance discovery". Unfilled — decide later: list the
-      diagnostics resources or trim the types.
-  [?] A populated @APIResourceList could only come from deserialization — no constructor or
-      accessor exists — yet no code deserializes it and it is never sent anywhere either.
-      Decide later: keep the round-trip derives or shrink @Serialize/@Deserialize/@Clone/
+  [ ] Couvrir le document exact : @discovery_handler() attendu directement, ou un `GET` du routeur
+      sur le chemin de base du groupe, renvoie `200` avec le corps JSON épinglé clé par clé.
+  [ ] Couvrir la désérialisation d'une liste peuplée — avec une ou plusieurs entrées name/namespaced/kind
+      — pour épingler la forme filaire qu'aucun producteur du workspace ne peut émettre aujourd'hui ;
+      inclure les comportements dérivés @std::fmt::Debug et @Clone.
+  [ ] Couvrir que la route de découverte répond indépendamment de l'authentification sur le
+      routeur d'instance, figeant le comportement d'aujourd'hui avant toute décision d'authz.
+  [?] @APIResource et la liste `resources` de @APIResourceList ne sont jamais peuplées, et
+      @APIResource n'est jamais construit dans le workspace (les champs privés bloquent la
+      construction externe), donc l'endpoint annonce zéro ressource même si la spec parente
+      nomme ce module "Package and instance discovery". Non rempli — décider plus tard : lister les
+      ressources de diagnostics ou réduire les types.
+  [?] Un @APIResourceList peuplé ne pourrait venir que de la désérialisation — aucun constructeur ni
+      accesseur n'existe — pourtant aucun code ne le désérialise et il n'est jamais envoyé ailleurs
+      non plus. Décider plus tard : garder les derives round-trip ou réduire @Serialize/@Deserialize/@Clone/
       @std::fmt::Debug.
-  [?] `./server.rs` declares duplicates of @API_GROUP/@API_VERSION as `pub` constants,
-      never reads either copy, and hardcodes the same two strings in the route literals —
-      three sources of one value. Decide later which copy becomes canonical.
-  [?] Discovery answers unauthenticated while the parent spec asks every read to be
-      authorized, and the file's own doc comment says "Handle the discovery endpoint"
-      although nothing is discovered dynamically. Decide later: gate the route, document
-      the exemption, or fill the handler.
-  [?] `namespaced` is typed for real discovery, but the served instance paths under
-      `/apis/admin.vynil.solidite.fr/v1/namespaces/` are not `@kube` resources registered
-      in this group, so a future populated list needs a namespaced-vs-cluster mapping that
-      exists nowhere yet. Decide later what it would hold.
+  [?] `./server.rs` déclare des doublons de @API_GROUP/@API_VERSION comme constantes `pub`,
+      ne lit aucune des copies, et code en dur les mêmes deux chaînes dans les littéraux de
+      route — trois sources pour une valeur. Décider plus tard quelle copie devient canonique.
+  [?] La découverte répond sans authentification alors que la spec parente demande que toute
+      lecture soit autorisée, et le doc comment du fichier dit lui-même "Handle the discovery endpoint"
+      alors que rien n'est découvert dynamiquement. Décider plus tard : verrouiller la route, documenter
+      l'exemption, ou remplir le handler.
+  [?] `namespaced` est typé pour une vraie découverte, mais les chemins d'instance servis sous
+      `/apis/admin.vynil.solidite.fr/v1/namespaces/` ne sont pas des ressources `@kube` enregistrées
+      dans ce groupe, donc une future liste peuplée aurait besoin d'un mapping namespaced-vs-cluster
+      qui n'existe nulle part pour l'instant. Décider plus tard ce qu'il contiendrait.
 
 Done when:
-  Every Scenario below maps to a green test, each `[?]` above is a decision or a removal,
-    and `cargo test -p server` is green.
+  Chaque Scenario ci-dessous correspond à un test vert, chaque `[?]` ci-dessus est une
+    décision ou une suppression, et `cargo test -p server` est vert.
 
 Scenario: Group base path returns the fixed discovery document
-  Given the @create_router app or a bare @discovery_handler call
-  When a `GET` reaches the group base path
-  Then the response is `200` with content type `application/json` and the exact body
+  Given l'app @create_router ou un appel nu à @discovery_handler
+  When un `GET` atteint le chemin de base du groupe
+  Then la réponse est `200` avec le type de contenu `application/json` et le corps exact
     `{"group":"admin.vynil.solidite.fr","version":"v1","resources":[]}`
-  No mapped test exists.
+  Aucun test mappé n'existe.
 
 Scenario: Response is independent of the caller and of the cluster
-  Given three requests carrying no identity, an unauthenticated identity and an
-    authenticated identity, with no reachable API server
-  When @discovery_handler answers each
-  Then all three bodies are identical with `resources` empty
-  And no Kubernetes object is read
-  No mapped test exists.
+  Given trois requêtes ne portant aucune identité, une identité non authentifiée et une
+    identité authentifiée, sans API server joignable
+  When @discovery_handler répond à chacune
+  Then les trois corps sont identiques avec `resources` vide
+  And aucun objet Kubernetes n'est lu
+  Aucun test mappé n'existe.
 
 Scenario: Populated list deserializes although nothing serializes one
-  Given a JSON document with `group` `g`, `version` `v` and one resource entry `name` `n`,
+  Given un document JSON avec `group` `g`, `version` `v` et une entrée de ressource `name` `n`,
     `namespaced` `true`, `kind` `K`
-  When it deserializes into @APIResourceList
-  Then the single @APIResource carries those three values
-  But this file never builds such a list — @discovery_handler keeps `resources` empty
-  No mapped test exists.
+  When il se désérialise dans @APIResourceList
+  Then l'unique @APIResource porte ces trois valeurs
+  But ce fichier ne construit jamais une telle liste — @discovery_handler garde `resources` vide
+  Aucun test mappé n'existe.
 
 Example:
-  Served body: `{"group":"admin.vynil.solidite.fr","version":"v1","resources":[]}`
-  Derived @std::fmt::Debug form: `APIResourceList { group: "g", version: "v", resources: [APIResource { name: "n", namespaced: true, kind: "K" }] }`
+  Corps servi : `{"group":"admin.vynil.solidite.fr","version":"v1","resources":[]}`
+  Forme @std::fmt::Debug dérivée : `APIResourceList { group: "g", version: "v", resources: [APIResource { name: "n", namespaced: true, kind: "K" }] }`
